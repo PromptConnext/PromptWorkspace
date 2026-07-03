@@ -1,0 +1,24 @@
+- generic [ref=e24]:
+  - complementary [ref=e25]:
+    - heading "Projects" [level=2] [ref=e26]
+    - list [ref=e32]:
+      - listitem [ref=e33]:
+        - button "UI Demo" [ref=e34] [cursor=pointer]
+    - generic [ref=e27]:
+      - textbox "New project name" [ref=e28]
+      - button "Create" [disabled] [ref=e29]
+  - generic [ref=e35]:
+    - generic [ref=e36]:
+      - heading "UI Demo" [level=2] [ref=e37]
+      - navigation [ref=e38]:
+        - button "3S Workflow" [ref=e39] [cursor=pointer]
+        - button "Task Graph" [ref=e40] [cursor=pointer]
+    - generic [ref=e41]:
+      - generic [ref=e42]: 1 · Scope (not_started)
+      - generic [ref=e43]: 2 · Spec (not_started)
+      - generic [ref=e44]: 3 · Skill
+    - generic [ref=e45]:
+      - heading "Scope — what should this project achieve?" [level=3] [ref=e46]
+      - textbox "Describe the goal in plain business terms…" [ref=e47]
+      - button "Generate" [disabled] [ref=e49]
+    - text: "00"

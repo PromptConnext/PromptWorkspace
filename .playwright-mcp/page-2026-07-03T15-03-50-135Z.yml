@@ -1,0 +1,30 @@
+- main [ref=e3]:
+  - heading "Welcome to PromptZone" [level=1] [ref=e4]
+  - paragraph [ref=e5]:
+    - text: PromptZone orchestrates the AI models
+    - emphasis [ref=e6]: you
+    - text: bring — it ships none of its own. Connect one model to get started. No AI subscription? Pick
+    - strong [ref=e7]: Local Ollama
+    - text: ": free, private, nothing to sign up for."
+  - paragraph [ref=e8]: Your key is verified with a live call before it's accepted, and it is stored only in the macOS keychain on this machine — never in the cloud.
+  - generic [ref=e9]:
+    - generic [ref=e19]:
+      - button "Local Ollama (no cost, no signup)" [ref=e20] [cursor=pointer]
+      - button "OpenRouter (one key, many models)" [ref=e21] [cursor=pointer]
+      - button "OpenAI" [ref=e22] [cursor=pointer]
+    - generic [ref=e10]:
+      - text: Provider
+      - textbox "Provider" [ref=e11]: openai
+    - generic [ref=e12]:
+      - text: Endpoint (base URL)
+      - textbox "Endpoint (base URL)" [ref=e13]: http://127.0.0.1:9
+    - generic [ref=e14]:
+      - text: Model
+      - textbox "Model" [ref=e15]:
+        - /placeholder: e.g. qwen3:8b
+        - text: gpt-x
+    - generic [ref=e16]:
+      - text: API key (leave empty for local models)
+      - textbox "API key (leave empty for local models)" [ref=e17]: sk-dead-key
+    - button "Connect & verify" [ref=e18] [cursor=pointer]
+    - paragraph [ref=e23]: "connection failed health check: fetch failed"

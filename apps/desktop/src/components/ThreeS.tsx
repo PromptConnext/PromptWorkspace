@@ -1,0 +1,182 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  approveStage,
+  getGraph,
+  listModels,
+  runScope,
+  runSpec,
+  type Graph,
+  type Project,
+} from "../api";
+import ConnectForm from "./ConnectForm";
+import GraphView from "./GraphView";
+
+function stageOf(graph: Graph | null, name: string) {
+  return graph?.stages.find((s) => s.stage === name);
+}
+
+export default function ThreeS({ project }: { project: Project }) {
+  const [graph, setGraph] = useState<Graph | null>(null);
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
+  const [hasCodeModel, setHasCodeModel] = useState(true);
+  const [tab, setTab] = useState<"threes" | "graph">("threes");
+
+  const refresh = useCallback(async () => {
+    setGraph(await getGraph(project.id));
+    const models = await listModels();
+    setHasCodeModel(models.connections.some((c) => c.role === "code" && c.healthy));
+  }, [project.id]);
+
+  useEffect(() => {
+    refresh().catch((err) => setError((err as Error).message));
+  }, [refresh]);
+
+  const scope = stageOf(graph, "scope");
+  const spec = stageOf(graph, "spec");
+  const scopeApproved = scope?.gate_passed === 1;
+  const specApproved = spec?.gate_passed === 1;
+
+  const act = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      const res = await fn();
+      const content = (res as { content?: string })?.content;
+      if (content) setOutput(content);
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="threes">
+      <header className="threes-header">
+        <h2>{project.name}</h2>
+        <nav>
+          <button
+            type="button"
+            className={tab === "threes" ? "active" : ""}
+            onClick={() => setTab("threes")}
+          >
+            3S Workflow
+          </button>
+          <button
+            type="button"
+            className={tab === "graph" ? "active" : ""}
+            onClick={() => setTab("graph")}
+          >
+            Task Graph
+          </button>
+        </nav>
+      </header>
+
+      {tab === "graph" ? (
+        <GraphView graph={graph} />
+      ) : (
+        <>
+          <div className="stepper">
+            <span className={`step ${scopeApproved ? "done" : "current"}`}>
+              1 · Scope {scopeApproved ? "✓" : `(${scope?.status ?? "…"})`}
+            </span>
+            <span
+              className={`step ${
+                specApproved ? "done" : scopeApproved ? "current" : ""
+              }`}
+            >
+              2 · Spec {specApproved ? "✓" : `(${spec?.status ?? "…"})`}
+            </span>
+            <span className={`step ${specApproved ? "current" : ""}`}>3 · Skill</span>
+          </div>
+
+          {!scopeApproved && (
+            <div className="stage-panel">
+              <h3>Scope — what should this project achieve?</h3>
+              <textarea
+                rows={5}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Describe the goal in plain business terms…"
+              />
+              <div className="row">
+                <button
+                  type="button"
+                  disabled={busy !== null || !description.trim()}
+                  onClick={() => act("scope", () => runScope(project.id, description))}
+                >
+                  {busy === "scope" ? "Generating specification…" : "Generate"}
+                </button>
+                {scope?.status === "awaiting_approval" && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => act("approve-scope", () => approveStage(project.id, "scope"))}
+                  >
+                    Approve scope ✓
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {scopeApproved && !specApproved && (
+            <div className="stage-panel">
+              <h3>Spec — review the project specification</h3>
+              <div className="row">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => act("spec", () => runSpec(project.id))}
+                >
+                  {busy === "spec" ? "Generating plan…" : "Generate plan"}
+                </button>
+                {spec?.status === "awaiting_approval" && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => act("approve-spec", () => approveStage(project.id, "spec"))}
+                  >
+                    Approve spec ✓
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {specApproved && (
+            <div className="stage-panel">
+              <h3>Skill — equip the project to build itself</h3>
+              {hasCodeModel ? (
+                <p>
+                  Coding model connected. Implementation execution ships in the next
+                  milestone — the skeleton stops at an approved spec.
+                </p>
+              ) : (
+                <>
+                  <p>
+                    Implementation needs a model optimized for coding. Connect one now —
+                    it's needed from this point on.
+                  </p>
+                  <ConnectForm role="code" onConnected={() => refresh()} />
+                </>
+              )}
+            </div>
+          )}
+
+          {output && (
+            <div className="stage-panel">
+              <h3>Latest output</h3>
+              <pre className="doc">{output}</pre>
+            </div>
+          )}
+          {error && <p className="error">{error}</p>}
+        </>
+      )}
+    </section>
+  );
+}

@@ -1,0 +1,222 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+  --accent: #2563eb;
+  --border: color-mix(in srgb, currentColor 18%, transparent);
+  --muted: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+main.center {
+  display: grid;
+  place-content: center;
+  min-height: 100vh;
+  text-align: center;
+}
+
+.error {
+  color: #dc2626;
+  white-space: pre-wrap;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+button {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+input,
+textarea {
+  font: inherit;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
+
+/* onboarding */
+.onboarding {
+  max-width: 560px;
+  margin: 8vh auto;
+  padding: 0 24px;
+}
+
+.onboarding .hint {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.connect-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.connect-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+.rec-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* workspace */
+.workspace {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.workspace aside {
+  border-right: 1px solid var(--border);
+  padding: 20px;
+}
+
+.workspace .content {
+  padding: 24px 32px;
+  overflow-x: auto;
+}
+
+.projects {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.projects button {
+  width: 100%;
+  text-align: left;
+}
+
+.new-project {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* 3S */
+.threes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.threes-header nav {
+  display: flex;
+  gap: 8px;
+}
+
+.stepper {
+  display: flex;
+  gap: 24px;
+  margin: 16px 0 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.step {
+  color: var(--muted);
+}
+
+.step.current {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.step.done {
+  color: inherit;
+}
+
+.stage-panel {
+  margin-bottom: 24px;
+  display: grid;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+pre.doc {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+/* graph */
+.tree {
+  line-height: 1.7;
+}
+
+.badge {
+  font-size: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 6px;
+}
+
+.badge.approved,
+.badge.succeeded {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+.badge.failed {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+table.runs {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+table.runs th,
+table.runs td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9em;
+}

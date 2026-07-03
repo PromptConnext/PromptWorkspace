@@ -1,0 +1,27 @@
+- generic [ref=e24]:
+  - complementary [ref=e25]:
+    - heading "Projects" [level=2] [ref=e26]
+    - list [ref=e32]:
+      - listitem [ref=e33]:
+        - button "UI Demo" [ref=e34] [cursor=pointer]
+    - generic [ref=e27]:
+      - textbox "New project name" [ref=e28]
+      - button "Create" [disabled] [ref=e29]
+  - generic [ref=e35]:
+    - generic [ref=e36]:
+      - heading "UI Demo" [level=2] [ref=e37]
+      - navigation [ref=e38]:
+        - button "3S Workflow" [ref=e39] [cursor=pointer]
+        - button "Task Graph" [ref=e40] [cursor=pointer]
+    - generic [ref=e41]:
+      - generic [ref=e42]: 1 · Scope ✓
+      - generic [ref=e43]: 2 · Spec (awaiting_approval)
+      - generic [ref=e44]: 3 · Skill
+    - generic [ref=e54]:
+      - heading "Spec — review the project specification" [level=3] [ref=e55]
+      - generic [ref=e56]:
+        - button "Generate plan" [ref=e57] [cursor=pointer]
+        - button "Approve spec ✓" [ref=e58] [cursor=pointer]
+    - generic [ref=e51]:
+      - heading "Latest output" [level=3] [ref=e52]
+      - generic [ref=e53]: "# Implementation Plan: Note Tagging ## Technical Context TypeScript, existing notes app. ## Phase 1 - Add tags column, tag input UI, filter control."

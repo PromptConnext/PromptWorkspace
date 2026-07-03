@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd apps/engine && node -e \\\"\\nconst { storeSecret, readSecret, deleteSecret } = await import('./src/keychain.ts');\\nstoreSecret('m0-test', 'sk-skeleton-check');\\nconst v = readSecret('m0-t...",
+  "error": "Exit code 1\n(eval):cd:1: no such file or directory: apps/engine",
+  "timestamp": "2026-07-03T14:54:00.404Z",
+  "retry_count": 1
+}
