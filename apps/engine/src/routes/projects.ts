@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -81,30 +82,37 @@ projects.post("/engine/projects/:id/scope", async (c) => {
   ).run(runId, project.id, conn.id, description.slice(0, 2000));
   setStage(project.id, "scope", "running");
 
-  try {
-    const out = await runStage("specify", conn, project.path, description);
-    const reqId = randomUUID();
-    db.prepare(
-      "INSERT INTO requirements (id, project_id, title, description, status) VALUES (?, ?, ?, ?, 'awaiting_approval')",
-    ).run(reqId, project.id, out.title, description);
-    db.prepare(
-      "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
-    ).run(out.files[0].path, `files: ${out.files.map((f) => f.path).join(", ")}`, runId);
-    setStage(project.id, "scope", "awaiting_approval");
-    return c.json({
-      requirementId: reqId,
-      title: out.title,
-      files: out.files.map((f) => f.path),
-      content: out.files[0].content,
-    });
-  } catch (err) {
-    db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
-      (err as Error).message,
-      runId,
-    );
-    setStage(project.id, "scope", "failed");
-    return c.json({ error: (err as Error).message }, 502);
-  }
+  return streamSSE(c, async (stream) => {
+    try {
+      const out = await runStage("specify", conn, project.path, description, (delta) => {
+        void stream.writeSSE({ event: "delta", data: delta });
+      });
+      const reqId = randomUUID();
+      db.prepare(
+        "INSERT INTO requirements (id, project_id, title, description, status) VALUES (?, ?, ?, ?, 'awaiting_approval')",
+      ).run(reqId, project.id, out.title, description);
+      db.prepare(
+        "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
+      ).run(out.files[0].path, `files: ${out.files.map((f) => f.path).join(", ")}`, runId);
+      setStage(project.id, "scope", "awaiting_approval");
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          requirementId: reqId,
+          title: out.title,
+          files: out.files.map((f) => f.path),
+          content: out.files[0].content,
+        }),
+      });
+    } catch (err) {
+      db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
+        (err as Error).message,
+        runId,
+      );
+      setStage(project.id, "scope", "failed");
+      await stream.writeSSE({ event: "error", data: (err as Error).message });
+    }
+  });
 });
 
 projects.post("/engine/projects/:id/spec", async (c) => {
@@ -129,30 +137,37 @@ projects.post("/engine/projects/:id/spec", async (c) => {
   ).run(runId, project.id, conn.id, requirement.id);
   setStage(project.id, "spec", "running");
 
-  try {
-    const specMd = `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`;
-    const out = await runStage("plan", conn, project.path, specMd);
-    const specId = randomUUID();
-    db.prepare(
-      "INSERT INTO spec_documents (id, requirement_id, content, version) VALUES (?, ?, ?, 1)",
-    ).run(specId, requirement.id, out.files[0].content);
-    db.prepare(
-      "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
-    ).run(out.files[0].path, `files: ${out.files.map((f) => f.path).join(", ")}`, runId);
-    setStage(project.id, "spec", "awaiting_approval");
-    return c.json({
-      specDocumentId: specId,
-      files: out.files.map((f) => f.path),
-      content: out.files[0].content,
-    });
-  } catch (err) {
-    db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
-      (err as Error).message,
-      runId,
-    );
-    setStage(project.id, "spec", "failed");
-    return c.json({ error: (err as Error).message }, 502);
-  }
+  return streamSSE(c, async (stream) => {
+    try {
+      const specMd = `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`;
+      const out = await runStage("plan", conn, project.path, specMd, (delta) => {
+        void stream.writeSSE({ event: "delta", data: delta });
+      });
+      const specId = randomUUID();
+      db.prepare(
+        "INSERT INTO spec_documents (id, requirement_id, content, version) VALUES (?, ?, ?, 1)",
+      ).run(specId, requirement.id, out.files[0].content);
+      db.prepare(
+        "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
+      ).run(out.files[0].path, `files: ${out.files.map((f) => f.path).join(", ")}`, runId);
+      setStage(project.id, "spec", "awaiting_approval");
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          specDocumentId: specId,
+          files: out.files.map((f) => f.path),
+          content: out.files[0].content,
+        }),
+      });
+    } catch (err) {
+      db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
+        (err as Error).message,
+        runId,
+      );
+      setStage(project.id, "spec", "failed");
+      await stream.writeSSE({ event: "error", data: (err as Error).message });
+    }
+  });
 });
 
 projects.post("/engine/projects/:id/stages/:stage/approve", async (c) => {

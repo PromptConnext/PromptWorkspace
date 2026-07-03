@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { chat, type ChatMessage, type ModelConnection } from "../gateway/index.ts";
+import { chatStream, type ChatMessage, type ModelConnection } from "../gateway/index.ts";
 
 const templatesDir = join(import.meta.dirname, "templates");
 
@@ -24,9 +24,13 @@ export type StageOutput = {
   raw: string;
 };
 
+function outPathFor(kind: "specify" | "plan"): string {
+  return kind === "specify" ? "specs/001/spec.md" : "specs/001/plan.md";
+}
+
 function driverPrompt(kind: "specify" | "plan"): string {
   const doc = template(kind === "specify" ? "spec-template.md" : "plan-template.md");
-  const outPath = kind === "specify" ? "specs/001/spec.md" : "specs/001/plan.md";
+  const outPath = outPathFor(kind);
   return [
     `You are the ${kind === "specify" ? "specification" : "implementation-planning"} engine inside PromptZone.`,
     `Fill in the following template completely, based on the user's input. Replace every placeholder. Do not leave template markers like [FEATURE NAME] or $ARGUMENTS in the output. Mark genuine unknowns with [NEEDS CLARIFICATION: question].`,
@@ -48,21 +52,45 @@ function parseFiles(raw: string): StageOutput["files"] {
   return files;
 }
 
+// Thinking models (qwen3, deepseek-r1, ...) prepend reasoning the parser must
+// never see.
+function stripThinking(raw: string): string {
+  return raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+}
+
+// Fallback for models that write a good document but ignore the file-block
+// wrapper (the most common real-model failure): unwrap a plain markdown fence
+// if present, then take everything from the first H1 onward.
+function extractDocument(raw: string): string | null {
+  let text = raw.trim();
+  const fenced = /^```[a-zA-Z]*\n([\s\S]*?)\n```$/m.exec(text);
+  if (fenced && fenced[0].length > text.length * 0.8) text = fenced[1].trim();
+  const h1 = text.indexOf("\n# ");
+  if (h1 >= 0 && !text.startsWith("# ")) text = text.slice(h1 + 1);
+  return text.startsWith("# ") && text.length > 80 ? text : null;
+}
+
 export async function runStage(
   kind: "specify" | "plan",
   conn: ModelConnection,
   projectPath: string,
   userInput: string,
+  onDelta: (text: string) => void = () => {},
 ): Promise<StageOutput> {
   const messages: ChatMessage[] = [
     { role: "system", content: driverPrompt(kind) },
     { role: "user", content: userInput },
   ];
-  const result = await chat(conn, messages);
-  const files = parseFiles(result.content);
+  const result = await chatStream(conn, messages, onDelta);
+  const cleaned = stripThinking(result.content);
+  let files = parseFiles(cleaned);
+  if (files.length === 0) {
+    const doc = extractDocument(cleaned);
+    if (doc) files = [{ path: outPathFor(kind), content: doc }];
+  }
   if (files.length === 0) {
     throw new Error(
-      "model returned no file blocks — output did not follow the required format",
+      "model output contained neither file blocks nor a recognizable markdown document",
     );
   }
   for (const file of files) {

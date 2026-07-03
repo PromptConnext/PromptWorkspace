@@ -39,9 +39,10 @@ export default function ThreeS({ project }: { project: Project }) {
   const scopeApproved = scope?.gate_passed === 1;
   const specApproved = spec?.gate_passed === 1;
 
-  const act = async (label: string, fn: () => Promise<unknown>) => {
+  const act = async (label: string, fn: () => Promise<unknown>, streams = false) => {
     setBusy(label);
     setError(null);
+    if (streams) setOutput("");
     try {
       const res = await fn();
       const content = (res as { content?: string })?.content;
@@ -53,6 +54,8 @@ export default function ThreeS({ project }: { project: Project }) {
       setBusy(null);
     }
   };
+
+  const appendOutput = (delta: string) => setOutput((prev) => (prev ?? "") + delta);
 
   return (
     <section className="threes">
@@ -107,7 +110,9 @@ export default function ThreeS({ project }: { project: Project }) {
                 <button
                   type="button"
                   disabled={busy !== null || !description.trim()}
-                  onClick={() => act("scope", () => runScope(project.id, description))}
+                  onClick={() =>
+                    act("scope", () => runScope(project.id, description, appendOutput), true)
+                  }
                 >
                   {busy === "scope" ? "Generating specification…" : "Generate"}
                 </button>
@@ -131,7 +136,7 @@ export default function ThreeS({ project }: { project: Project }) {
                 <button
                   type="button"
                   disabled={busy !== null}
-                  onClick={() => act("spec", () => runSpec(project.id))}
+                  onClick={() => act("spec", () => runSpec(project.id, appendOutput), true)}
                 >
                   {busy === "spec" ? "Generating plan…" : "Generate plan"}
                 </button>

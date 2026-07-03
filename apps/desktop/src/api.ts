@@ -94,16 +94,72 @@ export const createProject = (name: string, path?: string) =>
     body: JSON.stringify({ name, ...(path ? { path } : {}) }),
   });
 
-export const runScope = (projectId: string, description: string) =>
-  request<{ requirementId: string; title: string; files: string[]; content: string }>(
+// Stage runs stream over SSE: `delta` events carry raw model tokens, then one
+// `done` (JSON payload) or `error` event ends the stream.
+async function requestSSE<T>(
+  path: string,
+  body: unknown,
+  onDelta?: (text: string) => void,
+): Promise<T> {
+  const res = await fetch(`${ENGINE_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let done: T | null = null;
+  let error: string | null = null;
+
+  const handleEvent = (chunk: string) => {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of chunk.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    const payload = data.join("\n");
+    if (event === "delta") onDelta?.(payload);
+    else if (event === "done") done = JSON.parse(payload) as T;
+    else if (event === "error") error = payload;
+  };
+
+  while (true) {
+    const { value, done: eof } = await reader.read();
+    if (eof) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      handleEvent(buf.slice(0, idx));
+      buf = buf.slice(idx + 2);
+    }
+  }
+  if (error) throw new Error(error);
+  if (done === null) throw new Error("stream ended without a result");
+  return done;
+}
+
+export const runScope = (
+  projectId: string,
+  description: string,
+  onDelta?: (text: string) => void,
+) =>
+  requestSSE<{ requirementId: string; title: string; files: string[]; content: string }>(
     `/engine/projects/${projectId}/scope`,
-    { method: "POST", body: JSON.stringify({ description }) },
+    { description },
+    onDelta,
   );
 
-export const runSpec = (projectId: string) =>
-  request<{ specDocumentId: string; files: string[]; content: string }>(
+export const runSpec = (projectId: string, onDelta?: (text: string) => void) =>
+  requestSSE<{ specDocumentId: string; files: string[]; content: string }>(
     `/engine/projects/${projectId}/spec`,
-    { method: "POST", body: JSON.stringify({}) },
+    {},
+    onDelta,
   );
 
 export const approveStage = (projectId: string, stage: string) =>

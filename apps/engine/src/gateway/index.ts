@@ -91,6 +91,101 @@ export async function chat(
     : chatOpenAICompat(conn, messages, maxTokens);
 }
 
+async function* sseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  let buf = "";
+  for await (const chunk of body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      yield buf.slice(0, idx).replace(/\r$/, "");
+      buf = buf.slice(idx + 1);
+    }
+  }
+  if (buf) yield buf;
+}
+
+async function streamOpenAICompat(
+  conn: ModelConnection,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  const key = conn.credential_ref ? readSecret(conn.credential_ref) : null;
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (key) headers.authorization = `Bearer ${key}`;
+
+  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ model: conn.model, messages, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.text();
+    throw new Error(`${conn.provider} returned ${res.status}: ${body.slice(0, 300)}`);
+  }
+  let content = "";
+  for await (const line of sseLines(res.body)) {
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (data === "[DONE]") break;
+    try {
+      const delta = (JSON.parse(data) as { choices?: { delta?: { content?: string } }[] })
+        .choices?.[0]?.delta?.content;
+      if (delta) {
+        content += delta;
+        onDelta(delta);
+      }
+    } catch {
+      // partial or keep-alive frame — skip
+    }
+  }
+  if (!content) throw new Error(`${conn.provider} streamed no content`);
+  return { content };
+}
+
+async function streamOllama(
+  conn: ModelConnection,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: conn.model, messages, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.text();
+    throw new Error(`ollama returned ${res.status}: ${body.slice(0, 300)}`);
+  }
+  let content = "";
+  for await (const line of sseLines(res.body)) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
+      const delta = obj.message?.content;
+      if (delta) {
+        content += delta;
+        onDelta(delta);
+      }
+      if (obj.done) break;
+    } catch {
+      // partial NDJSON frame — skip
+    }
+  }
+  if (!content) throw new Error("ollama streamed no content");
+  return { content };
+}
+
+export async function chatStream(
+  conn: ModelConnection,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  return isOllama(conn)
+    ? streamOllama(conn, messages, onDelta)
+    : streamOpenAICompat(conn, messages, onDelta);
+}
+
 // "Never accept a key on faith" (architecture §3.4): a live round-trip is the
 // only accepted proof of a working connection.
 export async function healthCheck(conn: ModelConnection): Promise<void> {
