@@ -184,6 +184,21 @@ pre.doc {
   overflow-y: auto;
 }
 
+.task-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.task-list li {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9em;
+}
+
 /* graph */
 .tree {
   line-height: 1.7;

@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { db } from "../db.ts";
 import { connectionForRole } from "./models.ts";
-import { runStage } from "../agent/loop.ts";
+import { parseTaskLines, runStage } from "../agent/loop.ts";
 
 export const projects = new Hono();
 
@@ -165,6 +165,73 @@ projects.post("/engine/projects/:id/spec", async (c) => {
         runId,
       );
       setStage(project.id, "spec", "failed");
+      await stream.writeSSE({ event: "error", data: (err as Error).message });
+    }
+  });
+});
+
+// Skill stage, first half (gap G2): break the approved spec into tasks via
+// Spec Kit's tasks template. Implementation kick-off comes later.
+projects.post("/engine/projects/:id/tasks", async (c) => {
+  const project = getProject(c.req.param("id"));
+  if (!project) return c.json({ error: "project not found" }, 404);
+  if (!stageGatePassed(project.id, "spec")) {
+    return c.json({ error: "spec must be approved before generating tasks" }, 409);
+  }
+  const spec = db
+    .prepare(
+      `SELECT sd.id, sd.content, r.title FROM spec_documents sd
+       JOIN requirements r ON r.id = sd.requirement_id
+       WHERE r.project_id = ? ORDER BY sd.created_at DESC LIMIT 1`,
+    )
+    .get(project.id) as { id: string; content: string; title: string } | undefined;
+  if (!spec) return c.json({ error: "no spec document found — run spec first" }, 409);
+
+  const conn = connectionForRole("plan");
+  if (!conn) return c.json({ error: "no verified model connection for role: plan" }, 409);
+
+  const runId = randomUUID();
+  db.prepare(
+    "INSERT INTO agent_runs (id, project_id, model_connection_id, action, input_ref, status) VALUES (?, ?, ?, 'skill.tasks', ?, 'running')",
+  ).run(runId, project.id, conn.id, spec.id);
+  setStage(project.id, "skill", "running");
+
+  return streamSSE(c, async (stream) => {
+    try {
+      const input = `Break the approved implementation plan into executable tasks.\n\nRequirement: ${spec.title}\n\nApproved plan:\n\n${spec.content}`;
+      const out = await runStage("tasks", conn, project.path, input, (delta) => {
+        void stream.writeSSE({ event: "delta", data: delta });
+      });
+      const parsed = parseTaskLines(out.files[0].content);
+      if (parsed.length === 0) {
+        throw new Error("tasks document contained no parseable '- [ ] T###' checklist lines");
+      }
+      db.prepare("DELETE FROM tasks WHERE spec_id = ?").run(spec.id);
+      const insert = db.prepare(
+        "INSERT INTO tasks (id, spec_id, title, status, feature_tag) VALUES (?, ?, ?, 'todo', ?)",
+      );
+      for (const task of parsed) {
+        insert.run(randomUUID(), spec.id, task.title, task.parallel ? `${task.ref} [P]` : task.ref);
+      }
+      db.prepare(
+        "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
+      ).run(out.files[0].path, `${parsed.length} tasks parsed from ${out.files[0].path}`, runId);
+      setStage(project.id, "skill", "tasks_generated");
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          specDocumentId: spec.id,
+          taskCount: parsed.length,
+          files: out.files.map((f) => f.path),
+          content: out.files[0].content,
+        }),
+      });
+    } catch (err) {
+      db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
+        (err as Error).message,
+        runId,
+      );
+      setStage(project.id, "skill", "failed");
       await stream.writeSSE({ event: "error", data: (err as Error).message });
     }
   });

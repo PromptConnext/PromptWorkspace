@@ -162,6 +162,13 @@ export const runSpec = (projectId: string, onDelta?: (text: string) => void) =>
     onDelta,
   );
 
+export const runTasks = (projectId: string, onDelta?: (text: string) => void) =>
+  requestSSE<{ specDocumentId: string; taskCount: number; files: string[]; content: string }>(
+    `/engine/projects/${projectId}/tasks`,
+    {},
+    onDelta,
+  );
+
 export const approveStage = (projectId: string, stage: string) =>
   request<{ ok: boolean }>(`/engine/projects/${projectId}/stages/${stage}/approve`, {
     method: "POST",

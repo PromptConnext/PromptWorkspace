@@ -5,6 +5,7 @@ import {
   listModels,
   runScope,
   runSpec,
+  runTasks,
   type Graph,
   type Project,
 } from "../api";
@@ -38,6 +39,8 @@ export default function ThreeS({ project }: { project: Project }) {
   const spec = stageOf(graph, "spec");
   const scopeApproved = scope?.gate_passed === 1;
   const specApproved = spec?.gate_passed === 1;
+  const tasks =
+    graph?.requirements.flatMap((r) => r.specDocuments.flatMap((s) => s.tasks)) ?? [];
 
   const act = async (label: string, fn: () => Promise<unknown>, streams = false) => {
     setBusy(label);
@@ -156,10 +159,32 @@ export default function ThreeS({ project }: { project: Project }) {
           {specApproved && (
             <div className="stage-panel">
               <h3>Skill — equip the project to build itself</h3>
+              <div className="row">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => act("tasks", () => runTasks(project.id, appendOutput), true)}
+                >
+                  {busy === "tasks"
+                    ? "Breaking spec into tasks…"
+                    : tasks.length > 0
+                      ? "Regenerate tasks"
+                      : "Generate tasks"}
+                </button>
+              </div>
+              {tasks.length > 0 && (
+                <ul className="task-list">
+                  {tasks.map((task) => (
+                    <li key={task.id}>
+                      {task.title}{" "}
+                      <span className={`badge ${task.status}`}>{task.status}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {hasCodeModel ? (
-                <p>
-                  Coding model connected. Implementation execution ships in the next
-                  milestone — the skeleton stops at an approved spec.
+                <p className="muted">
+                  Coding model connected. Implementation execution is the next milestone.
                 </p>
               ) : (
                 <>

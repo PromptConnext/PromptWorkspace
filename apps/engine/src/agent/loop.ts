@@ -24,22 +24,59 @@ export type StageOutput = {
   raw: string;
 };
 
-function outPathFor(kind: "specify" | "plan"): string {
-  return kind === "specify" ? "specs/001/spec.md" : "specs/001/plan.md";
+export type StageKind = "specify" | "plan" | "tasks";
+
+const STAGES: Record<StageKind, { template: string; role: string; outPath: string }> = {
+  specify: {
+    template: "spec-template.md",
+    role: "specification",
+    outPath: "specs/001/spec.md",
+  },
+  plan: {
+    template: "plan-template.md",
+    role: "implementation-planning",
+    outPath: "specs/001/plan.md",
+  },
+  tasks: {
+    template: "tasks-template.md",
+    role: "task-breakdown",
+    outPath: "specs/001/tasks.md",
+  },
+};
+
+function outPathFor(kind: StageKind): string {
+  return STAGES[kind].outPath;
 }
 
-function driverPrompt(kind: "specify" | "plan"): string {
-  const doc = template(kind === "specify" ? "spec-template.md" : "plan-template.md");
-  const outPath = outPathFor(kind);
+function driverPrompt(kind: StageKind): string {
+  const stage = STAGES[kind];
+  const doc = template(stage.template);
   return [
-    `You are the ${kind === "specify" ? "specification" : "implementation-planning"} engine inside PromptZone.`,
+    `You are the ${stage.role} engine inside PromptZone.`,
     `Fill in the following template completely, based on the user's input. Replace every placeholder. Do not leave template markers like [FEATURE NAME] or $ARGUMENTS in the output. Mark genuine unknowns with [NEEDS CLARIFICATION: question].`,
+    ...(kind === "tasks"
+      ? [
+          `Every task line MUST keep the exact checklist shape \`- [ ] T001 [P] Description\` ([P] only when parallelizable) so the platform can ingest it.`,
+        ]
+      : []),
     ``,
     `TEMPLATE:`,
     doc,
     ``,
-    `OUTPUT FORMAT (mandatory): return each file as a fenced block that starts with \`\`\`file:<relative-path> and ends with \`\`\`. Produce exactly one file at ${outPath}. The first line of the file must be a markdown H1 title. No prose outside the fenced block.`,
+    `OUTPUT FORMAT (mandatory): return each file as a fenced block that starts with \`\`\`file:<relative-path> and ends with \`\`\`. Produce exactly one file at ${stage.outPath}. The first line of the file must be a markdown H1 title. No prose outside the fenced block.`,
   ].join("\n");
+}
+
+// Pull `- [ ] T001 [P] Description` checklist lines out of a tasks.md.
+export function parseTaskLines(
+  doc: string,
+): { ref: string; title: string; parallel: boolean }[] {
+  const tasks: { ref: string; title: string; parallel: boolean }[] = [];
+  for (const line of doc.split("\n")) {
+    const m = /^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$/.exec(line);
+    if (m) tasks.push({ ref: m[1], title: m[3].trim(), parallel: Boolean(m[2]) });
+  }
+  return tasks;
 }
 
 function parseFiles(raw: string): StageOutput["files"] {
@@ -71,7 +108,7 @@ function extractDocument(raw: string): string | null {
 }
 
 export async function runStage(
-  kind: "specify" | "plan",
+  kind: StageKind,
   conn: ModelConnection,
   projectPath: string,
   userInput: string,

@@ -10,5 +10,5 @@ The engine ships its own minimal loop (`apps/engine/src/agent/loop.ts`): the ven
 
 ## Consequences
 - Scope→`specify` and Spec→`plan` are honest re-implementations of Spec Kit's *intent*, not invocations of Spec Kit itself. Coupling risk to Spec Kit's evolution (architecture §5) is now limited to template drift.
-- Tasks (gap G2) still have no producer; the Skill stage will own `tasks`-generation when implementation lands.
+- Tasks (gap G2) are produced by the Skill stage via the same loop — see ADR 0004.
 - Validated end-to-end against a mock provider. **Quality with real BYO models is still unproven** — run the walkthrough with Ollama/OpenRouter before declaring Phase 1 feasible; if weak models can't fill the template, escalate to a multi-turn loop or an external agent-CLI fallback.
