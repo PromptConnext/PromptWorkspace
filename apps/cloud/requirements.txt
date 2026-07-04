@@ -1,0 +1,11 @@
+fastapi>=0.115,<0.117
+uvicorn[standard]>=0.30,<0.35
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+httpx>=0.27,<0.29
+# Optional at runtime — only needed when DATA_BACKEND=supabase
+supabase>=2.6,<3
+
+# Dev / test
+pytest>=8.2,<9
+ruff>=0.5,<0.13

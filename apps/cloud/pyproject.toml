@@ -1,0 +1,16 @@
+[project]
+name = "promptzone-cloud"
+version = "0.1.0"
+description = "Thin sync + collaboration backend for the PromptZone task graph."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
