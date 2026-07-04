@@ -58,6 +58,16 @@ onboarding.get("/engine/onboarding/recommendations", (c) =>
         role: "plan",
       },
       {
+        // Strong tool-calling coding model — a good code-role pick where a
+        // small local model can't drive the agent loop (ADR 0006 finding).
+        provider: "zai",
+        label: "Z.AI GLM (strong coding, tool-calling)",
+        endpoint: "https://api.z.ai/api/paas/v4",
+        model: "glm-4.6",
+        needsKey: true,
+        role: "code",
+      },
+      {
         provider: "openai",
         label: "OpenAI",
         endpoint: "https://api.openai.com/v1",

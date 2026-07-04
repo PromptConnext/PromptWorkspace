@@ -308,6 +308,29 @@ pre.doc {
   font-size: 0.85em;
 }
 
+.setup-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  display: grid;
+  gap: 8px;
+  font-size: 0.85em;
+}
+
+.setup-panel pre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  overflow-x: auto;
+  user-select: all;
+}
+
+.setup-panel button {
+  justify-self: start;
+}
+
 .terminal-pane {
   height: calc(100vh - 230px);
   border: 1px solid var(--border);

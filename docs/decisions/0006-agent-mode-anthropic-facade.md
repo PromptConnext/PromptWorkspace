@@ -11,8 +11,8 @@ Instead of building a bespoke multi-turn tool loop, task implementation spawns a
 ## Why
 The agent brings what ADR 0005 could not: it reads files on demand, iterates, and can run tests — while the model powering it stays BYO through our existing gateway and keychain.
 
-## Terminal helper (local-LLM Claude Code, opt-in)
-The same façade powers the developer's own use: the integrated terminal has a **"Use local model here"** button that injects `ANTHROPIC_BASE_URL` (→ façade), `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ATTRIBUTION_HEADER=0` (KV-cache guard from the local-LLM guides) into that shell session. Running `claude`/`codex` there then uses the connected local model with zero manual setup. Opt-in via `GET /engine/local-llm-env`; the export command is typed visibly into the shell, and a developer who wants their own Claude account simply doesn't press it. This turns the manual local-LLM setup (jonathansblog local-LLM guide et al.) into one click, and our translation layer means Ollama's tool calls work where a raw `/v1/messages` pointing at Ollama would not.
+## Terminal helper (local-LLM Claude Code, copy-paste)
+The same façade powers the developer's own use: the integrated terminal has a **"Point Claude Code at your model"** disclosure that shows the exact exports — `ANTHROPIC_BASE_URL` (→ façade), `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ATTRIBUTION_HEADER=0` (KV-cache guard from the local-LLM guides) — for the connected model, served by `GET /engine/local-llm-env`, with a Copy button. Developers paste them into the shell themselves (chosen over auto-injection: the audience is developers who know their shell, and it keeps their own Claude account the default). Our translation layer means Ollama's tool calls work where a raw `/v1/messages` pointing at Ollama would not.
 
 ## Caveats
 - **ToS grey zone (roadmap risk #5):** `ANTHROPIC_BASE_URL` is a supported Claude Code config for gateways, but routing it to non-Anthropic models is not an endorsed use. Per-provider/Anthropic ToS review before this ships beyond local dev. An openly-licensed agent CLI (OpenCode/Codex CLI) is the drop-in alternative via `PROMPTZONE_AGENT_CMD`.
