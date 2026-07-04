@@ -1,14 +1,16 @@
-// Agent-mode implementation (ADR 0006): instead of one-shot codegen, spawn a
-// real coding agent headless in the project workspace, pointed at the
-// engine's Anthropic-compat façade so it runs on the team's BYO code model.
-// Default agent is Claude Code; PROMPTZONE_AGENT_CMD overrides (also used by
-// tests to substitute a fake agent).
-import { spawn, execFileSync } from "node:child_process";
+// Orchestrates an external coding-agent CLI (ADR 0009). PromptZone does not
+// ship its own coding-agent runtime; it launches whichever agent the developer
+// prefers (Claude Code / Gemini / Codex / custom) headless in the project
+// workspace and captures the result from Git — a capture path that is
+// agent-agnostic, so adapters stay thin.
+import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ENGINE_PORT } from "../config.ts";
 import { dataDir } from "../db.ts";
 import { commitFiles } from "./loop.ts";
+import { resolveAdapter, detectInstalledAgents } from "./adapters/index.ts";
 
 const AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -18,49 +20,9 @@ function agentConfigDir(): string {
   return dir;
 }
 
-export function resolveAgentCommand(): string | null {
-  const custom = process.env.PROMPTZONE_AGENT_CMD;
-  if (custom) return custom;
-  try {
-    execFileSync("sh", ["-c", "command -v claude"], { stdio: "pipe" });
-    return "claude";
-  } catch {
-    return null;
-  }
-}
-
-type StreamJsonLine = {
-  type?: string;
-  result?: string;
-  message?: { content?: { type?: string; text?: string; name?: string; input?: unknown }[] };
-};
-
-function describeLine(line: string, onDelta: (text: string) => void): void {
-  let parsed: StreamJsonLine;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    onDelta(line + "\n");
-    return;
-  }
-  if (parsed.type === "assistant") {
-    for (const block of parsed.message?.content ?? []) {
-      if (block.type === "text" && block.text) onDelta(block.text);
-      else if (block.type === "tool_use") {
-        const hint =
-          block.input && typeof block.input === "object"
-            ? String(
-                (block.input as { file_path?: string; command?: string }).file_path ??
-                  (block.input as { command?: string }).command ??
-                  "",
-              ).slice(0, 120)
-            : "";
-        onDelta(`\n[${block.name}] ${hint}\n`);
-      }
-    }
-  } else if (parsed.type === "result" && parsed.result) {
-    onDelta(`\n${parsed.result}\n`);
-  }
+// True when at least one agent CLI (or a custom command) is available.
+export function anyAgentAvailable(): boolean {
+  return detectInstalledAgents().length > 0;
 }
 
 function changedFiles(projectPath: string): string[] {
@@ -79,49 +41,23 @@ export async function runAgentTask(
   taskLabel: string,
   prompt: string,
   onDelta: (text: string) => void,
+  preferredAgentId?: string | null,
 ): Promise<{ files: string[]; commitSha: string; agent: string }> {
-  const cmd = resolveAgentCommand();
-  if (!cmd) throw new Error("no agent CLI available");
+  const adapter = resolveAdapter(preferredAgentId);
+  if (!adapter) throw new Error("no agent CLI available");
 
-  const isClaude = cmd === "claude";
-  // Safe default: file tools only. The BYO model steers the agent, and an
-  // untrusted/compromised model endpoint must not get shell access. Setting
-  // PROMPTZONE_AGENT_ALLOW_BASH=1 opts in (lets the agent run tests) — the
-  // user accepts that their connected code model can execute commands.
-  const allowedTools =
-    process.env.PROMPTZONE_AGENT_ALLOW_BASH === "1"
-      ? "Edit,Write,Read,Glob,Grep,Bash"
-      : "Edit,Write,Read,Glob,Grep";
-  const child = isClaude
-    ? spawn(
-        "claude",
-        [
-          "-p", prompt,
-          "--output-format", "stream-json",
-          "--verbose",
-          "--permission-mode", "acceptEdits",
-          "--allowedTools", allowedTools,
-        ],
-        {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            ANTHROPIC_BASE_URL: `http://127.0.0.1:${ENGINE_PORT}/anthropic`,
-            ANTHROPIC_API_KEY: "promptzone-local-proxy",
-            // Isolate from the user's personal Claude Code setup: no global
-            // plugins/hooks/MCP servers leaking tools into the system prompt
-            // or state files into the workspace (live-dogfood finding).
-            CLAUDE_CONFIG_DIR: agentConfigDir(),
-            NO_COLOR: "1",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      )
-    : spawn("sh", ["-c", cmd], {
-        cwd: projectPath,
-        env: { ...process.env, TASK_PROMPT: prompt },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+  const plan = adapter.buildSpawn({
+    prompt,
+    engineBaseUrl: `http://127.0.0.1:${ENGINE_PORT}`,
+    configDir: agentConfigDir(),
+    allowBash: process.env.PROMPTZONE_AGENT_ALLOW_BASH === "1",
+  });
+
+  const child = spawn(plan.command, plan.args, {
+    cwd: projectPath,
+    env: { ...process.env, ...(plan.env ?? {}) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
@@ -133,9 +69,7 @@ export async function runAgentTask(
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      if (isClaude) describeLine(line, onDelta);
-      else onDelta(line + "\n");
+      if (line.trim()) adapter.parseLine(line, onDelta);
     }
   });
 
@@ -155,12 +89,12 @@ export async function runAgentTask(
   });
 
   if (exitCode !== 0) {
-    throw new Error(`agent exited with code ${exitCode}: ${stderr.slice(-400)}`);
+    throw new Error(`${adapter.label} exited with code ${exitCode}: ${stderr.slice(-400)}`);
   }
   const files = changedFiles(projectPath);
   if (files.length === 0) {
-    throw new Error("agent completed but made no changes to the repository");
+    throw new Error(`${adapter.label} completed but made no changes to the repository`);
   }
   const commitSha = commitFiles(projectPath, files, `promptzone: ${taskLabel}`);
-  return { files, commitSha, agent: isClaude ? "claude-code" : "custom" };
+  return { files, commitSha, agent: adapter.id };
 }

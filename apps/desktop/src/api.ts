@@ -217,3 +217,21 @@ export const getStatus = (projectId: string) =>
   request<{ changed: { state: string; path: string }[] }>(
     `/engine/projects/${projectId}/status`,
   );
+
+export type AgentInfo = {
+  id: string;
+  label: string;
+  installed: boolean;
+  bringsOwnModel: boolean;
+};
+
+export const listAgents = () => request<{ agents: AgentInfo[] }>("/engine/agents");
+
+export const getProjectAgent = (projectId: string) =>
+  request<{ selected: string }>(`/engine/projects/${projectId}/agent`);
+
+export const setProjectAgent = (projectId: string, agentId: string) =>
+  request<{ selected: string }>(`/engine/projects/${projectId}/agent`, {
+    method: "POST",
+    body: JSON.stringify({ agentId }),
+  });

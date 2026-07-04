@@ -8,6 +8,7 @@ import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
 import { projects } from "./routes/projects.ts";
 import { files } from "./routes/files.ts";
+import { agents } from "./routes/agents.ts";
 import { registerTerminal } from "./routes/terminal.ts";
 import { isAllowedOrigin } from "./security.ts";
 
@@ -33,6 +34,7 @@ app.route("/", models);
 app.route("/", onboarding);
 app.route("/", projects);
 app.route("/", files);
+app.route("/", agents);
 // Anthropic Messages façade for agent CLIs (ADR 0006) — routes to the
 // connected code-role model.
 app.route("/anthropic", anthropicCompat(() => connectionForRoleStrict("code")));

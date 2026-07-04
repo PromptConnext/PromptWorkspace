@@ -7,6 +7,7 @@ import {
   runSpec,
   runTaskImplementation,
   runTasks,
+  listAgents,
   type Graph,
   type Project,
 } from "../api";
@@ -16,6 +17,7 @@ import TerminalPane from "./TerminalPane";
 import EditorPane from "./EditorPane";
 import SpecDoc, { extractClarifications } from "./SpecDoc";
 import Clarifications from "./Clarifications";
+import AgentPicker from "./AgentPicker";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -29,6 +31,7 @@ export default function ThreeS({ project }: { project: Project }) {
   const [output, setOutput] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const [hasCodeModel, setHasCodeModel] = useState(true);
+  const [hasAgent, setHasAgent] = useState(false);
   const [tab, setTab] = useState<"threes" | "graph" | "editor" | "terminal">("threes");
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -36,7 +39,13 @@ export default function ThreeS({ project }: { project: Project }) {
     setGraph(await getGraph(project.id));
     const models = await listModels();
     setHasCodeModel(models.connections.some((c) => c.role === "code" && c.healthy));
+    const a = await listAgents().catch(() => ({ agents: [] }));
+    setHasAgent(a.agents.some((x) => x.installed));
   }, [project.id]);
+
+  // A task can be implemented if a coding model is connected OR an external
+  // agent (which may bring its own model) is available.
+  const canImplement = hasCodeModel || hasAgent;
 
   useEffect(() => {
     refresh().catch((err) => setError((err as Error).message));
@@ -271,6 +280,7 @@ export default function ThreeS({ project }: { project: Project }) {
           {specApproved && (
             <div className="stage-panel">
               <h3>Skill — equip the project to build itself</h3>
+              <AgentPicker projectId={project.id} />
               <div className="row">
                 <button
                   type="button"
@@ -299,8 +309,8 @@ export default function ThreeS({ project }: { project: Project }) {
                         {task.status !== "done" && (
                           <button
                             type="button"
-                            disabled={busy !== null || !hasCodeModel}
-                            title={hasCodeModel ? undefined : "Connect a coding model first"}
+                            disabled={busy !== null || !canImplement}
+                            title={canImplement ? undefined : "Connect a coding model or install an agent CLI"}
                             onClick={() =>
                               act(
                                 `run-${task.id}`,
@@ -317,15 +327,11 @@ export default function ThreeS({ project }: { project: Project }) {
                   ))}
                 </ul>
               )}
-              {hasCodeModel ? (
-                <p className="muted">
-                  Coding model connected. Implementation execution is the next milestone.
-                </p>
-              ) : (
+              {!canImplement && (
                 <>
                   <p>
-                    Implementation needs a model optimized for coding. Connect one now —
-                    it's needed from this point on.
+                    To implement, either install a coding-agent CLI (above) or connect a coding
+                    model for the built-in fallback.
                   </p>
                   <ConnectForm role="code" onConnected={() => refresh()} />
                 </>

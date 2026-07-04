@@ -404,6 +404,34 @@ pre.doc {
   transition: width 0.3s ease;
 }
 
+/* agent picker (ADR 0009) */
+.agent-picker {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  display: grid;
+  gap: 6px;
+}
+.agent-picker .agent-picker-head {
+  font-size: 0.95em;
+}
+.agent-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+.agent-chip {
+  font-size: 0.85em;
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.agent-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .task-list {
   list-style: none;
   padding: 0;

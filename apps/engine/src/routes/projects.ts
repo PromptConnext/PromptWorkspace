@@ -8,7 +8,8 @@ import { execFileSync } from "node:child_process";
 import { db, getAppState } from "../db.ts";
 import { connectionForRole, connectionForRoleStrict } from "./models.ts";
 import { parseTaskLines, runImplementation, runStage } from "../agent/loop.ts";
-import { resolveAgentCommand, runAgentTask } from "../agent/agent-runner.ts";
+import { runAgentTask } from "../agent/agent-runner.ts";
+import { resolveAdapter } from "../agent/adapters/index.ts";
 
 export const projects = new Hono();
 
@@ -349,10 +350,25 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
     | undefined;
   if (!task) return c.json({ error: "task not found" }, 404);
 
+  // Implementation runtime (ADR 0009): orchestrate the project's chosen agent
+  // CLI; fall back to the one-shot loop when none is available. `loop` forces
+  // the fallback.
+  const mode = getAppState("implementation_mode") ?? "auto";
+  const preferredAgent = getAppState(`implementation_agent.${task.project_id}`);
+  const adapter = mode === "loop" ? null : resolveAdapter(preferredAgent);
+  const useAgent = adapter !== null;
+
+  // The one-shot loop and façade-routed Claude Code run on the connected BYO
+  // model; agents that bring their own account/model (Gemini/Codex/custom) do
+  // not need a PromptZone code connection.
+  const needsCodeModel = !useAgent || adapter.bringsOwnModel === false;
   const conn = connectionForRoleStrict("code");
-  if (!conn) {
+  if (needsCodeModel && !conn) {
     return c.json(
-      { error: "no verified coding model — connect one with role 'code' in the Skill stage" },
+      {
+        error:
+          "no verified coding model — connect one with role 'code' in the Skill stage, or select an agent that uses its own account (Gemini/Codex)",
+      },
       409,
     );
   }
@@ -360,15 +376,8 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
   const runId = randomUUID();
   db.prepare(
     "INSERT INTO agent_runs (id, project_id, task_id, model_connection_id, action, input_ref, status) VALUES (?, ?, ?, ?, 'implement', ?, 'running')",
-  ).run(runId, task.project_id, task.id, conn.id, task.title.slice(0, 2000));
+  ).run(runId, task.project_id, task.id, conn?.id ?? null, task.title.slice(0, 2000));
   db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(task.id);
-
-  // Implementation mode (ADR 0006): "agent" spawns a coding-agent CLI in the
-  // workspace via the Anthropic façade; "loop" is the one-shot fallback;
-  // "auto" (default) picks agent when one is installed.
-  const mode = getAppState("implementation_mode") ?? "auto";
-  const useAgent =
-    mode === "agent" || (mode === "auto" && resolveAgentCommand() !== null);
 
   return streamSSE(c, async (stream) => {
     try {
@@ -388,9 +397,10 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
               `Implement ONLY the task named above, with tests where appropriate. Do not commit; the platform commits for you.`,
             ].join("\n"),
             onDelta,
+            preferredAgent,
           ).then((r) => ({ files: r.files.map((path) => ({ path })), commitSha: r.commitSha }))
         : await runImplementation(
-            conn,
+            conn!,
             task.project_path,
             label,
             [
