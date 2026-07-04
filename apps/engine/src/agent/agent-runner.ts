@@ -73,6 +73,14 @@ export async function runAgentTask(
   if (!cmd) throw new Error("no agent CLI available");
 
   const isClaude = cmd === "claude";
+  // Safe default: file tools only. The BYO model steers the agent, and an
+  // untrusted/compromised model endpoint must not get shell access. Setting
+  // PROMPTZONE_AGENT_ALLOW_BASH=1 opts in (lets the agent run tests) — the
+  // user accepts that their connected code model can execute commands.
+  const allowedTools =
+    process.env.PROMPTZONE_AGENT_ALLOW_BASH === "1"
+      ? "Edit,Write,Read,Glob,Grep,Bash"
+      : "Edit,Write,Read,Glob,Grep";
   const child = isClaude
     ? spawn(
         "claude",
@@ -81,7 +89,7 @@ export async function runAgentTask(
           "--output-format", "stream-json",
           "--verbose",
           "--permission-mode", "acceptEdits",
-          "--allowedTools", "Edit,Write,Read,Glob,Grep,Bash",
+          "--allowedTools", allowedTools,
         ],
         {
           cwd: projectPath,
