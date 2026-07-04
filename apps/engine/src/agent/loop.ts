@@ -149,6 +149,17 @@ function writeFiles(projectPath: string, files: StageOutput["files"]): void {
 
 export function commitAll(projectPath: string, message: string): string {
   execFileSync("git", ["add", "-A"], { cwd: projectPath });
+  return commitStaged(projectPath, message);
+}
+
+// Commit exactly these paths — agent mode must not sweep up unrelated files
+// (e.g. tooling state) with a blanket add.
+export function commitFiles(projectPath: string, files: string[], message: string): string {
+  execFileSync("git", ["add", "--", ...files], { cwd: projectPath });
+  return commitStaged(projectPath, message);
+}
+
+function commitStaged(projectPath: string, message: string): string {
   execFileSync("git", ["commit", "-m", message, "--no-gpg-sign"], {
     cwd: projectPath,
     stdio: "pipe",

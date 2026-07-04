@@ -4,10 +4,19 @@
 // Default agent is Claude Code; PROMPTZONE_AGENT_CMD overrides (also used by
 // tests to substitute a fake agent).
 import { spawn, execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { ENGINE_PORT } from "../config.ts";
-import { commitAll } from "./loop.ts";
+import { dataDir } from "../db.ts";
+import { commitFiles } from "./loop.ts";
 
 const AGENT_TIMEOUT_MS = 10 * 60 * 1000;
+
+function agentConfigDir(): string {
+  const dir = join(dataDir(), "agent-config");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 export function resolveAgentCommand(): string | null {
   const custom = process.env.PROMPTZONE_AGENT_CMD;
@@ -60,7 +69,9 @@ function changedFiles(projectPath: string): string[] {
     .split("\n")
     .filter(Boolean)
     .map((line) => line.slice(3).split(" -> ").pop()!.trim())
-    .filter(Boolean);
+    // Tooling state (.omc/, .claude/, …) is not implementation output — a
+    // plugin writing its session files must not count as "the agent did work".
+    .filter((path) => path && !path.split("/")[0].startsWith("."));
 }
 
 export async function runAgentTask(
@@ -97,6 +108,10 @@ export async function runAgentTask(
             ...process.env,
             ANTHROPIC_BASE_URL: `http://127.0.0.1:${ENGINE_PORT}/anthropic`,
             ANTHROPIC_API_KEY: "promptzone-local-proxy",
+            // Isolate from the user's personal Claude Code setup: no global
+            // plugins/hooks/MCP servers leaking tools into the system prompt
+            // or state files into the workspace (live-dogfood finding).
+            CLAUDE_CONFIG_DIR: agentConfigDir(),
             NO_COLOR: "1",
           },
           stdio: ["ignore", "pipe", "pipe"],
@@ -146,6 +161,6 @@ export async function runAgentTask(
   if (files.length === 0) {
     throw new Error("agent completed but made no changes to the repository");
   }
-  const commitSha = commitAll(projectPath, `promptzone: ${taskLabel}`);
+  const commitSha = commitFiles(projectPath, files, `promptzone: ${taskLabel}`);
   return { files, commitSha, agent: isClaude ? "claude-code" : "custom" };
 }
