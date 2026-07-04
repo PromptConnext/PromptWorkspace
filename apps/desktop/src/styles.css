@@ -203,6 +203,103 @@ pre.doc {
   gap: 12px;
 }
 
+/* editor — Cursor-like file tree + Monaco tabs */
+.editor-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  height: calc(100vh - 190px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.file-tree {
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  padding: 8px;
+  font-size: 0.85em;
+}
+
+.tree-root,
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-children {
+  padding-left: 12px;
+}
+
+.tree-row {
+  width: 100%;
+  text-align: left;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tree-row.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tree-row .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d97706;
+  margin-left: auto;
+}
+
+.editor-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.editor-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  padding: 4px;
+  overflow-x: auto;
+}
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.editor-tab.active {
+  border-color: var(--accent);
+}
+
+.editor-tab button {
+  border: none;
+  padding: 3px 6px;
+  font-size: 0.85em;
+}
+
+.editor-tab .close {
+  padding: 3px 6px;
+  opacity: 0.6;
+}
+
+.save-btn {
+  margin-left: auto;
+  font-size: 0.8em;
+}
+
+.editor-empty {
+  padding: 24px;
+}
+
 .terminal-pane {
   height: calc(100vh - 190px);
   border: 1px solid var(--border);

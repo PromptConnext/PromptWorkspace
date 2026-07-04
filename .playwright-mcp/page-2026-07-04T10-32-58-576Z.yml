@@ -1,0 +1,128 @@
+- generic [ref=f2e1]:
+  - generic [ref=f2e3]:
+    - complementary [ref=f2e4]:
+      - heading "Projects" [level=2] [ref=f2e5]
+      - list [ref=f2e6]:
+        - listitem [ref=f2e7]:
+          - button "20-20-20-EyeRest" [ref=f2e8] [cursor=pointer]
+        - listitem [ref=f2e9]:
+          - button "Stream Demo" [ref=f2e10] [cursor=pointer]
+      - generic [ref=f2e11]:
+        - textbox "New project name" [ref=f2e12]
+        - button "Create" [disabled] [ref=f2e13]
+    - generic [ref=f2e16]:
+      - generic [ref=f2e17]:
+        - heading "20-20-20-EyeRest" [level=2] [ref=f2e18]
+        - navigation [ref=f2e19]:
+          - button "3S Workflow" [ref=f2e20] [cursor=pointer]
+          - button "Task Graph" [ref=f2e21] [cursor=pointer]
+          - button "Editor" [ref=f2e22] [cursor=pointer]
+          - button "Terminal" [ref=f2e23] [cursor=pointer]
+      - generic [ref=f2e179]:
+        - complementary [ref=f2e180]:
+          - list [ref=f2e181]:
+            - listitem [ref=f2e182]:
+              - button "▸ .omc" [ref=f2e183] [cursor=pointer]
+            - listitem [ref=f2e184]:
+              - button "▸ backend" [ref=f2e185] [cursor=pointer]
+            - listitem [ref=f2e186]:
+              - button "▸ frontend" [ref=f2e187] [cursor=pointer]
+            - listitem [ref=f2e188]:
+              - button "▾ specs" [ref=f2e193] [cursor=pointer]
+              - list [ref=f2e194]:
+                - listitem [ref=f2e195]:
+                  - button "▾ 001" [ref=f2e199] [cursor=pointer]
+                  - list [ref=f2e200]:
+                    - listitem [ref=f2e201]:
+                      - button "▸ contracts" [ref=f2e202] [cursor=pointer]
+                    - listitem [ref=f2e203]:
+                      - button "data-model.md" [ref=f2e204] [cursor=pointer]
+                    - listitem [ref=f2e205]:
+                      - button "plan.md" [ref=f2e206] [cursor=pointer]
+                    - listitem [ref=f2e207]:
+                      - button "quickstart.md" [ref=f2e208] [cursor=pointer]
+                    - listitem [ref=f2e209]:
+                      - button "research.md" [ref=f2e210] [cursor=pointer]
+                    - listitem [ref=f2e211]:
+                      - button "spec.md" [active] [ref=f2e212] [cursor=pointer]
+                    - listitem [ref=f2e213]:
+                      - button "tasks.md" [ref=f2e214] [cursor=pointer]
+                - listitem [ref=f2e197]:
+                  - button "▸ 20-20-20-Eye-Rest-Tracker" [ref=f2e198] [cursor=pointer]
+        - generic [ref=f2e190]:
+          - generic [ref=f2e191]:
+            - generic [ref=f2e215]:
+              - button "spec.md" [ref=f2e216] [cursor=pointer]
+              - button "×" [ref=f2e217] [cursor=pointer]
+            - button "Save (⌘S)" [ref=f2e218] [cursor=pointer]
+          - code [ref=f2e221]:
+            - generic [ref=f2e222]:
+              - textbox "Editor content"
+              - textbox [ref=f2e223]
+              - generic [ref=f2e225]:
+                - generic [ref=f2e228]: "1"
+                - generic [ref=f2e230]: "2"
+                - generic [ref=f2e232]: "3"
+                - generic [ref=f2e234]: "4"
+                - generic [ref=f2e236]: "5"
+                - generic [ref=f2e238]: "6"
+                - generic [ref=f2e240]: "7"
+                - generic [ref=f2e242]: "8"
+                - generic [ref=f2e244]: "9"
+                - generic [ref=f2e246]: "10"
+                - generic [ref=f2e248]: "11"
+                - generic [ref=f2e250]: "12"
+                - generic [ref=f2e252]: "13"
+                - generic [ref=f2e254]: "14"
+                - generic [ref=f2e256]: "15"
+                - generic [ref=f2e258]: "16"
+                - generic [ref=f2e260]: "17"
+                - generic [ref=f2e262]: "18"
+                - generic [ref=f2e264]: "19"
+                - generic [ref=f2e266]: "20"
+                - generic [ref=f2e268]: "21"
+                - generic [ref=f2e270]: "22"
+                - generic [ref=f2e272]: "23"
+                - generic [ref=f2e274]: "24"
+                - generic [ref=f2e276]: "25"
+                - generic [ref=f2e278]: "26"
+                - generic [ref=f2e280]: "27"
+                - generic [ref=f2e282]: "28"
+                - generic [ref=f2e284]: "29"
+                - generic [ref=f2e286]: "30"
+                - generic [ref=f2e288]: "31"
+                - generic [ref=f2e290]: "32"
+                - generic [ref=f2e292]: "33"
+                - generic [ref=f2e294]: "34"
+                - generic [ref=f2e296]: "35"
+                - generic [ref=f2e298]: "36"
+                - generic [ref=f2e300]: "37"
+                - generic [ref=f2e302]: "38"
+                - generic [ref=f2e304]: "39"
+                - generic [ref=f2e306]: "40"
+                - generic [ref=f2e308]: "41"
+              - generic [ref=f2e352]:
+                - generic [ref=f2e355]: "# Feature Specification: 20-20-20 Eye Rest Tracker"
+                - generic [ref=f2e358]: "**Feature Branch**: [###-feature-20-20-20]"
+                - generic [ref=f2e361]: "**Created**: [DATE]"
+                - generic [ref=f2e364]: "**Status**: Draft"
+                - generic [ref=f2e367]: "**Input**: User description: \"A web application that track 20-20-20 Eye Rest rule\""
+                - generic [ref=f2e370]: "## User Scenarios & Testing *(mandatory)*"
+                - generic [ref=f2e373]: "### User Story 1 - Track the Eye Rest Rule (Priority: P1)"
+                - generic [ref=f2e376]: As a user, I want to be reminded every 20 minutes to look at something 20 feet away for 20 seconds so that my eyes can rest.
+                - generic [ref=f2e379]: "**Why this priority**: Ensuring frequent breaks from close-up screens reduces eye strain and fatigue."
+                - generic [ref=f2e382]: "**Independent Test**: The application should remind the user every 20 minutes to look at an object 20 feet away for 20 seconds."
+                - generic [ref=f2e385]: "**Acceptance Scenarios**:"
+                - generic [ref=f2e388]: 1. **Given** I am using a computer, **When** 20 minutes have passed, **Then** a reminder pop-up appears on my screen.
+                - generic [ref=f2e390]: 2. **Given** I am using a mobile device, **When** 20 minutes have passed, **Then** the operating system's notification should remind me.
+                - generic [ref=f2e393]: "---"
+                - generic [ref=f2e396]: "### User Story 2 - Set Custom Reminders (Priority: P2)"
+                - generic [ref=f2e399]: As a user, I want to be able to customize the frequency and duration of my eye rest breaks so that I can better manage my eye health.
+                - generic [ref=f2e402]: "**Why this priority**: Different users may have different needs regarding their visual breaks."
+                - generic [ref=f2e405]: "**Independent Test**: The application should allow users to set custom reminders for eye rest breaks."
+                - generic [ref=f2e408]: "**Acceptance Scenarios**:"
+                - generic [ref=f2e411]: 1. **Given** I am logged into the application, **When** I go to settings and change the reminder frequency and duration, **Then** the reminders should reflect these changes.
+                - generic [ref=f2e413]: 2. **Given** I am using a mobile device, **When** I receive an eye rest reminder while on call, **Then** the reminder should pause until the call is ended.
+  - generic [ref=f2e420]:
+    - alert
+    - alert

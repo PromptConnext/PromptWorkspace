@@ -13,6 +13,7 @@ import {
 import ConnectForm from "./ConnectForm";
 import GraphView from "./GraphView";
 import TerminalPane from "./TerminalPane";
+import EditorPane from "./EditorPane";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -25,7 +26,7 @@ export default function ThreeS({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [hasCodeModel, setHasCodeModel] = useState(true);
-  const [tab, setTab] = useState<"threes" | "graph" | "terminal">("threes");
+  const [tab, setTab] = useState<"threes" | "graph" | "editor" | "terminal">("threes");
   const [copied, setCopied] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -99,6 +100,13 @@ export default function ThreeS({ project }: { project: Project }) {
           </button>
           <button
             type="button"
+            className={tab === "editor" ? "active" : ""}
+            onClick={() => setTab("editor")}
+          >
+            Editor
+          </button>
+          <button
+            type="button"
             className={tab === "terminal" ? "active" : ""}
             onClick={() => setTab("terminal")}
           >
@@ -107,9 +115,13 @@ export default function ThreeS({ project }: { project: Project }) {
         </nav>
       </header>
 
-      {/* keep the terminal mounted so the shell survives tab switches */}
+      {/* keep terminal + editor mounted so shell sessions and editor state
+          survive tab switches */}
       <div style={{ display: tab === "terminal" ? "block" : "none" }}>
         <TerminalPane projectId={project.id} />
+      </div>
+      <div style={{ display: tab === "editor" ? "block" : "none" }}>
+        <EditorPane projectId={project.id} />
       </div>
       {tab === "graph" && <GraphView graph={graph} />}
       {tab === "threes" && (

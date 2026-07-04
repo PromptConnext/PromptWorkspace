@@ -184,3 +184,24 @@ export const approveStage = (projectId: string, stage: string) =>
 
 export const getGraph = (projectId: string) =>
   request<Graph>(`/engine/projects/${projectId}/graph`);
+
+export type FileNode = { name: string; path: string; dir: boolean; children?: FileNode[] };
+
+export const getFileTree = (projectId: string) =>
+  request<{ tree: FileNode[] }>(`/engine/projects/${projectId}/files`);
+
+export const readFile = (projectId: string, path: string) =>
+  request<{ path: string; content: string }>(
+    `/engine/projects/${projectId}/file?path=${encodeURIComponent(path)}`,
+  );
+
+export const writeFile = (projectId: string, path: string, content: string) =>
+  request<{ path: string; saved: boolean }>(`/engine/projects/${projectId}/file`, {
+    method: "PUT",
+    body: JSON.stringify({ path, content }),
+  });
+
+export const getStatus = (projectId: string) =>
+  request<{ changed: { state: string; path: string }[] }>(
+    `/engine/projects/${projectId}/status`,
+  );

@@ -1,0 +1,36 @@
+- generic [ref=f2e3]:
+  - complementary [ref=f2e4]:
+    - heading "Projects" [level=2] [ref=f2e5]
+    - list [ref=f2e6]:
+      - listitem [ref=f2e7]:
+        - button "20-20-20-EyeRest" [ref=f2e8] [cursor=pointer]
+      - listitem [ref=f2e9]:
+        - button "Stream Demo" [ref=f2e10] [cursor=pointer]
+    - generic [ref=f2e11]:
+      - textbox "New project name" [ref=f2e12]
+      - button "Create" [disabled] [ref=f2e13]
+  - generic [ref=f2e16]:
+    - generic [ref=f2e17]:
+      - heading "20-20-20-EyeRest" [level=2] [ref=f2e18]
+      - navigation [ref=f2e19]:
+        - button "3S Workflow" [ref=f2e20] [cursor=pointer]
+        - button "Task Graph" [ref=f2e21] [cursor=pointer]
+        - button "Editor" [ref=f2e22] [cursor=pointer]
+        - button "Terminal" [ref=f2e23] [cursor=pointer]
+    - generic [ref=f2e179]:
+      - complementary [ref=f2e180]:
+        - list [ref=f2e181]:
+          - listitem [ref=f2e182]:
+            - button "▸ .omc" [ref=f2e183] [cursor=pointer]
+          - listitem [ref=f2e184]:
+            - button "▸ backend" [ref=f2e185] [cursor=pointer]
+          - listitem [ref=f2e186]:
+            - button "▸ frontend" [ref=f2e187] [cursor=pointer]
+          - listitem [ref=f2e188]:
+            - button "▾ specs" [active] [ref=f2e193] [cursor=pointer]
+            - list [ref=f2e194]:
+              - listitem [ref=f2e195]:
+                - button "▸ 001" [ref=f2e196] [cursor=pointer]
+              - listitem [ref=f2e197]:
+                - button "▸ 20-20-20-Eye-Rest-Tracker" [ref=f2e198] [cursor=pointer]
+      - paragraph [ref=f2e192]: Open a file from the tree to start editing.

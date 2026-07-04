@@ -1,0 +1,171 @@
+- generic [ref=e19]:
+  - complementary [ref=e20]:
+    - heading "Projects" [level=2] [ref=e21]
+    - list [ref=e22]:
+      - listitem [ref=e23]:
+        - button "20-20-20-EyeRest" [active] [ref=e24] [cursor=pointer]
+      - listitem [ref=e25]:
+        - button "Stream Demo" [ref=e26] [cursor=pointer]
+    - generic [ref=e27]:
+      - textbox "New project name" [ref=e28]
+      - button "Create" [disabled] [ref=e29]
+  - generic [ref=e32]:
+    - generic [ref=e33]:
+      - heading "20-20-20-EyeRest" [level=2] [ref=e34]
+      - navigation [ref=e35]:
+        - button "3S Workflow" [ref=e36] [cursor=pointer]
+        - button "Task Graph" [ref=e37] [cursor=pointer]
+        - button "Editor" [ref=e38] [cursor=pointer]
+        - button "Terminal" [ref=e39] [cursor=pointer]
+    - generic [ref=e40]:
+      - generic [ref=e41]: 1 · Scope ✓
+      - generic [ref=e42]: 2 · Spec ✓
+      - generic [ref=e43]: 3 · Skill
+    - generic [ref=e44]:
+      - heading "Skill — equip the project to build itself" [level=3] [ref=e45]
+      - button "Regenerate tasks" [ref=e47] [cursor=pointer]
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - generic [ref=e50]: Create project structure per implementation plan done
+          - button "Copy context" [ref=e52] [cursor=pointer]
+        - listitem [ref=e53]:
+          - generic [ref=e54]: Initialize Python project with FastAPI dependencies todo
+          - generic [ref=e55]:
+            - button "Copy context" [ref=e56] [cursor=pointer]
+            - button "Run" [ref=e57] [cursor=pointer]
+        - listitem [ref=e58]:
+          - generic [ref=e59]: Configure linting and formatting tools todo
+          - generic [ref=e60]:
+            - button "Copy context" [ref=e61] [cursor=pointer]
+            - button "Run" [ref=e62] [cursor=pointer]
+        - listitem [ref=e63]:
+          - generic [ref=e64]: Setup database schema and migrations framework todo
+          - generic [ref=e65]:
+            - button "Copy context" [ref=e66] [cursor=pointer]
+            - button "Run" [ref=e67] [cursor=pointer]
+        - listitem [ref=e68]:
+          - generic [ref=e69]: Implement authentication/authorization framework (Simple JWT for now) todo
+          - generic [ref=e70]:
+            - button "Copy context" [ref=e71] [cursor=pointer]
+            - button "Run" [ref=e72] [cursor=pointer]
+        - listitem [ref=e73]:
+          - generic [ref=e74]: Setup API routing and middleware structure todo
+          - generic [ref=e75]:
+            - button "Copy context" [ref=e76] [cursor=pointer]
+            - button "Run" [ref=e77] [cursor=pointer]
+        - listitem [ref=e78]:
+          - generic [ref=e79]: Create base models/entities that all stories depend on todo
+          - generic [ref=e80]:
+            - button "Copy context" [ref=e81] [cursor=pointer]
+            - button "Run" [ref=e82] [cursor=pointer]
+        - listitem [ref=e83]:
+          - generic [ref=e84]: Configure error handling and logging infrastructure todo
+          - generic [ref=e85]:
+            - button "Copy context" [ref=e86] [cursor=pointer]
+            - button "Run" [ref=e87] [cursor=pointer]
+        - listitem [ref=e88]:
+          - generic [ref=e89]: Setup environment configuration management todo
+          - generic [ref=e90]:
+            - button "Copy context" [ref=e91] [cursor=pointer]
+            - button "Run" [ref=e92] [cursor=pointer]
+        - listitem [ref=e93]:
+          - generic [ref=e94]: Contract test for /break-endpoint in tests/contract/test_break_endpoint.py todo
+          - generic [ref=e95]:
+            - button "Copy context" [ref=e96] [cursor=pointer]
+            - button "Run" [ref=e97] [cursor=pointer]
+        - listitem [ref=e98]:
+          - generic [ref=e99]: Integration test for break functionality in tests/integration/test_break_functionality.py todo
+          - generic [ref=e100]:
+            - button "Copy context" [ref=e101] [cursor=pointer]
+            - button "Run" [ref=e102] [cursor=pointer]
+        - listitem [ref=e103]:
+          - generic [ref=e104]: Create BreakReminder model in src/models/break_reminder.py todo
+          - generic [ref=e105]:
+            - button "Copy context" [ref=e106] [cursor=pointer]
+            - button "Run" [ref=e107] [cursor=pointer]
+        - listitem [ref=e108]:
+          - generic [ref=e109]: Implement BreakService in src/services/break_service.py todo
+          - generic [ref=e110]:
+            - button "Copy context" [ref=e111] [cursor=pointer]
+            - button "Run" [ref=e112] [cursor=pointer]
+        - listitem [ref=e113]:
+          - generic [ref=e114]: Implement /break-endpoint in src/api/endpoints/break_endpoint.py todo
+          - generic [ref=e115]:
+            - button "Copy context" [ref=e116] [cursor=pointer]
+            - button "Run" [ref=e117] [cursor=pointer]
+        - listitem [ref=e118]:
+          - generic [ref=e119]: Add validation and error handling to /break-endpoint todo
+          - generic [ref=e120]:
+            - button "Copy context" [ref=e121] [cursor=pointer]
+            - button "Run" [ref=e122] [cursor=pointer]
+        - listitem [ref=e123]:
+          - generic [ref=e124]: Add logging for break reminder operations todo
+          - generic [ref=e125]:
+            - button "Copy context" [ref=e126] [cursor=pointer]
+            - button "Run" [ref=e127] [cursor=pointer]
+        - listitem [ref=e128]:
+          - generic [ref=e129]: Contract test for /visual-reminder-endpoint in tests/contract/test_visual_reminder_endpoint.py todo
+          - generic [ref=e130]:
+            - button "Copy context" [ref=e131] [cursor=pointer]
+            - button "Run" [ref=e132] [cursor=pointer]
+        - listitem [ref=e133]:
+          - generic [ref=e134]: Integration test for visual reminder functionality in tests/integration/test_visual_reminder_functionality.py todo
+          - generic [ref=e135]:
+            - button "Copy context" [ref=e136] [cursor=pointer]
+            - button "Run" [ref=e137] [cursor=pointer]
+        - listitem [ref=e138]:
+          - generic [ref=e139]: Create VisualReminder model in src/models/visual_reminder.py todo
+          - generic [ref=e140]:
+            - button "Copy context" [ref=e141] [cursor=pointer]
+            - button "Run" [ref=e142] [cursor=pointer]
+        - listitem [ref=e143]:
+          - generic [ref=e144]: Implement VisualReminderService in src/services/visual_reminder_service.py todo
+          - generic [ref=e145]:
+            - button "Copy context" [ref=e146] [cursor=pointer]
+            - button "Run" [ref=e147] [cursor=pointer]
+        - listitem [ref=e148]:
+          - generic [ref=e149]: Implement /visual-reminder-endpoint in src/api/endpoints/visual_reminder_endpoint.py todo
+          - generic [ref=e150]:
+            - button "Copy context" [ref=e151] [cursor=pointer]
+            - button "Run" [ref=e152] [cursor=pointer]
+        - listitem [ref=e153]:
+          - generic [ref=e154]: Integrate with BreakService (if needed) todo
+          - generic [ref=e155]:
+            - button "Copy context" [ref=e156] [cursor=pointer]
+            - button "Run" [ref=e157] [cursor=pointer]
+        - listitem [ref=e158]:
+          - generic [ref=e159]: Add validation and error handling to /visual-reminder-endpoint todo
+          - generic [ref=e160]:
+            - button "Copy context" [ref=e161] [cursor=pointer]
+            - button "Run" [ref=e162] [cursor=pointer]
+        - listitem [ref=e163]:
+          - generic [ref=e164]: Add logging for visual reminder operations todo
+          - generic [ref=e165]:
+            - button "Copy context" [ref=e166] [cursor=pointer]
+            - button "Run" [ref=e167] [cursor=pointer]
+        - listitem [ref=e168]:
+          - generic [ref=e169]: Contract test for cross-browser compatibility in tests/contract/test_cross_browser_compatibility.py todo
+          - generic [ref=e170]:
+            - button "Copy context" [ref=e171] [cursor=pointer]
+            - button "Run" [ref=e172] [cursor=pointer]
+        - listitem [ref=e173]:
+          - generic [ref=e174]: Integration test for cross-browser compatibility in tests/integration/test_cross_browser_compatibility.py todo
+          - generic [ref=e175]:
+            - button "Copy context" [ref=e176] [cursor=pointer]
+            - button "Run" [ref=e177] [cursor=pointer]
+        - listitem [ref=e178]:
+          - generic [ref=e179]: Update frontend code to ensure cross-browser compatibility (e.g., use polyfills) todo
+          - generic [ref=e180]:
+            - button "Copy context" [ref=e181] [cursor=pointer]
+            - button "Run" [ref=e182] [cursor=pointer]
+        - listitem [ref=e183]:
+          - generic [ref=e184]: Add unit tests for cross-browser compatibility in tests/unit/test_cross_browser_compatibility.py todo
+          - generic [ref=e185]:
+            - button "Copy context" [ref=e186] [cursor=pointer]
+            - button "Run" [ref=e187] [cursor=pointer]
+        - listitem [ref=e188]:
+          - generic [ref=e189]: Test the application across different browsers and fix any issues todo
+          - generic [ref=e190]:
+            - button "Copy context" [ref=e191] [cursor=pointer]
+            - button "Run" [ref=e192] [cursor=pointer]
+      - paragraph [ref=e193]: Coding model connected. Implementation execution is the next milestone.

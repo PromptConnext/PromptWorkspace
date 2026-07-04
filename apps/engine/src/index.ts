@@ -7,6 +7,7 @@ import { anthropicCompat } from "./gateway/anthropic-compat.ts";
 import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
 import { projects } from "./routes/projects.ts";
+import { files } from "./routes/files.ts";
 import { registerTerminal } from "./routes/terminal.ts";
 import { isAllowedOrigin } from "./security.ts";
 
@@ -31,6 +32,7 @@ app.get("/engine/health", (c) =>
 app.route("/", models);
 app.route("/", onboarding);
 app.route("/", projects);
+app.route("/", files);
 // Anthropic Messages façade for agent CLIs (ADR 0006) — routes to the
 // connected code-role model.
 app.route("/anthropic", anthropicCompat(() => connectionForRoleStrict("code")));
