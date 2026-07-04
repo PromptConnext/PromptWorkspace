@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { db } from "../db.ts";
-import { connectionForRole } from "./models.ts";
-import { parseTaskLines, runStage } from "../agent/loop.ts";
+import { connectionForRole, connectionForRoleStrict } from "./models.ts";
+import { parseTaskLines, runImplementation, runStage } from "../agent/loop.ts";
 
 export const projects = new Hono();
 
@@ -232,6 +232,120 @@ projects.post("/engine/projects/:id/tasks", async (c) => {
         runId,
       );
       setStage(project.id, "skill", "failed");
+      await stream.writeSSE({ event: "error", data: (err as Error).message });
+    }
+  });
+});
+
+// Snapshot the repo for single-shot codegen: full file list plus the contents
+// of small text files, capped so tiny skeleton projects fit whole and larger
+// ones degrade to listing-only.
+function repoSnapshot(projectPath: string): string {
+  const listing = execFileSync("git", ["ls-files"], { cwd: projectPath })
+    .toString()
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  const parts: string[] = [`Repository files:\n${listing.join("\n") || "(empty)"}`];
+  let budget = 40_000;
+  for (const rel of listing) {
+    if (budget <= 0) {
+      parts.push("(remaining file contents omitted — context budget reached)");
+      break;
+    }
+    try {
+      const abs = join(projectPath, rel);
+      if (statSync(abs).size > 8_000) continue;
+      const content = readFileSync(abs, "utf8");
+      budget -= content.length;
+      parts.push(`--- ${rel} ---\n${content}`);
+    } catch {
+      // unreadable/binary — listing entry is enough
+    }
+  }
+  return parts.join("\n\n");
+}
+
+projects.post("/engine/tasks/:taskId/run", async (c) => {
+  const task = db
+    .prepare(
+      `SELECT t.id, t.title, t.feature_tag, sd.content AS spec_content,
+              r.title AS requirement_title, p.id AS project_id, p.path AS project_path
+       FROM tasks t
+       JOIN spec_documents sd ON sd.id = t.spec_id
+       JOIN requirements r ON r.id = sd.requirement_id
+       JOIN projects p ON p.id = r.project_id
+       WHERE t.id = ?`,
+    )
+    .get(c.req.param("taskId")) as
+    | {
+        id: string;
+        title: string;
+        feature_tag: string | null;
+        spec_content: string;
+        requirement_title: string;
+        project_id: string;
+        project_path: string;
+      }
+    | undefined;
+  if (!task) return c.json({ error: "task not found" }, 404);
+
+  const conn = connectionForRoleStrict("code");
+  if (!conn) {
+    return c.json(
+      { error: "no verified coding model — connect one with role 'code' in the Skill stage" },
+      409,
+    );
+  }
+
+  const runId = randomUUID();
+  db.prepare(
+    "INSERT INTO agent_runs (id, project_id, task_id, model_connection_id, action, input_ref, status) VALUES (?, ?, ?, ?, 'implement', ?, 'running')",
+  ).run(runId, task.project_id, task.id, conn.id, task.title.slice(0, 2000));
+  db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(task.id);
+
+  return streamSSE(c, async (stream) => {
+    try {
+      const label = `${task.feature_tag ?? "task"} ${task.title}`;
+      const context = [
+        `Requirement: ${task.requirement_title}`,
+        ``,
+        `Approved implementation plan:`,
+        task.spec_content,
+        ``,
+        repoSnapshot(task.project_path),
+        ``,
+        `TASK TO IMPLEMENT NOW: ${label}`,
+      ].join("\n");
+      const out = await runImplementation(conn, task.project_path, label, context, (delta) => {
+        void stream.writeSSE({ event: "delta", data: delta });
+      });
+      const insertArtifact = db.prepare(
+        "INSERT INTO artifacts (id, task_id, kind, uri, commit_sha) VALUES (?, ?, 'code', ?, ?)",
+      );
+      for (const file of out.files) insertArtifact.run(randomUUID(), task.id, file.path, out.commitSha);
+      db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(task.id);
+      db.prepare(
+        "UPDATE agent_runs SET status = 'succeeded', output_ref = ?, evidence = ? WHERE id = ?",
+      ).run(
+        out.commitSha,
+        `commit ${out.commitSha.slice(0, 7)}: ${out.files.map((f) => f.path).join(", ")}`,
+        runId,
+      );
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          taskId: task.id,
+          commitSha: out.commitSha,
+          files: out.files.map((f) => f.path),
+        }),
+      });
+    } catch (err) {
+      db.prepare("UPDATE tasks SET status = 'failed' WHERE id = ?").run(task.id);
+      db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
+        (err as Error).message,
+        runId,
+      );
       await stream.writeSSE({ event: "error", data: (err as Error).message });
     }
   });

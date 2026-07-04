@@ -24,6 +24,12 @@ export function connectionForRole(role: string): ModelConnection | undefined {
   );
 }
 
+// No fallback: implementation must not silently run on the planning model —
+// the just-in-time Skill prompt exists to get a real coding model connected.
+export function connectionForRoleStrict(role: string): ModelConnection | undefined {
+  return listConnections().find((c) => c.role === role && c.verified_at);
+}
+
 export { chat };
 
 models.get("/engine/models", (c) => {

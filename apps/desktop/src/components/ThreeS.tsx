@@ -5,6 +5,7 @@ import {
   listModels,
   runScope,
   runSpec,
+  runTaskImplementation,
   runTasks,
   type Graph,
   type Project,
@@ -176,8 +177,26 @@ export default function ThreeS({ project }: { project: Project }) {
                 <ul className="task-list">
                   {tasks.map((task) => (
                     <li key={task.id}>
-                      {task.title}{" "}
-                      <span className={`badge ${task.status}`}>{task.status}</span>
+                      <span>
+                        {task.title}{" "}
+                        <span className={`badge ${task.status}`}>{task.status}</span>
+                      </span>
+                      {task.status !== "done" && (
+                        <button
+                          type="button"
+                          disabled={busy !== null || !hasCodeModel}
+                          title={hasCodeModel ? undefined : "Connect a coding model first"}
+                          onClick={() =>
+                            act(
+                              `run-${task.id}`,
+                              () => runTaskImplementation(task.id, appendOutput),
+                              true,
+                            )
+                          }
+                        >
+                          {busy === `run-${task.id}` ? "Implementing…" : "Run"}
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

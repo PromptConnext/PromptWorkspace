@@ -130,20 +130,60 @@ export async function runStage(
       "model output contained neither file blocks nor a recognizable markdown document",
     );
   }
+  writeFiles(projectPath, files);
+  const firstLine = files[0].content.split("\n").find((l) => l.startsWith("# "));
+  const title = firstLine ? firstLine.replace(/^#\s*/, "").trim() : userInput.slice(0, 80);
+
+  commitAll(projectPath, `promptzone: ${kind} output`);
+
+  return { files, title, raw: result.content };
+}
+
+function writeFiles(projectPath: string, files: StageOutput["files"]): void {
   for (const file of files) {
     const abs = join(projectPath, file.path);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, file.content);
   }
-  const firstLine = files[0].content.split("\n").find((l) => l.startsWith("# "));
-  const title = firstLine ? firstLine.replace(/^#\s*/, "").trim() : userInput.slice(0, 80);
+}
 
+function commitAll(projectPath: string, message: string): string {
   execFileSync("git", ["add", "-A"], { cwd: projectPath });
-  execFileSync(
-    "git",
-    ["commit", "-m", `promptzone: ${kind} output`, "--no-gpg-sign"],
-    { cwd: projectPath, stdio: "pipe" },
-  );
+  execFileSync("git", ["commit", "-m", message, "--no-gpg-sign"], {
+    cwd: projectPath,
+    stdio: "pipe",
+  });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectPath })
+    .toString()
+    .trim();
+}
 
-  return { files, title, raw: result.content };
+// Implementation kick-off (architecture §3.2 POST /engine/tasks/{id}/run):
+// single-shot codegen with the repo snapshot in context. The model cannot
+// read files interactively — complete-file outputs only. A multi-turn tool
+// loop is the known upgrade path (ADR 0005).
+export async function runImplementation(
+  conn: ModelConnection,
+  projectPath: string,
+  taskLabel: string,
+  context: string,
+  onDelta: (text: string) => void = () => {},
+): Promise<{ files: StageOutput["files"]; raw: string; commitSha: string }> {
+  const system = [
+    "You are the implementation engine inside PromptZone. Complete the given task by writing code into the repository.",
+    "Always write COMPLETE file contents — partial edits or diffs are not accepted. Keep changes scoped to the task.",
+    "OUTPUT FORMAT (mandatory): return each created or modified file as a fenced block that starts with ```file:<relative-path> and ends with ```. No prose outside fenced blocks.",
+  ].join("\n");
+  const messages: ChatMessage[] = [
+    { role: "system", content: system },
+    { role: "user", content: context },
+  ];
+  const result = await chatStream(conn, messages, onDelta);
+  const files = parseFiles(stripThinking(result.content));
+  if (files.length === 0) {
+    throw new Error("model output contained no file blocks — nothing to apply");
+  }
+  writeFiles(projectPath, files);
+  const commitSha = commitAll(projectPath, `promptzone: ${taskLabel}`);
+  return { files, raw: result.content, commitSha };
 }

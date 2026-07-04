@@ -169,6 +169,13 @@ export const runTasks = (projectId: string, onDelta?: (text: string) => void) =>
     onDelta,
   );
 
+export const runTaskImplementation = (taskId: string, onDelta?: (text: string) => void) =>
+  requestSSE<{ taskId: string; commitSha: string; files: string[] }>(
+    `/engine/tasks/${taskId}/run`,
+    {},
+    onDelta,
+  );
+
 export const approveStage = (projectId: string, stage: string) =>
   request<{ ok: boolean }>(`/engine/projects/${projectId}/stages/${stage}/approve`, {
     method: "POST",
