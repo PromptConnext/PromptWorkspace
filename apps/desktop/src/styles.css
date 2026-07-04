@@ -203,6 +203,15 @@ pre.doc {
   gap: 12px;
 }
 
+.terminal-pane {
+  height: calc(100vh - 190px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 6px;
+  background: #000;
+}
+
 /* graph */
 .tree {
   line-height: 1.7;

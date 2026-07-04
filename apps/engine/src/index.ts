@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { ENGINE_PORT } from "./config.ts";
@@ -6,6 +7,7 @@ import { anthropicCompat } from "./gateway/anthropic-compat.ts";
 import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
 import { projects } from "./routes/projects.ts";
+import { registerTerminal } from "./routes/terminal.ts";
 
 const app = new Hono();
 
@@ -24,9 +26,16 @@ app.route("/", projects);
 // connected code-role model.
 app.route("/anthropic", anthropicCompat(() => connectionForRoleStrict("code")));
 
-serve({ fetch: app.fetch, port: ENGINE_PORT, hostname: "127.0.0.1" }, (info) => {
-  console.log(`[engine] listening on http://127.0.0.1:${info.port}`);
-});
+const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+registerTerminal(app, upgradeWebSocket);
+
+const server = serve(
+  { fetch: app.fetch, port: ENGINE_PORT, hostname: "127.0.0.1" },
+  (info) => {
+    console.log(`[engine] listening on http://127.0.0.1:${info.port}`);
+  },
+);
+injectWebSocket(server);
 
 // When launched as the desktop app's sidecar, die with the parent even if it
 // was SIGKILLed and never ran its exit handler: once the shell is gone this

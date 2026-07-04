@@ -35,7 +35,7 @@ export type Graph = {
       version: number;
       approved_by: string | null;
       content: string;
-      tasks: { id: string; title: string; status: string }[];
+      tasks: { id: string; title: string; status: string; feature_tag?: string | null }[];
     }[];
   }[];
   agentRuns: {

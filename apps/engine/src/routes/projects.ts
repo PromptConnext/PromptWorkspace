@@ -403,11 +403,63 @@ projects.post("/engine/projects/:id/stages/:stage/approve", async (c) => {
   return c.json({ ok: true });
 });
 
+// Git truth-keeping (ADR 0007): developers implement in the integrated
+// terminal with their own tools; a commit subject mentioning a task ref
+// ("T003: add filter") marks that task done and attaches the commit as an
+// artifact. The graph stays honest without anyone updating a tracker.
+function syncTasksFromGit(projectId: string, projectPath: string): void {
+  let log: string;
+  try {
+    log = execFileSync("git", ["log", "--format=%H%x09%s", "-n", "300"], {
+      cwd: projectPath,
+      stdio: "pipe",
+    }).toString();
+  } catch {
+    return; // empty repo or no git — nothing to sync
+  }
+  const tasks = db
+    .prepare(
+      `SELECT t.id, t.feature_tag FROM tasks t
+       JOIN spec_documents sd ON sd.id = t.spec_id
+       JOIN requirements r ON r.id = sd.requirement_id
+       WHERE r.project_id = ? AND t.feature_tag IS NOT NULL`,
+    )
+    .all(projectId) as { id: string; feature_tag: string }[];
+  if (tasks.length === 0) return;
+  const byRef = new Map(tasks.map((t) => [t.feature_tag.split(" ")[0], t]));
+
+  const hasArtifact = db.prepare(
+    "SELECT 1 FROM artifacts WHERE task_id = ? AND commit_sha = ? LIMIT 1",
+  );
+  const insertArtifact = db.prepare(
+    "INSERT INTO artifacts (id, task_id, kind, uri, commit_sha) VALUES (?, ?, 'code', ?, ?)",
+  );
+  const markDone = db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?");
+
+  for (const line of log.split("\n")) {
+    const [sha, subject = ""] = line.split("\t");
+    if (!sha) continue;
+    for (const ref of subject.match(/\bT\d{3}\b/g) ?? []) {
+      const task = byRef.get(ref);
+      if (!task) continue;
+      if (!hasArtifact.get(task.id, sha)) {
+        insertArtifact.run(randomUUID(), task.id, `git: ${subject.slice(0, 100)}`, sha);
+      }
+      markDone.run(task.id);
+    }
+  }
+}
+
 // The traceability view's data source (roadmap Phase 1, gap G4): the whole
 // local graph in one read.
 projects.get("/engine/projects/:id/graph", (c) => {
   const project = getProject(c.req.param("id"));
   if (!project) return c.json({ error: "project not found" }, 404);
+  try {
+    syncTasksFromGit(project.id, project.path);
+  } catch {
+    // sync is best-effort; the graph read must never fail because of it
+  }
 
   const stages = db
     .prepare("SELECT stage, status, gate_passed, approver FROM stage_states WHERE project_id = ?")

@@ -12,6 +12,7 @@ import {
 } from "../api";
 import ConnectForm from "./ConnectForm";
 import GraphView from "./GraphView";
+import TerminalPane from "./TerminalPane";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -24,7 +25,8 @@ export default function ThreeS({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [hasCodeModel, setHasCodeModel] = useState(true);
-  const [tab, setTab] = useState<"threes" | "graph">("threes");
+  const [tab, setTab] = useState<"threes" | "graph" | "terminal">("threes");
+  const [copied, setCopied] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setGraph(await getGraph(project.id));
@@ -61,6 +63,21 @@ export default function ThreeS({ project }: { project: Project }) {
 
   const appendOutput = (delta: string) => setOutput((prev) => (prev ?? "") + delta);
 
+  // Handoff for developers using their own agent (in the Terminal tab or
+  // anywhere): a paste-ready prompt; the commit-ref convention closes the loop.
+  const copyContext = async (task: { id: string; title: string; feature_tag?: string | null }) => {
+    const ref = (task.feature_tag ?? "").split(" ")[0] || "the task";
+    await navigator.clipboard.writeText(
+      [
+        `Implement task ${ref}: ${task.title}`,
+        `Context: specs/001/spec.md (specification), specs/001/plan.md (plan), specs/001/tasks.md (full task list).`,
+        `Implement ONLY this task. Mention ${ref} in your commit message so PromptZone tracks it automatically.`,
+      ].join("\n"),
+    );
+    setCopied(task.id);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
   return (
     <section className="threes">
       <header className="threes-header">
@@ -80,12 +97,22 @@ export default function ThreeS({ project }: { project: Project }) {
           >
             Task Graph
           </button>
+          <button
+            type="button"
+            className={tab === "terminal" ? "active" : ""}
+            onClick={() => setTab("terminal")}
+          >
+            Terminal
+          </button>
         </nav>
       </header>
 
-      {tab === "graph" ? (
-        <GraphView graph={graph} />
-      ) : (
+      {/* keep the terminal mounted so the shell survives tab switches */}
+      <div style={{ display: tab === "terminal" ? "block" : "none" }}>
+        <TerminalPane projectId={project.id} />
+      </div>
+      {tab === "graph" && <GraphView graph={graph} />}
+      {tab === "threes" && (
         <>
           <div className="stepper">
             <span className={`step ${scopeApproved ? "done" : "current"}`}>
@@ -181,22 +208,27 @@ export default function ThreeS({ project }: { project: Project }) {
                         {task.title}{" "}
                         <span className={`badge ${task.status}`}>{task.status}</span>
                       </span>
-                      {task.status !== "done" && (
-                        <button
-                          type="button"
-                          disabled={busy !== null || !hasCodeModel}
-                          title={hasCodeModel ? undefined : "Connect a coding model first"}
-                          onClick={() =>
-                            act(
-                              `run-${task.id}`,
-                              () => runTaskImplementation(task.id, appendOutput),
-                              true,
-                            )
-                          }
-                        >
-                          {busy === `run-${task.id}` ? "Implementing…" : "Run"}
+                      <span className="row">
+                        <button type="button" onClick={() => copyContext(task)}>
+                          {copied === task.id ? "Copied ✓" : "Copy context"}
                         </button>
-                      )}
+                        {task.status !== "done" && (
+                          <button
+                            type="button"
+                            disabled={busy !== null || !hasCodeModel}
+                            title={hasCodeModel ? undefined : "Connect a coding model first"}
+                            onClick={() =>
+                              act(
+                                `run-${task.id}`,
+                                () => runTaskImplementation(task.id, appendOutput),
+                                true,
+                              )
+                            }
+                          >
+                            {busy === `run-${task.id}` ? "Implementing…" : "Run"}
+                          </button>
+                        )}
+                      </span>
                     </li>
                   ))}
                 </ul>
