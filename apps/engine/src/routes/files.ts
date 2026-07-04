@@ -3,7 +3,15 @@
 // "../../etc/passwd" or an absolute path must never escape. Browser-facing, so
 // it also rides the global origin allowlist (ADR 0008).
 import { Hono } from "hono";
-import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  statSync,
+  readdirSync,
+  realpathSync,
+  existsSync,
+} from "node:fs";
 import { join, dirname, resolve, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { db } from "../db.ts";
@@ -21,12 +29,39 @@ function getProjectPath(id: string): string | null {
 }
 
 // Resolve a client-supplied relative path and refuse anything that escapes the
-// project root (path traversal / absolute paths / symlink-ish tricks).
+// project root. A lexical resolve+startsWith blocks "../" traversal but NOT a
+// symlink *inside* the repo pointing out (e.g. `link -> /etc`, then
+// `link/passwd`). So we canonicalize with realpath: for an existing target,
+// realpath follows every symlink and must land inside root; for a new file
+// (write), we realpath the deepest existing ancestor instead and confirm the
+// not-yet-created remainder has no traversal.
 function safeJoin(root: string, rel: string): string | null {
-  const abs = resolve(root, rel);
-  const rootResolved = resolve(root);
-  if (abs !== rootResolved && !abs.startsWith(rootResolved + sep)) return null;
-  return abs;
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(resolve(root));
+  } catch {
+    return null;
+  }
+  const target = resolve(rootReal, rel);
+
+  let existing = target;
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return null;
+    existing = parent;
+  }
+
+  let existingReal: string;
+  try {
+    existingReal = realpathSync(existing);
+  } catch {
+    return null;
+  }
+  if (existingReal !== rootReal && !existingReal.startsWith(rootReal + sep)) return null;
+
+  const remainder = relative(existing, target);
+  if (remainder.split(sep).includes("..")) return null;
+  return remainder ? join(existingReal, remainder) : existingReal;
 }
 
 type TreeNode = { name: string; path: string; dir: boolean; children?: TreeNode[] };
