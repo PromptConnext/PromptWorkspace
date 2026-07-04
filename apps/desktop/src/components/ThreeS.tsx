@@ -18,6 +18,7 @@ import EditorPane from "./EditorPane";
 import SpecDoc, { extractClarifications } from "./SpecDoc";
 import Clarifications from "./Clarifications";
 import AgentPicker from "./AgentPicker";
+import ConstitutionSetup from "./ConstitutionSetup";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -178,6 +179,8 @@ export default function ThreeS({ project }: { project: Project }) {
               </div>
             </div>
           )}
+
+          {!scopeApproved && <ConstitutionSetup projectId={project.id} />}
 
           {!scopeApproved && (
             <div className="stage-panel">

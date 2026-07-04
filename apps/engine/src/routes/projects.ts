@@ -109,6 +109,69 @@ function withFeedback(base: string, feedback?: string): string {
   return `${base}\n\nREVISION REQUESTED by the reviewer — revise accordingly:\n${feedback.trim()}`;
 }
 
+// Spec Kit's constitution (project principles) steers specify/plan/tasks. If a
+// project has one, prepend it to each stage's input.
+function readConstitution(projectPath: string): string {
+  try {
+    const p = join(projectPath, ".specify/memory/constitution.md");
+    if (existsSync(p)) return readFileSync(p, "utf8");
+  } catch {
+    // absent is fine
+  }
+  return "";
+}
+
+function withConstitution(projectPath: string, input: string): string {
+  const con = readConstitution(projectPath);
+  return con
+    ? `PROJECT CONSTITUTION (principles that govern this project — honor them):\n${con}\n\n${input}`
+    : input;
+}
+
+// Spec Kit constitution step — project principles, presented under the 3S
+// vision as one-time setup (ADR 0009). Uses the lightweight generator, no
+// coding agent needed.
+projects.post("/engine/projects/:id/constitution", async (c) => {
+  const project = getProject(c.req.param("id"));
+  if (!project) return c.json({ error: "project not found" }, 404);
+  const { principles } = await c.req
+    .json<{ principles?: string }>()
+    .catch(() => ({}) as { principles?: string });
+
+  const conn = connectionForRole("plan");
+  if (!conn) return c.json({ error: "no verified model connection for role: plan" }, 409);
+
+  const runId = randomUUID();
+  db.prepare(
+    "INSERT INTO agent_runs (id, project_id, model_connection_id, action, input_ref, status) VALUES (?, ?, ?, 'constitution', ?, 'running')",
+  ).run(runId, project.id, conn.id, (principles ?? "").slice(0, 2000));
+
+  return streamSSE(c, async (stream) => {
+    try {
+      const input = principles?.trim()
+        ? principles
+        : "Establish sensible default engineering principles for this project.";
+      const out = await runStage("constitution", conn, project.path, input, (d) => {
+        void stream.writeSSE({ event: "delta", data: d });
+      });
+      db.prepare("UPDATE agent_runs SET status = 'succeeded', output_ref = ? WHERE id = ?").run(
+        out.files[0].path,
+        runId,
+      );
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({ files: out.files.map((f) => f.path), content: out.files[0].content }),
+      });
+    } catch (err) {
+      db.prepare("UPDATE agent_runs SET status = 'failed', evidence = ? WHERE id = ?").run(
+        (err as Error).message,
+        runId,
+      );
+      await stream.writeSSE({ event: "error", data: (err as Error).message });
+    }
+  });
+});
+
 projects.post("/engine/projects/:id/scope", async (c) => {
   const project = getProject(c.req.param("id"));
   if (!project) return c.json({ error: "project not found" }, 404);
@@ -133,7 +196,7 @@ projects.post("/engine/projects/:id/scope", async (c) => {
         "specify",
         conn,
         project.path,
-        withFeedback(description, feedback),
+        withConstitution(project.path, withFeedback(description, feedback)),
         (delta) => {
           void stream.writeSSE({ event: "delta", data: delta });
         },
@@ -194,9 +257,12 @@ projects.post("/engine/projects/:id/spec", async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      const specMd = withFeedback(
-        `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`,
-        feedback,
+      const specMd = withConstitution(
+        project.path,
+        withFeedback(
+          `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`,
+          feedback,
+        ),
       );
       const out = await runStage("plan", conn, project.path, specMd, (delta) => {
         void stream.writeSSE({ event: "delta", data: delta });
@@ -258,7 +324,10 @@ projects.post("/engine/projects/:id/tasks", async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      const input = `Break the approved implementation plan into executable tasks.\n\nRequirement: ${spec.title}\n\nApproved plan:\n\n${spec.content}`;
+      const input = withConstitution(
+        project.path,
+        `Break the approved implementation plan into executable tasks.\n\nRequirement: ${spec.title}\n\nApproved plan:\n\n${spec.content}`,
+      );
       const out = await runStage("tasks", conn, project.path, input, (delta) => {
         void stream.writeSSE({ event: "delta", data: delta });
       });

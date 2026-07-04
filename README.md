@@ -22,6 +22,15 @@ pnpm engine
 
 A zero-cost first model: install [Ollama](https://ollama.com), `ollama pull qwen3:8b`, then pick "Local Ollama" in onboarding.
 
-## Implementation modes
+## Implementation is BYO-agent (ADR 0009)
 
-Running a task uses one of two modes (ADR 0005/0006): if a coding-agent CLI is installed (Claude Code by default, any CLI via `PROMPTZONE_AGENT_CMD`), the engine spawns it headless in the project folder, pointed at the engine's Anthropic-compat façade (`/anthropic/v1/messages`) so it runs on your connected code-role model. Otherwise it falls back to one-shot codegen. Force a mode with the `implementation_mode` app state (`auto`/`agent`/`loop`).
+PromptZone doesn't ship its own coding-agent runtime — it **orchestrates the agent you already use**, exactly as it orchestrates the model you already pay for. Pick a coding agent per project in the Skill stage:
+
+- **Claude Code** — routed to your connected BYO model via the engine's Anthropic-compat façade (`/anthropic/v1/messages`).
+- **Gemini CLI / Codex CLI** — run on the developer's own account/model; PromptZone provides the workspace, task, and context.
+- **Custom** — any CLI via `PROMPTZONE_AGENT_CMD` (task text in `$TASK_PROMPT`).
+- **Fallback** — if no agent CLI is installed, the built-in one-shot generator runs on a connected coding model.
+
+Result capture is **agent-agnostic**: whatever the agent (or you, in the integrated terminal) commits is read back from Git — a commit mentioning a task ref (`T003: …`) marks that task done. Adapters live in `apps/engine/src/agent/adapters/`.
+
+Under the hood the process follows Spec Kit faithfully — **constitution → specify → plan → tasks → implement** — presented as the 3S vision (Scope/Spec/Skill).

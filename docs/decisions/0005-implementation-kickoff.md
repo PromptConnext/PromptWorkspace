@@ -1,6 +1,6 @@
 # ADR 0005 — Implementation kick-off: single-shot codegen per task
 
-**Date:** 2026-07-04 · **Status:** Accepted (skeleton).
+**Date:** 2026-07-04 · **Status:** Superseded as the primary path by ADR 0009 — now the **fallback only** (used when no agent CLI is available). Not invested in further. The "multi-turn tool loop" upgrade path noted below is **cancelled**: external coding agents (ADR 0009) provide that loop.
 
 ## Decision
 `POST /engine/tasks/{id}/run` (architecture §3.2) implements one task at a time:

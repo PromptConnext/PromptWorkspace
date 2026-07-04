@@ -24,9 +24,14 @@ export type StageOutput = {
   raw: string;
 };
 
-export type StageKind = "specify" | "plan" | "tasks";
+export type StageKind = "constitution" | "specify" | "plan" | "tasks";
 
 const STAGES: Record<StageKind, { template: string; role: string; outPath: string }> = {
+  constitution: {
+    template: "constitution-template.md",
+    role: "project-constitution",
+    outPath: ".specify/memory/constitution.md",
+  },
   specify: {
     template: "spec-template.md",
     role: "specification",

@@ -151,6 +151,17 @@ async function requestSSE<T>(
   return done;
 }
 
+export const runConstitution = (
+  projectId: string,
+  principles: string,
+  onDelta?: (text: string) => void,
+) =>
+  requestSSE<{ files: string[]; content: string }>(
+    `/engine/projects/${projectId}/constitution`,
+    { principles },
+    onDelta,
+  );
+
 export const runScope = (
   projectId: string,
   description: string,
