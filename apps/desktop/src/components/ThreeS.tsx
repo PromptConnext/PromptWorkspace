@@ -15,6 +15,7 @@ import GraphView from "./GraphView";
 import TerminalPane from "./TerminalPane";
 import EditorPane from "./EditorPane";
 import SpecDoc, { extractClarifications } from "./SpecDoc";
+import Clarifications from "./Clarifications";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -67,6 +68,17 @@ export default function ThreeS({ project }: { project: Project }) {
   };
 
   const appendOutput = (delta: string) => setOutput((prev) => (prev ?? "") + delta);
+
+  // Regenerate the current stage with reviewer-supplied feedback (used by both
+  // the free-text refine box and the interactive clarification answers).
+  const regenerateWith = async (fb: string) => {
+    if (!scopeApproved) {
+      await act("scope", () => runScope(project.id, description, appendOutput, fb), true);
+    } else if (!specApproved) {
+      await act("spec", () => runSpec(project.id, appendOutput, fb), true);
+    }
+    setFeedback("");
+  };
 
   // Handoff for developers using their own agent (in the Terminal tab or
   // anywhere): a paste-ready prompt; the commit-ref convention closes the loop.
@@ -321,19 +333,12 @@ export default function ThreeS({ project }: { project: Project }) {
             </div>
           )}
 
-          {clarifications.length > 0 && !busy && (
-            <div className="clarify-panel">
-              <h4>Questions to resolve ({clarifications.length})</h4>
-              <ul>
-                {clarifications.map((q, i) => (
-                  <li key={i}>{q}</li>
-                ))}
-              </ul>
-              <p className="muted">
-                The AI wasn't sure about these. Answer them in the “Want changes?” box above
-                and Regenerate, or approve as-is to decide later.
-              </p>
-            </div>
+          {clarifications.length > 0 && (
+            <Clarifications
+              questions={clarifications}
+              busy={busy !== null}
+              onAnswer={regenerateWith}
+            />
           )}
 
           {output && (

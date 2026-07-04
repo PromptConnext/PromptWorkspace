@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /Users/kittisak/REPO/ideva/PromptZone/apps/engine && pnpm exec tsc --noEmit && echo TSC OK\",\"description\":\"Typecheck engine after origin lockdown\"}",
-  "error": "Exit code 2\nsrc/routes/terminal.ts(35,14): error TS2769: No overload matches this call.\n  Overload 1 of 2, '(...anonymousParameters: SQLInputValue[]): Record<string, SQLOutputValue> | undefined', gave the following error.\n    Argument of type 'string | undefined' is not assignable to parameter of type 'SQLInputValue'.\n      Type 'undefined' is not assignable to type 'SQLInputValue'.\n  Overload 2 of 2, '(namedParameters: Record<string, SQLInputValue>, ...anonymousParameters: SQLInputValue[]): Rec...",
-  "timestamp": "2026-07-04T09:18:29.293Z",
-  "retry_count": 1
-}

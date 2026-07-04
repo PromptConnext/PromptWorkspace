@@ -360,6 +360,27 @@ pre.doc {
   margin: 0 0 8px;
   padding-left: 18px;
 }
+.clarify-qa {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+.clarify-item {
+  display: grid;
+  gap: 4px;
+}
+.clarify-q {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.clarify-item input {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
 
 /* business progress bar */
 .progress {
