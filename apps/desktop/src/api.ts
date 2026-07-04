@@ -155,17 +155,22 @@ export const runScope = (
   projectId: string,
   description: string,
   onDelta?: (text: string) => void,
+  feedback?: string,
 ) =>
   requestSSE<{ requirementId: string; title: string; files: string[]; content: string }>(
     `/engine/projects/${projectId}/scope`,
-    { description },
+    { description, ...(feedback ? { feedback } : {}) },
     onDelta,
   );
 
-export const runSpec = (projectId: string, onDelta?: (text: string) => void) =>
+export const runSpec = (
+  projectId: string,
+  onDelta?: (text: string) => void,
+  feedback?: string,
+) =>
   requestSSE<{ specDocumentId: string; files: string[]; content: string }>(
     `/engine/projects/${projectId}/spec`,
-    {},
+    feedback ? { feedback } : {},
     onDelta,
   );
 

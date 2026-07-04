@@ -68,10 +68,53 @@ projects.post("/engine/projects", async (c) => {
   return c.json({ id, name, path });
 });
 
+// Refine-before-approve (business surface): regenerating a stage replaces its
+// unapproved draft instead of stacking a new one, so a business user can
+// iterate on Scope/Spec until they approve. Approved records are never touched.
+function clearSpecChildren(specId: string): void {
+  const tasks = db.prepare("SELECT id FROM tasks WHERE spec_id = ?").all(specId) as {
+    id: string;
+  }[];
+  for (const t of tasks) {
+    db.prepare("DELETE FROM acceptance_criteria WHERE task_id = ?").run(t.id);
+    db.prepare("DELETE FROM artifacts WHERE task_id = ?").run(t.id);
+    db.prepare("UPDATE agent_runs SET task_id = NULL WHERE task_id = ?").run(t.id);
+  }
+  db.prepare("DELETE FROM tasks WHERE spec_id = ?").run(specId);
+}
+
+function clearUnapprovedSpecs(requirementId: string): void {
+  const specs = db
+    .prepare("SELECT id FROM spec_documents WHERE requirement_id = ? AND approved_by IS NULL")
+    .all(requirementId) as { id: string }[];
+  for (const s of specs) clearSpecChildren(s.id);
+  db.prepare(
+    "DELETE FROM spec_documents WHERE requirement_id = ? AND approved_by IS NULL",
+  ).run(requirementId);
+}
+
+function clearUnapprovedScope(projectId: string): void {
+  const reqs = db
+    .prepare("SELECT id FROM requirements WHERE project_id = ? AND status = 'awaiting_approval'")
+    .all(projectId) as { id: string }[];
+  for (const r of reqs) {
+    clearUnapprovedSpecs(r.id);
+    db.prepare("DELETE FROM requirements WHERE id = ?").run(r.id);
+  }
+}
+
+function withFeedback(base: string, feedback?: string): string {
+  if (!feedback?.trim()) return base;
+  return `${base}\n\nREVISION REQUESTED by the reviewer — revise accordingly:\n${feedback.trim()}`;
+}
+
 projects.post("/engine/projects/:id/scope", async (c) => {
   const project = getProject(c.req.param("id"));
   if (!project) return c.json({ error: "project not found" }, 404);
-  const { description } = await c.req.json<{ description?: string }>();
+  const { description, feedback } = await c.req.json<{
+    description?: string;
+    feedback?: string;
+  }>();
   if (!description) return c.json({ error: "description is required" }, 400);
 
   const conn = connectionForRole("plan");
@@ -85,9 +128,18 @@ projects.post("/engine/projects/:id/scope", async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      const out = await runStage("specify", conn, project.path, description, (delta) => {
-        void stream.writeSSE({ event: "delta", data: delta });
-      });
+      const out = await runStage(
+        "specify",
+        conn,
+        project.path,
+        withFeedback(description, feedback),
+        (delta) => {
+          void stream.writeSSE({ event: "delta", data: delta });
+        },
+      );
+      // Replace the prior unapproved draft only now that generation succeeded,
+      // so a failed regenerate never destroys the reviewer's current draft.
+      clearUnapprovedScope(project.id);
       const reqId = randomUUID();
       db.prepare(
         "INSERT INTO requirements (id, project_id, title, description, status) VALUES (?, ?, ?, ?, 'awaiting_approval')",
@@ -122,6 +174,7 @@ projects.post("/engine/projects/:id/spec", async (c) => {
   if (!stageGatePassed(project.id, "scope")) {
     return c.json({ error: "scope must be approved before running spec" }, 409);
   }
+  const { feedback } = await c.req.json<{ feedback?: string }>().catch(() => ({}) as { feedback?: string });
   const requirement = db
     .prepare(
       "SELECT id, title, description FROM requirements WHERE project_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -140,10 +193,15 @@ projects.post("/engine/projects/:id/spec", async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      const specMd = `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`;
+      const specMd = withFeedback(
+        `Requirement: ${requirement.title}\n\n${requirement.description}\n\nThe approved specification is in specs/001/spec.md of this repository.`,
+        feedback,
+      );
       const out = await runStage("plan", conn, project.path, specMd, (delta) => {
         void stream.writeSSE({ event: "delta", data: delta });
       });
+      // replace prior unapproved plan only after this one succeeded
+      clearUnapprovedSpecs(requirement.id);
       const specId = randomUUID();
       db.prepare(
         "INSERT INTO spec_documents (id, requirement_id, content, version) VALUES (?, ?, ?, 1)",

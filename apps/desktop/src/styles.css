@@ -292,6 +292,97 @@ pre.doc {
   overflow-y: auto;
 }
 
+/* business-facing rendered spec/plan */
+.doc.rendered {
+  padding: 4px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 460px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+.doc.rendered h1 {
+  font-size: 1.4em;
+}
+.doc.rendered h2 {
+  font-size: 1.15em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.doc.rendered h3 {
+  font-size: 1em;
+}
+.doc.rendered code {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.doc.rendered pre code {
+  display: block;
+  padding: 12px;
+  overflow-x: auto;
+}
+.doc.rendered table {
+  border-collapse: collapse;
+}
+.doc.rendered th,
+.doc.rendered td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+}
+.doc.streaming {
+  opacity: 0.85;
+}
+
+/* refine-before-approve */
+.refine {
+  display: grid;
+  gap: 4px;
+  font-size: 0.88em;
+  color: var(--muted);
+}
+
+/* clarifications surfaced from [NEEDS CLARIFICATION] */
+.clarify-panel {
+  border: 1px solid #d97706;
+  background: color-mix(in srgb, #d97706 8%, transparent);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.clarify-panel h4 {
+  margin: 0 0 6px;
+  color: #d97706;
+}
+.clarify-panel ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+/* business progress bar */
+.progress {
+  margin-bottom: 20px;
+  display: grid;
+  gap: 6px;
+}
+.progress-label {
+  font-size: 0.9em;
+  color: var(--muted);
+}
+.progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #16a34a;
+  transition: width 0.3s ease;
+}
+
 .task-list {
   list-style: none;
   padding: 0;

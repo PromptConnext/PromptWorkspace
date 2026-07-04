@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-04T09:23:18.348Z",
+  "updatedAt": "2026-07-04T11:40:51.324Z",
   "missions": [
     {
       "id": "session:f8312ef9-35b6-496a-9acf-d0c3041d6c31:none",
@@ -7,7 +7,7 @@
       "name": "none",
       "objective": "Session mission",
       "createdAt": "2026-07-03T14:42:07.205Z",
-      "updatedAt": "2026-07-04T09:23:18.348Z",
+      "updatedAt": "2026-07-04T11:40:51.324Z",
       "status": "done",
       "workerCount": 1,
       "taskCounts": {
@@ -27,7 +27,7 @@
           "currentStep": null,
           "latestUpdate": "completed",
           "completedSummary": null,
-          "updatedAt": "2026-07-04T09:23:18.348Z"
+          "updatedAt": "2026-07-04T11:40:51.324Z"
         }
       ],
       "timeline": [
@@ -590,6 +590,14 @@
           "agent": "Explore:ab52e2c",
           "detail": "completed",
           "sourceKey": "session-stop:ad86841129db7a3e2"
+        },
+        {
+          "id": "session-stop:a22dfa961316af28b:2026-07-04T11:40:51.324Z",
+          "at": "2026-07-04T11:40:51.324Z",
+          "kind": "completion",
+          "agent": "Explore:ab52e2c",
+          "detail": "completed",
+          "sourceKey": "session-stop:a22dfa961316af28b"
         }
       ]
     }

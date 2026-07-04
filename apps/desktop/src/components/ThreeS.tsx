@@ -14,6 +14,7 @@ import ConnectForm from "./ConnectForm";
 import GraphView from "./GraphView";
 import TerminalPane from "./TerminalPane";
 import EditorPane from "./EditorPane";
+import SpecDoc, { extractClarifications } from "./SpecDoc";
 
 function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
@@ -25,6 +26,7 @@ export default function ThreeS({ project }: { project: Project }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState("");
   const [hasCodeModel, setHasCodeModel] = useState(true);
   const [tab, setTab] = useState<"threes" | "graph" | "editor" | "terminal">("threes");
   const [copied, setCopied] = useState<string | null>(null);
@@ -45,6 +47,8 @@ export default function ThreeS({ project }: { project: Project }) {
   const specApproved = spec?.gate_passed === 1;
   const tasks =
     graph?.requirements.flatMap((r) => r.specDocuments.flatMap((s) => s.tasks)) ?? [];
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const clarifications = extractClarifications(output);
 
   const act = async (label: string, fn: () => Promise<unknown>, streams = false) => {
     setBusy(label);
@@ -140,6 +144,20 @@ export default function ThreeS({ project }: { project: Project }) {
             <span className={`step ${specApproved ? "current" : ""}`}>3 · Skill</span>
           </div>
 
+          {tasks.length > 0 && (
+            <div className="progress">
+              <div className="progress-label">
+                Implementation — {doneCount} of {tasks.length} tasks done
+              </div>
+              <div className="progress-bar">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${(doneCount / tasks.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {!scopeApproved && (
             <div className="stage-panel">
               <h3>Scope — what should this project achieve?</h3>
@@ -149,15 +167,35 @@ export default function ThreeS({ project }: { project: Project }) {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Describe the goal in plain business terms…"
               />
+              {scope?.status === "awaiting_approval" && (
+                <label className="refine">
+                  Want changes? Describe them, then Regenerate.
+                  <textarea
+                    rows={2}
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    placeholder="e.g. also support mobile push notifications"
+                  />
+                </label>
+              )}
               <div className="row">
                 <button
                   type="button"
                   disabled={busy !== null || !description.trim()}
-                  onClick={() =>
-                    act("scope", () => runScope(project.id, description, appendOutput), true)
-                  }
+                  onClick={async () => {
+                    await act(
+                      "scope",
+                      () => runScope(project.id, description, appendOutput, feedback || undefined),
+                      true,
+                    );
+                    setFeedback("");
+                  }}
                 >
-                  {busy === "scope" ? "Generating specification…" : "Generate"}
+                  {busy === "scope"
+                    ? "Generating…"
+                    : scope?.status === "awaiting_approval"
+                      ? "Regenerate"
+                      : "Generate specification"}
                 </button>
                 {scope?.status === "awaiting_approval" && (
                   <button
@@ -174,14 +212,36 @@ export default function ThreeS({ project }: { project: Project }) {
 
           {scopeApproved && !specApproved && (
             <div className="stage-panel">
-              <h3>Spec — review the project specification</h3>
+              <h3>Spec — review the project plan</h3>
+              {spec?.status === "awaiting_approval" && (
+                <label className="refine">
+                  Want changes to the plan? Describe them, then Regenerate.
+                  <textarea
+                    rows={2}
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    placeholder="e.g. use PostgreSQL instead of SQLite"
+                  />
+                </label>
+              )}
               <div className="row">
                 <button
                   type="button"
                   disabled={busy !== null}
-                  onClick={() => act("spec", () => runSpec(project.id, appendOutput), true)}
+                  onClick={async () => {
+                    await act(
+                      "spec",
+                      () => runSpec(project.id, appendOutput, feedback || undefined),
+                      true,
+                    );
+                    setFeedback("");
+                  }}
                 >
-                  {busy === "spec" ? "Generating plan…" : "Generate plan"}
+                  {busy === "spec"
+                    ? "Generating plan…"
+                    : spec?.status === "awaiting_approval"
+                      ? "Regenerate"
+                      : "Generate plan"}
                 </button>
                 {spec?.status === "awaiting_approval" && (
                   <button
@@ -261,10 +321,31 @@ export default function ThreeS({ project }: { project: Project }) {
             </div>
           )}
 
+          {clarifications.length > 0 && !busy && (
+            <div className="clarify-panel">
+              <h4>Questions to resolve ({clarifications.length})</h4>
+              <ul>
+                {clarifications.map((q, i) => (
+                  <li key={i}>{q}</li>
+                ))}
+              </ul>
+              <p className="muted">
+                The AI wasn't sure about these. Answer them in the “Want changes?” box above
+                and Regenerate, or approve as-is to decide later.
+              </p>
+            </div>
+          )}
+
           {output && (
             <div className="stage-panel">
-              <h3>Latest output</h3>
-              <pre className="doc">{output}</pre>
+              <h3>
+                {!scopeApproved
+                  ? "Draft specification"
+                  : !specApproved
+                    ? "Project plan"
+                    : "Latest output"}
+              </h3>
+              <SpecDoc content={output} streaming={busy !== null} />
             </div>
           )}
           {error && <p className="error">{error}</p>}

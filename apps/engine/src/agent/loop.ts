@@ -160,13 +160,27 @@ export function commitFiles(projectPath: string, files: string[], message: strin
 }
 
 function commitStaged(projectPath: string, message: string): string {
+  const head = () =>
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectPath }).toString().trim();
+  // A regenerate that produces identical files stages nothing — don't fail
+  // (and don't create an empty commit); just return the current HEAD.
+  const staged = execFileSync("git", ["diff", "--cached", "--name-only"], {
+    cwd: projectPath,
+  })
+    .toString()
+    .trim();
+  if (!staged) {
+    try {
+      return head();
+    } catch {
+      return ""; // repo with no commits yet and nothing to stage
+    }
+  }
   execFileSync("git", ["commit", "-m", message, "--no-gpg-sign"], {
     cwd: projectPath,
     stdio: "pipe",
   });
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectPath })
-    .toString()
-    .trim();
+  return head();
 }
 
 // Implementation kick-off (architecture §3.2 POST /engine/tasks/{id}/run):
