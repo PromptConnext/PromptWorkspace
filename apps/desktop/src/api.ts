@@ -74,6 +74,9 @@ export const getRecommendations = () =>
 
 export const listModels = () => request<{ connections: Connection[] }>("/engine/models");
 
+export const getLocalLlmEnv = () =>
+  request<{ model: string; env: Record<string, string> }>("/engine/local-llm-env");
+
 export const connectModel = (payload: {
   role: string;
   provider: string;

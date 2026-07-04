@@ -32,6 +32,24 @@ export function connectionForRoleStrict(role: string): ModelConnection | undefin
 
 export { chat };
 
+// Env to point a terminal-launched Claude Code / Codex at the connected
+// code-role model via our Anthropic façade (ADR 0006). Mirrors the manual
+// setup in the local-LLM guides, but with our translation layer so Ollama's
+// tool calls work. Attribution header off protects local-model KV cache.
+models.get("/engine/local-llm-env", (c) => {
+  const conn = connectionForRole("code") ?? connectionForRole("plan");
+  if (!conn) return c.json({ error: "no verified model connected" }, 409);
+  const base = new URL(c.req.url);
+  return c.json({
+    model: `${conn.provider}/${conn.model}`,
+    env: {
+      ANTHROPIC_BASE_URL: `${base.protocol}//${base.host}/anthropic`,
+      ANTHROPIC_AUTH_TOKEN: "promptzone-local",
+      CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
+    },
+  });
+});
+
 models.get("/engine/models", (c) => {
   const conns = listConnections().map((conn) => ({
     ...conn,
