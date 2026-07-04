@@ -8,6 +8,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { db } from "../db.ts";
+import { isAllowedOrigin } from "../security.ts";
 
 // pnpm strips the exec bit from node-pty's prebuilt spawn-helper, which makes
 // every pty.spawn die with "posix_spawnp failed" — restore it at startup.
@@ -31,11 +32,21 @@ export function registerTerminal(app: Hono, upgradeWebSocket: UpgradeWebSocket):
     upgradeWebSocket((c) => {
       const project = db
         .prepare("SELECT id, path FROM projects WHERE id = ?")
-        .get(c.req.param("id")) as { id: string; path: string } | undefined;
+        .get(c.req.param("id") ?? "") as { id: string; path: string } | undefined;
+
+      // Browsers always send Origin on the WS handshake and cannot forge it,
+      // so a disallowed origin means a drive-by page — never spawn a shell for
+      // it (ADR 0008, CSWSH → RCE).
+      const origin = c.req.header("Origin");
+      const originOk = isAllowedOrigin(origin);
 
       let shell: pty.IPty | null = null;
       return {
         onOpen(_evt, ws) {
+          if (!originOk) {
+            ws.close(1008, "forbidden origin");
+            return;
+          }
           if (!project) {
             ws.send(JSON.stringify({ type: "output", data: "project not found\r\n" }));
             ws.close();

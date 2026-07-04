@@ -8,12 +8,21 @@ import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
 import { projects } from "./routes/projects.ts";
 import { registerTerminal } from "./routes/terminal.ts";
+import { isAllowedOrigin } from "./security.ts";
 
 const app = new Hono();
 
-// The webview origin differs (tauri://localhost in prod, http://localhost:1420
-// in dev); the engine itself only ever binds 127.0.0.1.
-app.use("*", cors());
+// Reflect only allowlisted browser origins (ADR 0008) instead of the previous
+// wildcard, so a drive-by page cannot read engine responses. Native clients
+// (curl, the spawned agent hitting /anthropic) send no Origin and are
+// unaffected — CORS only governs browsers.
+app.use(
+  "*",
+  cors({
+    origin: (origin) => (isAllowedOrigin(origin) ? origin : ""),
+    credentials: true,
+  }),
+);
 
 app.get("/engine/health", (c) =>
   c.json({ ok: true, version: "0.0.1", pid: process.pid }),
