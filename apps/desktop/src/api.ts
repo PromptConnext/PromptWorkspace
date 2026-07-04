@@ -9,6 +9,10 @@ export type Recommendation = {
   model: string;
   needsKey: boolean;
   role: string;
+  cost?: string;
+  hint?: string;
+  getKeyUrl?: string;
+  steps?: string[];
 };
 
 export type Connection = {

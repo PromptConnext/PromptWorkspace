@@ -1,0 +1,32 @@
+- main [ref=f4e3]:
+  - heading "Welcome to PromptZone" [level=1] [ref=f4e4]
+  - paragraph [ref=f4e5]:
+    - text: PromptZone orchestrates the AI models
+    - emphasis [ref=f4e6]: you
+    - text: bring — it ships none of its own. Connect one model to get started. No AI subscription? Pick
+    - strong [ref=f4e7]: Local Ollama
+    - text: ": free, private, nothing to sign up for."
+  - paragraph [ref=f4e8]: Your key is verified with a live call before it's accepted, and it is stored only in the macOS keychain on this machine — never in the cloud.
+  - generic [ref=f4e9]:
+    - button "Local Ollama Free · runs on your machine No signup, fully private. Great for planning; small models can't drive the coding agent." [ref=f4e10] [cursor=pointer]:
+      - generic [ref=f4e12]: Local Ollama
+      - generic [ref=f4e13]: Free · runs on your machine
+      - generic [ref=f4e14]: No signup, fully private. Great for planning; small models can't drive the coding agent.
+    - button "Z.AI GLM (best for coding) coding Paid · low cost per token Strong tool-calling coding model — the recommended pick for the Skill/implementation role and the Run button." [ref=f4e15] [cursor=pointer]:
+      - generic [ref=f4e16]:
+        - generic [ref=f4e17]: Z.AI GLM (best for coding)
+        - generic [ref=f4e18]: coding
+      - generic [ref=f4e19]: Paid · low cost per token
+      - generic [ref=f4e20]: Strong tool-calling coding model — the recommended pick for the Skill/implementation role and the Run button.
+    - button "OpenRouter (many models, one key) Paid · pay per token One key reaches hundreds of models; swap the model id to try others." [ref=f4e21] [cursor=pointer]:
+      - generic [ref=f4e23]: OpenRouter (many models, one key)
+      - generic [ref=f4e24]: Paid · pay per token
+      - generic [ref=f4e25]: One key reaches hundreds of models; swap the model id to try others.
+    - button "OpenAI Paid · pay per token Familiar, reliable; a solid planning model." [ref=f4e26] [cursor=pointer]:
+      - generic [ref=f4e28]: OpenAI
+      - generic [ref=f4e29]: Paid · pay per token
+      - generic [ref=f4e30]: Familiar, reliable; a solid planning model.
+    - button "Custom / other Any OpenAI-compatible endpoint vLLM, LM Studio, a self-hosted gateway, or any provider with an OpenAI-compatible API." [ref=f4e31] [cursor=pointer]:
+      - generic [ref=f4e33]: Custom / other
+      - generic [ref=f4e34]: Any OpenAI-compatible endpoint
+      - generic [ref=f4e35]: vLLM, LM Studio, a self-hosted gateway, or any provider with an OpenAI-compatible API.

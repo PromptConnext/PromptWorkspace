@@ -1,0 +1,8 @@
+- generic [ref=f5e57]:
+  - complementary [ref=f5e58]:
+    - heading "Projects" [level=2] [ref=f5e59]
+    - list
+    - generic [ref=f5e60]:
+      - textbox "New project name" [ref=f5e61]
+      - button "Create" [disabled] [ref=f5e62]
+  - paragraph [ref=f5e64]: Select or create a project to start the 3S flow.

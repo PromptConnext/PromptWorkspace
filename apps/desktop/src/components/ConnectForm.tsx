@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
-import {
-  connectModel,
-  getRecommendations,
-  type Recommendation,
-} from "../api";
+import { connectModel, getRecommendations, type Recommendation } from "../api";
 
+const CUSTOM: Recommendation = {
+  provider: "",
+  label: "Custom / other",
+  endpoint: "",
+  model: "",
+  needsKey: true,
+  role: "plan",
+  cost: "Any OpenAI-compatible endpoint",
+  hint: "vLLM, LM Studio, a self-hosted gateway, or any provider with an OpenAI-compatible API.",
+};
+
+// Guided model connection (ADR 0006/0007): pick a provider → see cost + where
+// to get a key → paste → verify. The `role` prop is the context default
+// (Scope/Spec onboarding = plan; Skill stage = code); each card can suggest its
+// own best-fit role.
 export default function ConnectForm({
   role,
   onConnected,
@@ -13,10 +24,13 @@ export default function ConnectForm({
   onConnected: () => void;
 }) {
   const [recs, setRecs] = useState<Recommendation[]>([]);
-  const [provider, setProvider] = useState("ollama");
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:11434");
+  const [picked, setPicked] = useState<Recommendation | null>(null);
+  const [provider, setProvider] = useState("");
+  const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [connRole, setConnRole] = useState<"plan" | "code">(role);
+  const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,11 +38,15 @@ export default function ConnectForm({
     getRecommendations().then((r) => setRecs(r.recommendations)).catch(() => {});
   }, []);
 
-  const applyRec = (rec: Recommendation) => {
+  const pick = (rec: Recommendation) => {
+    setPicked(rec);
     setProvider(rec.provider);
     setEndpoint(rec.endpoint);
     setModel(rec.model);
+    setConnRole((rec.role as "plan" | "code") || role);
+    setApiKey("");
     setError(null);
+    setAdvanced(rec.provider === ""); // custom → show endpoint/model straight away
   };
 
   const submit = async () => {
@@ -36,8 +54,8 @@ export default function ConnectForm({
     setError(null);
     try {
       await connectModel({
-        role,
-        provider,
+        role: connRole,
+        provider: provider || "custom",
         endpoint,
         model,
         ...(apiKey ? { apiKey } : {}),
@@ -50,40 +68,90 @@ export default function ConnectForm({
     }
   };
 
-  return (
-    <div className="connect-form">
-      <div className="rec-row">
-        {recs.map((rec) => (
-          <button key={rec.label} type="button" onClick={() => applyRec(rec)}>
-            {rec.label}
+  if (!picked) {
+    return (
+      <div className="provider-picker">
+        {[...recs, CUSTOM].map((rec) => (
+          <button key={rec.label} type="button" className="provider-card" onClick={() => pick(rec)}>
+            <span className="pc-head">
+              <span className="pc-label">{rec.label}</span>
+              {rec.role === "code" && <span className="pc-tag">coding</span>}
+            </span>
+            {rec.cost && <span className="pc-cost">{rec.cost}</span>}
+            {rec.hint && <span className="pc-hint">{rec.hint}</span>}
           </button>
         ))}
       </div>
+    );
+  }
+
+  const needsKey = picked.needsKey;
+  const canSubmit = !busy && Boolean(model) && Boolean(endpoint);
+
+  return (
+    <div className="connect-detail">
+      <button type="button" className="link" onClick={() => setPicked(null)}>
+        ← choose a different provider
+      </button>
+      <h4>{picked.label}</h4>
+
+      {picked.steps && (
+        <ol className="steps">
+          {picked.steps.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+      )}
+
+      {needsKey && picked.getKeyUrl && (
+        <p className="muted">
+          Get a key at: <span className="url">{picked.getKeyUrl}</span>
+        </p>
+      )}
+
+      {needsKey ? (
+        <label>
+          API key
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="paste your key"
+          />
+        </label>
+      ) : (
+        <p className="muted">No key needed — this runs locally on your machine.</p>
+      )}
+
       <label>
-        Provider
-        <input value={provider} onChange={(e) => setProvider(e.target.value)} />
+        Use this model for
+        <select value={connRole} onChange={(e) => setConnRole(e.target.value as "plan" | "code")}>
+          <option value="plan">Planning — Scope &amp; Spec</option>
+          <option value="code">Coding — implementation &amp; the Run button</option>
+        </select>
       </label>
-      <label>
-        Endpoint (base URL)
-        <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
-      </label>
-      <label>
-        Model
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="e.g. qwen3:8b"
-        />
-      </label>
-      <label>
-        API key (leave empty for local models)
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
-      </label>
-      <button type="button" disabled={busy || !model} onClick={submit}>
+
+      <button type="button" className="link" onClick={() => setAdvanced((v) => !v)}>
+        {advanced ? "Hide" : "Advanced"} — endpoint &amp; model id
+      </button>
+      {advanced && (
+        <>
+          <label>
+            Endpoint (base URL)
+            <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
+          </label>
+          <label>
+            Model id
+            <input value={model} onChange={(e) => setModel(e.target.value)} />
+          </label>
+        </>
+      )}
+
+      <p className="muted confirm">
+        Will connect <strong>{model || "…"}</strong> ({provider || "custom"}) as the{" "}
+        <strong>{connRole}</strong> model.
+      </p>
+      <button type="button" disabled={!canSubmit} onClick={submit}>
         {busy ? "Verifying with a live call…" : "Connect & verify"}
       </button>
       {error && <p className="error">{error}</p>}
