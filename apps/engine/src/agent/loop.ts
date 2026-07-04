@@ -147,7 +147,7 @@ function writeFiles(projectPath: string, files: StageOutput["files"]): void {
   }
 }
 
-function commitAll(projectPath: string, message: string): string {
+export function commitAll(projectPath: string, message: string): string {
   execFileSync("git", ["add", "-A"], { cwd: projectPath });
   execFileSync("git", ["commit", "-m", message, "--no-gpg-sign"], {
     cwd: projectPath,

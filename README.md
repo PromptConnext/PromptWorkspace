@@ -21,3 +21,7 @@ pnpm engine
 ```
 
 A zero-cost first model: install [Ollama](https://ollama.com), `ollama pull qwen3:8b`, then pick "Local Ollama" in onboarding.
+
+## Implementation modes
+
+Running a task uses one of two modes (ADR 0005/0006): if a coding-agent CLI is installed (Claude Code by default, any CLI via `PROMPTZONE_AGENT_CMD`), the engine spawns it headless in the project folder, pointed at the engine's Anthropic-compat façade (`/anthropic/v1/messages`) so it runs on your connected code-role model. Otherwise it falls back to one-shot codegen. Force a mode with the `implementation_mode` app state (`auto`/`agent`/`loop`).

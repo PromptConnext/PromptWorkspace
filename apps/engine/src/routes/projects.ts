@@ -5,9 +5,10 @@ import { mkdirSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { db } from "../db.ts";
+import { db, getAppState } from "../db.ts";
 import { connectionForRole, connectionForRoleStrict } from "./models.ts";
 import { parseTaskLines, runImplementation, runStage } from "../agent/loop.ts";
+import { resolveAgentCommand, runAgentTask } from "../agent/agent-runner.ts";
 
 export const projects = new Hono();
 
@@ -304,22 +305,48 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
   ).run(runId, task.project_id, task.id, conn.id, task.title.slice(0, 2000));
   db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(task.id);
 
+  // Implementation mode (ADR 0006): "agent" spawns a coding-agent CLI in the
+  // workspace via the Anthropic façade; "loop" is the one-shot fallback;
+  // "auto" (default) picks agent when one is installed.
+  const mode = getAppState("implementation_mode") ?? "auto";
+  const useAgent =
+    mode === "agent" || (mode === "auto" && resolveAgentCommand() !== null);
+
   return streamSSE(c, async (stream) => {
     try {
       const label = `${task.feature_tag ?? "task"} ${task.title}`;
-      const context = [
-        `Requirement: ${task.requirement_title}`,
-        ``,
-        `Approved implementation plan:`,
-        task.spec_content,
-        ``,
-        repoSnapshot(task.project_path),
-        ``,
-        `TASK TO IMPLEMENT NOW: ${label}`,
-      ].join("\n");
-      const out = await runImplementation(conn, task.project_path, label, context, (delta) => {
+      const onDelta = (delta: string) => {
         void stream.writeSSE({ event: "delta", data: delta });
-      });
+      };
+      const out = useAgent
+        ? await runAgentTask(
+            task.project_path,
+            label,
+            [
+              `Implement exactly one task in this repository: ${label}`,
+              ``,
+              `Requirement: ${task.requirement_title}`,
+              `The approved specification is at specs/001/spec.md, the implementation plan at specs/001/plan.md, and the full task list at specs/001/tasks.md — read them for context.`,
+              `Implement ONLY the task named above, with tests where appropriate. Do not commit; the platform commits for you.`,
+            ].join("\n"),
+            onDelta,
+          ).then((r) => ({ files: r.files.map((path) => ({ path })), commitSha: r.commitSha }))
+        : await runImplementation(
+            conn,
+            task.project_path,
+            label,
+            [
+              `Requirement: ${task.requirement_title}`,
+              ``,
+              `Approved implementation plan:`,
+              task.spec_content,
+              ``,
+              repoSnapshot(task.project_path),
+              ``,
+              `TASK TO IMPLEMENT NOW: ${label}`,
+            ].join("\n"),
+            onDelta,
+          );
       const insertArtifact = db.prepare(
         "INSERT INTO artifacts (id, task_id, kind, uri, commit_sha) VALUES (?, ?, 'code', ?, ?)",
       );

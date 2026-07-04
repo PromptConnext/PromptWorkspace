@@ -1,11 +1,11 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { models } from "./routes/models.ts";
+import { ENGINE_PORT } from "./config.ts";
+import { anthropicCompat } from "./gateway/anthropic-compat.ts";
+import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
 import { projects } from "./routes/projects.ts";
-
-export const ENGINE_PORT = Number(process.env.PROMPTZONE_ENGINE_PORT ?? 47131);
 
 const app = new Hono();
 
@@ -20,6 +20,9 @@ app.get("/engine/health", (c) =>
 app.route("/", models);
 app.route("/", onboarding);
 app.route("/", projects);
+// Anthropic Messages façade for agent CLIs (ADR 0006) — routes to the
+// connected code-role model.
+app.route("/anthropic", anthropicCompat(() => connectionForRoleStrict("code")));
 
 serve({ fetch: app.fetch, port: ENGINE_PORT, hostname: "127.0.0.1" }, (info) => {
   console.log(`[engine] listening on http://127.0.0.1:${info.port}`);
