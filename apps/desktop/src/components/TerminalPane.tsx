@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { ENGINE_URL, getLocalLlmEnv } from "../api";
+import { ENGINE_URL, getLocalLlmEnv, withToken } from "../api";
 
 // The developer surface (ADR 0007): a real shell in the project directory.
 // Developers run their own agent CLI here — their tools, their auth. Commits
@@ -34,7 +34,7 @@ export default function TerminalPane({ projectId }: { projectId: string }) {
     safeFit();
 
     const ws = new WebSocket(
-      `${ENGINE_URL.replace(/^http/, "ws")}/engine/projects/${projectId}/terminal`,
+      withToken(`${ENGINE_URL.replace(/^http/, "ws")}/engine/projects/${projectId}/terminal`),
     );
     ws.onopen = () =>
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));

@@ -23,3 +23,19 @@ export const ALLOWED_ORIGINS = new Set([
 export function isAllowedOrigin(origin: string | undefined | null): boolean {
   return typeof origin === "string" && ALLOWED_ORIGINS.has(origin);
 }
+
+// Per-session auth token (ADR 0008/0001). The packaged Tauri shell mints a
+// random token, passes it to the engine via PROMPTZONE_AUTH_TOKEN, and injects
+// it into the webview. When set, every request must present it — defending
+// against same-origin XSS and non-browser local processes that the origin
+// allowlist alone can't stop. Unset in dev (`pnpm engine`) so local iteration
+// and browser tests keep working.
+export const AUTH_TOKEN = process.env.PROMPTZONE_AUTH_TOKEN ?? null;
+
+// Accept the token via header (HTTP) or `?token=` (WebSocket handshakes, where
+// browsers can't set headers). Returns true when no token is configured.
+export function isAuthorized(headerToken: string | undefined, queryToken: string | null): boolean {
+  if (!AUTH_TOKEN) return true;
+  const bearer = headerToken?.replace(/^Bearer\s+/i, "");
+  return bearer === AUTH_TOKEN || queryToken === AUTH_TOKEN;
+}

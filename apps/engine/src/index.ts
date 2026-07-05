@@ -10,7 +10,7 @@ import { projects } from "./routes/projects.ts";
 import { files } from "./routes/files.ts";
 import { agents } from "./routes/agents.ts";
 import { registerTerminal } from "./routes/terminal.ts";
-import { isAllowedOrigin } from "./security.ts";
+import { isAllowedOrigin, isAuthorized, AUTH_TOKEN } from "./security.ts";
 
 const app = new Hono();
 
@@ -25,6 +25,20 @@ app.use(
     credentials: true,
   }),
 );
+
+// Require the per-session token (when configured) on every request. Skip CORS
+// preflight (no auth header allowed on it) and the health probe (liveness check
+// the shell/UI make before the token round-trips). No-op in dev (token unset).
+if (AUTH_TOKEN) {
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS" || c.req.path === "/engine/health") return next();
+    const queryToken = new URL(c.req.url).searchParams.get("token");
+    if (!isAuthorized(c.req.header("authorization"), queryToken)) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    return next();
+  });
+}
 
 app.get("/engine/health", (c) =>
   c.json({ ok: true, version: "0.0.1", pid: process.pid }),

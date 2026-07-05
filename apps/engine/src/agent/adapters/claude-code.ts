@@ -39,7 +39,9 @@ export const claudeCode: AgentAdapter = {
       ],
       env: {
         ANTHROPIC_BASE_URL: `${engineBaseUrl}/anthropic`,
-        ANTHROPIC_API_KEY: "promptzone-local-proxy",
+        // Becomes the Bearer on the agent's façade calls — must be the session
+        // token when one is configured, so the auth middleware accepts it.
+        ANTHROPIC_API_KEY: process.env.PROMPTZONE_AUTH_TOKEN ?? "promptzone-local-proxy",
         // Isolate from the user's personal Claude Code setup: no global
         // plugins/hooks leaking tools or state files into the workspace.
         CLAUDE_CONFIG_DIR: configDir,

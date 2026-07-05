@@ -1,5 +1,20 @@
 export const ENGINE_URL = "http://127.0.0.1:47131";
 
+// The packaged Tauri shell injects the per-session token (ADR 0008); undefined
+// in the browser/dev, where the engine runs without a token.
+const AUTH_TOKEN: string | undefined = (
+  globalThis as { __PROMPTZONE_TOKEN__?: string }
+).__PROMPTZONE_TOKEN__;
+
+function authHeaders(): Record<string, string> {
+  return AUTH_TOKEN ? { authorization: `Bearer ${AUTH_TOKEN}` } : {};
+}
+
+// Append the token to a WS URL (browsers can't set WebSocket headers).
+export function withToken(url: string): string {
+  return AUTH_TOKEN ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(AUTH_TOKEN)}` : url;
+}
+
 export type OnboardingState = "not_started" | "in_progress" | "satisfied";
 
 export type Recommendation = {
@@ -53,8 +68,8 @@ export type Graph = {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${ENGINE_URL}${path}`, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: { "content-type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
@@ -63,7 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function engineHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${ENGINE_URL}/engine/health`);
+    const res = await fetch(`${ENGINE_URL}/engine/health`, { headers: authHeaders() });
     return res.ok;
   } catch {
     return false;
@@ -110,7 +125,7 @@ async function requestSSE<T>(
 ): Promise<T> {
   const res = await fetch(`${ENGINE_URL}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok || !res.body) {
