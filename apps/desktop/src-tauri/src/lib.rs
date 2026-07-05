@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
@@ -21,21 +21,27 @@ fn mint_token() -> String {
     format!("pz{}{:p}", std::process::id(), &buf)
 }
 
-// Skeleton engine resolution: env override, else the repo checkout this binary
-// was compiled from. A packaged distribution must bundle the engine as a
-// resource instead (docs/decisions/0001-tauri-node-sidecar.md).
-fn engine_dir() -> PathBuf {
+// Engine resolution (ADR 0001): explicit override, else the copy bundled into
+// the app's resource dir (packaged), else the repo checkout this binary was
+// compiled from (dev / `cargo build`).
+fn engine_dir<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> PathBuf {
     if let Ok(dir) = std::env::var("PROMPTZONE_ENGINE_DIR") {
         return PathBuf::from(dir);
+    }
+    if let Ok(res) = handle.path().resource_dir() {
+        let bundled = res.join("engine");
+        if bundled.join("src").join("index.ts").exists() {
+            return bundled;
+        }
     }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine");
     dev.canonicalize().unwrap_or(dev)
 }
 
-fn spawn_engine(token: &str) -> std::io::Result<Child> {
+fn spawn_engine(token: &str, dir: &Path) -> std::io::Result<Child> {
     Command::new("node")
         .arg("src/index.ts")
-        .current_dir(engine_dir())
+        .current_dir(dir)
         .env("PROMPTZONE_PARENT_PID", std::process::id().to_string())
         .env("PROMPTZONE_AUTH_TOKEN", token)
         .spawn()
@@ -46,9 +52,14 @@ pub fn run() {
     let token = mint_token();
     tauri::Builder::default()
         .setup(move |app| {
-            let child = match spawn_engine(&token) {
+            let dir = engine_dir(app.handle());
+            let child = match spawn_engine(&token, &dir) {
                 Ok(child) => {
-                    println!("[promptzone] engine started (pid {})", child.id());
+                    println!(
+                        "[promptzone] engine started (pid {}) from {}",
+                        child.id(),
+                        dir.display()
+                    );
                     Some(child)
                 }
                 Err(err) => {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "stage:engine": "rm -rf src-tauri/.engine-pkg && pnpm --filter @promptzone/engine deploy --prod --config.node-linker=hoisted src-tauri/.engine-pkg",
     "tauri": "tauri"
   },
   "dependencies": {

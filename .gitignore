@@ -4,5 +4,7 @@ target/
 *.log
 .DS_Store
 .env
-.omc/
+.omc/*
 .playwright-*
+.claude/*
+.engine-pkg/
