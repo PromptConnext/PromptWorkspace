@@ -13,8 +13,12 @@ The shell passes `PROMPTZONE_PARENT_PID`; the engine watches `process.ppid` and 
 ## Packaging progress (2026-07-05)
 - **Engine bundled + resolved from the app (done).** `beforeBuildCommand` runs `pnpm stage:engine`, a **hoisted** `pnpm deploy` (`--config.node-linker=hoisted`) that produces a symlink-free, self-contained engine at `src-tauri/.engine-pkg` (raw pnpm `node_modules` is a symlink forest into the monorepo store and can't be bundled; `cp -RL` breaks Node ESM resolution — hoisted deploy is the working recipe). It's declared as a bundle resource (`.engine-pkg → engine`) and the Rust shell resolves the engine from `resource_dir()/engine` when present, falling back to the repo path in dev. **Verified:** a `.app` copied *outside* the repo starts the engine from `…/PromptZone.app/Contents/Resources/engine` (log confirms the path), node-pty's `darwin-arm64` prebuild + `spawn-helper` are present, health 200, token-protected, dies with the app.
 - **Per-session auth token (done)** — see ADR 0008.
+- **Node runtime bundled (done).** `scripts/bundle-node.mjs` copies the build's own Node (`process.execPath`) into `.engine-pkg/node`, guaranteeing the ABI matches node-pty's prebuilt addon (installed with that same Node) and satisfying the Node ≥24 floor (`node:sqlite`, native TS). The Rust shell prefers `<engine_dir>/node` over PATH. **Verified:** a `.app` copied outside the repo and launched with `node` stripped from PATH (`PATH=/usr/bin:/bin`) starts the engine from the bundle on the bundled Node — health 200, token-protected, no errors, dies with the app. Engine reaching health also proves node-pty's native addon loaded against the bundled Node (it's imported at startup). Bundle ≈192 MB (Node ~120 MB + engine deps ~66 MB).
+
+**macOS packaging is now self-contained: no repo, no system Node needed.**
 
 ## Remaining caveats (before external distribution)
-- `node` is still expected on PATH; a distribution must bundle a Node runtime (e.g. a Tauri sidecar binary) or compile the engine — the ABI-sensitive step, given node-pty is a native addon and `node:sqlite` needs Node ≥24. **This is the next packaging task.**
-- The bundled engine carries node-pty prebuilds for all platforms (~62 MB of 66 MB); prune to the target platform to shrink the bundle.
+- The bundled engine carries node-pty prebuilds for all platforms (~62 MB); prune to the target platform to shrink the bundle.
+- **Code signing / notarization:** the `.app` and the bundled Node/`.node` binaries are unsigned — fine for local runs, but Gatekeeper will block distribution until signed + notarized.
 - Keychain access shells out to macOS `security`; swap for a cross-platform keyring binding for Windows/Linux.
+- Windows/Linux packaging unaddressed (bundle-node + node-pty prebuilds are per-platform).
