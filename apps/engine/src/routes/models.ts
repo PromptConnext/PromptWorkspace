@@ -15,19 +15,23 @@ function listConnections(): ModelConnection[] {
 }
 
 export function connectionForRole(role: string): ModelConnection | undefined {
-  const conns = listConnections();
-  // Degrade within what's connected (architecture §3.3): exact role first,
-  // then any verified connection.
-  return (
-    conns.find((c) => c.role === role && c.verified_at) ??
-    conns.find((c) => c.verified_at)
-  );
+  // Newest verified connection wins: reconnecting a role supersedes the prior
+  // one (see connect handler), so resolve most-recent-first rather than by
+  // insertion order. Degrade within what's connected (architecture §3.3):
+  // exact role first, then any verified connection.
+  const verified = listConnections()
+    .filter((c) => c.verified_at)
+    .reverse();
+  return verified.find((c) => c.role === role) ?? verified[0];
 }
 
 // No fallback: implementation must not silently run on the planning model —
 // the just-in-time Skill prompt exists to get a real coding model connected.
 export function connectionForRoleStrict(role: string): ModelConnection | undefined {
-  return listConnections().find((c) => c.role === role && c.verified_at);
+  return listConnections()
+    .filter((c) => c.verified_at)
+    .reverse()
+    .find((c) => c.role === role);
 }
 
 export { chat };
@@ -106,6 +110,22 @@ models.post("/engine/models/connect", async (c) => {
       422,
     );
   }
+
+  // Supersede any prior connection for this role only after the new one
+  // verifies. We deactivate (clear verified_at) rather than delete, because
+  // agent_runs.model_connection_id references these rows (FK enforced) and we
+  // keep the run history. Drop the superseded secrets so they don't dangle.
+  const superseded = db
+    .prepare(
+      "SELECT credential_ref FROM model_connections WHERE role = ? AND verified_at IS NOT NULL",
+    )
+    .all(conn.role) as { credential_ref: string | null }[];
+  for (const prior of superseded) {
+    if (prior.credential_ref) deleteSecret(prior.credential_ref);
+  }
+  db.prepare(
+    "UPDATE model_connections SET verified_at = NULL, credential_ref = NULL WHERE role = ? AND verified_at IS NOT NULL",
+  ).run(conn.role);
 
   db.prepare(
     `INSERT INTO model_connections (id, role, mode, provider, endpoint, model, credential_ref, verified_at)

@@ -62,6 +62,11 @@ const server = serve(
     console.log(`[engine] listening on http://127.0.0.1:${info.port}`);
   },
 );
+// Agent task runs stream SSE for minutes. Node's default http requestTimeout
+// (300s) would destroy the still-open connection at the 5-minute mark — cutting
+// off any agent slower than that and orphaning the spawned CLI. Disable it;
+// per-run bounds come from AGENT_TIMEOUT_MS and client aborts instead.
+(server as import("node:http").Server).requestTimeout = 0;
 injectWebSocket(server);
 
 // When launched as the desktop app's sidecar, die with the parent even if it
