@@ -291,6 +291,19 @@ export const linkProjectToCloud = (projectId: string, workspaceId: string) =>
 export const unlinkProjectFromCloud = (projectId: string) =>
   request<CloudLink>(`/engine/projects/${projectId}/cloud-link`, { method: "DELETE" });
 
+export type CloudSyncResult = {
+  at: string | null;
+  ok: boolean | null;
+  upserted?: Record<string, number>;
+  error?: string;
+};
+
+export const triggerCloudSync = (projectId: string) =>
+  request<CloudSyncResult>(`/engine/projects/${projectId}/cloud-sync`, { method: "POST" });
+
+export const getCloudSyncStatus = (projectId: string) =>
+  request<CloudSyncResult>(`/engine/projects/${projectId}/cloud-sync`);
+
 export const getProjectAgent = (projectId: string) =>
   request<{ selected: string }>(`/engine/projects/${projectId}/agent`);
 

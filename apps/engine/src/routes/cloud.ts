@@ -10,6 +10,7 @@ import {
   storeCloudSession,
   supabasePasswordLogin,
 } from "../cloudClient.ts";
+import { lastSyncResult, pushProjectSnapshot } from "../sync/loop.ts";
 
 export const cloud = new Hono();
 
@@ -163,3 +164,14 @@ cloud.delete("/engine/projects/:id/cloud-link", (c) => {
   );
   return c.json({ linked: false });
 });
+
+// --- Push sync (D2 push-only cut) ------------------------------------------
+
+cloud.post("/engine/projects/:id/cloud-sync", async (c) => {
+  const result = await pushProjectSnapshot(c.req.param("id"));
+  return c.json(result, result.ok ? 200 : 502);
+});
+
+cloud.get("/engine/projects/:id/cloud-sync", (c) =>
+  c.json(lastSyncResult(c.req.param("id")) ?? { at: null, ok: null }),
+);

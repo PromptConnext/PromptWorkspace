@@ -6,12 +6,15 @@ import {
   getCloudConfig,
   getCloudLink,
   getCloudSession,
+  getCloudSyncStatus,
   linkProjectToCloud,
   listCloudWorkspaces,
+  triggerCloudSync,
   unlinkProjectFromCloud,
   type CloudConfig,
   type CloudLink,
   type CloudSession,
+  type CloudSyncResult,
   type CloudWorkspace,
 } from "../api";
 
@@ -30,6 +33,7 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
   const [pickedWorkspace, setPickedWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<CloudSyncResult | null>(null);
 
   const refresh = async () => {
     const cfg = await getCloudConfig();
@@ -41,6 +45,7 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
       const [ws, l] = await Promise.all([listCloudWorkspaces(), getCloudLink(projectId)]);
       setWorkspaces(ws.workspaces);
       setLink(l);
+      if (l.linked) setSyncStatus(await getCloudSyncStatus(projectId).catch(() => null));
     }
   };
 
@@ -117,6 +122,16 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
         <p className="muted">
           Synced to cloud workspace <strong>{link.workspace_id}</strong>
         </p>
+        {syncStatus?.at && (
+          <p className={syncStatus.ok ? "muted" : "error"}>
+            {syncStatus.ok
+              ? `Last synced ${new Date(syncStatus.at).toLocaleTimeString()}`
+              : `Last sync failed: ${syncStatus.error}`}
+          </p>
+        )}
+        <button type="button" disabled={busy} onClick={() => run(() => triggerCloudSync(projectId))}>
+          {busy ? "Syncing…" : "Sync now"}
+        </button>
         <button type="button" disabled={busy} onClick={() => run(() => unlinkProjectFromCloud(projectId))}>
           Unlink
         </button>
@@ -147,7 +162,12 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
       <button
         type="button"
         disabled={busy || !pickedWorkspace}
-        onClick={() => run(() => linkProjectToCloud(projectId, pickedWorkspace))}
+        onClick={() =>
+          run(async () => {
+            await linkProjectToCloud(projectId, pickedWorkspace);
+            await triggerCloudSync(projectId);
+          })
+        }
       >
         Link project
       </button>

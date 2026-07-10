@@ -11,6 +11,7 @@ import { files } from "./routes/files.ts";
 import { agents } from "./routes/agents.ts";
 import { cloud } from "./routes/cloud.ts";
 import { registerTerminal } from "./routes/terminal.ts";
+import { startCloudSyncLoop } from "./sync/loop.ts";
 import { isAllowedOrigin, isAuthorized, AUTH_TOKEN } from "./security.ts";
 
 const app = new Hono();
@@ -57,6 +58,7 @@ app.route("/anthropic", anthropicCompat(() => connectionForRoleStrict("code")));
 
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 registerTerminal(app, upgradeWebSocket);
+startCloudSyncLoop();
 
 const server = serve(
   { fetch: app.fetch, port: ENGINE_PORT, hostname: "127.0.0.1" },
