@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_webhook_secret: str = ""
 
+    # Presence (M6): ephemeral who's-here over WebSocket. In-memory, single
+    # instance — horizontal scale needs a Redis/pub-sub backplane (flagged).
+    ws_heartbeat_seconds: int = 20
+    ws_max_connections_per_project: int = 50
+
     # Rate limiting (M4/M7): token bucket per identity on /sync and webhook
     # endpoints. `burst` is the bucket capacity; `per_minute` the refill rate.
     rate_limit_enabled: bool = True

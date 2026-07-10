@@ -14,10 +14,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import health, integrations, sync, workspaces
+from app.api import health, integrations, presence, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from app.ws.manager import ConnectionManager
 
 logger = logging.getLogger("promptzone")
 
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=settings.log_level)
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
+    app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)
     logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,
@@ -97,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(workspaces.router)
     app.include_router(integrations.router)
+    app.include_router(presence.router)
     app.include_router(sync.router)
 
     @app.get("/", tags=["health"])

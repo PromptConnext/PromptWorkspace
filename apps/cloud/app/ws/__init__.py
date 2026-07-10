@@ -1,0 +1,1 @@
+"""WebSocket presence (M6)."""
