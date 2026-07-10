@@ -135,6 +135,43 @@ def test_upsert_updates_existing_entity(client):
 
 
 # --------------------------------------------------------------------------- #
+# Milestone 3 — per-field conflict ownership (end-to-end through the API)
+# --------------------------------------------------------------------------- #
+def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    # PromptZone (default source="pz") sets an agent-driven status.
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "in_progress"}]},
+        headers=headers,
+    )
+    # An external tracker (source="pmo") tries to overwrite status (a pz field)
+    # and set assignee (a pmo field) in the same push.
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "source": "pmo",
+            "tasks": [
+                {
+                    "id": "t1",
+                    "project_id": pid,
+                    "title": "X",
+                    "status": "verified",
+                    "assignee": "alice",
+                }
+            ],
+        },
+        headers=headers,
+    )
+    task = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()["tasks"][0]
+    assert task["status"] == "in_progress"  # pz field untouched by pmo
+    assert task["assignee"] == "alice"  # pmo owns assignee
+
+
+# --------------------------------------------------------------------------- #
 # Milestone 1 — tombstone soft-delete
 # --------------------------------------------------------------------------- #
 def test_delete_propagates_via_incremental_pull(client):

@@ -14,8 +14,10 @@ import abc
 import copy
 from datetime import datetime, timedelta
 
+from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
+    FIELD_AUTHORITY,
     GraphUpsertRequest,
     Invitation,
     InvitationStatus,
@@ -204,18 +206,23 @@ class InMemoryRepository(Repository):
     ) -> dict[str, int]:
         store = self._graph[project_id]
         counts: dict[str, int] = {}
-        for etype in ENTITY_TYPES:
+        now = utcnow()  # server owns the cursor timestamp
+        for etype, model in ENTITY_TYPES.items():
             items = getattr(payload, etype)
             if not items:
                 continue
+            authority = FIELD_AUTHORITY.get(etype, {})
             for item in items:
-                entity = copy.deepcopy(item)
-                entity.updated_at = utcnow()  # server owns the cursor timestamp
-                store[etype][entity.id] = entity
+                stored = store[etype].get(item.id)
+                stored_dict = stored.model_dump(mode="json") if stored else None
+                merged = merge_entity(
+                    stored_dict, item.model_dump(mode="json"), authority, source, now
+                )
+                store[etype][item.id] = model(**merged)
             counts[etype] = len(items)
         # touch the project so its updated_at advances too
         if counts and (project := self._projects.get(project_id)):
-            project.updated_at = utcnow()
+            project.updated_at = now
         return counts
 
     def get_graph(
