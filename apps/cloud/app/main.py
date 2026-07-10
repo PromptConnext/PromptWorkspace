@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import health, sync, workspaces
+from app.api import health, integrations, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
@@ -96,6 +96,7 @@ def create_app() -> FastAPI:
         )
     app.include_router(health.router)
     app.include_router(workspaces.router)
+    app.include_router(integrations.router)
     app.include_router(sync.router)
 
     @app.get("/", tags=["health"])

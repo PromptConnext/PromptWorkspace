@@ -178,6 +178,10 @@ class Workspace(BaseModel):
     name: str
     created_by: str
     git_config: dict = Field(default_factory=dict)
+    # Per-provider external-tracker settings (non-secret): base_url, project_key,
+    # status_map. See app/integrations. Secrets come from the server env, never
+    # this row (ADR 0010 §5).
+    integration_config: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -205,6 +209,37 @@ class Invitation(BaseModel):
     invited_by: str
     expires_at: datetime
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# External-tracker links (M5)
+# --------------------------------------------------------------------------- #
+class TaskLink(BaseModel):
+    """Maps a PromptZone task to its mirror in an external tracker."""
+
+    task_id: str
+    project_id: str
+    provider: str  # "jira" | "clickup"
+    external_key: str  # e.g. Jira issue key "PZ-42"
+    external_url: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class JiraIntegrationConfig(BaseModel):
+    """Non-secret Jira settings stored on the workspace. The API token +
+    webhook secret live in the server env, never here (ADR 0010 §5)."""
+
+    base_url: str  # https://your-org.atlassian.net
+    project_key: str  # "PZ"
+    # PromptZone TaskStatus value -> Jira status name used in transitions.
+    status_map: dict[str, str] = Field(
+        default_factory=lambda: {
+            "todo": "To Do",
+            "in_progress": "In Progress",
+            "implemented": "In Review",
+            "verified": "Done",
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #

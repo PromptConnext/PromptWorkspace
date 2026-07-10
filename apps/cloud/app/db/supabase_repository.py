@@ -28,6 +28,8 @@ from app.models.schemas import (
     Project,
     ProjectGraph,
     Role,
+    Task,
+    TaskLink,
     Workspace,
     WorkspaceMember,
     utcnow,
@@ -44,6 +46,7 @@ _PROJECTS = "pz_projects"
 _WORKSPACES = "pz_workspaces"
 _MEMBERS = "pz_workspace_members"
 _INVITATIONS = "pz_invitations"
+_TASK_LINKS = "pz_task_links"
 
 
 class SupabaseRepository(Repository):
@@ -81,13 +84,20 @@ class SupabaseRepository(Repository):
         return [Workspace(**row) for row in (res.data or [])]
 
     def update_workspace(
-        self, workspace_id: str, *, name: str | None = None, git_config: dict | None = None
+        self,
+        workspace_id: str,
+        *,
+        name: str | None = None,
+        git_config: dict | None = None,
+        integration_config: dict | None = None,
     ) -> Workspace:
         patch: dict = {"updated_at": utcnow().isoformat()}
         if name is not None:
             patch["name"] = name
         if git_config is not None:
             patch["git_config"] = git_config
+        if integration_config is not None:
+            patch["integration_config"] = integration_config
         self._client.table(_WORKSPACES).update(patch).eq("id", workspace_id).execute()
         ws = self.get_workspace(workspace_id)
         if ws is None:
@@ -259,6 +269,49 @@ class SupabaseRepository(Repository):
             if res.count:
                 counts[etype] = res.count
         return max_cursor, counts
+
+    def get_task(self, project_id: str, task_id: str) -> Task | None:
+        res = (
+            self._client.table(_TABLE["tasks"])
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("id", task_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return Task(**rows[0]) if rows else None
+
+    # -- external-tracker links (M5) -------------------------------------- #
+    def upsert_task_link(self, link: TaskLink) -> TaskLink:
+        self._client.table(_TASK_LINKS).upsert(
+            _dump(link), on_conflict="provider,external_key"
+        ).execute()
+        return link
+
+    def get_task_link(self, task_id: str, provider: str) -> TaskLink | None:
+        res = (
+            self._client.table(_TASK_LINKS)
+            .select("*")
+            .eq("task_id", task_id)
+            .eq("provider", provider)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return TaskLink(**rows[0]) if rows else None
+
+    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
+        res = (
+            self._client.table(_TASK_LINKS)
+            .select("*")
+            .eq("provider", provider)
+            .eq("external_key", external_key)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return TaskLink(**rows[0]) if rows else None
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:

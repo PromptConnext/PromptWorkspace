@@ -24,6 +24,8 @@ from app.models.schemas import (
     Project,
     ProjectGraph,
     Role,
+    Task,
+    TaskLink,
     Workspace,
     WorkspaceMember,
     utcnow,
@@ -47,7 +49,12 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def update_workspace(
-        self, workspace_id: str, *, name: str | None = None, git_config: dict | None = None
+        self,
+        workspace_id: str,
+        *,
+        name: str | None = None,
+        git_config: dict | None = None,
+        integration_config: dict | None = None,
     ) -> Workspace: ...
 
     @abc.abstractmethod
@@ -103,6 +110,20 @@ class Repository(abc.ABC):
         materialising rows — the cheap "is there anything to pull" probe (M4)."""
 
     @abc.abstractmethod
+    def get_task(self, project_id: str, task_id: str) -> Task | None: ...
+
+    # -- external-tracker links (M5) -------------------------------------- #
+    @abc.abstractmethod
+    def upsert_task_link(self, link: TaskLink) -> TaskLink: ...
+
+    @abc.abstractmethod
+    def get_task_link(self, task_id: str, provider: str) -> TaskLink | None: ...
+
+    @abc.abstractmethod
+    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
+        """Resolve an inbound webhook's external key to a PromptZone task."""
+
+    @abc.abstractmethod
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
         """Hard-delete rows tombstoned (`deleted_at` set) longer than `ttl_days`
         ago. Never touches live rows or recent tombstones. Returns per-entity
@@ -123,6 +144,8 @@ class InMemoryRepository(Repository):
         self._members: dict[str, dict[str, WorkspaceMember]] = {}
         # token -> Invitation
         self._invitations: dict[str, Invitation] = {}
+        # (provider, external_key) -> TaskLink
+        self._task_links: dict[tuple[str, str], TaskLink] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(self, name: str, created_by: str) -> Workspace:
@@ -143,13 +166,20 @@ class InMemoryRepository(Repository):
         ]
 
     def update_workspace(
-        self, workspace_id: str, *, name: str | None = None, git_config: dict | None = None
+        self,
+        workspace_id: str,
+        *,
+        name: str | None = None,
+        git_config: dict | None = None,
+        integration_config: dict | None = None,
     ) -> Workspace:
         ws = self._workspaces[workspace_id]
         if name is not None:
             ws.name = name
         if git_config is not None:
             ws.git_config = git_config
+        if integration_config is not None:
+            ws.integration_config = integration_config
         ws.updated_at = utcnow()
         return ws
 
@@ -275,6 +305,27 @@ class InMemoryRepository(Repository):
             if changed:
                 counts[etype] = changed
         return max_cursor, counts
+
+    def get_task(self, project_id: str, task_id: str) -> Task | None:
+        store = self._graph.get(project_id)
+        if not store:
+            return None
+        task = store["tasks"].get(task_id)
+        return copy.deepcopy(task) if task else None
+
+    # -- external-tracker links (M5) -------------------------------------- #
+    def upsert_task_link(self, link: TaskLink) -> TaskLink:
+        self._task_links[(link.provider, link.external_key)] = link
+        return link
+
+    def get_task_link(self, task_id: str, provider: str) -> TaskLink | None:
+        for link in self._task_links.values():
+            if link.provider == provider and link.task_id == task_id:
+                return link
+        return None
+
+    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
+        return self._task_links.get((provider, external_key))
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
