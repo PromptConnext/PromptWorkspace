@@ -1,5 +1,9 @@
 """End-to-end tests for the Sync API against the in-memory backend."""
 
+from datetime import timedelta
+
+from app.models.schemas import utcnow
+
 
 def _create_project(client, name="Demo", user="alice"):
     res = client.post("/projects", json={"name": name}, headers={"X-User-Id": user})
@@ -116,3 +120,161 @@ def test_upsert_updates_existing_entity(client):
     assert len(tasks) == 1
     assert tasks[0]["title"] == "New"
     assert tasks[0]["status"] == "implemented"
+
+
+# --------------------------------------------------------------------------- #
+# Milestone 1 — tombstone soft-delete
+# --------------------------------------------------------------------------- #
+def test_delete_propagates_via_incremental_pull(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"requirements": [{"id": "r1", "project_id": pid, "title": "First"}]},
+        headers=headers,
+    )
+    cursor = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()["cursor"]
+
+    # Delete = upsert the same id with deleted_at set.
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {
+                    "id": "r1",
+                    "project_id": pid,
+                    "title": "First",
+                    "deleted_at": utcnow().isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+
+    delta = client.get(
+        f"/sync/projects/{pid}/graph", params={"since": cursor}, headers=headers
+    ).json()
+    assert len(delta["requirements"]) == 1
+    assert delta["requirements"][0]["id"] == "r1"
+    assert delta["requirements"][0]["deleted_at"] is not None
+
+
+def test_bootstrap_pull_hides_deleted(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"requirements": [{"id": "r1", "project_id": pid, "title": "First"}]},
+        headers=headers,
+    )
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {
+                    "id": "r1",
+                    "project_id": pid,
+                    "title": "First",
+                    "deleted_at": utcnow().isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+
+    # A fresh (since-less) pull never sees the tombstoned row.
+    bootstrap = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()
+    assert bootstrap["requirements"] == []
+
+
+def test_recreate_after_delete(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"requirements": [{"id": "r1", "project_id": pid, "title": "First"}]},
+        headers=headers,
+    )
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {
+                    "id": "r1",
+                    "project_id": pid,
+                    "title": "First",
+                    "deleted_at": utcnow().isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    # Re-upsert without deleted_at restores it as live.
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"requirements": [{"id": "r1", "project_id": pid, "title": "First (restored)"}]},
+        headers=headers,
+    )
+
+    bootstrap = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()
+    assert len(bootstrap["requirements"]) == 1
+    assert bootstrap["requirements"][0]["deleted_at"] is None
+    assert bootstrap["requirements"][0]["title"] == "First (restored)"
+
+
+def test_tombstone_gc_purges_old_deleted_rows(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [{"id": "r1", "project_id": pid, "title": "First"}],
+            "tasks": [{"id": "t1", "project_id": pid, "title": "Old task"}],
+        },
+        headers=headers,
+    )
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {
+                    "id": "r1",
+                    "project_id": pid,
+                    "title": "First",
+                    "deleted_at": utcnow().isoformat(),
+                }
+            ],
+            "tasks": [
+                {
+                    "id": "t1",
+                    "project_id": pid,
+                    "title": "Old task",
+                    "deleted_at": (utcnow() - timedelta(days=1)).isoformat(),
+                }
+            ],
+        },
+        headers=headers,
+    )
+
+    repo = client.app.state.repository
+    # Force the requirement's tombstone to look old enough to purge; leave
+    # the task's tombstone fresh so it's untouched by a 30-day TTL.
+    project_store = repo._graph[pid]  # test-only reach into InMemoryRepository internals
+    project_store["requirements"]["r1"].deleted_at = utcnow() - timedelta(days=31)
+
+    purged = repo.purge_expired_tombstones(ttl_days=30)
+    assert purged.get("requirements") == 1
+    assert "tasks" not in purged  # task tombstone is only 1 day old
+
+    # Purge never touches live rows: task-graph fetch (since-less) already
+    # hid the tombstone; incremental pull confirms the row is truly gone.
+    assert "r1" not in project_store["requirements"]
+    assert "t1" in project_store["tasks"]

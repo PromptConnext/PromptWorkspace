@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import abc
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -40,6 +40,12 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def get_graph(self, project_id: str, since: datetime | None = None) -> ProjectGraph: ...
+
+    @abc.abstractmethod
+    def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
+        """Hard-delete rows tombstoned (`deleted_at` set) longer than `ttl_days`
+        ago. Never touches live rows or recent tombstones. Returns per-entity
+        purge counts. See docs/plans/0001-cloud-deletes-and-auth.md (M1 GC)."""
 
 
 class InMemoryRepository(Repository):
@@ -91,11 +97,31 @@ class InMemoryRepository(Repository):
         for etype in ENTITY_TYPES:
             rows = []
             for entity in store[etype].values():
-                if since is not None and (entity.updated_at is None or entity.updated_at <= since):
-                    continue
+                if since is None:
+                    if entity.deleted_at is not None:
+                        continue  # bootstrap pull: hide dead rows
+                elif entity.updated_at is None or entity.updated_at <= since:
+                    continue  # incremental pull: unchanged rows (tombstones included)
                 rows.append(copy.deepcopy(entity))
                 if entity.updated_at and (max_cursor is None or entity.updated_at > max_cursor):
                     max_cursor = entity.updated_at
             setattr(graph, etype, rows)
         graph.cursor = max_cursor
         return graph
+
+    # -- maintenance -------------------------------------------------------- #
+    def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
+        cutoff = utcnow() - timedelta(days=ttl_days)
+        counts: dict[str, int] = {}
+        for project_id, store in self._graph.items():
+            for etype in ENTITY_TYPES:
+                expired_ids = [
+                    eid
+                    for eid, entity in store[etype].items()
+                    if entity.deleted_at is not None and entity.deleted_at <= cutoff
+                ]
+                for eid in expired_ids:
+                    del store[etype][eid]
+                if expired_ids:
+                    counts[etype] = counts.get(etype, 0) + len(expired_ids)
+        return counts

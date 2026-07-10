@@ -78,10 +78,16 @@ class GraphEntity(BaseModel):
 
     `updated_at` is server-managed: clients may send it, but the server always
     overwrites it on write so it can serve as a reliable incremental-pull cursor.
+
+    `deleted_at` is a tombstone: a delete is just an upsert that sets this
+    field. Bootstrap pulls (no `since`) hide tombstoned rows; incremental
+    pulls (`since` set) include them so peers learn of the deletion. See
+    docs/plans/0001-cloud-deletes-and-auth.md (Milestone 1).
     """
 
     id: str = Field(default_factory=new_id)
     updated_at: datetime | None = None
+    deleted_at: datetime | None = None
 
 
 class AcceptanceCriterion(BaseModel):

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://localhost:1420"
 
+    # Tombstone GC (Milestone 1): rows with deleted_at older than this are
+    # hard-deleted. Safe once every client has plausibly pulled past them.
+    # Set to 0 to disable the background purge loop entirely.
+    tombstone_ttl_days: int = 30
+    tombstone_gc_interval_seconds: int = 3600
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

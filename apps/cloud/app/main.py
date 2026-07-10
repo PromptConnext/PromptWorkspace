@@ -5,6 +5,8 @@ Run:  uvicorn app.main:app --reload --port 8080 --env-file=.env.local
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -16,6 +18,8 @@ from app.api import health, sync
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 
+logger = logging.getLogger("promptzone")
+
 
 def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
@@ -26,18 +30,43 @@ def _build_repository(settings: Settings) -> Repository:
     return InMemoryRepository()
 
 
+async def _tombstone_gc_loop(app: FastAPI, settings: Settings) -> None:
+    """Periodically hard-delete tombstones older than TOMBSTONE_TTL_DAYS.
+
+    Deferred-then-promoted from plan 0001 M7 to M1 on request: GC ships
+    alongside the tombstones it cleans up rather than later. Disabled when
+    tombstone_ttl_days <= 0.
+    """
+    if settings.tombstone_ttl_days <= 0:
+        return
+    while True:
+        await asyncio.sleep(settings.tombstone_gc_interval_seconds)
+        try:
+            purged = app.state.repository.purge_expired_tombstones(settings.tombstone_ttl_days)
+            if purged:
+                logger.info("Tombstone GC purged %s", purged)
+        except Exception:  # noqa: BLE001 - GC must never crash the app
+            logger.exception("Tombstone GC pass failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
-    logging.getLogger("promptzone").info(
+    logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,
         app.state.repository.backend_name,
     )
-    yield
+    gc_task = asyncio.create_task(_tombstone_gc_loop(app, settings))
+    try:
+        yield
+    finally:
+        gc_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await gc_task
 
 
 def create_app() -> FastAPI:

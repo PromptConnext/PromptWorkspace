@@ -11,7 +11,7 @@ fields) is a later refinement — see the task-management memo.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -85,7 +85,11 @@ class SupabaseRepository(Repository):
         for etype, model in ENTITY_TYPES.items():
             query = self._client.table(_TABLE[etype]).select("*").eq("project_id", project_id)
             if since is not None:
+                # Incremental pull: everything changed, tombstones included.
                 query = query.gt("updated_at", since.isoformat())
+            else:
+                # Bootstrap pull: live rows only.
+                query = query.is_("deleted_at", "null")
             res = query.execute()
             rows = [model(**row) for row in (res.data or [])]
             setattr(graph, etype, rows)
@@ -94,6 +98,23 @@ class SupabaseRepository(Repository):
                     max_cursor = row.updated_at
         graph.cursor = max_cursor
         return graph
+
+    # -- maintenance -------------------------------------------------------- #
+    def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
+        cutoff = (utcnow() - timedelta(days=ttl_days)).isoformat()
+        counts: dict[str, int] = {}
+        for etype in ENTITY_TYPES:
+            res = (
+                self._client.table(_TABLE[etype])
+                .delete()
+                .lte("deleted_at", cutoff)
+                .not_.is_("deleted_at", "null")
+                .execute()
+            )
+            purged = len(res.data or [])
+            if purged:
+                counts[etype] = purged
+        return counts
 
 
 def _dump(model) -> dict:
