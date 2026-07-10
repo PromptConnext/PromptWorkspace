@@ -135,6 +135,38 @@ def test_upsert_updates_existing_entity(client):
 
 
 # --------------------------------------------------------------------------- #
+# Milestone 7 — keyset pagination
+# --------------------------------------------------------------------------- #
+def test_graph_pull_keyset_pagination(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+    client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "tasks": [
+                {"id": f"t{i}", "project_id": pid, "title": f"Task {i}"} for i in range(5)
+            ]
+        },
+        headers=headers,
+    )
+
+    seen: list[str] = []
+    params: dict = {"limit": 2}
+    for _ in range(5):  # safety bound
+        page = client.get(
+            f"/sync/projects/{pid}/graph", params=params, headers=headers
+        ).json()
+        seen.extend(t["id"] for t in page["tasks"])
+        if not page["has_more"]:
+            break
+        params = {"limit": 2, "after_ts": page["cursor"], "after_id": page["next_id"]}
+
+    assert sorted(seen) == [f"t{i}" for i in range(5)]
+    assert len(seen) == 5  # no dupes, no gaps across pages
+
+
+# --------------------------------------------------------------------------- #
 # Milestone 3 — per-field conflict ownership (end-to-end through the API)
 # --------------------------------------------------------------------------- #
 def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):

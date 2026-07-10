@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,20 @@ from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from app.ws.manager import ConnectionManager
 
 logger = logging.getLogger("promptzone")
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+
+
+def _schema_version() -> str:
+    """Latest bundled migration stem (e.g. '0005_tracker_links'), for /health.
+
+    Reports what the *code* expects; a mismatch with the DB is an operator
+    signal to apply pending migrations."""
+    try:
+        files = sorted(p.stem for p in _MIGRATIONS_DIR.glob("*.sql"))
+        return files[-1] if files else "none"
+    except OSError:
+        return "unknown"
 
 
 def _build_repository(settings: Settings) -> Repository:
@@ -59,6 +74,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
     app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)
+    app.state.schema_version = _schema_version()
+    # Lightweight in-process counters surfaced on /health (M7 observability).
+    app.state.metrics = {"pushed": 0, "pulled": 0, "merged": 0, "conflicts": 0}
     logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,

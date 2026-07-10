@@ -17,7 +17,6 @@ from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     Invitation,
     InvitationCreate,
-    Role,
     Workspace,
     WorkspaceCreate,
     WorkspaceMember,
@@ -128,6 +127,6 @@ def accept_invitation(
     try:
         return repo.accept_invitation(token, user.id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="invitation_not_found")
+        raise HTTPException(status_code=404, detail="invitation_not_found") from None
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

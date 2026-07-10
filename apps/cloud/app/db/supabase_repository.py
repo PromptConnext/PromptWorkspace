@@ -57,7 +57,7 @@ class SupabaseRepository(Repository):
 
         self._client = create_client(url, key)
 
-    def for_user(self, token: str) -> "SupabaseRepository":
+    def for_user(self, token: str) -> SupabaseRepository:
         """Return a view whose PostgREST calls carry the caller's JWT so RLS
         applies per request. Shares the underlying connection pool."""
         self._client.postgrest.auth(token)
@@ -212,7 +212,12 @@ class SupabaseRepository(Repository):
         return rows[0] if rows else None
 
     def get_graph(
-        self, project_id: str, since: datetime | None = None, limit: int | None = None
+        self,
+        project_id: str,
+        since: datetime | None = None,
+        limit: int | None = None,
+        after_ts: datetime | None = None,
+        after_id: str | None = None,
     ) -> ProjectGraph:
         project = self.get_project(project_id)
         if project is None:
@@ -227,11 +232,20 @@ class SupabaseRepository(Repository):
             else:
                 # Bootstrap pull: live rows only.
                 query = query.is_("deleted_at", "null")
+            # Keyset lower bound for pagination continuation.
+            if after_ts is not None:
+                query = query.gte("updated_at", after_ts.isoformat())
             query = query.order("updated_at").order("id")
             if limit is not None:
                 query = query.limit(limit)
             res = query.execute()
             rows = [model(**row) for row in (res.data or [])]
+            if after_ts is not None and after_id is not None:
+                rows = [
+                    r
+                    for r in rows
+                    if r.updated_at and (r.updated_at > after_ts or r.id > after_id)
+                ]
             setattr(graph, etype, rows)
             for row in rows:
                 if row.updated_at and (max_cursor is None or row.updated_at > max_cursor):

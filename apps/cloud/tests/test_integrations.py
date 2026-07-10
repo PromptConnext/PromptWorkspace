@@ -115,7 +115,11 @@ def _bootstrap(client, monkeypatch):
     ).json()["id"]
     client.put(
         f"/sync/projects/{pid}/graph",
-        json={"tasks": [{"id": "t1", "project_id": pid, "title": "Login", "status": "in_progress"}]},
+        json={
+            "tasks": [
+                {"id": "t1", "project_id": pid, "title": "Login", "status": "in_progress"}
+            ]
+        },
         headers={"X-User-Id": "alice"},
     )
     cfg = client.post(
@@ -150,6 +154,26 @@ def test_configure_integration_requires_admin(jira_client):
         headers={"X-User-Id": "bob"},
     )
     assert res.status_code == 403
+
+
+def test_configure_rejects_non_allowlisted_base_url(jira_client):
+    ws = jira_client.post(
+        "/workspaces", json={"name": "W"}, headers={"X-User-Id": "alice"}
+    ).json()
+    # An attacker-controlled host would exfiltrate the outbound Jira token.
+    evil = jira_client.post(
+        f"/workspaces/{ws['id']}/integrations/jira",
+        json={"base_url": "https://evil.example.com", "project_key": "PZ"},
+        headers={"X-User-Id": "alice"},
+    )
+    assert evil.status_code == 422
+    # http (non-TLS) is also rejected.
+    insecure = jira_client.post(
+        f"/workspaces/{ws['id']}/integrations/jira",
+        json={"base_url": "http://acme.atlassian.net", "project_key": "PZ"},
+        headers={"X-User-Id": "alice"},
+    )
+    assert insecure.status_code == 422
 
 
 def test_webhook_updates_only_pmo_fields(jira_client, monkeypatch):

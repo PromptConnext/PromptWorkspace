@@ -48,7 +48,7 @@ def get_current_user(
             audience="authenticated",
         )
     except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="invalid_token")
+        raise HTTPException(status_code=401, detail="invalid_token") from None
     sub = claims.get("sub")
     if not sub:
         raise HTTPException(status_code=401, detail="invalid_token")

@@ -345,3 +345,7 @@ class ProjectGraph(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
     cursor: datetime | None = None
+    # Keyset continuation (M7): when a `limit` truncates the page, the client
+    # re-pulls with since=cursor & after_id=next_id. None means fully drained.
+    next_id: str | None = None
+    has_more: bool = False

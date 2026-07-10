@@ -99,8 +99,17 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def get_graph(
-        self, project_id: str, since: datetime | None = None, limit: int | None = None
-    ) -> ProjectGraph: ...
+        self,
+        project_id: str,
+        since: datetime | None = None,
+        limit: int | None = None,
+        after_ts: datetime | None = None,
+        after_id: str | None = None,
+    ) -> ProjectGraph:
+        """Pull the graph. `since` selects mode (bootstrap = live only;
+        incremental = everything changed after it, tombstones included).
+        `limit` + (`after_ts`,`after_id`) give keyset pagination ordered by
+        (updated_at, id)."""
 
     @abc.abstractmethod
     def changes_head(
@@ -263,25 +272,56 @@ class InMemoryRepository(Repository):
         return counts
 
     def get_graph(
-        self, project_id: str, since: datetime | None = None, limit: int | None = None
+        self,
+        project_id: str,
+        since: datetime | None = None,
+        limit: int | None = None,
+        after_ts: datetime | None = None,
+        after_id: str | None = None,
     ) -> ProjectGraph:
         project = self._projects[project_id]
         store = self._graph[project_id]
         graph = ProjectGraph(project=project)
-        max_cursor: datetime | None = None
+
+        # Gather candidates across all entity types, then order globally by
+        # (updated_at, id) so a `limit` yields a stable keyset page.
+        candidates: list[tuple[datetime, str, str, object]] = []
         for etype in ENTITY_TYPES:
-            rows = []
             for entity in store[etype].values():
                 if since is None:
                     if entity.deleted_at is not None:
                         continue  # bootstrap pull: hide dead rows
                 elif entity.updated_at is None or entity.updated_at <= since:
                     continue  # incremental pull: unchanged rows (tombstones included)
-                rows.append(copy.deepcopy(entity))
-                if entity.updated_at and (max_cursor is None or entity.updated_at > max_cursor):
-                    max_cursor = entity.updated_at
-            setattr(graph, etype, rows)
-        graph.cursor = max_cursor
+                if entity.updated_at is None:
+                    continue
+                # Keyset lower bound (exclusive) for pagination continuation.
+                if after_ts is not None:
+                    if entity.updated_at < after_ts:
+                        continue
+                    if entity.updated_at == after_ts and (
+                        after_id is None or entity.id <= after_id
+                    ):
+                        continue
+                candidates.append((entity.updated_at, entity.id, etype, entity))
+
+        candidates.sort(key=lambda c: (c[0], c[1]))
+        truncated = limit is not None and len(candidates) > limit
+        if limit is not None:
+            candidates = candidates[:limit]
+
+        rows_by_type: dict[str, list] = {etype: [] for etype in ENTITY_TYPES}
+        last: tuple[datetime, str] | None = None
+        for ts, eid, etype, entity in candidates:
+            rows_by_type[etype].append(copy.deepcopy(entity))
+            last = (ts, eid)
+        for etype in ENTITY_TYPES:
+            setattr(graph, etype, rows_by_type[etype])
+
+        graph.cursor = last[0] if last else (after_ts if after_ts else since)
+        if truncated and last:
+            graph.next_id = last[1]
+            graph.has_more = True
         return graph
 
     def changes_head(
@@ -331,7 +371,7 @@ class InMemoryRepository(Repository):
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
         cutoff = utcnow() - timedelta(days=ttl_days)
         counts: dict[str, int] = {}
-        for project_id, store in self._graph.items():
+        for store in self._graph.values():
             for etype in ENTITY_TYPES:
                 expired_ids = [
                     eid

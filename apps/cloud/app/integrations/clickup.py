@@ -23,6 +23,8 @@ _DEFAULT_STATUS_MAP = {
 
 class ClickUpAdapter:
     provider = "clickup"
+    # Only the official ClickUp API host may receive the outbound token.
+    allowed_host_suffixes = ("api.clickup.com",)
 
     # -- outbound --------------------------------------------------------- #
     def build_push(self, task: Task, config: dict) -> OutboundRequest:

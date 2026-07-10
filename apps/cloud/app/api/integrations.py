@@ -11,6 +11,7 @@ Secrets (API token, webhook secret) come from the server env, never the DB.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,6 +38,24 @@ def _webhook_secret(settings, provider: str) -> str:
     return {"jira": settings.jira_webhook_secret}.get(provider, "")
 
 
+def _validate_base_url(adapter, base_url: str) -> None:
+    """Reject a base_url whose host is not on the adapter's allowlist. The
+    outbound API token is Basic-auth'd to this host, so an arbitrary host is a
+    credential-exfiltration (SSRF) vector — bound it to the provider's domain."""
+    suffixes = getattr(adapter, "allowed_host_suffixes", ())
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https":
+        raise HTTPException(status_code=422, detail="base_url_must_be_https")
+    host = (parsed.hostname or "").lower()
+    if not host or not any(
+        host == s.lstrip(".") or host.endswith(s) for s in suffixes
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"base_url_host_not_allowed:{host or 'none'}",
+        )
+
+
 def _outbound_auth(settings, provider: str) -> tuple | dict | None:
     """Return httpx auth (tuple) or headers (dict) for an outbound call, or None
     when credentials are unconfigured."""
@@ -57,10 +76,12 @@ def configure_integration(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Workspace:
-    if get_adapter(provider) is None:
+    adapter = get_adapter(provider)
+    if adapter is None:
         raise HTTPException(status_code=404, detail=f"unknown_provider:{provider}")
     if "base_url" not in config or "project_key" not in config:
         raise HTTPException(status_code=422, detail="base_url_and_project_key_required")
+    _validate_base_url(adapter, config["base_url"])
     ws = require_admin(repo, workspace_id, user)
     merged = dict(ws.integration_config)
     merged[provider] = config
@@ -89,6 +110,10 @@ def mirror_task(
     if not config:
         raise HTTPException(status_code=400, detail="integration_not_configured")
 
+    # Defense in depth: re-validate the stored base_url before sending the token,
+    # in case the allowlist tightened after the config was saved.
+    _validate_base_url(adapter, config.get("base_url", ""))
+
     task = repo.get_task(project_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -103,7 +128,7 @@ def mirror_task(
         body = _send(outbound, auth)
     except httpx.HTTPError as exc:  # pragma: no cover - network failure path
         logger.warning("mirror push failed: %s", exc)
-        raise HTTPException(status_code=502, detail="tracker_request_failed")
+        raise HTTPException(status_code=502, detail="tracker_request_failed") from exc
 
     external_key, external_url = adapter.parse_push_response(body, config)
     link = TaskLink(

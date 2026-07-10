@@ -28,6 +28,10 @@ _DEFAULT_STATUS_MAP = {
 
 class JiraAdapter:
     provider = "jira"
+    # Only Atlassian Cloud hosts may receive the outbound API token. Prevents a
+    # compromised/malicious admin from pointing base_url at an attacker server
+    # to exfiltrate the server's Jira credentials (SSRF / credential exfil).
+    allowed_host_suffixes = (".atlassian.net",)
 
     # -- outbound --------------------------------------------------------- #
     def build_push(self, task: Task, config: dict) -> OutboundRequest:

@@ -14,9 +14,10 @@ Endpoints (this milestone):
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
@@ -31,6 +32,7 @@ from app.models.schemas import (
 )
 
 router = APIRouter(tags=["sync"])
+logger = logging.getLogger("promptzone.sync")
 
 
 @router.post("/projects", response_model=Project, status_code=201)
@@ -67,13 +69,26 @@ def get_project(
 def push_graph(
     project_id: str,
     payload: GraphUpsertRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> GraphUpsertResponse:
     require_project(repo, project_id, user)
     counts = repo.upsert_graph(project_id, payload, source=payload.source)
-    graph = repo.get_graph(project_id)
-    return GraphUpsertResponse(upserted=counts, cursor=graph.cursor)
+    cursor, _ = repo.changes_head(project_id)
+    total = sum(counts.values())
+    metrics = getattr(request.app.state, "metrics", None)
+    if metrics is not None:
+        metrics["pushed"] += 1
+        metrics["merged"] += total
+    logger.info(
+        "graph push project=%s user=%s source=%s counts=%s",
+        project_id,
+        user.id,
+        payload.source,
+        counts,
+    )
+    return GraphUpsertResponse(upserted=counts, cursor=cursor)
 
 
 @router.get("/sync/projects/{project_id}/changes", response_model=ChangesHead)
@@ -99,10 +114,25 @@ def pull_graph(
     project_id: str,
     since: datetime | None = Query(
         default=None,
-        description="Return only entities updated strictly after this timestamp (incremental pull).",
+        description="Return only entities updated strictly after this timestamp.",
     ),
+    limit: int | None = Query(
+        default=None, ge=1, le=5000, description="Max rows in this page (keyset paginated)."
+    ),
+    after_ts: datetime | None = Query(
+        default=None, description="Keyset continuation: last page's cursor."
+    ),
+    after_id: str | None = Query(
+        default=None, description="Keyset continuation: last page's next_id."
+    ),
+    request: Request = None,  # type: ignore[assignment]
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> ProjectGraph:
     require_project(repo, project_id, user)
-    return repo.get_graph(project_id, since=since)
+    metrics = getattr(request.app.state, "metrics", None) if request else None
+    if metrics is not None:
+        metrics["pulled"] += 1
+    return repo.get_graph(
+        project_id, since=since, limit=limit, after_ts=after_ts, after_id=after_id
+    )
