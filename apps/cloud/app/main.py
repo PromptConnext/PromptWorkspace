@@ -17,6 +17,7 @@ from app import __version__
 from app.api import health, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
+from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
 
 logger = logging.getLogger("promptzone")
 
@@ -85,6 +86,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if settings.rate_limit_enabled:
+        app.add_middleware(
+            RateLimitMiddleware,
+            limiter=TokenBucketLimiter(
+                per_minute=settings.rate_limit_per_minute,
+                burst=settings.rate_limit_burst,
+            ),
+        )
     app.include_router(health.router)
     app.include_router(workspaces.router)
     app.include_router(sync.router)

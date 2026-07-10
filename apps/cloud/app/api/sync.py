@@ -22,6 +22,7 @@ from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
+    ChangesHead,
     GraphUpsertRequest,
     GraphUpsertResponse,
     Project,
@@ -73,6 +74,24 @@ def push_graph(
     counts = repo.upsert_graph(project_id, payload, source=payload.source)
     graph = repo.get_graph(project_id)
     return GraphUpsertResponse(upserted=counts, cursor=graph.cursor)
+
+
+@router.get("/sync/projects/{project_id}/changes", response_model=ChangesHead)
+def changes_head(
+    project_id: str,
+    since: datetime | None = Query(
+        default=None,
+        description="Cursor from the last pull; counts reflect changes strictly after it.",
+    ),
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> ChangesHead:
+    """Cheap sync head so a polling client can decide whether to pull. When
+    `since == head` (nothing new) `has_changes` is False and the client skips
+    the full graph pull entirely."""
+    require_project(repo, project_id, user)
+    cursor, counts = repo.changes_head(project_id, since=since)
+    return ChangesHead(cursor=cursor, counts=counts, has_changes=bool(counts))
 
 
 @router.get("/sync/projects/{project_id}/graph", response_model=ProjectGraph)

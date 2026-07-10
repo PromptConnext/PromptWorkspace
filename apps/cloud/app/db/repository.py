@@ -96,6 +96,13 @@ class Repository(abc.ABC):
     ) -> ProjectGraph: ...
 
     @abc.abstractmethod
+    def changes_head(
+        self, project_id: str, since: datetime | None = None
+    ) -> tuple[datetime | None, dict[str, int]]:
+        """Return (max cursor, per-entity changed counts since `since`) without
+        materialising rows — the cheap "is there anything to pull" probe (M4)."""
+
+    @abc.abstractmethod
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
         """Hard-delete rows tombstoned (`deleted_at` set) longer than `ttl_days`
         ago. Never touches live rows or recent tombstones. Returns per-entity
@@ -246,6 +253,28 @@ class InMemoryRepository(Repository):
             setattr(graph, etype, rows)
         graph.cursor = max_cursor
         return graph
+
+    def changes_head(
+        self, project_id: str, since: datetime | None = None
+    ) -> tuple[datetime | None, dict[str, int]]:
+        store = self._graph[project_id]
+        counts: dict[str, int] = {}
+        max_cursor: datetime | None = None
+        for etype in ENTITY_TYPES:
+            changed = 0
+            for entity in store[etype].values():
+                if entity.updated_at is None:
+                    continue
+                if max_cursor is None or entity.updated_at > max_cursor:
+                    max_cursor = entity.updated_at
+                if since is not None and entity.updated_at <= since:
+                    continue
+                if since is None and entity.deleted_at is not None:
+                    continue
+                changed += 1
+            if changed:
+                counts[etype] = changed
+        return max_cursor, counts
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:

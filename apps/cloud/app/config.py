@@ -36,6 +36,12 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://localhost:1420"
 
+    # Rate limiting (M4/M7): token bucket per identity on /sync and webhook
+    # endpoints. `burst` is the bucket capacity; `per_minute` the refill rate.
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 300
+    rate_limit_burst: int = 60
+
     # Tombstone GC (Milestone 1): rows with deleted_at older than this are
     # hard-deleted. Safe once every client has plausibly pulled past them.
     # Set to 0 to disable the background purge loop entirely.

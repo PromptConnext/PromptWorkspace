@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.db.merge import merge_entity
+from app.db.merge import _as_dt, merge_entity
 from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -228,6 +228,37 @@ class SupabaseRepository(Repository):
                     max_cursor = row.updated_at
         graph.cursor = max_cursor
         return graph
+
+    def changes_head(
+        self, project_id: str, since: datetime | None = None
+    ) -> tuple[datetime | None, dict[str, int]]:
+        counts: dict[str, int] = {}
+        max_cursor: datetime | None = None
+        for etype in ENTITY_TYPES:
+            table = self._client.table(_TABLE[etype])
+            # Head cursor: newest updated_at for the project.
+            head = (
+                table.select("updated_at")
+                .eq("project_id", project_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = head.data or []
+            if rows and rows[0].get("updated_at"):
+                cur = _as_dt(rows[0]["updated_at"])
+                if cur and (max_cursor is None or cur > max_cursor):
+                    max_cursor = cur
+            # Changed count since the cursor (head-only, no row bodies).
+            q = table.select("id", count="exact").eq("project_id", project_id)
+            if since is not None:
+                q = q.gt("updated_at", since.isoformat())
+            else:
+                q = q.is_("deleted_at", "null")
+            res = q.limit(1).execute()
+            if res.count:
+                counts[etype] = res.count
+        return max_cursor, counts
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:

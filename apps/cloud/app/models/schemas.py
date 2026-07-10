@@ -286,6 +286,20 @@ class GraphUpsertResponse(BaseModel):
     cursor: datetime | None = None
 
 
+class ChangesHead(BaseModel):
+    """Lightweight sync head: lets a client cheaply decide whether to pull.
+
+    `cursor` is the max updated_at across the project's entities (or the value
+    of `since` when nothing changed). `counts` is per-entity changed rows since
+    `since`. `has_changes` is the fast-path flag — when False the client can
+    skip a full pull entirely.
+    """
+
+    cursor: datetime | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+    has_changes: bool = False
+
+
 class ProjectGraph(BaseModel):
     """Full (or incremental, when `since` is provided) view of a project's graph."""
 
