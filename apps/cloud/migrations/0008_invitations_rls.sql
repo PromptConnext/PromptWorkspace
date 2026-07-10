@@ -27,9 +27,28 @@ create policy pz_invitations_admin on pz_invitations for all
 drop policy if exists pz_invitations_invitee_read on pz_invitations;
 create policy pz_invitations_invitee_read on pz_invitations for select
   using (email = auth.email());
+
+-- RLS restricts *rows*, not *columns* — `email = auth.email()` alone would
+-- let an invitee UPDATE any column of a row they can already reach,
+-- including `workspace_id` and `role`. Since app code only ever updates
+-- `status` (verified: grep of app/db/supabase_repository.py shows no other
+-- column touched by UPDATE), lock this down two ways: a column-level GRANT
+-- so only `status` is writable at all regardless of which policy matches,
+-- and a row policy that only allows a *pending* invite to move to
+-- *accepted*/*expired* — not an admin rewriting it to point at a different
+-- workspace/role and then "accepting" their own tampered row. Without both,
+-- an authenticated user who has ever received even one invitation (to any
+-- workspace, expired or revoked) could rewrite that row's workspace_id and
+-- role to an arbitrary target and self-escalate to admin there — a real
+-- privilege-escalation gap, caught by review before this ever ran anywhere
+-- but a local throwaway test database.
+revoke update on pz_invitations from authenticated;
+grant update (status) on pz_invitations to authenticated;
+
 drop policy if exists pz_invitations_invitee_update on pz_invitations;
 create policy pz_invitations_invitee_update on pz_invitations for update
-  using (email = auth.email()) with check (email = auth.email());
+  using (email = auth.email() and status = 'pending')
+  with check (email = auth.email() and status in ('accepted', 'expired'));
 
 -- Second half of the same bug class as 0007: accept_invitation() calls
 -- add_member() for the *accepting* user, who is neither already an admin
