@@ -5,8 +5,20 @@ from datetime import timedelta
 from app.models.schemas import utcnow
 
 
-def _create_project(client, name="Demo", user="alice"):
-    res = client.post("/projects", json={"name": name}, headers={"X-User-Id": user})
+def _create_workspace(client, name="WS", user="alice"):
+    res = client.post("/workspaces", json={"name": name}, headers={"X-User-Id": user})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _create_project(client, name="Demo", user="alice", workspace_id=None):
+    if workspace_id is None:
+        workspace_id = _create_workspace(client, user=user)["id"]
+    res = client.post(
+        "/projects",
+        json={"name": name, "workspace_id": workspace_id},
+        headers={"X-User-Id": user},
+    )
     assert res.status_code == 201, res.text
     return res.json()
 

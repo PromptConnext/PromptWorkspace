@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30,<0.35
 pydantic>=2.7,<3
 pydantic-settings>=2.3,<3
 httpx>=0.27,<0.29
+PyJWT>=2.8,<3
 # Optional at runtime — only needed when DATA_BACKEND=supabase
 supabase>=2.6,<3
 

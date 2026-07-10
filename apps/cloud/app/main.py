@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import health, sync
+from app.api import health, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 
@@ -23,6 +23,7 @@ logger = logging.getLogger("promptzone")
 
 def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
+    settings.require_auth()
     if settings.data_backend == "supabase":
         from app.db.supabase_repository import SupabaseRepository
 
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health.router)
+    app.include_router(workspaces.router)
     app.include_router(sync.router)
 
     @app.get("/", tags=["health"])

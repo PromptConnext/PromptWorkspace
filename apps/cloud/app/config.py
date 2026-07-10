@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
 
+    # "stub"     — identity from an X-User-Id header (tests / local dev).
+    # "supabase" — verify a real Supabase HS256 bearer JWT on every request.
+    auth_mode: Literal["stub", "supabase"] = "stub"
+    supabase_jwt_secret: str = ""
+
     app_env: str = "development"
     log_level: str = "INFO"
 
@@ -45,6 +50,13 @@ class Settings(BaseSettings):
         if self.data_backend == "supabase" and not (self.supabase_url and self.supabase_key):
             raise RuntimeError(
                 "DATA_BACKEND=supabase requires SUPABASE_URL and SUPABASE_KEY to be set."
+            )
+
+    def require_auth(self) -> None:
+        if self.auth_mode == "supabase" and not self.supabase_jwt_secret:
+            raise RuntimeError(
+                "AUTH_MODE=supabase requires SUPABASE_JWT_SECRET (HS256 secret from "
+                "Supabase project settings → API → JWT Settings)."
             )
 
 

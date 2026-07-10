@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
@@ -31,23 +32,17 @@ from app.models.schemas import (
 router = APIRouter(tags=["sync"])
 
 
-def _require_project(repo: Repository, project_id: str, user: User) -> Project:
-    project = repo.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project_not_found")
-    if project.owner_id != user.id:
-        # Collaboration/sharing lands with real auth; for now, owner-only.
-        raise HTTPException(status_code=403, detail="not_project_owner")
-    return project
-
-
 @router.post("/projects", response_model=Project, status_code=201)
 def create_project(
     body: ProjectCreate,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
-    return repo.create_project(owner_id=user.id, name=body.name)
+    # Only members of the target workspace may create projects in it.
+    require_workspace(repo, body.workspace_id, user)
+    return repo.create_project(
+        workspace_id=body.workspace_id, created_by=user.id, name=body.name
+    )
 
 
 @router.get("/projects", response_model=list[Project])
@@ -55,7 +50,7 @@ def list_projects(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[Project]:
-    return repo.list_projects(owner_id=user.id)
+    return repo.list_projects(user_id=user.id)
 
 
 @router.get("/projects/{project_id}", response_model=Project)
@@ -64,7 +59,7 @@ def get_project(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
-    return _require_project(repo, project_id, user)
+    return require_project(repo, project_id, user)
 
 
 @router.put("/sync/projects/{project_id}/graph", response_model=GraphUpsertResponse)
@@ -74,8 +69,8 @@ def push_graph(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> GraphUpsertResponse:
-    _require_project(repo, project_id, user)
-    counts = repo.upsert_graph(project_id, payload)
+    require_project(repo, project_id, user)
+    counts = repo.upsert_graph(project_id, payload, source=payload.source)
     graph = repo.get_graph(project_id)
     return GraphUpsertResponse(upserted=counts, cursor=graph.cursor)
 
@@ -90,5 +85,5 @@ def pull_graph(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> ProjectGraph:
-    _require_project(repo, project_id, user)
+    require_project(repo, project_id, user)
     return repo.get_graph(project_id, since=since)

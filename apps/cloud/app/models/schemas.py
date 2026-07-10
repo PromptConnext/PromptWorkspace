@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +71,18 @@ class AgentRunStatus(str, Enum):
     failed = "failed"
 
 
+class Role(str, Enum):
+    admin = "admin"
+    member = "member"
+
+
+class InvitationStatus(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    revoked = "revoked"
+    expired = "expired"
+
+
 # --------------------------------------------------------------------------- #
 # Graph entities
 # --------------------------------------------------------------------------- #
@@ -88,6 +101,9 @@ class GraphEntity(BaseModel):
     id: str = Field(default_factory=new_id)
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
+    # Per-field {field: {updated_at, source}} for conflict-safe field-level
+    # merges (M3). Empty map = behaves as row-level LWW until first scoped write.
+    field_versions: dict = Field(default_factory=dict)
 
 
 class AcceptanceCriterion(BaseModel):
@@ -119,6 +135,9 @@ class Task(GraphEntity):
     status: TaskStatus = TaskStatus.todo
     feature_tag: str | None = None
     acceptance_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
+    # PMO fields, populated by the external-tracker mirror (M5).
+    assignee: str | None = None
+    sprint: str | None = None
 
 
 class Artifact(GraphEntity):
@@ -139,15 +158,69 @@ class AgentRun(GraphEntity):
 
 
 # --------------------------------------------------------------------------- #
+# Workspaces, membership & invitations (M2)
+# --------------------------------------------------------------------------- #
+# A workspace is the access-control tier: it owns projects and carries the
+# shared (non-secret) Git configuration. Access is by membership, not project
+# ownership. Per ADR 0010 §5 the cloud stores only Git *metadata* here
+# (repo_url / provider / default_branch) — never a raw credential (Option C).
+class WorkspaceCreate(BaseModel):
+    name: str
+
+
+class WorkspaceUpdate(BaseModel):
+    name: str | None = None
+    git_config: dict | None = None
+
+
+class Workspace(BaseModel):
+    id: str = Field(default_factory=new_id)
+    name: str
+    created_by: str
+    git_config: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkspaceMember(BaseModel):
+    workspace_id: str
+    user_id: str
+    role: Role = Role.member
+    invited_by: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class InvitationCreate(BaseModel):
+    email: str
+    role: Role = Role.member
+
+
+class Invitation(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    email: str
+    role: Role = Role.member
+    token: str = Field(default_factory=new_id)
+    status: InvitationStatus = InvitationStatus.pending
+    invited_by: str
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
 # Project
 # --------------------------------------------------------------------------- #
 class ProjectCreate(BaseModel):
     name: str
+    workspace_id: str
 
 
 class Project(BaseModel):
     id: str = Field(default_factory=new_id)
     name: str
+    workspace_id: str
+    # created_by is the acting user at creation; owner_id is retained as an
+    # alias for backward compatibility with pre-workspace clients/tests.
     owner_id: str
     onboarding_state: OnboardingState = OnboardingState.not_started
     stage_state: dict[str, StageStatus] = Field(
@@ -174,6 +247,27 @@ ENTITY_TYPES: dict[str, type[GraphEntity]] = {
 }
 
 
+# Per-field authority domains (M3). A field is one of:
+#   "pz"     — PromptZone-authoritative (AI-native: agent evidence, spec lineage)
+#   "pmo"    — external-tracker-authoritative (assignee/sprint/human priority)
+#   "shared" — low-contention free text; row-level LWW is acceptable
+# Fields absent from an entity's map default to "pz" (the moat stays local).
+FIELD_AUTHORITY: dict[str, dict[str, str]] = {
+    "tasks": {
+        "title": "shared",
+        "status": "pz",
+        "acceptance_criteria": "pz",
+        "feature_tag": "pmo",
+        "assignee": "pmo",
+        "sprint": "pmo",
+    },
+    "requirements": {"title": "shared", "description": "shared", "status": "pz"},
+    "spec_documents": {"content": "pz", "status": "pz", "version": "pz"},
+    "artifacts": {"uri": "pz", "commit_sha": "pz", "kind": "pz"},
+    "agent_runs": {"action": "pz", "status": "pz", "evidence": "pz"},
+}
+
+
 class GraphUpsertRequest(BaseModel):
     """A delta (or full snapshot) pushed by the local engine. All lists optional."""
 
@@ -182,6 +276,9 @@ class GraphUpsertRequest(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
+    # Which authority domain is writing. The engine pushes "pz"; the Jira/
+    # ClickUp webhook path pushes "pmo". Governs field-level merge (M3).
+    source: Literal["pz", "pmo"] = "pz"
 
 
 class GraphUpsertResponse(BaseModel):
