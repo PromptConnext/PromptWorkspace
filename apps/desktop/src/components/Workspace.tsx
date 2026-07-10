@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createProject, listProjects, type Project } from "../api";
 import ThreeS from "./ThreeS";
+import CloudConnect from "./CloudConnect";
 
 export default function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -55,6 +56,7 @@ export default function Workspace() {
           </button>
         </div>
         {error && <p className="error">{error}</p>}
+        {active && <CloudConnect key={active.id} projectId={active.id} />}
       </aside>
       <div className="content">
         {active ? (

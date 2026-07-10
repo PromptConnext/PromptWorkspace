@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS model_connections (
 CREATE TABLE IF NOT EXISTS integrations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  kind TEXT NOT NULL CHECK (kind IN ('git','jira','clickup','mcp')),
+  kind TEXT NOT NULL CHECK (kind IN ('git','jira','clickup','mcp','cloud')),
   config TEXT,
   required INTEGER NOT NULL DEFAULT 0
 );

@@ -253,6 +253,44 @@ export type AgentInfo = {
 
 export const listAgents = () => request<{ agents: AgentInfo[] }>("/engine/agents");
 
+// Cloud sync (docs/plans/0004 D1) --------------------------------------
+
+export type CloudConfig = { enabled: boolean; mode: "stub" | "supabase" };
+export type CloudSession = { connected: boolean; mode: "stub" | "supabase" | null; userId: string | null };
+export type CloudWorkspace = { id: string; name: string };
+export type CloudLink = { linked: boolean; workspace_id?: string; project_id?: string };
+
+export const getCloudConfig = () => request<CloudConfig>("/engine/cloud/config");
+
+export const getCloudSession = () => request<CloudSession>("/engine/cloud/session");
+
+export const cloudLogin = (payload: { userId?: string; email?: string; password?: string }) =>
+  request<CloudSession>("/engine/cloud/login", { method: "POST", body: JSON.stringify(payload) });
+
+export const cloudLogout = () =>
+  request<{ ok: boolean }>("/engine/cloud/logout", { method: "POST" });
+
+export const listCloudWorkspaces = () =>
+  request<{ workspaces: CloudWorkspace[] }>("/engine/cloud/workspaces");
+
+export const createCloudWorkspace = (name: string) =>
+  request<CloudWorkspace>("/engine/cloud/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+
+export const getCloudLink = (projectId: string) =>
+  request<CloudLink>(`/engine/projects/${projectId}/cloud-link`);
+
+export const linkProjectToCloud = (projectId: string, workspaceId: string) =>
+  request<CloudLink>(`/engine/projects/${projectId}/cloud-link`, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId }),
+  });
+
+export const unlinkProjectFromCloud = (projectId: string) =>
+  request<CloudLink>(`/engine/projects/${projectId}/cloud-link`, { method: "DELETE" });
+
 export const getProjectAgent = (projectId: string) =>
   request<{ selected: string }>(`/engine/projects/${projectId}/agent`);
 
