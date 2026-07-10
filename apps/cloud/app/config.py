@@ -71,10 +71,15 @@ class Settings(BaseSettings):
             )
 
     def require_auth(self) -> None:
-        if self.auth_mode == "supabase" and not self.supabase_jwt_secret:
+        # Modern Supabase projects sign JWTs asymmetrically and are verified
+        # via SUPABASE_URL's JWKS endpoint — no shared secret needed for that
+        # path. SUPABASE_JWT_SECRET is only required as the legacy HS256
+        # fallback when SUPABASE_URL isn't set (see app/dependencies.py).
+        if self.auth_mode == "supabase" and not (self.supabase_url or self.supabase_jwt_secret):
             raise RuntimeError(
-                "AUTH_MODE=supabase requires SUPABASE_JWT_SECRET (HS256 secret from "
-                "Supabase project settings → API → JWT Settings)."
+                "AUTH_MODE=supabase requires SUPABASE_URL (for JWKS verification) or "
+                "SUPABASE_JWT_SECRET (legacy HS256 secret from Supabase project "
+                "settings → API → JWT Settings)."
             )
 
 

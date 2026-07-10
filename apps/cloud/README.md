@@ -57,7 +57,9 @@ instance.
 ## Features & API
 
 Identity: **stub** mode uses an `X-User-Id` header (dev/test); **supabase** mode
-verifies a real HS256 bearer JWT (`AUTH_MODE=supabase` + `SUPABASE_JWT_SECRET`).
+verifies a real bearer JWT (`AUTH_MODE=supabase`) — via JWKS at `SUPABASE_URL`
+(current default; covers the asymmetric ES256/RS256 tokens Supabase Auth now
+issues) or, as a legacy fallback, HS256 with `SUPABASE_JWT_SECRET`.
 
 ### Workspaces, membership & invitations (M2)
 
@@ -157,6 +159,26 @@ Apply in order; each is additive and backward-compatible:
 | `0003_auth_workspaces.sql` | workspaces, membership, invitations, RLS + backfill |
 | `0004_field_ownership.sql` | `field_versions`, task `assignee`/`sprint` |
 | `0005_tracker_links.sql` | `pz_task_links`, workspace `integration_config` |
+| `0006_grants.sql` | base table `GRANT`s to `authenticated` (RLS alone doesn't grant access — see below) |
+| `0007_membership_bootstrap.sql` | fixes a bootstrap deadlock in the membership RLS policy |
+| `0008_invitations_rls.sql` | enables RLS on `pz_invitations` (previously missing entirely) + invite-acceptance RLS fix |
+
+**0006–0008 were found by actually running `apps/cloud` against a real local
+Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`
+against a real signed-up user) instead of only the in-memory backend the test
+suite uses. Each is a genuine bug that was invisible until then:
+- **No base grants (0006):** RLS policies exist, but Postgres checks the
+  table-level `GRANT` *before* RLS ever runs — hosted Supabase projects grant
+  this schema-wide automatically at project creation, so it's easy to never
+  notice a fresh project's own migrations never did it themselves.
+- **Membership bootstrap deadlock (0007):** the very first admin membership
+  row for a new workspace could never satisfy `pz_is_admin(workspace_id)` —
+  no admin exists yet to satisfy it. Workspace creation was unreachable under
+  real RLS. This was masked because `for_user()` (which forwards the caller's
+  JWT so RLS applies) was previously dead code, never called from any route.
+- **`pz_invitations` had no RLS at all (0008):** any authenticated user could
+  read or modify any workspace's invitations once 0006's grants made the
+  table reachable.
 
 A later cleanup migration flips `projects.workspace_id` to `NOT NULL` and drops
 the legacy `owner_id` once the M2 cutover (RLS + `AUTH_MODE=supabase`) is done.

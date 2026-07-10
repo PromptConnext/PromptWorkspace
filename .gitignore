@@ -4,7 +4,11 @@ target/
 *.log
 .DS_Store
 .env
-.omc/*
+.env.local
+.omc/
+.omc/state/
 .playwright-*
 .claude/*
 .engine-pkg/
+apps/cloud/.venv/
+__pycache__/

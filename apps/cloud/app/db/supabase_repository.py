@@ -55,18 +55,40 @@ class SupabaseRepository(Repository):
     def __init__(self, url: str, key: str) -> None:
         from supabase import create_client  # lazy import
 
+        self._url = url
+        self._key = key
         self._client = create_client(url, key)
 
     def for_user(self, token: str) -> SupabaseRepository:
-        """Return a view whose PostgREST calls carry the caller's JWT so RLS
-        applies per request. Shares the underlying connection pool."""
-        self._client.postgrest.auth(token)
-        return self
+        """Return a *new* repository whose PostgREST calls carry the caller's
+        JWT so RLS applies per request.
+
+        Must not mutate `self._client` in place: `app.state.repository` is one
+        shared instance across all concurrent requests (see
+        app/dependencies.py::get_repository, which calls this per-request) —
+        an in-place `.postgrest.auth(token)` would let one request's identity
+        leak into a concurrent request's queries. This was previously dead
+        code (never called from any route) and had this exact bug; found and
+        fixed while verifying apps/cloud against a real local Supabase
+        instance (docs/plans/0004) for the first time.
+        """
+        scoped = SupabaseRepository(self._url, self._key)
+        scoped._client.postgrest.auth(token)
+        return scoped
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(self, name: str, created_by: str) -> Workspace:
         ws = Workspace(name=name, created_by=created_by)
-        self._client.table(_WORKSPACES).insert(_dump(ws)).execute()
+        # `returning="minimal"`: Postgres subjects INSERT...RETURNING to the
+        # table's SELECT policy too, and `pz_ws_read` requires membership —
+        # which doesn't exist yet (add_member runs next). The insert itself
+        # is fine (WITH CHECK only needs created_by = auth.uid()); asking
+        # Postgres to hand the row back is what RLS was rejecting. The
+        # caller already has `ws` locally, so nothing is lost by not asking.
+        # Found by running this against a real local Supabase instance
+        # (docs/plans/0004) — the in-memory backend's tests never exercise
+        # RLS and couldn't have caught this.
+        self._client.table(_WORKSPACES).insert(_dump(ws), returning="minimal").execute()
         self.add_member(ws.id, created_by, Role.admin, invited_by=created_by)
         return ws
 
@@ -126,8 +148,12 @@ class SupabaseRepository(Repository):
         member = WorkspaceMember(
             workspace_id=workspace_id, user_id=user_id, role=role, invited_by=invited_by
         )
+        # returning="minimal": same RLS-vs-RETURNING issue as create_workspace
+        # above — the SELECT policy (pz_members_read) can't see a just-added
+        # member for RETURNING's benefit in every case (e.g. the bootstrap
+        # add), and the caller already has `member` locally.
         self._client.table(_MEMBERS).upsert(
-            _dump(member), on_conflict="workspace_id,user_id"
+            _dump(member), on_conflict="workspace_id,user_id", returning="minimal"
         ).execute()
         return member
 
@@ -137,7 +163,7 @@ class SupabaseRepository(Repository):
         ).execute()
 
     def create_invitation(self, invitation: Invitation) -> Invitation:
-        self._client.table(_INVITATIONS).insert(_dump(invitation)).execute()
+        self._client.table(_INVITATIONS).insert(_dump(invitation), returning="minimal").execute()
         return invitation
 
     def get_invitation(self, token: str) -> Invitation | None:
@@ -164,7 +190,7 @@ class SupabaseRepository(Repository):
     # -- projects --------------------------------------------------------- #
     def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
         project = Project(name=name, workspace_id=workspace_id, owner_id=created_by)
-        self._client.table(_PROJECTS).insert(_dump(project)).execute()
+        self._client.table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
 
     def get_project(self, project_id: str) -> Project | None:
@@ -198,7 +224,7 @@ class SupabaseRepository(Repository):
                 merged = merge_entity(stored, incoming, authority, source, now)
                 merged["project_id"] = project_id
                 rows.append(merged)
-            self._client.table(_TABLE[etype]).upsert(rows).execute()
+            self._client.table(_TABLE[etype]).upsert(rows, returning="minimal").execute()
             counts[etype] = len(rows)
         if counts:
             self._client.table(_PROJECTS).update({"updated_at": now.isoformat()}).eq(
@@ -299,7 +325,7 @@ class SupabaseRepository(Repository):
     # -- external-tracker links (M5) -------------------------------------- #
     def upsert_task_link(self, link: TaskLink) -> TaskLink:
         self._client.table(_TASK_LINKS).upsert(
-            _dump(link), on_conflict="provider,external_key"
+            _dump(link), on_conflict="provider,external_key", returning="minimal"
         ).execute()
         return link
 
