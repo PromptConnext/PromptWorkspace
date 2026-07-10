@@ -129,16 +129,45 @@ local deltas via `PUT /sync/projects/{id}/graph` with `source: "pz"`. This is
 the same head-check-before-pull design already proven server-side — no new
 protocol to invent.
 
+### Blocked on a schema gap, found during D1 implementation
+
+**This section's premise is wrong and needs a decision before D2 starts.**
+`apps/engine/src/db.ts`'s actual schema (verified directly, not from memory)
+has **no `updated_at` column anywhere** — only `created_at`, and not even
+that on `spec_documents`/`tasks`/`acceptance_criteria`/`artifacts`. "Reuse
+`updated_at` already on local rows" assumed a column that doesn't exist.
+Two ways to unblock, need a call before D2 proceeds:
+
+1. **Add `updated_at` + bump-on-write to every syncable table** (real local
+   migration: `requirements`, `spec_documents`, `tasks`, `artifacts`,
+   `agent_runs`), so pushes can be incremental deltas like the cloud's own
+   dirty-tracking. More correct, more surface area, touches every write path
+   in `routes/projects.ts`/`routes/agents.ts` that inserts/updates these rows.
+2. **Push a full snapshot every sync cycle, no incremental dirty-tracking.**
+   Local task graphs are single-project and small (this is a per-developer
+   desktop app, not a multi-tenant store) — a full-snapshot `PUT` is cheap at
+   this scale. Simpler, ships D2 sooner, revisit incrementality only if a
+   real project's graph gets large enough to matter.
+
+**Recommendation: (2) for the first cut.** It unblocks D2 without a schema
+migration touching every insert/update call site; (1) can follow once real
+project sizes are known. Filed as a queue item — see
+`docs/overnight/QUEUE-2026-07-10.md`.
+
 ### Changes
 - **`apps/engine/src/sync/loop.ts`** (new): background interval (config:
   `CLOUD_SYNC_POLL_SECONDS`, default 20s, only runs when a project has a
   `kind='cloud'` integration row), pause while offline (fetch failure →
   backoff, don't spam).
-- **Local dirty tracking**: reuse `updated_at` already on local rows;
-  push payload assembled from rows changed since the last successful push
-  cursor (stored in `app_state`), tagged `source: "pz"` (the field the
+- **Local dirty tracking**: per the decision above, D2's first cut pushes a
+  full snapshot of the linked project's graph each cycle (reusing local ids
+  as the cloud entity ids directly — no id-mapping table needed, cloud
+  accepts a client-supplied `id`), tagged `source: "pz"` (the field the
   cloud's merge engine keys on — omitting it defaults to `"pz"` anyway, but
-  send it explicitly for clarity).
+  send it explicitly for clarity). Local rows also need `project_id`
+  resolved via join (`spec_documents`→`requirements`, `tasks`→`spec_documents`
+  →`requirements`, `artifacts`→`tasks`→…) since only `requirements` and
+  `agent_runs` carry `project_id` directly today.
 - **Pull applies to SQLite**: incoming graph entities upsert into the local
   tables using the same per-field-ownership contract the cloud already
   enforces server-side (cloud is the merge authority; the client applies
