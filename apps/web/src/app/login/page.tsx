@@ -5,11 +5,19 @@ import { Suspense, useState } from "react";
 import { AUTH_MODE } from "@/lib/config";
 import { useAuth } from "@/lib/auth";
 
+// Only same-origin, in-app paths are safe redirect targets. Reject absolute
+// URLs and protocol-relative paths ("//evil.example") — both would send a
+// just-authenticated user off-site.
+function safeNext(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
+}
+
 function LoginForm() {
   const { user, signInStub, signInSupabase } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") ?? "/";
+  const next = safeNext(params.get("next"));
 
   const [userId, setUserId] = useState("dev-user");
   const [email, setEmail] = useState("");
