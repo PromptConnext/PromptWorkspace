@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "stage:engine": "rm -rf src-tauri/.engine-pkg && pnpm --filter @promptzone/engine deploy --prod --config.node-linker=hoisted src-tauri/.engine-pkg && node scripts/bundle-node.mjs",
+    "stage:engine": "node -e \"require('fs').rmSync('src-tauri/.engine-pkg',{recursive:true,force:true})\" && pnpm --filter @promptzone/engine deploy --prod --config.node-linker=hoisted src-tauri/.engine-pkg && node scripts/bundle-node.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

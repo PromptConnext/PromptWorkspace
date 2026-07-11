@@ -41,7 +41,7 @@ fn engine_dir<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> PathBuf {
 fn spawn_engine(token: &str, dir: &Path) -> std::io::Result<Child> {
     // Prefer the Node runtime bundled next to the engine (packaged app, ADR
     // 0001); fall back to `node` on PATH in dev.
-    let bundled_node = dir.join("node");
+    let bundled_node = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
     let node = if bundled_node.exists() {
         bundled_node.into_os_string()
     } else {

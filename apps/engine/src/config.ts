@@ -1,8 +1,14 @@
 export const ENGINE_PORT = Number(process.env.PROMPTZONE_ENGINE_PORT ?? 47131);
 
-// Cloud sync (apps/cloud) is opt-in — unset means the feature is off and no
-// "Connect to PromptZone Cloud" step is offered (see docs/plans/0004).
-export const CLOUD_API_URL = process.env.CLOUD_API_URL || null;
+// Cloud sync (apps/cloud) defaults to the hosted PromptZone Cloud instance.
+// Override with CLOUD_API_URL (e.g. http://localhost:8080 for local dev
+// against a source checkout of apps/cloud, see docs/DEVELOPMENT.md). Set it
+// to an empty string to disable cloud sync entirely.
+const DEFAULT_CLOUD_API_URL = "https://promptzonecloud-production.up.railway.app";
+export const CLOUD_API_URL =
+  process.env.CLOUD_API_URL === ""
+    ? null
+    : process.env.CLOUD_API_URL || DEFAULT_CLOUD_API_URL;
 
 // When both are set, cloud login uses real Supabase password-grant auth and
 // stores the returned JWT. When either is unset, cloud login falls back to

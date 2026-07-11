@@ -13,12 +13,14 @@ if (major < 24) {
   exit(1);
 }
 
-const dest = join("src-tauri", ".engine-pkg", "node");
+const dest = join("src-tauri", ".engine-pkg", process.platform === "win32" ? "node.exe" : "node");
 if (!existsSync(join("src-tauri", ".engine-pkg", "src", "index.ts"))) {
   console.error("[bundle-node] staged engine missing — run the hoisted deploy first");
   exit(1);
 }
 
 copyFileSync(execPath, dest);
-chmodSync(dest, 0o755);
+if (process.platform !== "win32") {
+  chmodSync(dest, 0o755);
+}
 console.log(`[bundle-node] bundled Node ${versions.node} -> ${dest}`);
