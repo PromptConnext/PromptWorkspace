@@ -349,3 +349,81 @@ class ProjectGraph(BaseModel):
     # re-pulls with since=cursor & after_id=next_id. None means fully drained.
     next_id: str | None = None
     has_more: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# RAG assistant v1 (M9)
+# --------------------------------------------------------------------------- #
+class ModelConnectionCreate(BaseModel):
+    """Admin-supplied, workspace-BYO chat + embedding model. `api_key` is
+    encrypted to a `secret_ref` on write (app/secrets.py) and never stored or
+    echoed back in plaintext."""
+
+    provider: str
+    base_url: str
+    model: str
+    embed_model: str
+    embed_dim: int = 1536
+    api_key: str
+    daily_token_budget: int = 200_000
+
+
+class ModelConnection(BaseModel):
+    """Internal representation, includes `secret_ref` — never returned by an
+    API route; routes serialize `ModelConnectionOut` instead."""
+
+    workspace_id: str
+    provider: str
+    base_url: str
+    model: str
+    embed_model: str
+    embed_dim: int = 1536
+    secret_ref: str
+    daily_token_budget: int = 200_000
+    created_by: str
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ModelConnectionOut(BaseModel):
+    workspace_id: str
+    provider: str
+    base_url: str
+    model: str
+    embed_model: str
+    embed_dim: int
+    daily_token_budget: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class RagChunk(BaseModel):
+    """A stored, embedded chunk. `embedding` never leaves the repository
+    layer — retrieval returns `RagChunkHit`, which drops it."""
+
+    workspace_id: str
+    project_id: str
+    node_type: str
+    node_id: str
+    chunk_index: int
+    content: str
+    embedding: list[float]
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class RagChunkHit(BaseModel):
+    node_type: str
+    node_id: str
+    chunk_index: int
+    content: str
+    score: float
+
+
+class Citation(BaseModel):
+    node_type: str
+    node_id: str
+    chunk_index: int
+
+
+class ChatRequest(BaseModel):
+    question: str

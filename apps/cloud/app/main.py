@@ -15,10 +15,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import health, integrations, presence, sync, workspaces
+from app.api import assistant, health, integrations, presence, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
+from app.rag.budget import DailyTokenBudget
+from app.rag.chat import HttpChatProvider
+from app.rag.embedder import HttpEmbeddingProvider
+from app.rag.queue import EmbedQueue, embed_worker_loop
 from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
 
 logger = logging.getLogger("promptzone")
@@ -77,18 +82,31 @@ async def lifespan(app: FastAPI):
     app.state.schema_version = _schema_version()
     # Lightweight in-process counters surfaced on /health (M7 observability).
     app.state.metrics = {"pushed": 0, "pulled": 0, "merged": 0, "conflicts": 0}
+    # RAG assistant v1 (M9): in-process embed queue + worker, BYO model
+    # providers, secret store, and per-workspace daily token budget. All
+    # in-process/single-instance, same as presence and the rate limiter.
+    app.state.loop = asyncio.get_running_loop()
+    app.state.embed_queue = EmbedQueue()
+    app.state.secret_store = build_secret_store(settings.rag_key_encryption_key)
+    app.state.embedding_provider = HttpEmbeddingProvider()
+    app.state.chat_provider = HttpChatProvider()
+    app.state.token_budget = DailyTokenBudget()
     logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,
         app.state.repository.backend_name,
     )
     gc_task = asyncio.create_task(_tombstone_gc_loop(app, settings))
+    embed_task = asyncio.create_task(embed_worker_loop(app))
     try:
         yield
     finally:
         gc_task.cancel()
+        embed_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await gc_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await embed_task
 
 
 def create_app() -> FastAPI:
@@ -119,6 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(integrations.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
+    app.include_router(assistant.router)
 
     @app.get("/", tags=["health"])
     def root() -> dict:

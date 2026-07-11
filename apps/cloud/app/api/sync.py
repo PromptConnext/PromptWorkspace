@@ -30,6 +30,8 @@ from app.models.schemas import (
     ProjectCreate,
     ProjectGraph,
 )
+from app.rag.queue import EmbedJob, enqueue
+from app.rag.source import RAG_NODE_TYPES
 
 router = APIRouter(tags=["sync"])
 logger = logging.getLogger("promptzone.sync")
@@ -73,7 +75,7 @@ def push_graph(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> GraphUpsertResponse:
-    require_project(repo, project_id, user)
+    project = require_project(repo, project_id, user)
     counts = repo.upsert_graph(project_id, payload, source=payload.source)
     cursor, _ = repo.changes_head(project_id)
     total = sum(counts.values())
@@ -88,6 +90,14 @@ def push_graph(
         payload.source,
         counts,
     )
+    # Embed-on-ingest (M9): enqueue only, never block this push on a model
+    # call. The worker skips nodes whose workspace has no model connection.
+    for node_type in RAG_NODE_TYPES:
+        for item in getattr(payload, node_type):
+            enqueue(
+                request.app,
+                EmbedJob(project.workspace_id, project_id, node_type, item.id),
+            )
     return GraphUpsertResponse(upserted=counts, cursor=cursor)
 
 

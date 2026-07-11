@@ -1,9 +1,13 @@
 # PromptZone Cloud
 
-Thin **sync + collaboration** backend for the PromptZone task graph. It holds the
-shared requirement → spec → task → artifact → agent-run lineage so collaborators
-and business stakeholders see the same truth. It does **not** run models, store
-credentials, or hold source code — those stay on the user's machine.
+**Sync + collaboration** backend for the PromptZone task graph, plus a
+workspace-BYO RAG assistant (ADR 0011). It holds the shared requirement →
+spec → task → artifact → agent-run lineage so collaborators and business
+stakeholders see the same truth, and answers questions grounded in that
+graph. Per ADR 0011's amended posture: no *source code* at rest (v1 has none
+to store), and no *end-user* credentials — a workspace admin's own model API
+key is the only credential the cloud ever holds, encrypted server-side
+(`app/secrets.py`), never in a Supabase row.
 
 See [`../../docs/promptzone-platform-architecture.md`](../../docs/promptzone-platform-architecture.md)
 and the roadmap in [`../../docs/plans/`](../../docs/plans).
@@ -141,12 +145,65 @@ persisted.
 in-process `metrics` (pushed/pulled/merged/conflicts). Sync pushes log
 structured lines with `project`, `user`, `source`, and counts.
 
+### RAG assistant v1 (M9)
+
+Chat grounded in synced project artifacts, with citations, powered by a
+**workspace-connected BYO model** (ADR 0011). v1 sources: `requirements`,
+`spec_documents`, `tasks` — the entities that already carry free text.
+Discussions and Artifact/code content aren't sources yet (no such entity/field
+exists); adding them is a later milestone, not silently expanded here.
+
+| Method | Path | Guard |
+|---|---|---|
+| POST | `/workspaces/{id}/model-connection` | admin — configure chat + embed model, BYO key |
+| POST | `/projects/{id}/assistant/chat` | member — SSE-streamed answer + `citations` |
+| POST | `/projects/{id}/assistant/reindex` | admin — backfill embeddings for an existing project |
+
+**Embed-on-ingest:** every `PUT /sync/projects/{id}/graph` push enqueues its
+requirement/spec/task ids onto an in-process queue; a background worker
+(`app/rag/queue.py`) chunks (~500 words, 50-word overlap) and embeds off the
+request path — an upsert never blocks on a model call. A tombstoned or
+missing node has its chunks deleted immediately by the same worker, and again
+by the tombstone GC loop when the row is hard-deleted (belt-and-suspenders on
+the same M1 GC pass).
+
+**Secrets:** the workspace admin's model API key is never stored in
+plaintext. `app/secrets.py` encrypts it (Fernet, key = `RAG_KEY_ENCRYPTION_KEY`
+env var — never written to Supabase) into an opaque `secret_ref`; only that
+ciphertext lands in `pz_workspace_model_connections`. `data_backend=memory`
+falls back to a dependency-free dev store (fine — nothing persists past the
+process anyway).
+
+**Retrieval scoping:** membership-scoped *before* similarity (ADR 0011) —
+`vector_search` filters by `(workspace_id, project_id)` as an explicit
+predicate ahead of the nearest-neighbour search, on top of the RLS policy on
+`pz_rag_chunks` and the app-layer membership guard on the chat route. A member
+of one workspace cannot retrieve another workspace's chunks even given its
+project id.
+
+**Cost controls:** `app/rag/budget.py` tracks a per-workspace, per-day token
+usage counter (`daily_token_budget`, admin-set on the model connection);
+exceeding it 429s. Same in-process, single-instance shape as the rate limiter
+below — inherits its Redis-backplane TODO rather than adding a second one.
+
+**Providers:** one OpenAI-compatible HTTP client (`/embeddings`,
+`/chat/completions` with `stream=true`) driven by the connection's `base_url`
+— works for OpenAI, Azure OpenAI, Ollama, and most self-hosted gateways
+without a per-provider SDK. `embed_dim` is fixed at 1536 for v1 (the pgvector
+column width); a workspace's `embed_model` must produce 1536-dim vectors.
+
+**Prompt-injection posture:** retrieved chunk text is passed to the model as
+data inside a `CONTEXT:` block, with a system prompt instructing it to ignore
+any instructions found there. No tool use in v1 — the assistant is read-only
+by construction.
+
 ## Scaling
 
 State that is **in-process today** (single instance): presence rooms,
-rate-limit buckets, `/health` metrics. Horizontal scale needs a shared
-backplane (Redis pub/sub or a managed realtime service) before running >1
-instance. The task graph itself is in Postgres and scales normally.
+rate-limit buckets, `/health` metrics, the RAG embed queue, and the daily
+token budget. Horizontal scale needs a shared backplane (Redis pub/sub or a
+managed realtime service) before running >1 instance. The task graph itself
+is in Postgres and scales normally.
 
 ## Migrations
 
@@ -162,6 +219,7 @@ Apply in order; each is additive and backward-compatible:
 | `0006_grants.sql` | base table `GRANT`s to `authenticated` (RLS alone doesn't grant access — see below) |
 | `0007_membership_bootstrap.sql` | fixes a bootstrap deadlock in the membership RLS policy |
 | `0008_invitations_rls.sql` | enables RLS on `pz_invitations` (previously missing entirely) + invite-acceptance RLS fix |
+| `0009_rag.sql` | `pgvector` extension, `pz_workspace_model_connections`, `pz_rag_chunks`, `pz_rag_match_chunks` RPC (M9) |
 
 **0006–0008 were found by actually running `apps/cloud` against a real local
 Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`

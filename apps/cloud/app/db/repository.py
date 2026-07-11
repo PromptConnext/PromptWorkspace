@@ -18,11 +18,15 @@ from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    GraphEntity,
     GraphUpsertRequest,
     Invitation,
     InvitationStatus,
+    ModelConnection,
     Project,
     ProjectGraph,
+    RagChunk,
+    RagChunkHit,
     Role,
     Task,
     TaskLink,
@@ -121,6 +125,12 @@ class Repository(abc.ABC):
     @abc.abstractmethod
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
 
+    @abc.abstractmethod
+    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+        """Fetch any graph entity by (project, type, id) — used by the RAG
+        embed worker, which handles requirements/spec_documents/tasks
+        uniformly (M9)."""
+
     # -- external-tracker links (M5) -------------------------------------- #
     @abc.abstractmethod
     def upsert_task_link(self, link: TaskLink) -> TaskLink: ...
@@ -137,6 +147,53 @@ class Repository(abc.ABC):
         """Hard-delete rows tombstoned (`deleted_at` set) longer than `ttl_days`
         ago. Never touches live rows or recent tombstones. Returns per-entity
         purge counts. See docs/plans/0001-cloud-deletes-and-auth.md (M1 GC)."""
+
+    # -- RAG assistant v1 (M9) --------------------------------------------- #
+    @abc.abstractmethod
+    def get_model_connection(self, workspace_id: str) -> ModelConnection | None: ...
+
+    @abc.abstractmethod
+    def upsert_model_connection(
+        self,
+        *,
+        workspace_id: str,
+        provider: str,
+        base_url: str,
+        model: str,
+        embed_model: str,
+        embed_dim: int,
+        secret_ref: str,
+        daily_token_budget: int,
+        created_by: str,
+    ) -> ModelConnection: ...
+
+    @abc.abstractmethod
+    def upsert_rag_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        node_type: str,
+        node_id: str,
+        chunks: list[str],
+        embeddings: list[list[float]],
+    ) -> None:
+        """Replace all stored chunks for one node — wholesale, so a shrinking
+        node doesn't leave stale trailing chunks behind."""
+
+    @abc.abstractmethod
+    def delete_rag_chunks_for_node(self, node_id: str) -> int: ...
+
+    @abc.abstractmethod
+    def vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[RagChunkHit]:
+        """Nearest-neighbour search, pre-filtered to (workspace_id,
+        project_id) — membership scoping happens before similarity, per
+        ADR 0011."""
 
 
 class InMemoryRepository(Repository):
@@ -155,6 +212,10 @@ class InMemoryRepository(Repository):
         self._invitations: dict[str, Invitation] = {}
         # (provider, external_key) -> TaskLink
         self._task_links: dict[tuple[str, str], TaskLink] = {}
+        # workspace_id -> ModelConnection (M9)
+        self._model_connections: dict[str, ModelConnection] = {}
+        # project_id -> node_id -> chunk_index -> RagChunk (M9)
+        self._rag_chunks: dict[str, dict[str, dict[int, RagChunk]]] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(self, name: str, created_by: str) -> Workspace:
@@ -353,6 +414,13 @@ class InMemoryRepository(Repository):
         task = store["tasks"].get(task_id)
         return copy.deepcopy(task) if task else None
 
+    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+        store = self._graph.get(project_id)
+        if not store:
+            return None
+        node = store.get(node_type, {}).get(node_id)
+        return copy.deepcopy(node) if node else None
+
     # -- external-tracker links (M5) -------------------------------------- #
     def upsert_task_link(self, link: TaskLink) -> TaskLink:
         self._task_links[(link.provider, link.external_key)] = link
@@ -380,6 +448,110 @@ class InMemoryRepository(Repository):
                 ]
                 for eid in expired_ids:
                     del store[etype][eid]
+                    self.delete_rag_chunks_for_node(eid)  # M9: chunks die with the tombstone
                 if expired_ids:
                     counts[etype] = counts.get(etype, 0) + len(expired_ids)
         return counts
+
+    # -- RAG assistant v1 (M9) --------------------------------------------- #
+    def get_model_connection(self, workspace_id: str) -> ModelConnection | None:
+        return self._model_connections.get(workspace_id)
+
+    def upsert_model_connection(
+        self,
+        *,
+        workspace_id: str,
+        provider: str,
+        base_url: str,
+        model: str,
+        embed_model: str,
+        embed_dim: int,
+        secret_ref: str,
+        daily_token_budget: int,
+        created_by: str,
+    ) -> ModelConnection:
+        existing = self._model_connections.get(workspace_id)
+        conn = ModelConnection(
+            workspace_id=workspace_id,
+            provider=provider,
+            base_url=base_url,
+            model=model,
+            embed_model=embed_model,
+            embed_dim=embed_dim,
+            secret_ref=secret_ref,
+            daily_token_budget=daily_token_budget,
+            created_by=created_by,
+            created_at=existing.created_at if existing else utcnow(),
+            updated_at=utcnow(),
+        )
+        self._model_connections[workspace_id] = conn
+        return conn
+
+    def upsert_rag_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        node_type: str,
+        node_id: str,
+        chunks: list[str],
+        embeddings: list[list[float]],
+    ) -> None:
+        project_store = self._rag_chunks.setdefault(project_id, {})
+        project_store[node_id] = {
+            idx: RagChunk(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                node_type=node_type,
+                node_id=node_id,
+                chunk_index=idx,
+                content=content,
+                embedding=embedding,
+            )
+            for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
+        }
+
+    def delete_rag_chunks_for_node(self, node_id: str) -> int:
+        removed = 0
+        for project_store in self._rag_chunks.values():
+            popped = project_store.pop(node_id, None)
+            if popped:
+                removed += len(popped)
+        return removed
+
+    def vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[RagChunkHit]:
+        scored: list[tuple[float, RagChunk]] = []
+        for chunk in self._rag_chunks.get(project_id, {}).values():
+            for c in chunk.values():
+                # Explicit workspace predicate before similarity (ADR 0011) —
+                # a project_id collision across workspaces can't leak chunks.
+                if c.workspace_id != workspace_id or c.project_id != project_id:
+                    continue
+                scored.append((_cosine(c.embedding, query_embedding), c))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [
+            RagChunkHit(
+                node_type=c.node_type,
+                node_id=c.node_id,
+                chunk_index=c.chunk_index,
+                content=c.content,
+                score=score,
+            )
+            for score, c in scored[:top_k]
+        ]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)

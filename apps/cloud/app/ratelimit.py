@@ -19,8 +19,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 # Prefixes that count against the limit. Reads of the whole graph and the cheap
-# /changes probe both live under /sync; webhooks under /api/webhooks.
+# /changes probe both live under /sync; webhooks under /api/webhooks. Chat
+# (M9) is metered separately by cost too (app/rag/budget.py) but still counts
+# against the request-throughput bucket like every other hot path.
 _LIMITED_PREFIXES = ("/sync", "/api/webhooks")
+_LIMITED_SUFFIXES = ("/assistant/chat",)
 
 
 @dataclass
@@ -59,7 +62,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not any(path.startswith(p) for p in _LIMITED_PREFIXES):
+        limited = path.startswith(_LIMITED_PREFIXES) or path.endswith(_LIMITED_SUFFIXES)
+        if not limited:
             return await call_next(request)
         key = _identity(request)
         if not self._limiter.allow(key, time.monotonic()):

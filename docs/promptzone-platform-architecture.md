@@ -122,7 +122,7 @@ flowchart TB
 | **Model Gateway + Router** | Normalizes all providers to one interface; routes tasks to the right connected model by role; holds the two connection modes; degrades gracefully to the two required models. |
 | **Credential Vault** | Model keys/tokens in OS keychain. Never leaves the machine. |
 | **Local Task-Graph Cache** | Source of truth while offline; syncs to cloud when connected. |
-| **PromptZone Cloud** | Thin: identity, the shared task graph, collaboration (presence/comments/roles), and external-tracker sync. No model calls, no code storage. |
+| **PromptZone Cloud** | Identity, the shared task graph, collaboration (presence/comments/roles), external-tracker sync, and a workspace-BYO RAG assistant (ADR 0011, plan 0005 M9). No source code at rest; no *end-user* credentials — only a workspace admin's own model key, encrypted server-side. |
 
 ---
 

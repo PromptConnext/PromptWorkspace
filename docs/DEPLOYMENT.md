@@ -81,12 +81,14 @@ Production values:
 | `TOMBSTONE_TTL_DAYS` | `30` | `0` disables the GC loop |
 | `TOMBSTONE_GC_INTERVAL_SECONDS` | `3600` | |
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_WEBHOOK_SECRET` | as needed | Only if the Jira/ClickUp mirror (M5) is in use |
+| `RAG_KEY_ENCRYPTION_KEY` | Fernet key | Required before any workspace configures a model connection (M9 RAG assistant); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, `POST /workspaces/{id}/model-connection` fails closed rather than storing a plaintext key. |
 
 Railway injects `PORT` automatically; the Dockerfile already honors it.
 
 ### 2.5 Scaling constraints — important
 
-Presence, rate-limit, and metrics state are **in-process**. Until a shared backplane (e.g. Redis) exists:
+Presence, rate-limit, metrics, the RAG embed queue, and the RAG daily token
+budget are all **in-process**. Until a shared backplane (e.g. Redis) exists:
 
 - **Replicas = 1.** Do not scale horizontally.
 - Railway routes all traffic to the single replica, so session affinity is a non-issue at 1 instance — but revisit before ever raising the replica count.

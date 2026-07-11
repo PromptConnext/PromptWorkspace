@@ -22,11 +22,14 @@ from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    GraphEntity,
     GraphUpsertRequest,
     Invitation,
     InvitationStatus,
+    ModelConnection,
     Project,
     ProjectGraph,
+    RagChunkHit,
     Role,
     Task,
     TaskLink,
@@ -47,6 +50,9 @@ _WORKSPACES = "pz_workspaces"
 _MEMBERS = "pz_workspace_members"
 _INVITATIONS = "pz_invitations"
 _TASK_LINKS = "pz_task_links"
+_MODEL_CONNECTIONS = "pz_workspace_model_connections"
+_RAG_CHUNKS = "pz_rag_chunks"
+_RAG_MATCH_RPC = "pz_rag_match_chunks"
 
 
 class SupabaseRepository(Repository):
@@ -322,6 +328,19 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Task(**rows[0]) if rows else None
 
+    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+        model = ENTITY_TYPES[node_type]
+        res = (
+            self._client.table(_TABLE[node_type])
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("id", node_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return model(**rows[0]) if rows else None
+
     # -- external-tracker links (M5) -------------------------------------- #
     def upsert_task_link(self, link: TaskLink) -> TaskLink:
         self._client.table(_TASK_LINKS).upsert(
@@ -365,10 +384,111 @@ class SupabaseRepository(Repository):
                 .not_.is_("deleted_at", "null")
                 .execute()
             )
-            purged = len(res.data or [])
-            if purged:
-                counts[etype] = purged
+            purged_rows = res.data or []
+            if purged_rows:
+                counts[etype] = len(purged_rows)
+                for row in purged_rows:  # M9: chunks die with the tombstone
+                    self.delete_rag_chunks_for_node(row["id"])
         return counts
+
+    # -- RAG assistant v1 (M9) --------------------------------------------- #
+    def get_model_connection(self, workspace_id: str) -> ModelConnection | None:
+        res = (
+            self._client.table(_MODEL_CONNECTIONS)
+            .select("*")
+            .eq("workspace_id", workspace_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return ModelConnection(**rows[0]) if rows else None
+
+    def upsert_model_connection(
+        self,
+        *,
+        workspace_id: str,
+        provider: str,
+        base_url: str,
+        model: str,
+        embed_model: str,
+        embed_dim: int,
+        secret_ref: str,
+        daily_token_budget: int,
+        created_by: str,
+    ) -> ModelConnection:
+        existing = self.get_model_connection(workspace_id)
+        conn = ModelConnection(
+            workspace_id=workspace_id,
+            provider=provider,
+            base_url=base_url,
+            model=model,
+            embed_model=embed_model,
+            embed_dim=embed_dim,
+            secret_ref=secret_ref,
+            daily_token_budget=daily_token_budget,
+            created_by=created_by,
+            created_at=existing.created_at if existing else utcnow(),
+            updated_at=utcnow(),
+        )
+        self._client.table(_MODEL_CONNECTIONS).upsert(
+            _dump(conn), on_conflict="workspace_id", returning="minimal"
+        ).execute()
+        return conn
+
+    def upsert_rag_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        node_type: str,
+        node_id: str,
+        chunks: list[str],
+        embeddings: list[list[float]],
+    ) -> None:
+        # Replace wholesale so a shrinking node doesn't leave stale trailing
+        # chunks (e.g. index 5 survives after a re-embed only produces 3).
+        self._client.table(_RAG_CHUNKS).delete().eq("node_id", node_id).execute()
+        if not chunks:
+            return
+        rows = [
+            {
+                "workspace_id": workspace_id,
+                "project_id": project_id,
+                "node_type": node_type,
+                "node_id": node_id,
+                "chunk_index": idx,
+                "content": content,
+                "embedding": embedding,
+                "updated_at": utcnow().isoformat(),
+            }
+            for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
+        ]
+        self._client.table(_RAG_CHUNKS).insert(rows, returning="minimal").execute()
+
+    def delete_rag_chunks_for_node(self, node_id: str) -> int:
+        res = self._client.table(_RAG_CHUNKS).delete().eq("node_id", node_id).execute()
+        return len(res.data or [])
+
+    def vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[RagChunkHit]:
+        # pz_rag_match_chunks takes the (workspace_id, project_id) predicate as
+        # explicit RPC args — membership-scoped before similarity (ADR 0011),
+        # independent of whether this client carries a caller JWT or the
+        # service-role key.
+        res = self._client.rpc(
+            _RAG_MATCH_RPC,
+            {
+                "p_workspace_id": workspace_id,
+                "p_project_id": project_id,
+                "p_query_embedding": query_embedding,
+                "p_match_count": top_k,
+            },
+        ).execute()
+        return [RagChunkHit(**row) for row in (res.data or [])]
 
 
 def _dump(model) -> dict:

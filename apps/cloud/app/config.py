@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     tombstone_ttl_days: int = 30
     tombstone_gc_interval_seconds: int = 3600
 
+    # RAG assistant v1 (M9): symmetric key (Fernet) for workspace model-key
+    # secret_ref encryption (app/secrets.py). Never written to Supabase. Empty
+    # falls back to an unencrypted dev store — fine for data_backend=memory,
+    # rejected at the model-connection endpoint when data_backend=supabase.
+    rag_key_encryption_key: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -80,6 +86,18 @@ class Settings(BaseSettings):
                 "AUTH_MODE=supabase requires SUPABASE_URL (for JWKS verification) or "
                 "SUPABASE_JWT_SECRET (legacy HS256 secret from Supabase project "
                 "settings → API → JWT Settings)."
+            )
+
+    def require_rag(self) -> None:
+        # Checked lazily at the model-connection endpoint, not app startup:
+        # RAG is opt-in per workspace, so an existing supabase deployment that
+        # hasn't configured it yet must keep booting.
+        if self.data_backend == "supabase" and not self.rag_key_encryption_key:
+            raise RuntimeError(
+                "RAG_KEY_ENCRYPTION_KEY is required to store a workspace model "
+                "connection when DATA_BACKEND=supabase (generate one with "
+                "`python -c \"from cryptography.fernet import Fernet; "
+                'print(Fernet.generate_key().decode())"`).'
             )
 
 
