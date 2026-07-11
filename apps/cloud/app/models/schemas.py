@@ -423,7 +423,38 @@ class Citation(BaseModel):
     node_type: str
     node_id: str
     chunk_index: int
+    # "vector" — a retrieved embedding chunk (M9). "graph" — a whole-node
+    # reference from an exact graph walk (M10); chunk_index is meaningless
+    # for these and is always 0.
+    source: Literal["vector", "graph"] = "vector"
 
 
 class ChatRequest(BaseModel):
     question: str
+
+
+# --------------------------------------------------------------------------- #
+# Graph-aware retrieval (M10)
+# --------------------------------------------------------------------------- #
+class LineageAgentRun(BaseModel):
+    id: str
+    status: AgentRunStatus
+
+
+class LineageFacts(BaseModel):
+    """Exact facts computed by a graph walk (app/rag/lineage.py) — not model
+    output. Sent to the client as its own SSE event ahead of the narrated
+    answer, so status/progress questions carry data a test can assert on
+    directly rather than parsing model prose."""
+
+    scope: Literal["requirement", "task", "project"]
+    node_type: str | None = None
+    node_id: str | None = None
+    title: str
+    status: str | None = None
+    specs_total: int = 0
+    tasks_total: int = 0
+    tasks_done: int = 0
+    task_status_counts: dict[str, int] = Field(default_factory=dict)
+    artifacts_total: int = 0
+    agent_runs: list[LineageAgentRun] = Field(default_factory=list)

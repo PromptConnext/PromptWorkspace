@@ -1,4 +1,4 @@
-"""RAG assistant v1 API (M9): workspace model connection + project chat.
+"""RAG assistant API: workspace model connection + project chat.
 
 Endpoints:
   POST /workspaces/{id}/model-connection   admin — configure workspace-BYO model
@@ -8,6 +8,14 @@ Endpoints:
 Retrieval is membership-scoped before similarity (ADR 0011): `require_project`
 gates the caller to the project's workspace, and `vector_search` additionally
 filters by that same workspace_id/project_id before ranking.
+
+Chat (M10): the question is classified (app/rag/classify.py) before any
+retrieval. Lineage/status questions are answered from an exact graph walk
+(app/rag/lineage.py, SQL-backed `get_graph` — no embeddings); content
+questions use the M9 vector-search path; mixed questions use both. The graph
+walk's facts are exact by construction — sent to the client as their own
+`facts` SSE event, ahead of the model's narration, so status/progress
+questions carry data a test can assert on directly.
 """
 
 from __future__ import annotations
@@ -24,12 +32,15 @@ from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     ChatRequest,
     Citation,
+    LineageFacts,
     ModelConnectionCreate,
     ModelConnectionOut,
 )
 from app.rag.budget import estimate_tokens
 from app.rag.chat import HttpChatProvider
+from app.rag.classify import classify_question
 from app.rag.embedder import HttpEmbeddingProvider
+from app.rag.lineage import compute_facts, facts_to_text, resolve_target
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
@@ -115,13 +126,35 @@ async def chat(
     embedder = getattr(request.app.state, "embedding_provider", None) or HttpEmbeddingProvider()
     chat_provider = getattr(request.app.state, "chat_provider", None) or HttpChatProvider()
 
-    [query_embedding] = await embedder.embed(
-        [body.question], conn.embed_model, api_key, conn.base_url
-    )
-    hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
-    context = _assemble_context(hits)
+    classification = classify_question(body.question)
+
+    facts = None
+    facts_citation = None
+    if classification in ("lineage", "mixed"):
+        # Exact graph walk — same bootstrap pull reindex_project uses, no
+        # embeddings involved. Membership was already gated by
+        # require_project() above, so this new code path inherits that guard.
+        graph = repo.get_graph(project_id)
+        target = resolve_target(graph, body.question)
+        facts = compute_facts(graph, target)
+        if facts.node_type and facts.node_id:
+            facts_citation = Citation(
+                node_type=facts.node_type, node_id=facts.node_id, chunk_index=0, source="graph"
+            )
+
+    hits: list = []
+    if classification in ("content", "mixed"):
+        [query_embedding] = await embedder.embed(
+            [body.question], conn.embed_model, api_key, conn.base_url
+        )
+        hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
+
+    context = _assemble_context(facts, hits)
 
     async def stream():
+        if facts is not None:
+            yield f"event: facts\ndata: {facts.model_dump_json()}\n\n"
+
         answer_parts: list[str] = []
         async for delta in chat_provider.stream_chat(
             context, body.question, conn.model, api_key, conn.base_url
@@ -132,20 +165,28 @@ async def chat(
         budget.record(
             project.workspace_id, estimate_tokens(context) + estimate_tokens(answer)
         )
+
         citations = [
             Citation(
                 node_type=h.node_type, node_id=h.node_id, chunk_index=h.chunk_index
             ).model_dump()
             for h in hits
         ]
+        if facts_citation is not None:
+            citations.append(facts_citation.model_dump())
         yield f"event: citations\ndata: {json.dumps({'citations': citations})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
-def _assemble_context(hits: list) -> str:
-    if not hits:
+def _assemble_context(facts: LineageFacts | None, hits: list) -> str:
+    parts = []
+    if facts is not None:
+        parts.append(f"GRAPH FACTS (exact, from the project graph):\n{facts_to_text(facts)}")
+    if hits:
+        parts.append(
+            "\n\n".join(f"[{h.node_type}:{h.node_id}#{h.chunk_index}]\n{h.content}" for h in hits)
+        )
+    if not parts:
         return "(no matching project artifacts found)"
-    return "\n\n".join(
-        f"[{h.node_type}:{h.node_id}#{h.chunk_index}]\n{h.content}" for h in hits
-    )
+    return "\n\n".join(parts)

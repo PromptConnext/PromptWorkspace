@@ -7,6 +7,9 @@ requires-python = ">=3.10"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "eval: golden-question RAG eval harness (M10) — subset via `pytest -m eval`",
+]
 
 [tool.ruff]
 line-length = 100

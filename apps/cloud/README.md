@@ -203,6 +203,38 @@ data inside a `CONTEXT:` block, with a system prompt instructing it to ignore
 any instructions found there. No tool use in v1 — the assistant is read-only
 by construction.
 
+### Graph-aware retrieval (M10)
+
+Status/progress questions ("is X done?") are answered from an exact graph
+walk, not similarity search — the moat identified in ADR 0011. Every chat
+question is classified first (`app/rag/classify.py`, a cheap regex
+heuristic — deterministic and free, no model round-trip; see the module
+docstring for the full justification):
+
+- **lineage** — resolved against the project graph
+  (`app/rag/lineage.py`: `resolve_target` matches the question to a
+  requirement or task by title-token overlap, `compute_facts` walks
+  requirement → specs → tasks → artifacts/agent-runs) — **no embeddings, no
+  vector search**. The result (`LineageFacts`) is sent as its own SSE
+  `event: facts`, ahead of the model's narration, so the exact numbers don't
+  depend on parsing model output.
+- **content** — the existing M9 vector-search path, unchanged.
+- **mixed** — both; facts and vector chunks are concatenated into one
+  context block for the model to narrate.
+
+`Citation.source` distinguishes `"graph"` (a whole-node reference from a
+graph walk) from `"vector"` (an embedded chunk, M9's original citation
+shape). Retrieval stays keyed off `RAG_NODE_TYPES` (`app/rag/source.py`), so
+a future entity (e.g. Discussions, M12) is additive, not a rework.
+
+**Eval harness:** `tests/test_rag_eval.py` — a golden-question set (lineage,
+content, cross-artifact, permission-boundary) over one seeded fixture
+project, marked `@pytest.mark.eval` for a discoverable subset:
+```bash
+pytest -m eval -q
+```
+It's also part of the normal `pytest -q` run — no separate CI wiring needed.
+
 ## Scaling
 
 State that is **in-process today** (single instance): presence rooms,

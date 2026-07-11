@@ -69,8 +69,9 @@ Milestone: M10 (plan 0005) — graph-aware retrieval on top of M9.
 
 1. Question classifier (lineage/status vs content vs mixed) — cheap heuristic or single model call, your call, justify it.
 2. Lineage/status questions answered from graph walks (SQL, exact) with the model narrating supplied data; content questions via vector search; mixed uses both.
-3. pmo-mirrored comments excluded from the index by default; workspace opt-in flag.
-4. Eval harness: golden-question set over a fixture project (lineage, content, cross-artifact, permission-boundary) runnable in CI with the stub provider.
+3. Eval harness: golden-question set over a fixture project (lineage, content, cross-artifact, permission-boundary) runnable in CI with the stub provider.
+
+Note: discussions ingestion is NOT in this milestone (no Discussion entity exists — descoped to M12). Keep retrieval node_type-extensible so M12 chunks slot in without rework.
 
 Exit criteria: eval set passes; a status question ("is requirement X done?") returns graph-exact data, verified by test.
 ```
@@ -86,6 +87,19 @@ Milestone: M11 (plan 0005) — PRs + code, no source at rest.
 4. Storage-posture test: assert no source-code plaintext exists in any cloud table after a full index + chat cycle.
 
 Exit criteria: plan 0005 §M11.
+```
+
+## M12 — Discussions (entity + collaboration + ingestion)
+
+```
+Milestone: M12 (plan 0005) — Discussion entity end-to-end.
+
+1. Discussion entity: schema migration + sync payload + memory-backend parity + tombstones; per-field authority — pz-native comments vs pmo-mirrored (Jira via M5 boundary).
+2. Web UI (extends M8): comment threads on graph nodes; authoring allowed for discussions only.
+3. RAG ingestion (extends M9): add discussions to RAG_NODE_TYPES / node_text(); native discussions default-in, pmo-mirrored comments workspace opt-in (ADR 0011).
+4. Resolve the Artifact content gap flagged in apps/cloud/app/rag/source.py: add a content field or record a deliberate exclusion.
+
+Exit criteria: plan 0005 §M12 — web comment → desktop sync → cited assistant answer; opted-out pmo comments unretrievable; RLS boundary tested.
 ```
 
 ---
