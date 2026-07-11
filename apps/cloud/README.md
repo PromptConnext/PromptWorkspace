@@ -12,6 +12,12 @@ key is the only credential the cloud ever holds, encrypted server-side
 See [`../../docs/promptzone-platform-architecture.md`](../../docs/promptzone-platform-architecture.md)
 and the roadmap in [`../../docs/plans/`](../../docs/plans).
 
+[`apps/web`](../web) (M8) is a read-only browser client of this API's
+sync/workspace/invitation endpoints — its origin must be added to
+`CORS_ORIGINS` (default already includes `http://localhost:3000` for local
+dev; production origins go in Railway, see
+[`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md#28-web-app-apps-web--vercel)).
+
 ## Stack
 
 FastAPI (Python) · Supabase/Postgres. A `memory` data backend lets the service

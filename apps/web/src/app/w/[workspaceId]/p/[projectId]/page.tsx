@@ -1,0 +1,71 @@
+"use client";
+
+import { use, useState } from "react";
+import { RequireAuth } from "@/components/RequireAuth";
+import { TopBar } from "@/components/TopBar";
+import { PresenceBar } from "@/components/PresenceBar";
+import { GraphBrowser } from "@/components/project/GraphBrowser";
+import { TaskBoard } from "@/components/project/TaskBoard";
+import { ProgressRollup } from "@/components/project/ProgressRollup";
+import { useCloudGet } from "@/lib/hooks";
+import type { ProjectGraph } from "@/lib/types";
+
+const TABS = ["Graph", "Tasks", "Progress"] as const;
+type Tab = (typeof TABS)[number];
+
+function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
+  const [tab, setTab] = useState<Tab>("Graph");
+  const { data: graph, error, loading } = useCloudGet<ProjectGraph>(`/sync/projects/${projectId}/graph`);
+
+  return (
+    <>
+      <TopBar
+        crumbs={[
+          { label: workspaceId, href: `/w/${workspaceId}` },
+          { label: graph?.project.name ?? projectId },
+        ]}
+      />
+      <main className="mx-auto max-w-5xl px-4 py-8">
+        <div className="mb-6 flex items-center justify-between">
+          <div className="flex gap-1 rounded border border-slate-200 bg-white p-1">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`rounded px-3 py-1.5 text-sm ${
+                  tab === t ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <PresenceBar projectId={projectId} />
+        </div>
+
+        {loading && <p className="text-sm text-slate-500">Loading graph…</p>}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {graph && (
+          <>
+            {tab === "Graph" && <GraphBrowser graph={graph} />}
+            {tab === "Tasks" && <TaskBoard graph={graph} />}
+            {tab === "Progress" && <ProgressRollup graph={graph} />}
+          </>
+        )}
+      </main>
+    </>
+  );
+}
+
+export default function ProjectPage({
+  params,
+}: {
+  params: Promise<{ workspaceId: string; projectId: string }>;
+}) {
+  const { workspaceId, projectId } = use(params);
+  return (
+    <RequireAuth>
+      <ProjectWorkspace workspaceId={workspaceId} projectId={projectId} />
+    </RequireAuth>
+  );
+}

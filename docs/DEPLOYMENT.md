@@ -1,11 +1,12 @@
 # PromptZone Deployment Guide
 
-How to ship the two deployable halves of PromptZone:
+How to ship the three deployable halves of PromptZone:
 
 1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Railway** (public HTTPS).
-2. **Desktop app** (`apps/desktop` + `apps/engine`) — Tauri 2 bundle → installers published to **Cloudflare R2** for download.
+2. **Web app** (`apps/web`, M8) — Next.js read-only workspace UI → **Vercel**.
+3. **Desktop app** (`apps/desktop` + `apps/engine`) — Tauri 2 bundle → installers published to **Cloudflare R2** for download.
 
-Railway is used (not Vercel) because the cloud app is a long-lived container with WebSockets (presence) and in-process state that requires a **single instance** — a poor fit for serverless. Deploys are manual for now; CI/CD recommendations are in [§6](#6-cicd-recommendations).
+Railway is used (not Vercel) for the cloud app because it's a long-lived container with WebSockets (presence) and in-process state that requires a **single instance** — a poor fit for serverless. `apps/web` has none of those constraints (its only WebSocket use is a client-side connection *to* `apps/cloud`, not a server it hosts), so Vercel's static/SSR hosting is a good fit — see [§2.8](#28-web-app-apps-web--vercel). Deploys are manual for now; CI/CD recommendations are in [§6](#6-cicd-recommendations).
 
 ---
 
@@ -73,7 +74,7 @@ Production values:
 | `SUPABASE_JWT_SECRET` | (usually empty) | Legacy HS256 fallback only; JWKS via `SUPABASE_URL` is the default path |
 | `APP_ENV` | `production` | |
 | `LOG_LEVEL` | `INFO` | |
-| `CORS_ORIGINS` | `tauri://localhost,http://localhost:1420` | Packaged Tauri app origin + dev Vite origin; add any web client origins |
+| `CORS_ORIGINS` | `tauri://localhost,http://localhost:1420,https://<web-app>.vercel.app` | Packaged Tauri app origin + dev Vite origin + the `apps/web` deployment's origin(s) — see [§2.8](#28-web-app-apps-web--vercel) |
 | `RATE_LIMIT_ENABLED` | `true` | |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `300` / `60` | Defaults are fine to start |
 | `WS_HEARTBEAT_SECONDS` | `20` | |
@@ -117,6 +118,34 @@ Use Railway **Environments** (one project, `dev` + `production`) or two projects
 | Supabase | separate free project | production project |
 
 Never share a Supabase project between environments — migrations and tombstone GC would collide.
+
+### 2.8 Web app (`apps/web`) → Vercel
+
+`apps/web` (M8) is a read-only Next.js client of `apps/cloud` — no server-side
+secrets, no WebSocket server of its own (presence is a client-side connection
+*to* `apps/cloud`), so it deploys as a normal static/SSR Vercel project.
+
+1. Import `apps/web` as the project root in Vercel (monorepo → set "Root
+   Directory" to `apps/web`).
+2. Environment variables (Vercel → project → Settings → Environment
+   Variables), mirroring `apps/web/.env.example`:
+
+   | Variable | Value |
+   |---|---|
+   | `NEXT_PUBLIC_CLOUD_API_URL` | `https://<cloud-service>.up.railway.app` |
+   | `NEXT_PUBLIC_CLOUD_WS_URL` | `wss://<cloud-service>.up.railway.app` |
+   | `NEXT_PUBLIC_AUTH_MODE` | `supabase` |
+   | `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon key (safe to expose client-side) |
+
+3. After the first deploy, add the resulting `https://<project>.vercel.app`
+   origin (and any custom domain) to `apps/cloud`'s `CORS_ORIGINS` (§2.4) and
+   redeploy the cloud service — without this, the browser blocks every
+   request with a CORS error.
+
+No changes to `apps/cloud` are required beyond that CORS entry: `apps/web`
+only calls the sync/graph/workspace/invitation endpoints the desktop client
+already uses.
 
 ---
 

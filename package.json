@@ -5,6 +5,7 @@
   "description": "AI-native development workspace — 3S workflow (Scope → Spec → Skill) over a BYO-model orchestration engine",
   "scripts": {
     "engine": "pnpm --dir apps/engine start",
-    "desktop": "pnpm --dir apps/desktop tauri dev"
+    "desktop": "pnpm --dir apps/desktop tauri dev",
+    "web": "pnpm --dir apps/web dev"
   }
 }

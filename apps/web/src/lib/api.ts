@@ -1,0 +1,32 @@
+// Thin fetch wrapper against apps/cloud, mirroring cloudFetch in
+// apps/engine/src/cloudClient.ts on the browser side.
+
+import { CLOUD_API_URL } from "./config";
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export async function apiFetch<T>(
+  path: string,
+  authHeaders: Record<string, string>,
+  init: RequestInit = {},
+): Promise<T> {
+  const res = await fetch(`${CLOUD_API_URL}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders,
+      ...((init.headers as Record<string, string>) ?? {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(res.status, (data as { detail?: string }).detail ?? `cloud HTTP ${res.status}`);
+  }
+  return data as T;
+}
