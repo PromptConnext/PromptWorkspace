@@ -46,6 +46,7 @@ _TABLE = {
     "tasks": "pz_tasks",
     "artifacts": "pz_artifacts",
     "agent_runs": "pz_agent_runs",
+    "discussions": "pz_discussions",
 }
 _PROJECTS = "pz_projects"
 _WORKSPACES = "pz_workspaces"
@@ -123,6 +124,7 @@ class SupabaseRepository(Repository):
         name: str | None = None,
         git_config: dict | None = None,
         integration_config: dict | None = None,
+        rag_index_pmo_discussions: bool | None = None,
     ) -> Workspace:
         patch: dict = {"updated_at": utcnow().isoformat()}
         if name is not None:
@@ -131,6 +133,8 @@ class SupabaseRepository(Repository):
             patch["git_config"] = git_config
         if integration_config is not None:
             patch["integration_config"] = integration_config
+        if rag_index_pmo_discussions is not None:
+            patch["rag_index_pmo_discussions"] = rag_index_pmo_discussions
         self._client.table(_WORKSPACES).update(patch).eq("id", workspace_id).execute()
         ws = self.get_workspace(workspace_id)
         if ws is None:

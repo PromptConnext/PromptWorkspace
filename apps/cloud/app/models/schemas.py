@@ -157,6 +157,31 @@ class AgentRun(GraphEntity):
     evidence: dict = Field(default_factory=dict)
 
 
+class Discussion(GraphEntity):
+    """A comment threaded on any graph node (M12). `source` distinguishes a
+    PromptZone-native comment (web/desktop) from a Jira-mirrored one — unlike
+    Task, both sources create their *own* rows rather than fighting over the
+    same one, so `body`/`author` are "shared" authority (see FIELD_AUTHORITY
+    below), not a pz/pmo split."""
+
+    project_id: str
+    parent_node_type: str  # "requirements" | "spec_documents" | "tasks" | "artifacts"
+    parent_node_id: str
+    author: str
+    body: str
+    source: Literal["pz", "pmo"] = "pz"
+
+
+class DiscussionCreate(BaseModel):
+    """Web/desktop authoring request. `author` is deliberately absent —
+    the endpoint sets it to the authenticated caller, never client-supplied
+    (otherwise anyone could comment as anyone)."""
+
+    parent_node_type: str
+    parent_node_id: str
+    body: str
+
+
 # --------------------------------------------------------------------------- #
 # Workspaces, membership & invitations (M2)
 # --------------------------------------------------------------------------- #
@@ -171,6 +196,7 @@ class WorkspaceCreate(BaseModel):
 class WorkspaceUpdate(BaseModel):
     name: str | None = None
     git_config: dict | None = None
+    rag_index_pmo_discussions: bool | None = None
 
 
 class Workspace(BaseModel):
@@ -182,6 +208,11 @@ class Workspace(BaseModel):
     # status_map. See app/integrations. Secrets come from the server env, never
     # this row (ADR 0010 §5).
     integration_config: dict = Field(default_factory=dict)
+    # Discussions RAG opt-in (M12, ADR 0011): pmo-mirrored (Jira) comments are
+    # third-party content and default OUT of the assistant's index; pz-native
+    # discussions are always in. A typed column, not another integration_config
+    # key — this is a first-class workspace setting, not vendor config.
+    rag_index_pmo_discussions: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -279,6 +310,7 @@ ENTITY_TYPES: dict[str, type[GraphEntity]] = {
     "tasks": Task,
     "artifacts": Artifact,
     "agent_runs": AgentRun,
+    "discussions": Discussion,
 }
 
 
@@ -300,6 +332,12 @@ FIELD_AUTHORITY: dict[str, dict[str, str]] = {
     "spec_documents": {"content": "pz", "status": "pz", "version": "pz"},
     "artifacts": {"uri": "pz", "commit_sha": "pz", "kind": "pz"},
     "agent_runs": {"action": "pz", "status": "pz", "evidence": "pz"},
+    # "shared", not a pz/pmo split: a pz upsert and a pmo upsert never fight
+    # over the SAME row's body — each source creates its own comment row.
+    # Splitting this "pz" (or "pmo") would silently drop the other source's
+    # writes entirely (merge_entity's domain gate), which would make Jira
+    # comment mirroring impossible rather than merely lower-priority.
+    "discussions": {"body": "shared", "author": "shared"},
 }
 
 
@@ -311,6 +349,7 @@ class GraphUpsertRequest(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
+    discussions: list[Discussion] = Field(default_factory=list)
     # Which authority domain is writing. The engine pushes "pz"; the Jira/
     # ClickUp webhook path pushes "pmo". Governs field-level merge (M3).
     source: Literal["pz", "pmo"] = "pz"
@@ -344,6 +383,7 @@ class ProjectGraph(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
+    discussions: list[Discussion] = Field(default_factory=list)
     cursor: datetime | None = None
     # Keyset continuation (M7): when a `limit` truncates the page, the client
     # re-pulls with since=cursor & after_id=next_id. None means fully drained.

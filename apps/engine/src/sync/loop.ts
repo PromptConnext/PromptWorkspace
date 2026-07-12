@@ -1,6 +1,10 @@
 // D2 (docs/plans/0004): push the linked project's local graph to apps/cloud
-// on an interval + on demand. Pull-back (apps/cloud -> local SQLite) is
-// deliberately out of scope for this cut — see the note at the bottom.
+// on an interval + on demand. Pull-back (apps/cloud -> local SQLite) was
+// deliberately out of scope for that cut (see the note at the bottom) — M12
+// adds it, narrowly, for discussions only: comments authored in the web app
+// need to reach desktop, and unlike tasks/requirements/etc. there's no local
+// column-shape conflict to resolve first (a wholly new local table, nothing
+// to reconcile against). Every other entity stays push-only, unchanged.
 import { db, getAppState, setAppState } from "../db.ts";
 import { cloudFetch } from "../cloudClient.ts";
 
@@ -180,7 +184,45 @@ function assembleSnapshot(localProjectId: string, cloudProjectId: string) {
       evidence: ar.evidence ? { note: ar.evidence } : {},
     }));
 
-  return { requirements, spec_documents: specDocuments, tasks, artifacts, agent_runs: agentRuns, source: "pz" as const };
+  // Only source='pz' rows — pmo-mirrored discussions were pulled FROM the
+  // cloud (pullProjectDiscussions below), not authored here; re-pushing them
+  // back would be a harmless but pointless echo (same shape as tasks
+  // omitting pmo-owned assignee/sprint above).
+  const discussions = (
+    db
+      .prepare(
+        `SELECT id, parent_node_type, parent_node_id, author, body, source, deleted_at
+         FROM discussions WHERE project_id = ? AND source = 'pz'`,
+      )
+      .all(localProjectId) as {
+      id: string;
+      parent_node_type: string;
+      parent_node_id: string;
+      author: string;
+      body: string;
+      source: string;
+      deleted_at: string | null;
+    }[]
+  ).map((d) => ({
+    id: d.id,
+    project_id: cloudProjectId,
+    parent_node_type: d.parent_node_type,
+    parent_node_id: d.parent_node_id,
+    author: d.author,
+    body: d.body,
+    source: d.source as "pz" | "pmo",
+    deleted_at: d.deleted_at,
+  }));
+
+  return {
+    requirements,
+    spec_documents: specDocuments,
+    tasks,
+    artifacts,
+    agent_runs: agentRuns,
+    discussions,
+    source: "pz" as const,
+  };
 }
 
 export type SyncResult = {
@@ -226,6 +268,66 @@ export async function pushProjectSnapshot(localProjectId: string): Promise<SyncR
   }
 }
 
+type CloudDiscussion = {
+  id: string;
+  parent_node_type: string;
+  parent_node_id: string;
+  author: string;
+  body: string;
+  source: "pz" | "pmo";
+  deleted_at: string | null;
+};
+
+const upsertLocalDiscussion = db.prepare(`
+  INSERT INTO discussions (id, project_id, parent_node_type, parent_node_id, author, body, source, deleted_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(id) DO UPDATE SET
+    parent_node_type = excluded.parent_node_type,
+    parent_node_id = excluded.parent_node_id,
+    author = excluded.author,
+    body = excluded.body,
+    source = excluded.source,
+    deleted_at = excluded.deleted_at,
+    updated_at = excluded.updated_at
+`);
+
+function pullCursorKey(localProjectId: string): string {
+  return `discussions_pull_cursor:${localProjectId}`;
+}
+
+// M12: the *only* pull direction this engine has — see the module header.
+// Reuses the existing incremental-pull graph endpoint (built for the desktop
+// client's own bootstrap/incremental reads) and only looks at its
+// `discussions` field; every other array in the response is ignored, since
+// engine remains the source of truth for the rest of the graph.
+export async function pullProjectDiscussions(localProjectId: string): Promise<void> {
+  const link = getCloudLink(localProjectId);
+  if (!link) return;
+
+  const cursor = getAppState(pullCursorKey(localProjectId));
+  const path = cursor
+    ? `/sync/projects/${link.project_id}/graph?since=${encodeURIComponent(cursor)}`
+    : `/sync/projects/${link.project_id}/graph`;
+
+  const res = await cloudFetch<{ discussions: CloudDiscussion[]; cursor: string | null }>(path, {
+    method: "GET",
+  });
+
+  for (const d of res.discussions) {
+    upsertLocalDiscussion.run(
+      d.id,
+      localProjectId,
+      d.parent_node_type,
+      d.parent_node_id,
+      d.author,
+      d.body,
+      d.source,
+      d.deleted_at,
+    );
+  }
+  if (res.cursor) setAppState(pullCursorKey(localProjectId), res.cursor);
+}
+
 let loopTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startCloudSyncLoop(): void {
@@ -233,6 +335,7 @@ export function startCloudSyncLoop(): void {
   loopTimer = setInterval(async () => {
     for (const projectId of linkedProjectIds()) {
       await pushProjectSnapshot(projectId).catch(() => {});
+      await pullProjectDiscussions(projectId).catch(() => {});
     }
   }, CLOUD_SYNC_POLL_SECONDS * 1000);
   loopTimer.unref?.();
@@ -243,10 +346,11 @@ export function stopCloudSyncLoop(): void {
   loopTimer = null;
 }
 
-// --- Deliberately not built in this cut -------------------------------
-// Pull-and-apply (cloud graph -> local SQLite) needs its own schema
-// decision: the local `tasks` table has no `assignee`/`sprint` columns, so
-// there's nowhere to put the pmo fields a pull would bring back from a
-// Jira/ClickUp mirror. Rather than guess a migration here, this ships
-// push-only sync (the primary value: local work becomes visible to the
-// team/cloud) and leaves pull as a follow-up once those columns exist.
+// --- Still deliberately not built ---------------------------------------
+// General pull-and-apply for requirements/specs/tasks/artifacts/agent_runs
+// (cloud graph -> local SQLite) remains out of scope: the local `tasks`
+// table has no `assignee`/`sprint` columns, so there's nowhere to put the
+// pmo fields a pull would bring back from a Jira/ClickUp mirror. M12's
+// discussions pull (above) didn't need to solve this — a wholly new local
+// table has nothing to reconcile against. This gap is unchanged by M12 and
+// stays a follow-up once those columns exist.

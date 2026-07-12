@@ -106,6 +106,21 @@ export interface AgentRun {
   field_versions: Record<string, unknown>;
 }
 
+export type DiscussionSource = "pz" | "pmo";
+
+export interface Discussion {
+  id: string;
+  project_id: string;
+  parent_node_type: string;
+  parent_node_id: string;
+  author: string;
+  body: string;
+  source: DiscussionSource;
+  updated_at: string | null;
+  deleted_at: string | null;
+  field_versions: Record<string, unknown>;
+}
+
 export interface ProjectGraph {
   project: Project;
   requirements: Requirement[];
@@ -113,6 +128,7 @@ export interface ProjectGraph {
   tasks: Task[];
   artifacts: Artifact[];
   agent_runs: AgentRun[];
+  discussions: Discussion[];
   cursor: string | null;
   next_id: string | null;
   has_more: boolean;

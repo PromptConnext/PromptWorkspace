@@ -1,8 +1,15 @@
+import { useState } from "react";
 import type { Graph } from "../api";
+import DiscussionPanel from "./DiscussionPanel";
 
-// Read-only traceability view (roadmap Phase 1): requirement → spec → task,
-// plus every agent run as evidence.
-export default function GraphView({ graph }: { graph: Graph | null }) {
+type Selected = { nodeType: string; nodeId: string; label: string };
+
+// Traceability view (roadmap Phase 1): requirement → spec → task, plus every
+// agent run as evidence. Read-only except for comments (M12) — clicking a
+// requirement or task selects it and opens its discussion thread below.
+export default function GraphView({ graph, projectId }: { graph: Graph | null; projectId: string }) {
+  const [selected, setSelected] = useState<Selected | null>(null);
+
   if (!graph) return <p>Loading graph…</p>;
   return (
     <div className="graph">
@@ -10,7 +17,15 @@ export default function GraphView({ graph }: { graph: Graph | null }) {
         {graph.requirements.length === 0 && <li>No requirements yet — run Scope.</li>}
         {graph.requirements.map((req) => (
           <li key={req.id}>
-            <strong>Requirement:</strong> {req.title}{" "}
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setSelected({ nodeType: "requirements", nodeId: req.id, label: req.title });
+              }}
+            >
+              <strong>Requirement:</strong> {req.title}
+            </a>{" "}
             <span className={`badge ${req.status}`}>{req.status}</span>
             <ul>
               {req.specDocuments.map((spec) => (
@@ -25,7 +40,16 @@ export default function GraphView({ graph }: { graph: Graph | null }) {
                     {spec.tasks.length === 0 && <li className="muted">No tasks yet</li>}
                     {spec.tasks.map((task) => (
                       <li key={task.id}>
-                        {task.title} <span className={`badge ${task.status}`}>{task.status}</span>
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setSelected({ nodeType: "tasks", nodeId: task.id, label: task.title });
+                          }}
+                        >
+                          {task.title}
+                        </a>{" "}
+                        <span className={`badge ${task.status}`}>{task.status}</span>
                       </li>
                     ))}
                   </ul>
@@ -35,6 +59,14 @@ export default function GraphView({ graph }: { graph: Graph | null }) {
           </li>
         ))}
       </ul>
+      {selected && (
+        <DiscussionPanel
+          projectId={projectId}
+          nodeType={selected.nodeType}
+          nodeId={selected.nodeId}
+          label={selected.label}
+        />
+      )}
       <h3>Agent runs</h3>
       <table className="runs">
         <thead>

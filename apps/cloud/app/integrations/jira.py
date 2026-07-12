@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from app.integrations.tracker import InboundUpdate, OutboundRequest
+from app.integrations.tracker import InboundComment, InboundUpdate, OutboundRequest
 from app.models.schemas import Task, TaskStatus
 
 _DEFAULT_STATUS_MAP = {
@@ -105,6 +105,28 @@ class JiraAdapter:
         )
         return [update] if update.has_updates() else []
 
+    def parse_comment_webhook(self, payload: dict, config: dict) -> InboundComment | None:
+        """`comment_created`/`comment_updated` webhook events (M12). Jira
+        Cloud's comment `body` may be a plain string (older webhook configs)
+        or Atlassian Document Format (a rich-text JSON tree) depending on API
+        version — `_adf_to_text` best-effort-extracts plain text from the
+        latter; this is a v1 simplification (formatting/mentions are lost),
+        not a full ADF renderer."""
+        if payload.get("webhookEvent") not in {"comment_created", "comment_updated"}:
+            return None
+        issue_key = (payload.get("issue") or {}).get("key")
+        comment = payload.get("comment") or {}
+        comment_id = comment.get("id")
+        if not issue_key or not comment_id:
+            return None
+        author = comment.get("author") or {}
+        author_name = author.get("displayName") or author.get("accountId") or "unknown"
+        body = comment.get("body")
+        text = body if isinstance(body, str) else _adf_to_text(body)
+        return InboundComment(
+            external_key=issue_key, comment_id=str(comment_id), author=author_name, body=text
+        )
+
     def verify_signature(self, body: bytes, signature: str | None, secret: str) -> bool:
         if not signature or not secret:
             return False
@@ -124,6 +146,19 @@ def _first_sprint(value):
     if isinstance(value, list) and value:
         return value[0]
     return value
+
+
+def _adf_to_text(node) -> str:
+    """Best-effort plain-text extraction from an Atlassian Document Format
+    node tree — walks `content`, joins `text` leaves. Not a full renderer
+    (tables, mentions, etc. are flattened or dropped); good enough for
+    embedding a comment's substance."""
+    if not isinstance(node, dict):
+        return ""
+    if "text" in node and isinstance(node["text"], str):
+        return node["text"]
+    parts = [_adf_to_text(child) for child in node.get("content") or []]
+    return " ".join(p for p in parts if p)
 
 
 def _reverse_status(jira_status_name: str, config: dict) -> TaskStatus | None:

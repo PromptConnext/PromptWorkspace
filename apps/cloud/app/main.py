@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import assistant, github, health, integrations, presence, sync, workspaces
+from app.api import assistant, discussions, github, health, integrations, presence, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.integrations.github import HttpGithubClient
@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(presence.router)
     app.include_router(sync.router)
     app.include_router(assistant.router)
+    app.include_router(discussions.router)
 
     @app.get("/", tags=["health"])
     def root() -> dict:

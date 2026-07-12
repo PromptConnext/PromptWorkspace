@@ -97,6 +97,25 @@ CREATE TABLE IF NOT EXISTS app_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- M12: comments threaded on any graph node. project_id is stored directly
+-- (like agent_runs, unlike requirements/tasks/artifacts, which reach it via
+-- a join chain) since parent_node_type can point at four different tables —
+-- joining through all of them just to scope by project isn't worth it.
+-- The first local table needing updated_at/deleted_at: it's also the first
+-- table this engine pulls from the cloud rather than only ever pushing, so
+-- it needs the same tombstone/cursor shape the cloud side already has.
+CREATE TABLE IF NOT EXISTS discussions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  parent_node_type TEXT NOT NULL,
+  parent_node_id TEXT NOT NULL,
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'pz' CHECK (source IN ('pz','pmo')),
+  deleted_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 export function dataDir(): string {

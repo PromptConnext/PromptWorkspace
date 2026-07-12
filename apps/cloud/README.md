@@ -121,10 +121,10 @@ The pure engine in `app/db/merge.py` merges field-by-field using per-field
 version clocks (`field_versions`), so a `pmo` writer can never overwrite a `pz`
 field and vice-versa. The sync payload carries `source: "pz" | "pmo"`.
 
-### Jira / ClickUp mirror (M5)
+### Jira / ClickUp mirror (M5, extended M12)
 
-A thin, field-scoped two-way boundary — only status/assignment/linkage mirror;
-the AI-native graph stays in PromptZone.
+A thin, field-scoped two-way boundary — only status/assignment/linkage (and,
+as of M12, comments) mirror; the AI-native graph stays in PromptZone.
 
 | Method | Path | Guard |
 |---|---|---|
@@ -137,6 +137,17 @@ pmo fields. Tracker **credentials never live in the DB** — the API token and
 webhook secret come from the server env; only non-secret settings (base URL,
 project key, status map) sit on the workspace. `base_url` is allowlisted to the
 provider's domain over HTTPS to prevent credential exfiltration.
+
+**Comments (M12):** `comment_created`/`comment_updated` Jira webhooks are a
+different payload shape from `jira:issue_updated` — routed separately in
+`tracker_webhook()` (`app/api/integrations.py`), not through
+`handle_webhook()`/`InboundUpdate`. `TrackerAdapter.parse_comment_webhook()`
+is deliberately *not* a required protocol method (only `JiraAdapter`
+implements it; ClickUp has none) — called via `getattr(...)`, so an adapter
+with no comment support simply doesn't define it. A parsed comment becomes a
+`Discussion(source="pmo")` with a deterministic id
+(`f"{provider}-comment-{comment_id}"`), so webhook redelivery upserts the
+same row instead of duplicating it.
 
 ### Presence (M6)
 
@@ -156,8 +167,9 @@ structured lines with `project`, `user`, `source`, and counts.
 Chat grounded in synced project artifacts, with citations, powered by a
 **workspace-connected BYO model** (ADR 0011). v1 sources: `requirements`,
 `spec_documents`, `tasks` — the entities that already carry free text.
-Discussions and Artifact/code content aren't sources yet (no such entity/field
-exists); adding them is a later milestone, not silently expanded here.
+Discussions (M12) and PRs (M11) extend this list; Artifact staying
+content-less is now a deliberate, permanent design decision, not an open gap
+— see `app/rag/source.py`'s docstring.
 
 | Method | Path | Guard |
 |---|---|---|
@@ -295,6 +307,44 @@ reachable from the repository's own state and asserts that text is nowhere
 in it — not just that today's schema lacks a `content` column, but that
 nothing in the actual data flow ever writes one.
 
+### Discussions (M12)
+
+Comments threaded on any graph node (`parent_node_type`/`parent_node_id`) —
+a `GraphEntity` like every other synced type (`discussions` in
+`ENTITY_TYPES`), so it rides the *existing* sync/pull/tombstone/RLS
+machinery unmodified, not a bespoke pipeline.
+
+| Method | Path | Guard |
+|---|---|---|
+| POST | `/projects/{id}/discussions` | member — the one deliberate exception to "authoring stays on desktop" (M8); comments are collaboration data, not planning artifacts |
+
+Reads aren't a new endpoint — discussions come back on the existing
+`GET /sync/projects/{id}/graph` (`ProjectGraph.discussions`), and desktop
+authors them through the same `PUT .../graph` push every other entity uses.
+
+**Field authority:** unlike `Task` (row-level split: `status` is pz-only,
+`assignee` is pmo-only), `FIELD_AUTHORITY["discussions"]` is `"shared"` for
+both `body` and `author` — a pz-native comment and a pmo-mirrored (Jira)
+comment are always *different rows*, never the same row edited by both
+sides, so `"shared"` (either source may write, LWW) is correct; a `"pz"`/
+`"pmo"` split would make the merge silently drop pmo's writes, which would
+make comment mirroring impossible rather than merely lower-priority.
+
+**RAG opt-in:** pz-native discussions embed by default (same
+`RAG_NODE_TYPES`/`node_text()` pipeline as every other source); pmo-mirrored
+ones don't, unless the workspace sets `rag_index_pmo_discussions` (via
+`PATCH /workspaces/{id}`) — third-party content defaults out (ADR 0011). The
+gate lives in `app/rag/queue.py::_process_job`, checked per-job right before
+the embedding call, not at ingest time — so flipping the setting takes
+effect on the next (re-)embed, not retroactively on already-embedded rows.
+
+**Desktop sync:** `apps/engine` gained its *first* pull-from-cloud
+capability for this — sync was push-only before M12. It's scoped narrowly to
+discussions only (`pullProjectDiscussions()` in `apps/engine/src/sync/loop.ts`,
+reading the existing incremental `GET .../graph?since=` endpoint and only
+looking at its `discussions` array) — engine remains the sole source of
+truth for requirements/specs/tasks/artifacts/agent_runs, unchanged.
+
 ## Scaling
 
 State that is **in-process today** (single instance): presence rooms,
@@ -319,6 +369,7 @@ Apply in order; each is additive and backward-compatible:
 | `0008_invitations_rls.sql` | enables RLS on `pz_invitations` (previously missing entirely) + invite-acceptance RLS fix |
 | `0009_rag.sql` | `pgvector` extension, `pz_workspace_model_connections`, `pz_rag_chunks`, `pz_rag_match_chunks` RPC (M9) |
 | `0010_github.sql` | `pz_pull_requests`, `pz_code_chunks` (no `content` column), `pz_code_match_chunks` RPC (M11) |
+| `0011_discussions.sql` | `pz_discussions` (comments, RLS), `pz_workspaces.rag_index_pmo_discussions` (M12) |
 
 **0006–0008 were found by actually running `apps/cloud` against a real local
 Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`

@@ -39,6 +39,18 @@ class InboundUpdate:
         return any(v is not None for v in (self.status, self.assignee, self.sprint))
 
 
+@dataclass
+class InboundComment:
+    """A provider-neutral tracker comment parsed from a webhook (M12). The API
+    layer resolves `external_key` (the parent issue) to a PromptZone task via
+    the task-link table, then upserts a Discussion with source="pmo"."""
+
+    external_key: str
+    comment_id: str
+    author: str
+    body: str
+
+
 class TrackerAdapter(Protocol):
     provider: str
 
@@ -54,3 +66,13 @@ class TrackerAdapter(Protocol):
 
     def verify_signature(self, body: bytes, signature: str | None, secret: str) -> bool:
         """Verify the webhook HMAC. Returns False on any mismatch."""
+
+    # Deliberately NOT a required method: comments are Jira-specific in v1
+    # (M12) and ClickUp has no implementation. app/api/integrations.py calls
+    # this via getattr(adapter, "parse_comment_webhook", None) rather than
+    # requiring every adapter to have it — an adapter with no comment support
+    # just doesn't define this method.
+    #
+    # def parse_comment_webhook(self, payload: dict, config: dict) -> InboundComment | None:
+    #     """Return a parsed comment, or None if this payload isn't a comment
+    #     event this adapter recognizes."""

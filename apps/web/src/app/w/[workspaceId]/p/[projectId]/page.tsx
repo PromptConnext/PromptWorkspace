@@ -7,15 +7,21 @@ import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
 import { TaskBoard } from "@/components/project/TaskBoard";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
+import { DiscussionThread } from "@/components/project/DiscussionThread";
 import { useCloudGet } from "@/lib/hooks";
 import type { ProjectGraph } from "@/lib/types";
 
-const TABS = ["Graph", "Tasks", "Progress"] as const;
+const TABS = ["Graph", "Tasks", "Progress", "Discussion"] as const;
 type Tab = (typeof TABS)[number];
 
 function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
   const [tab, setTab] = useState<Tab>("Graph");
-  const { data: graph, error, loading } = useCloudGet<ProjectGraph>(`/sync/projects/${projectId}/graph`);
+  const {
+    data: graph,
+    error,
+    loading,
+    refetch,
+  } = useCloudGet<ProjectGraph>(`/sync/projects/${projectId}/graph`);
 
   return (
     <>
@@ -50,6 +56,9 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
             {tab === "Graph" && <GraphBrowser graph={graph} />}
             {tab === "Tasks" && <TaskBoard graph={graph} />}
             {tab === "Progress" && <ProgressRollup graph={graph} />}
+            {tab === "Discussion" && (
+              <DiscussionThread graph={graph} projectId={projectId} onPosted={refetch} />
+            )}
           </>
         )}
       </main>

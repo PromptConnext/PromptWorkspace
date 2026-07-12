@@ -99,6 +99,20 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         repo.delete_rag_chunks_for_node(job.node_id)
         return
 
+    if job.node_type == "discussions" and getattr(node, "source", "pz") == "pmo":
+        # Third-party content defaults out of the index (ADR 0011). Not an
+        # error — same "skip, log, don't fail the queue" shape as a missing
+        # model connection above.
+        workspace = repo.get_workspace(job.workspace_id)
+        if workspace is None or not workspace.rag_index_pmo_discussions:
+            logger.info(
+                "skip embed: pmo discussion not opted in workspace=%s node=%s",
+                job.workspace_id,
+                job.node_id,
+            )
+            repo.delete_rag_chunks_for_node(job.node_id)
+            return
+
     text = node_text(job.node_type, node)
     chunks = chunk_text(text)
     if not chunks:

@@ -312,3 +312,35 @@ export const setProjectAgent = (projectId: string, agentId: string) =>
     method: "POST",
     body: JSON.stringify({ agentId }),
   });
+
+// Discussions (M12) -----------------------------------------------------
+
+export type Discussion = {
+  id: string;
+  project_id: string;
+  parent_node_type: string;
+  parent_node_id: string;
+  author: string;
+  body: string;
+  source: "pz" | "pmo";
+  updated_at: string;
+};
+
+export const listDiscussions = (projectId: string, parentNodeType?: string, parentNodeId?: string) => {
+  const query =
+    parentNodeType && parentNodeId
+      ? `?parentNodeType=${encodeURIComponent(parentNodeType)}&parentNodeId=${encodeURIComponent(parentNodeId)}`
+      : "";
+  return request<{ discussions: Discussion[] }>(`/engine/projects/${projectId}/discussions${query}`);
+};
+
+export const createDiscussion = (
+  projectId: string,
+  parentNodeType: string,
+  parentNodeId: string,
+  body: string,
+) =>
+  request<Discussion>(`/engine/projects/${projectId}/discussions`, {
+    method: "POST",
+    body: JSON.stringify({ parentNodeType, parentNodeId, body }),
+  });

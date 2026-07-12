@@ -62,6 +62,7 @@ class Repository(abc.ABC):
         name: str | None = None,
         git_config: dict | None = None,
         integration_config: dict | None = None,
+        rag_index_pmo_discussions: bool | None = None,
     ) -> Workspace: ...
 
     @abc.abstractmethod
@@ -300,6 +301,7 @@ class InMemoryRepository(Repository):
         name: str | None = None,
         git_config: dict | None = None,
         integration_config: dict | None = None,
+        rag_index_pmo_discussions: bool | None = None,
     ) -> Workspace:
         ws = self._workspaces[workspace_id]
         if name is not None:
@@ -308,6 +310,8 @@ class InMemoryRepository(Repository):
             ws.git_config = git_config
         if integration_config is not None:
             ws.integration_config = integration_config
+        if rag_index_pmo_discussions is not None:
+            ws.rag_index_pmo_discussions = rag_index_pmo_discussions
         ws.updated_at = utcnow()
         return ws
 

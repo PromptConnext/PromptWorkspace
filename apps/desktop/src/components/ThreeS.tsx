@@ -149,7 +149,7 @@ export default function ThreeS({ project }: { project: Project }) {
       <div style={{ display: tab === "editor" ? "block" : "none" }}>
         <EditorPane projectId={project.id} />
       </div>
-      {tab === "graph" && <GraphView graph={graph} />}
+      {tab === "graph" && <GraphView graph={graph} projectId={project.id} />}
       {tab === "threes" && (
         <>
           <div className="stepper">

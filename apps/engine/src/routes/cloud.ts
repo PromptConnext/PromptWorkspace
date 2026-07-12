@@ -175,3 +175,71 @@ cloud.post("/engine/projects/:id/cloud-sync", async (c) => {
 cloud.get("/engine/projects/:id/cloud-sync", (c) =>
   c.json(lastSyncResult(c.req.param("id")) ?? { at: null, ok: null }),
 );
+
+// --- Discussions (M12) ------------------------------------------------------
+// Local reads/writes only — sync happens via pushProjectSnapshot (up) and
+// pullProjectDiscussions (down, sync/loop.ts), not directly from these routes.
+
+type LocalDiscussion = {
+  id: string;
+  project_id: string;
+  parent_node_type: string;
+  parent_node_id: string;
+  author: string;
+  body: string;
+  source: string;
+  updated_at: string;
+};
+
+cloud.get("/engine/projects/:id/discussions", (c) => {
+  const projectId = c.req.param("id");
+  const parentNodeType = c.req.query("parentNodeType");
+  const parentNodeId = c.req.query("parentNodeId");
+
+  let query = "SELECT id, project_id, parent_node_type, parent_node_id, author, body, source, updated_at FROM discussions WHERE project_id = ? AND deleted_at IS NULL";
+  const params: string[] = [projectId];
+  if (parentNodeType && parentNodeId) {
+    query += " AND parent_node_type = ? AND parent_node_id = ?";
+    params.push(parentNodeType, parentNodeId);
+  }
+  query += " ORDER BY updated_at ASC";
+
+  const rows = db.prepare(query).all(...params) as LocalDiscussion[];
+  return c.json({ discussions: rows });
+});
+
+cloud.post("/engine/projects/:id/discussions", async (c) => {
+  const projectId = c.req.param("id");
+  const project = db.prepare("SELECT id FROM projects WHERE id = ?").get(projectId);
+  if (!project) return c.json({ error: "project not found" }, 404);
+
+  const body = await c.req.json<{
+    parentNodeType?: string;
+    parentNodeId?: string;
+    body?: string;
+  }>();
+  if (!body.parentNodeType?.trim() || !body.parentNodeId?.trim() || !body.body?.trim()) {
+    return c.json({ error: "parentNodeType, parentNodeId, and body are required" }, 400);
+  }
+
+  // Desktop is single-user per install; the "author" identity is whichever
+  // cloud user this install is logged in as (same identity pushed graph
+  // data is implicitly attributed to), or a placeholder when unlinked.
+  const author = loadCloudSession()?.userId ?? "local";
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO discussions (id, project_id, parent_node_type, parent_node_id, author, body, source)
+     VALUES (?, ?, ?, ?, ?, ?, 'pz')`,
+  ).run(id, projectId, body.parentNodeType.trim(), body.parentNodeId.trim(), author, body.body.trim());
+
+  // Push immediately rather than waiting for the next interval tick —
+  // comments should feel synchronous, not delayed up to CLOUD_SYNC_POLL_SECONDS.
+  await pushProjectSnapshot(projectId).catch(() => {});
+
+  const created = db
+    .prepare(
+      "SELECT id, project_id, parent_node_type, parent_node_id, author, body, source, updated_at FROM discussions WHERE id = ?",
+    )
+    .get(id) as LocalDiscussion;
+  return c.json(created, 201);
+});

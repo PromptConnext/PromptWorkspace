@@ -21,11 +21,14 @@ from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.integrations import get_adapter, list_providers
 from app.models.schemas import (
+    Discussion,
     GraphUpsertRequest,
     TaskLink,
     Workspace,
     utcnow,
 )
+from app.rag.queue import EmbedJob, enqueue
+from app.rag.source import RAG_NODE_TYPES
 
 logger = logging.getLogger("promptzone.integrations")
 router = APIRouter(tags=["integrations"])
@@ -178,6 +181,16 @@ async def tracker_webhook(
         raise HTTPException(status_code=401, detail="invalid_signature")
 
     payload = await request.json()
+
+    # Comments (M12) are a different shape from field updates — routed
+    # separately, not through handle_webhook()/InboundUpdate. Optional: only
+    # Jira implements this today (see TrackerAdapter's docstring note).
+    parse_comment = getattr(adapter, "parse_comment_webhook", None)
+    comment = parse_comment(payload, {}) if parse_comment else None
+    if comment is not None:
+        applied = _apply_inbound_comment(request.app, repo, provider, comment)
+        return {"received": 1, "applied": applied}
+
     updates = adapter.handle_webhook(payload, {})  # config not needed for parse
     applied = 0
     for update in updates:
@@ -200,6 +213,35 @@ async def tracker_webhook(
         )
         applied += 1
     return {"received": len(updates), "applied": applied}
+
+
+def _apply_inbound_comment(app, repo: Repository, provider: str, comment) -> int:
+    link = repo.find_task_link_by_key(provider, comment.external_key)
+    if link is None:
+        return 0
+    task = repo.get_task(link.project_id, link.task_id)
+    project = repo.get_project(link.project_id)
+    if task is None or project is None:
+        return 0
+
+    # Deterministic id: re-delivery of the same webhook (Jira retries on a
+    # non-2xx, or a "created" followed by an "updated") upserts the same row
+    # rather than creating duplicates.
+    discussion = Discussion(
+        id=f"{provider}-comment-{comment.comment_id}",
+        project_id=link.project_id,
+        parent_node_type="tasks",
+        parent_node_id=link.task_id,
+        author=comment.author,
+        body=comment.body,
+        source="pmo",
+    )
+    repo.upsert_graph(
+        link.project_id, GraphUpsertRequest(discussions=[discussion]), source="pmo"
+    )
+    if "discussions" in RAG_NODE_TYPES:
+        enqueue(app, EmbedJob(project.workspace_id, link.project_id, "discussions", discussion.id))
+    return 1
 
 
 @router.get("/integrations/providers")

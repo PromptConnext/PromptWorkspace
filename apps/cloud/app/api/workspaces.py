@@ -64,7 +64,10 @@ def update_workspace(
 ) -> Workspace:
     require_admin(repo, workspace_id, user)
     return repo.update_workspace(
-        workspace_id, name=body.name, git_config=body.git_config
+        workspace_id,
+        name=body.name,
+        git_config=body.git_config,
+        rag_index_pmo_discussions=body.rag_index_pmo_discussions,
     )
 
 
