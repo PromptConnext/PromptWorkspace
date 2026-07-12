@@ -22,6 +22,7 @@ from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    CodeChunkHit,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -29,6 +30,7 @@ from app.models.schemas import (
     ModelConnection,
     Project,
     ProjectGraph,
+    PullRequest,
     RagChunkHit,
     Role,
     Task,
@@ -53,6 +55,9 @@ _TASK_LINKS = "pz_task_links"
 _MODEL_CONNECTIONS = "pz_workspace_model_connections"
 _RAG_CHUNKS = "pz_rag_chunks"
 _RAG_MATCH_RPC = "pz_rag_match_chunks"
+_PULL_REQUESTS = "pz_pull_requests"
+_CODE_CHUNKS = "pz_code_chunks"
+_CODE_MATCH_RPC = "pz_code_match_chunks"
 
 
 class SupabaseRepository(Repository):
@@ -131,6 +136,17 @@ class SupabaseRepository(Repository):
         if ws is None:
             raise KeyError(workspace_id)
         return ws
+
+    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
+        res = (
+            self._client.table(_WORKSPACES)
+            .select("*")
+            .filter("integration_config->github->>repo", "eq", repo)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return Workspace(**rows[0]) if rows else None
 
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None:
         res = (
@@ -328,7 +344,20 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Task(**rows[0]) if rows else None
 
-    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+    def get_node(
+        self, project_id: str, node_type: str, node_id: str
+    ) -> GraphEntity | PullRequest | None:
+        if node_type == "pull_requests":
+            res = (
+                self._client.table(_PULL_REQUESTS)
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("id", node_id)
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            return PullRequest(**rows[0]) if rows else None
         model = ENTITY_TYPES[node_type]
         res = (
             self._client.table(_TABLE[node_type])
@@ -489,6 +518,79 @@ class SupabaseRepository(Repository):
             },
         ).execute()
         return [RagChunkHit(**row) for row in (res.data or [])]
+
+    # -- Git-host integration (M11) ---------------------------------------- #
+    def upsert_pull_request(self, pr: PullRequest) -> PullRequest:
+        self._client.table(_PULL_REQUESTS).upsert(
+            _dump(pr), on_conflict="id", returning="minimal"
+        ).execute()
+        return pr
+
+    def upsert_code_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        repo: str,
+        path: str,
+        sha: str,
+        line_ranges: list[tuple[int, int]],
+        embeddings: list[list[float]],
+    ) -> None:
+        # Replace wholesale, same rationale as upsert_rag_chunks: a shrinking
+        # file shouldn't leave stale trailing chunks, and a new `sha`
+        # supersedes the old one for this path.
+        self._client.table(_CODE_CHUNKS).delete().eq("project_id", project_id).eq(
+            "repo", repo
+        ).eq("path", path).execute()
+        if not line_ranges:
+            return
+        rows = [
+            {
+                "workspace_id": workspace_id,
+                "project_id": project_id,
+                "repo": repo,
+                "path": path,
+                "sha": sha,
+                "start_line": start,
+                "end_line": end,
+                "chunk_index": idx,
+                "embedding": embedding,
+                "updated_at": utcnow().isoformat(),
+            }
+            for idx, ((start, end), embedding) in enumerate(
+                zip(line_ranges, embeddings, strict=True)
+            )
+        ]
+        self._client.table(_CODE_CHUNKS).insert(rows, returning="minimal").execute()
+
+    def delete_code_chunks_for_path(self, project_id: str, repo: str, path: str) -> int:
+        res = (
+            self._client.table(_CODE_CHUNKS)
+            .delete()
+            .eq("project_id", project_id)
+            .eq("repo", repo)
+            .eq("path", path)
+            .execute()
+        )
+        return len(res.data or [])
+
+    def code_vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[CodeChunkHit]:
+        res = self._client.rpc(
+            _CODE_MATCH_RPC,
+            {
+                "p_workspace_id": workspace_id,
+                "p_project_id": project_id,
+                "p_query_embedding": query_embedding,
+                "p_match_count": top_k,
+            },
+        ).execute()
+        return [CodeChunkHit(**row) for row in (res.data or [])]
 
 
 def _dump(model) -> dict:

@@ -18,6 +18,8 @@ from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    CodeChunk,
+    CodeChunkHit,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -25,6 +27,7 @@ from app.models.schemas import (
     ModelConnection,
     Project,
     ProjectGraph,
+    PullRequest,
     RagChunk,
     RagChunkHit,
     Role,
@@ -60,6 +63,13 @@ class Repository(abc.ABC):
         git_config: dict | None = None,
         integration_config: dict | None = None,
     ) -> Workspace: ...
+
+    @abc.abstractmethod
+    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
+        """Resolve an inbound GitHub webhook (no caller identity, just a
+        `repository.full_name`) to the workspace whose install config names
+        this repo (M11). v1 keeps this a one-repo-per-workspace mapping —
+        see app/api/github.py."""
 
     @abc.abstractmethod
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None: ...
@@ -126,10 +136,15 @@ class Repository(abc.ABC):
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
 
     @abc.abstractmethod
-    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+    def get_node(
+        self, project_id: str, node_type: str, node_id: str
+    ) -> GraphEntity | PullRequest | None:
         """Fetch any graph entity by (project, type, id) — used by the RAG
         embed worker, which handles requirements/spec_documents/tasks
-        uniformly (M9)."""
+        uniformly (M9). Also handles node_type="pull_requests" (M11), which
+        isn't a GraphEntity (GitHub is the source of truth for it, not a
+        pz/pmo merge), but still exposes `deleted_at` for the worker's
+        tombstone check."""
 
     # -- external-tracker links (M5) -------------------------------------- #
     @abc.abstractmethod
@@ -195,6 +210,45 @@ class Repository(abc.ABC):
         project_id) — membership scoping happens before similarity, per
         ADR 0011."""
 
+    # -- Git-host integration (M11) ---------------------------------------- #
+    @abc.abstractmethod
+    def upsert_pull_request(self, pr: PullRequest) -> PullRequest:
+        """Keyed by pr.id (deterministic: f"pr-{project_id}-{number}") —
+        idempotent across repeated webhook deliveries and PR state
+        transitions (opened -> merged)."""
+
+    @abc.abstractmethod
+    def upsert_code_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        repo: str,
+        path: str,
+        sha: str,
+        line_ranges: list[tuple[int, int]],
+        embeddings: list[list[float]],
+    ) -> None:
+        """Replace all stored chunks for one (repo, path) — wholesale, so a
+        shrinking file doesn't leave stale trailing chunks, and re-embedding
+        at a new `sha` supersedes the old one. Deliberately takes no chunk
+        text parameter — only line ranges and their embeddings ever reach
+        storage (ADR 0011: no source code at rest)."""
+
+    @abc.abstractmethod
+    def delete_code_chunks_for_path(self, project_id: str, repo: str, path: str) -> int:
+        """Called for files a push removed."""
+
+    @abc.abstractmethod
+    def code_vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[CodeChunkHit]:
+        """Same membership-scoping-before-similarity contract as
+        `vector_search`, over the separate no-content code index."""
+
 
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
@@ -216,6 +270,10 @@ class InMemoryRepository(Repository):
         self._model_connections: dict[str, ModelConnection] = {}
         # project_id -> node_id -> chunk_index -> RagChunk (M9)
         self._rag_chunks: dict[str, dict[str, dict[int, RagChunk]]] = {}
+        # project_id -> pr_id -> PullRequest (M11)
+        self._pull_requests: dict[str, dict[str, PullRequest]] = {}
+        # project_id -> (repo, path) -> chunk_index -> CodeChunk (M11)
+        self._code_chunks: dict[str, dict[tuple[str, str], dict[int, CodeChunk]]] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(self, name: str, created_by: str) -> Workspace:
@@ -252,6 +310,12 @@ class InMemoryRepository(Repository):
             ws.integration_config = integration_config
         ws.updated_at = utcnow()
         return ws
+
+    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
+        for ws in self._workspaces.values():
+            if (ws.integration_config or {}).get("github", {}).get("repo") == repo:
+                return ws
+        return None
 
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None:
         member = self._members.get(workspace_id, {}).get(user_id)
@@ -414,7 +478,12 @@ class InMemoryRepository(Repository):
         task = store["tasks"].get(task_id)
         return copy.deepcopy(task) if task else None
 
-    def get_node(self, project_id: str, node_type: str, node_id: str) -> GraphEntity | None:
+    def get_node(
+        self, project_id: str, node_type: str, node_id: str
+    ) -> GraphEntity | PullRequest | None:
+        if node_type == "pull_requests":
+            pr = self._pull_requests.get(project_id, {}).get(node_id)
+            return copy.deepcopy(pr) if pr else None
         store = self._graph.get(project_id)
         if not store:
             return None
@@ -541,6 +610,66 @@ class InMemoryRepository(Repository):
                 chunk_index=c.chunk_index,
                 content=c.content,
                 score=score,
+            )
+            for score, c in scored[:top_k]
+        ]
+
+    # -- Git-host integration (M11) ---------------------------------------- #
+    def upsert_pull_request(self, pr: PullRequest) -> PullRequest:
+        self._pull_requests.setdefault(pr.project_id, {})[pr.id] = pr
+        return pr
+
+    def upsert_code_chunks(
+        self,
+        workspace_id: str,
+        project_id: str,
+        repo: str,
+        path: str,
+        sha: str,
+        line_ranges: list[tuple[int, int]],
+        embeddings: list[list[float]],
+    ) -> None:
+        project_store = self._code_chunks.setdefault(project_id, {})
+        project_store[(repo, path)] = {
+            idx: CodeChunk(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                repo=repo,
+                path=path,
+                sha=sha,
+                start_line=start,
+                end_line=end,
+                chunk_index=idx,
+                embedding=embedding,
+            )
+            for idx, ((start, end), embedding) in enumerate(
+                zip(line_ranges, embeddings, strict=True)
+            )
+        }
+
+    def delete_code_chunks_for_path(self, project_id: str, repo: str, path: str) -> int:
+        project_store = self._code_chunks.get(project_id, {})
+        popped = project_store.pop((repo, path), None)
+        return len(popped) if popped else 0
+
+    def code_vector_search(
+        self,
+        workspace_id: str,
+        project_id: str,
+        query_embedding: list[float],
+        top_k: int = 8,
+    ) -> list[CodeChunkHit]:
+        scored: list[tuple[float, CodeChunk]] = []
+        for chunks_by_index in self._code_chunks.get(project_id, {}).values():
+            for c in chunks_by_index.values():
+                if c.workspace_id != workspace_id or c.project_id != project_id:
+                    continue
+                scored.append((_cosine(c.embedding, query_embedding), c))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [
+            CodeChunkHit(
+                repo=c.repo, path=c.path, sha=c.sha,
+                start_line=c.start_line, end_line=c.end_line, score=score,
             )
             for score, c in scored[:top_k]
         ]

@@ -23,6 +23,7 @@ from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
+    ENTITY_TYPES,
     ChangesHead,
     GraphUpsertRequest,
     GraphUpsertResponse,
@@ -92,7 +93,13 @@ def push_graph(
     )
     # Embed-on-ingest (M9): enqueue only, never block this push on a model
     # call. The worker skips nodes whose workspace has no model connection.
-    for node_type in RAG_NODE_TYPES:
+    # Only entity types that are both syncable (ENTITY_TYPES, i.e. actual
+    # GraphUpsertRequest fields) and RAG-indexable (RAG_NODE_TYPES) apply —
+    # RAG_NODE_TYPES also carries types with no sync-payload field at all
+    # (M11's "pull_requests", indexed from a GitHub webhook, not a push).
+    for node_type in ENTITY_TYPES:
+        if node_type not in RAG_NODE_TYPES:
+            continue
         for item in getattr(payload, node_type):
             enqueue(
                 request.app,

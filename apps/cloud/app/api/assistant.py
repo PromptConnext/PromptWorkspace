@@ -16,6 +16,13 @@ questions use the M9 vector-search path; mixed questions use both. The graph
 walk's facts are exact by construction — sent to the client as their own
 `facts` SSE event, ahead of the model's narration, so status/progress
 questions carry data a test can assert on directly.
+
+Code retrieval (M11): a content/mixed question also runs `code_vector_search`
+against the same query embedding (no separate per-workspace code-embedding
+model in v1). Unlike every other hit type, a code hit's `content` is never
+stored — the matching line range is fetched fresh from GitHub for this
+request only, using a freshly-minted installation token, and discarded once
+the answer streams (ADR 0011: no source code at rest).
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     ChatRequest,
     Citation,
+    CodeChunkHit,
     LineageFacts,
     ModelConnectionCreate,
     ModelConnectionOut,
@@ -98,6 +106,13 @@ def reindex_project(
     graph = repo.get_graph(project_id)  # bootstrap pull: live rows only
     enqueued = 0
     for node_type in RAG_NODE_TYPES:
+        if node_type == "pull_requests":
+            # Not a GraphEntity — PullRequest rows aren't part of
+            # ProjectGraph (GitHub is their source of truth, not sync), and
+            # they're indexed the moment their webhook arrives (M11). No
+            # backfill scenario exists for them the way there is for
+            # requirements/specs/tasks that pre-date RAG.
+            continue
         for item in getattr(graph, node_type):
             enqueue(request.app, EmbedJob(project.workspace_id, project_id, node_type, item.id))
             enqueued += 1
@@ -143,13 +158,19 @@ async def chat(
             )
 
     hits: list = []
+    code_hits: list[CodeChunkHit] = []
     if classification in ("content", "mixed"):
         [query_embedding] = await embedder.embed(
             [body.question], conn.embed_model, api_key, conn.base_url
         )
         hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
+        code_hits = repo.code_vector_search(
+            project.workspace_id, project_id, query_embedding, top_k=8
+        )
 
-    context = _assemble_context(facts, hits)
+    code_snippets, code_citations = await _fetch_code_context(request.app, repo, project, code_hits)
+
+    context = _assemble_context(facts, hits, code_snippets)
 
     async def stream():
         if facts is not None:
@@ -172,6 +193,7 @@ async def chat(
             ).model_dump()
             for h in hits
         ]
+        citations.extend(c.model_dump() for c in code_citations)
         if facts_citation is not None:
             citations.append(facts_citation.model_dump())
         yield f"event: citations\ndata: {json.dumps({'citations': citations})}\n\n"
@@ -179,7 +201,57 @@ async def chat(
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
-def _assemble_context(facts: LineageFacts | None, hits: list) -> str:
+async def _fetch_code_context(
+    app, repo: Repository, project, code_hits: list[CodeChunkHit]
+) -> tuple[list[str], list[Citation]]:
+    """Fetch-on-demand: mint an installation token and pull just the matched
+    line range fresh from GitHub for *this request only*. The fetched text
+    (`full`, `snippet`) never reaches any repository write — it's a local
+    variable that goes out of scope when this function returns (ADR 0011: no
+    source code at rest). Silently yields nothing if GitHub isn't configured
+    for this workspace — a content question must still work without it.
+    """
+    if not code_hits:
+        return [], []
+    workspace = repo.get_workspace(project.workspace_id)
+    github_config = (workspace.integration_config or {}).get("github") if workspace else None
+    settings = app.state.settings
+    if not github_config or not (settings.github_app_id and settings.github_app_private_key):
+        return [], []
+
+    github_client = app.state.github_client
+    token = await github_client.mint_installation_token(
+        settings.github_app_id, settings.github_app_private_key, github_config["installation_id"]
+    )
+
+    snippets: list[str] = []
+    citations: list[Citation] = []
+    fetched: dict[tuple[str, str, str], str] = {}
+    for hit in code_hits:
+        key = (hit.repo, hit.path, hit.sha)
+        if key not in fetched:
+            fetched[key] = await github_client.fetch_file_content(
+                token, hit.repo, hit.path, hit.sha
+            )
+        full = fetched[key]
+        snippet = "\n".join(full.splitlines()[hit.start_line - 1 : hit.end_line])
+        snippets.append(f"[code:{hit.repo}/{hit.path}#L{hit.start_line}-L{hit.end_line}]\n{snippet}")
+        citations.append(
+            Citation(
+                node_type="code",
+                node_id=f"{hit.repo}:{hit.path}",
+                chunk_index=0,
+                source="code",
+                repo=hit.repo,
+                path=hit.path,
+                start_line=hit.start_line,
+                end_line=hit.end_line,
+            )
+        )
+    return snippets, citations
+
+
+def _assemble_context(facts: LineageFacts | None, hits: list, code_snippets: list[str]) -> str:
     parts = []
     if facts is not None:
         parts.append(f"GRAPH FACTS (exact, from the project graph):\n{facts_to_text(facts)}")
@@ -187,6 +259,8 @@ def _assemble_context(facts: LineageFacts | None, hits: list) -> str:
         parts.append(
             "\n\n".join(f"[{h.node_type}:{h.node_id}#{h.chunk_index}]\n{h.content}" for h in hits)
         )
+    if code_snippets:
+        parts.append("\n\n".join(code_snippets))
     if not parts:
         return "(no matching project artifacts found)"
     return "\n\n".join(parts)

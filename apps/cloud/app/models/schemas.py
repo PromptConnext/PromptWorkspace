@@ -425,8 +425,14 @@ class Citation(BaseModel):
     chunk_index: int
     # "vector" — a retrieved embedding chunk (M9). "graph" — a whole-node
     # reference from an exact graph walk (M10); chunk_index is meaningless
-    # for these and is always 0.
-    source: Literal["vector", "graph"] = "vector"
+    # for these and is always 0. "code" — a fetch-on-demand code chunk (M11);
+    # repo/path/start_line/end_line let the client link to the Git host —
+    # the code itself was never persisted (ADR 0011: no source at rest).
+    source: Literal["vector", "graph", "code"] = "vector"
+    repo: str | None = None
+    path: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
 
 
 class ChatRequest(BaseModel):
@@ -458,3 +464,68 @@ class LineageFacts(BaseModel):
     task_status_counts: dict[str, int] = Field(default_factory=dict)
     artifacts_total: int = 0
     agent_runs: list[LineageAgentRun] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Git-host integration (M11) — PRs indexed as text, code indexed as
+# embeddings + refs only (ADR 0011: no source code at rest).
+# --------------------------------------------------------------------------- #
+class GithubInstallRequest(BaseModel):
+    """Admin-supplied, after completing the GitHub App install flow on
+    GitHub's own site (external, one-time — same posture as generating a
+    Jira API token today; no OAuth redirect handling lives in this repo).
+    v1 is one-repo-per-workspace: `project_id` says which project this repo's
+    PRs/code index into."""
+
+    installation_id: str
+    repo: str  # "owner/name"
+    default_branch: str = "main"
+    project_id: str
+
+
+class PullRequest(BaseModel):
+    """GitHub is the source of truth for this data — unlike GraphEntity rows,
+    there's no pz/pmo merge semantics or tombstone lifecycle here, just an
+    upsert keyed by (project_id, number) driven entirely by webhook events."""
+
+    id: str
+    project_id: str
+    number: int
+    title: str
+    body: str = ""
+    html_url: str
+    head_sha: str
+    task_id: str | None = None  # resolved via the T-ref commit convention
+    merged: bool = False
+    # Always None in v1 — no PR-deletion webhook is handled — but present so
+    # the embed worker's duck-typed tombstone check (`node.deleted_at`,
+    # shared with every other node_type) works unmodified for this one too.
+    deleted_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CodeChunk(BaseModel):
+    """No `content` field — by construction, not by omission. The embedding
+    is computed from code fetched transiently at index time (app/rag/queue.py);
+    only the reference survives. Answer-time context re-fetches the same
+    range fresh via the Git host (app/api/assistant.py)."""
+
+    workspace_id: str
+    project_id: str
+    repo: str
+    path: str
+    sha: str
+    start_line: int
+    end_line: int
+    chunk_index: int
+    embedding: list[float]
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CodeChunkHit(BaseModel):
+    repo: str
+    path: str
+    sha: str
+    start_line: int
+    end_line: int
+    score: float

@@ -15,9 +15,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import assistant, health, integrations, presence, sync, workspaces
+from app.api import assistant, github, health, integrations, presence, sync, workspaces
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
+from app.integrations.github import HttpGithubClient
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
 from app.rag.embedder import HttpEmbeddingProvider
@@ -91,6 +92,9 @@ async def lifespan(app: FastAPI):
     app.state.embedding_provider = HttpEmbeddingProvider()
     app.state.chat_provider = HttpChatProvider()
     app.state.token_budget = DailyTokenBudget()
+    # Git-host integration (M11): one client instance, same wiring pattern —
+    # tests override app.state.github_client with FakeGithubClient.
+    app.state.github_client = HttpGithubClient()
     logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,
@@ -134,6 +138,12 @@ def create_app() -> FastAPI:
         )
     app.include_router(health.router)
     app.include_router(workspaces.router)
+    # github.router's static /api/webhooks/github must be registered before
+    # integrations.router's /api/webhooks/{provider} — Starlette matches
+    # routes in registration order, and the dynamic path param would
+    # otherwise swallow the static one first (get_adapter("github") is None
+    # -> a wrong 404, never reaching this router's own signature check).
+    app.include_router(github.router)
     app.include_router(integrations.router)
     app.include_router(presence.router)
     app.include_router(sync.router)

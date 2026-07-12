@@ -235,6 +235,66 @@ pytest -m eval -q
 ```
 It's also part of the normal `pytest -q` run — no separate CI wiring needed.
 
+### Git-host integration (M11)
+
+PRs and code, without storing source code at rest (ADR 0011's "no source code
+→ no source code *at rest*" amendment). One GitHub App is shared across all
+workspaces — server-env credentials (`GITHUB_APP_ID`,
+`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`), same posture as
+`JIRA_API_TOKEN`. No installation access token is ever stored: one is minted
+on demand (`app/integrations/github.py`, RS256 App JWT → GitHub's
+installation-token endpoint) per use and discarded.
+
+| Method | Path | Guard |
+|---|---|---|
+| POST | `/workspaces/{id}/integrations/github/install` | admin — non-secret config (`installation_id`, `repo`, `default_branch`, `project_id`) |
+| POST | `/api/webhooks/github` | public, HMAC-signature-verified (`X-Hub-Signature-256`) |
+
+v1 is one-repo-per-workspace; the admin completes the App install on
+GitHub's own site first (external, one-time — no OAuth redirect handling
+lives in this repo, same posture as generating a Jira API token today) and
+supplies the resulting `installation_id`.
+
+**PRs** are a different data class from code — ADR 0011 explicitly names PR
+title/description as an indexable v2 source, not source code. A
+`pull_request` webhook (opened/merged) resolves task linkage via the same
+T-ref commit convention `apps/engine`'s `syncTasksFromGit` already uses
+(`\bT\d{3}\b` matched against a task's `feature_tag`); a match creates a real
+`Artifact` (`kind="pr"`, so it shows up in the existing graph) and enqueues
+the PR text through the same M9 embed pipeline (`RAG_NODE_TYPES` gained
+`"pull_requests"`). A PR with no matching task is skipped entirely, mirroring
+`syncTasksFromGit`'s own behavior. `RAG_NODE_TYPES` staying extensible (M10's
+design) is why this only required an additive `node_text()` branch.
+
+**Code** gets its own table (`pz_code_chunks`) with **no `content` column, by
+construction** — only `(repo, path, sha, start_line, end_line, embedding)`.
+A `push` webhook to the default branch enqueues one job per changed file onto
+the same off-request-path queue M9 already uses for embeddings (fetching a
+file is exactly the kind of external call that must never block a webhook
+response); the worker fetches the file, chunks it by line
+(`app/rag/code_chunker.py` — line ranges, not `app/rag/chunker.py`'s word
+count, since citations need to link to an exact location), embeds each
+chunk, and stores only the reference + embedding. The fetched text is a
+local variable that goes out of scope at the end of that one function —
+never passed to any repository write. Removed files get their chunks
+deleted directly (no fetch needed).
+
+At answer time, a content/mixed chat question also runs
+`code_vector_search` (same query embedding, no separate per-workspace code
+model in v1). For each hit, `app/api/assistant.py::_fetch_code_context`
+mints a fresh installation token and re-fetches just that line range from
+GitHub — used to build the model's context for that one request, then
+discarded. `Citation.source` gains `"code"`, with `repo`/`path`/
+`start_line`/`end_line` so the web UI can link straight to the Git host
+(`https://github.com/{repo}/blob/{sha}/{path}#L{start}-L{end}`).
+
+`tests/test_github_storage_posture.py` is the automated proof of "no source
+code at rest": it runs a full index + chat cycle against a fake Git-host
+client returning distinctive fake source text, then deep-scans every string
+reachable from the repository's own state and asserts that text is nowhere
+in it — not just that today's schema lacks a `content` column, but that
+nothing in the actual data flow ever writes one.
+
 ## Scaling
 
 State that is **in-process today** (single instance): presence rooms,
@@ -258,6 +318,7 @@ Apply in order; each is additive and backward-compatible:
 | `0007_membership_bootstrap.sql` | fixes a bootstrap deadlock in the membership RLS policy |
 | `0008_invitations_rls.sql` | enables RLS on `pz_invitations` (previously missing entirely) + invite-acceptance RLS fix |
 | `0009_rag.sql` | `pgvector` extension, `pz_workspace_model_connections`, `pz_rag_chunks`, `pz_rag_match_chunks` RPC (M9) |
+| `0010_github.sql` | `pz_pull_requests`, `pz_code_chunks` (no `content` column), `pz_code_match_chunks` RPC (M11) |
 
 **0006–0008 were found by actually running `apps/cloud` against a real local
 Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`

@@ -1,4 +1,4 @@
-"""In-process embed-on-ingest queue + background worker (M9).
+"""In-process embed-on-ingest queue + background worker (M9, extended M11).
 
 The sync upsert path (app/api/sync.py) only calls `enqueue()` — a non-blocking
 put — never the embedding call itself. `embed_worker_loop` (started in
@@ -11,6 +11,11 @@ sync must keep working without it.
 worker thread — `asyncio.Queue` is not thread-safe across threads, so the put
 is marshalled onto the event-loop thread via `call_soon_threadsafe` rather
 than called directly.
+
+M11 reuses this same off-request-path queue for code files: fetching a file
+from GitHub is exactly the kind of external call that must never block a
+webhook response, the same reasoning that already applies to the embedding
+call itself.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.rag.chunker import chunk_text
+from app.rag.code_chunker import chunk_code
 from app.rag.source import node_text
 
 logger = logging.getLogger("promptzone.rag")
@@ -32,6 +38,13 @@ class EmbedJob:
     project_id: str
     node_type: str
     node_id: str
+    # Only set when node_type == "code_file" (M11) — code isn't fetched via
+    # get_node()/node_text() like every other node_type, since the fetched
+    # content must never be persisted (ADR 0011: no source at rest), only
+    # used transiently within this one job.
+    repo: str | None = None
+    path: str | None = None
+    sha: str | None = None
 
 
 class EmbedQueue:
@@ -71,6 +84,10 @@ async def embed_worker_loop(app: Any) -> None:
 
 
 async def _process_job(app: Any, job: EmbedJob) -> None:
+    if job.node_type == "code_file":
+        await _process_code_file_job(app, job)
+        return
+
     repo = app.state.repository
     conn = repo.get_model_connection(job.workspace_id)
     if conn is None:
@@ -94,4 +111,47 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
     vectors = await embedder.embed(chunks, conn.embed_model, api_key, conn.base_url)
     repo.upsert_rag_chunks(
         job.workspace_id, job.project_id, job.node_type, job.node_id, chunks, vectors
+    )
+
+
+async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
+    """Fetch, chunk, embed, store refs — the fetched content (`content`,
+    `texts` below) never leaves this function; only line ranges and
+    embeddings reach `upsert_code_chunks` (ADR 0011: no source at rest)."""
+    repo = app.state.repository
+    conn = repo.get_model_connection(job.workspace_id)
+    if conn is None:
+        logger.info("skip code embed: no model connection workspace=%s", job.workspace_id)
+        return
+
+    settings = app.state.settings
+    if not (settings.github_app_id and settings.github_app_private_key):
+        logger.warning("skip code embed: github app not configured")
+        return
+
+    workspace = repo.get_workspace(job.workspace_id)
+    github_config = (workspace.integration_config or {}).get("github") if workspace else None
+    if not github_config:
+        logger.info("skip code embed: github not installed for workspace=%s", job.workspace_id)
+        return
+
+    github_client = app.state.github_client
+    token = await github_client.mint_installation_token(
+        settings.github_app_id, settings.github_app_private_key, github_config["installation_id"]
+    )
+    content = await github_client.fetch_file_content(token, job.repo, job.path, job.sha)
+    chunks = chunk_code(content)
+    if not chunks:
+        repo.delete_code_chunks_for_path(job.project_id, job.repo, job.path)
+        return
+
+    texts = [c[0] for c in chunks]
+    line_ranges = [(c[1], c[2]) for c in chunks]
+
+    secret_store = app.state.secret_store
+    api_key = secret_store.decrypt(conn.secret_ref)
+    embedder = app.state.embedding_provider
+    vectors = await embedder.embed(texts, conn.embed_model, api_key, conn.base_url)
+    repo.upsert_code_chunks(
+        job.workspace_id, job.project_id, job.repo, job.path, job.sha, line_ranges, vectors
     )

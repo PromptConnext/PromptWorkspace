@@ -83,6 +83,7 @@ Production values:
 | `TOMBSTONE_GC_INTERVAL_SECONDS` | `3600` | |
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_WEBHOOK_SECRET` | as needed | Only if the Jira/ClickUp mirror (M5) is in use |
 | `RAG_KEY_ENCRYPTION_KEY` | Fernet key | Required before any workspace configures a model connection (M9 RAG assistant); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, `POST /workspaces/{id}/model-connection` fails closed rather than storing a plaintext key. |
+| `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_WEBHOOK_SECRET` | as needed | Only if the Git-host integration (M11) is in use — one GitHub App shared across all workspaces, same posture as the Jira credentials above. No installation access token is ever stored. |
 
 Railway injects `PORT` automatically; the Dockerfile already honors it.
 
