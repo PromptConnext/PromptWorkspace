@@ -30,7 +30,24 @@ jobs:
           workspaces: apps/desktop/src-tauri
       - run: pnpm install --frozen-lockfile
       - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        id: tauri
         with:
           projectPath: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload bundles to Cloudflare R2
+        shell: bash # Git Bash on Windows runners; native on macOS
+        run: |
+          set -euo pipefail
+          for f in ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), ' ') }}; do
+            echo "Uploading $f"
+            aws s3 cp "$f" "s3://$R2_BUCKET/desktop/$REF_NAME/" \
+              --endpoint-url "$R2_ENDPOINT"
+          done
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }} # https://<accountid>.r2.cloudflarestorage.com
+          REF_NAME: ${{ github.ref_name }} # via env to avoid run-command injection
