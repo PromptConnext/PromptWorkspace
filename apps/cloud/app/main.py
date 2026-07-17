@@ -15,7 +15,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import assistant, discussions, github, health, integrations, presence, sync, workspaces
+from app.api import (
+    assistant,
+    desktop_auth,
+    discussions,
+    github,
+    health,
+    integrations,
+    presence,
+    sync,
+    workspaces,
+)
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.integrations.github import HttpGithubClient
@@ -80,6 +90,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
     app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)
+    from app.desktop_auth_store import HandoffStore
+
+    app.state.handoff_store = HandoffStore()
     app.state.schema_version = _schema_version()
     # Lightweight in-process counters surfaced on /health (M7 observability).
     app.state.metrics = {"pushed": 0, "pulled": 0, "merged": 0, "conflicts": 0}
@@ -149,6 +162,7 @@ def create_app() -> FastAPI:
     app.include_router(sync.router)
     app.include_router(assistant.router)
     app.include_router(discussions.router)
+    app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])
     def root() -> dict:
