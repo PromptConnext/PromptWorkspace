@@ -43,6 +43,7 @@ jobs:
           # Windows backslash paths survive (inline expression expansion would eat
           # backslashes as shell escapes). Env indirection also blocks injection.
           echo "$ARTIFACTS" | jq -r '.[]' | while IFS= read -r f; do
+            f="${f%$'\r'}"                                # strip Windows CR (CRLF output)
             [ -z "$f" ] && continue
             f="${f%/}"                                    # drop any trailing slash
             base=$(printf '%s' "$f" | sed 's#.*[\\/]##')  # strip dir, fwd or backslash
