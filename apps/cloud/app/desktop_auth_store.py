@@ -28,8 +28,10 @@ class HandoffStore:
         self._items: dict[str, tuple[float, HandoffSession]] = {}
 
     def put(self, refresh_token: str, access_token: str, user_id: str) -> str:
+        now = self._clock()
+        self._items = {c: v for c, v in self._items.items() if v[0] > now}
         code = secrets.token_urlsafe(32)
-        expires_at = self._clock() + self._ttl
+        expires_at = now + self._ttl
         self._items[code] = (expires_at, HandoffSession(refresh_token, access_token, user_id))
         return code
 

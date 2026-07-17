@@ -35,7 +35,10 @@ function LoginForm() {
       // Hand the session to the cloud broker, then bounce to the desktop.
       (async () => {
         const tokens = await getSessionTokens();
-        if (!tokens) return;
+        if (!tokens) {
+          router.replace(next);
+          return;
+        }
         try {
           const { code } = await apiFetch<{ code: string }>(
             "/desktop-auth/handoff",

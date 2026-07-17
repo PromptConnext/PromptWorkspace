@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 # /changes probe both live under /sync; webhooks under /api/webhooks. Chat
 # (M9) is metered separately by cost too (app/rag/budget.py) but still counts
 # against the request-throughput bucket like every other hot path.
-_LIMITED_PREFIXES = ("/sync", "/api/webhooks")
+_LIMITED_PREFIXES = ("/sync", "/api/webhooks", "/desktop-auth")
 _LIMITED_SUFFIXES = ("/assistant/chat",)
 
 

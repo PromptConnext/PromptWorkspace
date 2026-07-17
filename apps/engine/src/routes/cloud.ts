@@ -63,6 +63,7 @@ cloud.post("/engine/cloud/login/browser", (c) => {
 });
 
 cloud.post("/engine/cloud/login/redeem", async (c) => {
+  if (!CLOUD_API_URL) return c.json({ error: "cloud sync is not configured" }, 409);
   const body = await c.req.json<{ code?: string; state?: string }>();
   if (!body.code?.trim() || !body.state?.trim()) {
     return c.json({ error: "code and state are required" }, 400);
