@@ -72,6 +72,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let dir = engine_dir(app.handle());
             let child = match spawn_engine(&token, &dir) {
