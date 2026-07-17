@@ -98,3 +98,22 @@ export async function supabasePasswordLogin(
   const ok = data as { access_token: string; user: { id: string } };
   return { token: ok.access_token, userId: ok.user.id };
 }
+
+// Exchange a one-time handoff code (from the promptconnext:// callback) for the
+// Supabase session, via apps/cloud's unauthenticated redeem endpoint (ADR 0014).
+export async function redeemDesktopCode(
+  code: string,
+): Promise<{ accessToken: string; refreshToken: string; userId: string }> {
+  if (!CLOUD_API_URL) throw new CloudNotConfiguredError();
+  const res = await fetch(`${CLOUD_API_URL}/desktop-auth/redeem`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { detail?: string }).detail ?? `redeem failed (HTTP ${res.status})`);
+  }
+  const ok = data as { access_token: string; refresh_token: string; user_id: string };
+  return { accessToken: ok.access_token, refreshToken: ok.refresh_token, userId: ok.user_id };
+}

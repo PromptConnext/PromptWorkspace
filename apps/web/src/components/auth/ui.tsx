@@ -37,10 +37,15 @@ export function AuthCard({
   );
 }
 
+// `popover` is omitted from the passthrough on purpose: the workspace resolves
+// two @types/react 19 minors (web pins 19.0.14; styled-jsx's packageExtension
+// forces 19.2.17), and only the `popover` union diverges between them. This
+// field never takes a popover attribute, so dropping it sidesteps the skew
+// without losing any capability. Remove the Omit once @types/react is unified.
 export function Field({
   label,
   ...props
-}: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+}: { label: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "popover">) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-sm font-medium text-slate-700">{label}</span>

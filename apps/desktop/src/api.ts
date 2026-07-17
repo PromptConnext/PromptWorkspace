@@ -264,8 +264,17 @@ export const getCloudConfig = () => request<CloudConfig>("/engine/cloud/config")
 
 export const getCloudSession = () => request<CloudSession>("/engine/cloud/session");
 
-export const cloudLogin = (payload: { userId?: string; email?: string; password?: string }) =>
+export const cloudLogin = (payload: { userId: string }) =>
   request<CloudSession>("/engine/cloud/login", { method: "POST", body: JSON.stringify(payload) });
+
+export const startBrowserLogin = () =>
+  request<{ url: string; state: string }>("/engine/cloud/login/browser", { method: "POST" });
+
+export const redeemBrowserLogin = (code: string, state: string) =>
+  request<CloudSession>("/engine/cloud/login/redeem", {
+    method: "POST",
+    body: JSON.stringify({ code, state }),
+  });
 
 export const cloudLogout = () =>
   request<{ ok: boolean }>("/engine/cloud/logout", { method: "POST" });

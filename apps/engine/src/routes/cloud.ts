@@ -1,14 +1,14 @@
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { db } from "../db.ts";
-import { CLOUD_API_URL } from "../config.ts";
+import { CLOUD_API_URL, CLOUD_WEB_URL } from "../config.ts";
 import {
   cloudFetch,
   cloudMode,
   clearCloudSession,
   loadCloudSession,
+  redeemDesktopCode,
   storeCloudSession,
-  supabasePasswordLogin,
 } from "../cloudClient.ts";
 import { lastSyncResult, pushProjectSnapshot } from "../sync/loop.ts";
 
@@ -33,27 +33,52 @@ cloud.get("/engine/cloud/session", (c) => {
 
 cloud.post("/engine/cloud/login", async (c) => {
   if (!CLOUD_API_URL) return c.json({ error: "cloud sync is not configured" }, 409);
-  const body = await c.req.json<{ userId?: string; email?: string; password?: string }>();
-
   if (cloudMode() === "supabase") {
-    if (!body.email?.trim() || !body.password) {
-      return c.json({ error: "email and password are required" }, 400);
-    }
-    try {
-      const { token, userId } = await supabasePasswordLogin(body.email.trim(), body.password);
-      storeCloudSession({ mode: "supabase", userId }, token);
-      return c.json({ connected: true, mode: "supabase", userId });
-    } catch (err) {
-      return c.json({ error: (err as Error).message }, 401);
-    }
+    return c.json(
+      { error: "supabase login is browser-based; call /engine/cloud/login/browser" },
+      400,
+    );
   }
-
+  const body = await c.req.json<{ userId?: string }>();
   if (!body.userId?.trim()) {
     return c.json({ error: "userId is required (cloud is running in stub auth mode)" }, 400);
   }
   const userId = body.userId.trim();
   storeCloudSession({ mode: "stub", userId });
   return c.json({ connected: true, mode: "stub", userId });
+});
+
+// One pending browser login per install (desktop is single-user, ADR 0010).
+let pendingLoginState: string | null = null;
+
+cloud.post("/engine/cloud/login/browser", (c) => {
+  if (!CLOUD_API_URL) return c.json({ error: "cloud sync is not configured" }, 409);
+  if (cloudMode() !== "supabase") {
+    return c.json({ error: "browser login is only used in supabase auth mode" }, 400);
+  }
+  const state = randomBytes(16).toString("hex");
+  pendingLoginState = state;
+  const url = `${CLOUD_WEB_URL}/login?desktop=1&state=${state}`;
+  return c.json({ url, state });
+});
+
+cloud.post("/engine/cloud/login/redeem", async (c) => {
+  if (!CLOUD_API_URL) return c.json({ error: "cloud sync is not configured" }, 409);
+  const body = await c.req.json<{ code?: string; state?: string }>();
+  if (!body.code?.trim() || !body.state?.trim()) {
+    return c.json({ error: "code and state are required" }, 400);
+  }
+  if (!pendingLoginState || body.state !== pendingLoginState) {
+    return c.json({ error: "unexpected or expired login state" }, 400);
+  }
+  pendingLoginState = null; // consume regardless of outcome
+  try {
+    const { accessToken, userId } = await redeemDesktopCode(body.code.trim());
+    storeCloudSession({ mode: "supabase", userId }, accessToken);
+    return c.json({ connected: true, mode: "supabase", userId });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 401);
+  }
 });
 
 cloud.post("/engine/cloud/logout", (c) => {

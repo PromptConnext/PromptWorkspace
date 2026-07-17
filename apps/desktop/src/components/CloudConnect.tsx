@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   cloudLogin,
   cloudLogout,
@@ -9,6 +11,8 @@ import {
   getCloudSyncStatus,
   linkProjectToCloud,
   listCloudWorkspaces,
+  redeemBrowserLogin,
+  startBrowserLogin,
   triggerCloudSync,
   unlinkProjectFromCloud,
   type CloudConfig,
@@ -27,11 +31,10 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
   const [link, setLink] = useState<CloudLink | null>(null);
   const [workspaces, setWorkspaces] = useState<CloudWorkspace[]>([]);
   const [userId, setUserId] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [newWorkspace, setNewWorkspace] = useState("");
   const [pickedWorkspace, setPickedWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<CloudSyncResult | null>(null);
 
@@ -54,6 +57,42 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  // Deep-link round trip (Task 5): the Rust shell forwards a
+  // promptconnext:// callback here as `{ url }`, we pull code/state off the
+  // query string and redeem it against the engine.
+  useEffect(() => {
+    const unlisten = listen<{ url: string }>("auth-callback", async (event) => {
+      try {
+        const url = new URL(event.payload.url);
+        const code = url.searchParams.get("code");
+        const state = url.searchParams.get("state");
+        if (!code || !state) return;
+        await redeemBrowserLogin(code, state);
+        setWaiting(false);
+        await refresh();
+      } catch (err) {
+        setWaiting(false);
+        setError((err as Error).message);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const beginBrowserLogin = async () => {
+    setError(null);
+    setWaiting(true);
+    try {
+      const { url } = await startBrowserLogin();
+      await openUrl(url);
+    } catch (err) {
+      setWaiting(false);
+      setError((err as Error).message);
+    }
+  };
+
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -75,24 +114,11 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
         <h3>Connect to PromptZone Cloud</h3>
         {config.mode === "supabase" ? (
           <>
-            <label>
-              Email
-              <input value={email} onChange={(e) => setEmail(e.target.value)} />
-            </label>
-            <label>
-              Password
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              disabled={busy || !email.trim() || !password}
-              onClick={() => run(() => cloudLogin({ email: email.trim(), password }))}
-            >
-              {busy ? "Signing in…" : "Sign in"}
+            <p className="muted">
+              Sign in through your browser to connect this app to PromptConnext Cloud.
+            </p>
+            <button type="button" disabled={waiting} onClick={beginBrowserLogin}>
+              {waiting ? "Waiting for browser…" : "Sign in with browser"}
             </button>
           </>
         ) : (

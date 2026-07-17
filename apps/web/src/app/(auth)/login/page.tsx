@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { AUTH_MODE } from "@/lib/config";
 import { useAuth } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
 import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@/components/auth/ui";
 
 // Only same-origin, in-app paths are safe redirect targets. Reject absolute
@@ -15,10 +16,12 @@ function safeNext(raw: string | null): string {
 }
 
 function LoginForm() {
-  const { user, signInStub, signInSupabase } = useAuth();
+  const { user, signInStub, signInSupabase, getSessionTokens } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const next = safeNext(params.get("next"));
+  const desktop = params.get("desktop") === "1";
+  const desktopState = params.get("state");
 
   const [userId, setUserId] = useState("dev-user");
   const [email, setEmail] = useState("");
@@ -27,10 +30,44 @@ function LoginForm() {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    if (user) router.replace(next);
-  }, [user, next, router]);
+    if (!user) return;
+    if (desktop && desktopState) {
+      // Hand the session to the cloud broker, then bounce to the desktop.
+      (async () => {
+        const tokens = await getSessionTokens();
+        if (!tokens) {
+          router.replace(next);
+          return;
+        }
+        try {
+          const { code } = await apiFetch<{ code: string }>(
+            "/desktop-auth/handoff",
+            { authorization: `Bearer ${tokens.accessToken}` },
+            {
+              method: "POST",
+              body: JSON.stringify({
+                refresh_token: tokens.refreshToken,
+                access_token: tokens.accessToken,
+              }),
+            },
+          );
+          window.location.href =
+            `promptconnext://auth/callback?code=${encodeURIComponent(code)}` +
+            `&state=${encodeURIComponent(desktopState)}`;
+        } catch {
+          // fall through to normal redirect on failure
+          router.replace(next);
+        }
+      })();
+      return;
+    }
+    router.replace(next);
+  }, [user, desktop, desktopState, getSessionTokens, next, router]);
 
   if (user) return null;
+
+  const qs = params.toString();
+  const withQuery = (path: string) => (qs ? `${path}?${qs}` : path);
 
   async function handleStubSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,10 +130,10 @@ function LoginForm() {
       </form>
       <AuthLinks>
         <span>
-          No account? <AuthLink href="/register">Create one</AuthLink>
+          No account? <AuthLink href={withQuery("/register")}>Create one</AuthLink>
         </span>
         <span>
-          <AuthLink href="/forgot-password">Forgot your password?</AuthLink>
+          <AuthLink href={withQuery("/forgot-password")}>Forgot your password?</AuthLink>
         </span>
       </AuthLinks>
     </AuthCard>
