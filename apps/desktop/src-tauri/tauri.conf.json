@@ -22,5 +22,12 @@
     "resources": {
       ".engine-pkg": "engine"
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["promptconnext"]
+      }
+    }
   }
 }

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 struct EngineProcess(Mutex<Option<Child>>);
 
@@ -59,6 +60,18 @@ fn spawn_engine(token: &str, dir: &Path) -> std::io::Result<Child> {
 pub fn run() {
     let token = mint_token();
     tauri::Builder::default()
+        // Registration order matters: tauri-plugin-single-instance must be
+        // added first so its second-instance callback can forward the
+        // OS-provided deep-link argv into the deep-link plugin's state
+        // (Windows/Linux single-instance re-launch path).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // A promptconnext:// open (or a plain second launch) hit an
+            // already-running instance; bring the existing window forward.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
             let dir = engine_dir(app.handle());
             let child = match spawn_engine(&token, &dir) {
@@ -87,6 +100,33 @@ pub fn run() {
                 .inner_size(1280.0, 840.0)
                 .initialization_script(&format!("window.__PROMPTZONE_TOKEN__ = \"{token}\";"))
                 .build()?;
+
+            // On Linux, packaging (e.g. an AppImage launched without a proper
+            // installer) may not have registered the scheme; do it at
+            // runtime as a fallback. macOS and Windows register the scheme
+            // from the `plugins.deep-link.desktop.schemes` config at bundle
+            // time (Info.plist / installer registry keys respectively).
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = app.deep_link().register("promptconnext") {
+                    eprintln!("[promptzone] failed to register promptconnext:// scheme: {err}");
+                }
+            }
+
+            // Forward every promptconnext:// callback to the webview, which
+            // parses ?code & ?state and calls the engine redeem route. Only
+            // an opaque one-time code rides this URL (ADR 0014). On macOS
+            // this fires directly from the OS `open` event; on Windows/Linux
+            // it's relayed via the single-instance plugin's argv (registered
+            // above), plus the initial-launch argv handled by the deep-link
+            // plugin's own setup.
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let _ = handle.emit("auth-callback", serde_json::json!({ "url": url.to_string() }));
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())
