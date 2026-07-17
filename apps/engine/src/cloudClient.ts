@@ -7,6 +7,7 @@ import { CLOUD_API_URL, SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.ts";
 
 const SESSION_KEY = "cloud_session";
 const SESSION_CRED = "cloud.session";
+const REFRESH_CRED = "cloud.refresh";
 
 export type CloudSession = { mode: "stub" | "supabase"; userId: string };
 
@@ -24,13 +25,19 @@ export function loadCloudSession(): CloudSession | null {
   }
 }
 
-export function storeCloudSession(session: CloudSession, token?: string): void {
+export function storeCloudSession(
+  session: CloudSession,
+  token?: string,
+  refreshToken?: string,
+): void {
   if (token) storeSecret(SESSION_CRED, token);
+  if (refreshToken) storeSecret(REFRESH_CRED, refreshToken);
   setAppState(SESSION_KEY, JSON.stringify(session));
 }
 
 export function clearCloudSession(): void {
   deleteSecret(SESSION_CRED);
+  deleteSecret(REFRESH_CRED);
   setAppState(SESSION_KEY, JSON.stringify(null));
 }
 
@@ -55,12 +62,8 @@ export class CloudNotLoggedInError extends Error {
   }
 }
 
-// Authenticated call against apps/cloud, using whichever session is stored.
-export async function cloudFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (!CLOUD_API_URL) throw new CloudNotConfiguredError();
-  const session = loadCloudSession();
-  if (!session) throw new CloudNotLoggedInError();
-  const res = await fetch(`${CLOUD_API_URL}${path}`, {
+function requestCloud(path: string, init: RequestInit, session: CloudSession): Promise<Response> {
+  return fetch(`${CLOUD_API_URL}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
@@ -68,6 +71,53 @@ export async function cloudFetch<T>(path: string, init: RequestInit = {}): Promi
       ...((init.headers as Record<string, string>) ?? {}),
     },
   });
+}
+
+// Coalesce concurrent refreshes. The sync loop (every ~20s) and on-demand pushes
+// both call cloudFetch, so several requests can hit a 401 at the same expiry
+// moment. Supabase rotates the refresh token on each use, so letting each caller
+// refresh independently would make all but the first fail with invalid_grant.
+// Sharing one in-flight refresh means a single rotation, and every caller retries
+// with the token it produced.
+let inFlightRefresh: Promise<void> | null = null;
+
+function refreshCloudSession(session: CloudSession): Promise<void> {
+  if (!inFlightRefresh) {
+    inFlightRefresh = (async () => {
+      const current = readSecret(REFRESH_CRED);
+      if (!current) throw new Error("no refresh token stored");
+      const refreshed = await supabaseRefresh(current);
+      storeCloudSession(session, refreshed.token, refreshed.refreshToken);
+    })().finally(() => {
+      inFlightRefresh = null;
+    });
+  }
+  return inFlightRefresh;
+}
+
+// Authenticated call against apps/cloud, using whichever session is stored.
+export async function cloudFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (!CLOUD_API_URL) throw new CloudNotConfiguredError();
+  const session = loadCloudSession();
+  if (!session) throw new CloudNotLoggedInError();
+
+  let res = await requestCloud(path, init, session);
+
+  // Supabase access tokens expire (~1h). On a 401, refresh once with the stored
+  // rotating refresh token and retry, so long-lived sync survives without a new
+  // browser login (ADR 0014). authHeaders() re-reads the token from the keychain,
+  // so the retry picks up the freshly stored access token. If refresh fails
+  // (token expired or already rotated away), the original 401 propagates and the
+  // user must re-authenticate through the browser flow.
+  if (res.status === 401 && session.mode === "supabase" && readSecret(REFRESH_CRED)) {
+    try {
+      await refreshCloudSession(session);
+      res = await requestCloud(path, init, session);
+    } catch {
+      // keep the original 401 response; fall through to the error below.
+    }
+  }
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error((data as { error?: string }).error ?? `cloud HTTP ${res.status}`);
@@ -97,6 +147,29 @@ export async function supabasePasswordLogin(
   }
   const ok = data as { access_token: string; user: { id: string } };
   return { token: ok.access_token, userId: ok.user.id };
+}
+
+// Exchange a rotating refresh token for a fresh access token (Supabase rotates
+// the refresh token on every use, so the new one must be persisted too). Used by
+// cloudFetch's refresh-on-401 retry.
+export async function supabaseRefresh(
+  refreshToken: string,
+): Promise<{ token: string; refreshToken: string }> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error("Supabase auth is not configured");
+  }
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = data as { error_description?: string; msg?: string };
+    throw new Error(err.error_description ?? err.msg ?? "token refresh failed");
+  }
+  const ok = data as { access_token: string; refresh_token: string };
+  return { token: ok.access_token, refreshToken: ok.refresh_token };
 }
 
 // Exchange a one-time handoff code (from the promptconnext:// callback) for the

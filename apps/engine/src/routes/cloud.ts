@@ -73,8 +73,8 @@ cloud.post("/engine/cloud/login/redeem", async (c) => {
   }
   pendingLoginState = null; // consume regardless of outcome
   try {
-    const { accessToken, userId } = await redeemDesktopCode(body.code.trim());
-    storeCloudSession({ mode: "supabase", userId }, accessToken);
+    const { accessToken, refreshToken, userId } = await redeemDesktopCode(body.code.trim());
+    storeCloudSession({ mode: "supabase", userId }, accessToken, refreshToken);
     return c.json({ connected: true, mode: "supabase", userId });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 401);
