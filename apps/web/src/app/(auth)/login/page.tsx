@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { AUTH_MODE } from "@/lib/config";
 import { useAuth } from "@/lib/auth";
+import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@/components/auth/ui";
 
 // Only same-origin, in-app paths are safe redirect targets. Reject absolute
 // URLs and protocol-relative paths ("//evil.example") — both would send a
@@ -23,6 +24,7 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
     if (user) router.replace(next);
@@ -39,56 +41,65 @@ function LoginForm() {
   async function handleSupabaseSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setPending(true);
     try {
       await signInSupabase(email, password);
       router.replace(next);
     } catch (err) {
       setError((err as Error).message);
+      setPending(false);
     }
   }
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 px-4">
-      <h1 className="text-xl font-semibold">Sign in to PromptZone</h1>
-
-      {AUTH_MODE === "stub" ? (
-        <form onSubmit={handleStubSubmit} className="flex flex-col gap-3">
-          <p className="text-sm text-slate-500">
-            Local dev (stub auth) — any user id works, no password.
-          </p>
-          <input
-            className="rounded border border-slate-300 px-3 py-2"
+  if (AUTH_MODE === "stub") {
+    return (
+      <AuthCard title="Sign in to PromptZone" subtitle="Local dev (stub auth) — any user id works, no password.">
+        <form onSubmit={handleStubSubmit} className="flex flex-col gap-4">
+          <Field
+            label="User id"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
             placeholder="user id"
           />
-          <button className="rounded bg-slate-900 px-3 py-2 text-white" type="submit">
-            Continue
-          </button>
+          <SubmitButton>Continue</SubmitButton>
         </form>
-      ) : (
-        <form onSubmit={handleSupabaseSubmit} className="flex flex-col gap-3">
-          <input
-            className="rounded border border-slate-300 px-3 py-2"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="email"
-          />
-          <input
-            className="rounded border border-slate-300 px-3 py-2"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="password"
-          />
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <button className="rounded bg-slate-900 px-3 py-2 text-white" type="submit">
-            Sign in
-          </button>
-        </form>
-      )}
-    </main>
+      </AuthCard>
+    );
+  }
+
+  return (
+    <AuthCard title="Sign in to PromptZone">
+      <form onSubmit={handleSupabaseSubmit} className="flex flex-col gap-4">
+        <Field
+          label="Email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          required
+        />
+        <Field
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+          required
+        />
+        <FormError message={error} />
+        <SubmitButton pending={pending}>Sign in</SubmitButton>
+      </form>
+      <AuthLinks>
+        <span>
+          No account? <AuthLink href="/register">Create one</AuthLink>
+        </span>
+        <span>
+          <AuthLink href="/forgot-password">Forgot your password?</AuthLink>
+        </span>
+      </AuthLinks>
+    </AuthCard>
   );
 }
 

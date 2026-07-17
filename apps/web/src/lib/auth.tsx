@@ -21,6 +21,9 @@ interface AuthContextValue {
   authHeaders: () => Record<string, string>;
   signInStub: (userId: string) => void;
   signInSupabase: (email: string, password: string) => Promise<void>;
+  signUpSupabase: (email: string, password: string) => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  updatePassword: (newPassword: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -81,6 +84,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const signUpSupabase = useCallback(async (email: string, password: string) => {
+    const { error } = await getSupabase().auth.signUp({ email, password });
+    if (error) throw error;
+  }, []);
+
+  // Supabase mails a recovery link back to /reset-password; the redirect must be
+  // an absolute URL, so it's built from the live origin at call time.
+  const sendPasswordReset = useCallback(async (email: string) => {
+    const redirectTo =
+      typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined;
+    const { error } = await getSupabase().auth.resetPasswordForEmail(email, { redirectTo });
+    if (error) throw error;
+  }, []);
+
+  const updatePassword = useCallback(async (newPassword: string) => {
+    const { error } = await getSupabase().auth.updateUser({ password: newPassword });
+    if (error) throw error;
+  }, []);
+
   const signOut = useCallback(async () => {
     if (AUTH_MODE === "stub") {
       localStorage.removeItem(STUB_USER_KEY);
@@ -98,8 +120,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, token]);
 
   const value = useMemo(
-    () => ({ user, loading, authHeaders, signInStub, signInSupabase, signOut }),
-    [user, loading, authHeaders, signInStub, signInSupabase, signOut],
+    () => ({
+      user,
+      loading,
+      authHeaders,
+      signInStub,
+      signInSupabase,
+      signUpSupabase,
+      sendPasswordReset,
+      updatePassword,
+      signOut,
+    }),
+    [
+      user,
+      loading,
+      authHeaders,
+      signInStub,
+      signInSupabase,
+      signUpSupabase,
+      sendPasswordReset,
+      updatePassword,
+      signOut,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
