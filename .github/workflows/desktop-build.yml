@@ -44,9 +44,19 @@ jobs:
           # backslashes as shell escapes). Env indirection also blocks injection.
           echo "$ARTIFACTS" | jq -r '.[]' | while IFS= read -r f; do
             [ -z "$f" ] && continue
-            base=$(printf '%s' "$f" | sed 's#.*[\\/]##') # strip dir, fwd or backslash
-            echo "Uploading $base"
-            aws s3 cp "$f" "s3://$R2_BUCKET/desktop/$REF_NAME/$base" \
+            f="${f%/}"                                    # drop any trailing slash
+            base=$(printf '%s' "$f" | sed 's#.*[\\/]##')  # strip dir, fwd or backslash
+            if [ -d "$f" ]; then
+              # macOS .app is a directory bundle — zip it into one seekable file.
+              # -y preserves symlinks so the bundle stays launchable.
+              echo "Zipping bundle $base"
+              ( cd "$(dirname "$f")" && zip -qry "$base.zip" "$base" )
+              src="$(dirname "$f")/$base.zip"; key="$base.zip"
+            else
+              src="$f"; key="$base"
+            fi
+            echo "Uploading $key"
+            aws s3 cp "$src" "s3://$R2_BUCKET/desktop/$REF_NAME/$key" \
               --endpoint-url "$R2_ENDPOINT"
           done
         env:
