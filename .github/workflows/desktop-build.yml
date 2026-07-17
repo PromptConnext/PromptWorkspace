@@ -39,12 +39,18 @@ jobs:
         shell: bash # Git Bash on Windows runners; native on macOS
         run: |
           set -euo pipefail
-          for f in ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), ' ') }}; do
-            echo "Uploading $f"
-            aws s3 cp "$f" "s3://$R2_BUCKET/desktop/$REF_NAME/" \
+          # ARTIFACTS is the raw JSON array from tauri-action. Decode with jq so
+          # Windows backslash paths survive (inline ${{ }} would eat backslashes as
+          # shell escapes). Env indirection also blocks run-command injection.
+          echo "$ARTIFACTS" | jq -r '.[]' | while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            base=$(printf '%s' "$f" | sed 's#.*[\\/]##') # strip dir, fwd or backslash
+            echo "Uploading $base"
+            aws s3 cp "$f" "s3://$R2_BUCKET/desktop/$REF_NAME/$base" \
               --endpoint-url "$R2_ENDPOINT"
           done
         env:
+          ARTIFACTS: ${{ steps.tauri.outputs.artifactPaths }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
