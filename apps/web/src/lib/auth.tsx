@@ -25,6 +25,7 @@ interface AuthContextValue {
   sendPasswordReset: (email: string) => Promise<void>;
   updatePassword: (newPassword: string) => Promise<void>;
   signOut: () => Promise<void>;
+  getSessionTokens: () => Promise<{ accessToken: string; refreshToken: string } | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -112,6 +113,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await getSupabase().auth.signOut();
   }, []);
 
+  const getSessionTokens = useCallback(async () => {
+    const { data } = await getSupabase().auth.getSession();
+    const session = data.session;
+    if (!session) return null;
+    return { accessToken: session.access_token, refreshToken: session.refresh_token };
+  }, []);
+
   const authHeaders = useCallback((): Record<string, string> => {
     if (AUTH_MODE === "stub") {
       return user ? { "x-user-id": user.id } : {};
@@ -130,6 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sendPasswordReset,
       updatePassword,
       signOut,
+      getSessionTokens,
     }),
     [
       user,
@@ -141,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sendPasswordReset,
       updatePassword,
       signOut,
+      getSessionTokens,
     ],
   );
 

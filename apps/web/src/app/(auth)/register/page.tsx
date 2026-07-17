@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import {
   AuthCard,
@@ -12,9 +13,12 @@ import {
   useStubRedirect,
 } from "@/components/auth/ui";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const stubRedirecting = useStubRedirect();
   const { signUpSupabase } = useAuth();
+  const params = useSearchParams();
+  const qs = params.toString();
+  const loginHref = qs ? `/login?${qs}` : "/login";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -100,9 +104,17 @@ export default function RegisterPage() {
       </form>
       <AuthLinks>
         <span>
-          Already have an account? <AuthLink href="/login">Sign in</AuthLink>
+          Already have an account? <AuthLink href={loginHref}>Sign in</AuthLink>
         </span>
       </AuthLinks>
     </AuthCard>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterForm />
+    </Suspense>
   );
 }
