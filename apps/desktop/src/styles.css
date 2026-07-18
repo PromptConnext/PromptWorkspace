@@ -97,8 +97,22 @@ textarea {
 /* guided provider picker */
 .provider-picker {
   display: grid;
-  gap: 10px;
+  gap: 16px;
   margin-top: 8px;
+}
+
+.provider-group {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-group h3 {
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0;
 }
 
 .provider-card {
@@ -202,39 +216,163 @@ button.link {
   font-size: 0.85em;
 }
 
-/* workspace */
+/* workspace shell: a single-column layout now — the top bar owns workspace
+   + project navigation (see below), so the content area gets full width for
+   the 3S flow instead of sharing space with a sidebar. */
 .workspace {
-  display: grid;
-  grid-template-columns: 240px 1fr;
   min-height: 100vh;
-}
-
-.workspace aside {
-  border-right: 1px solid var(--border);
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
 }
 
 .workspace .content {
   padding: 24px 32px;
   overflow-x: auto;
+  flex: 1;
 }
 
-.projects {
-  list-style: none;
-  padding: 0;
+/* top bar: three zones — workspace, projects, account — read left to right
+   as "where am I, what's in it, who am I". The accent dot on the workspace
+   zone is the one signature mark, carried over from the sidebar version. */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.tb-workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-right: 20px;
+  border-right: 1px solid var(--border);
+}
+
+.workspace-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.tb-workspace-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tb-workspace-name {
+  font-weight: 600;
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+
+.tb-workspace-select {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+
+.tb-projects {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.tb-tab {
+  white-space: nowrap;
+  font-size: 0.9em;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+
+.tb-tab-muted {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.tb-tab-new {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.tb-unassigned {
+  position: relative;
+}
+
+.tb-unassigned-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
   display: grid;
+  gap: 4px;
+  padding: 8px;
+  min-width: 180px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.tb-new-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tb-new-form input {
+  width: 160px;
+  padding: 5px 10px;
+}
+
+.tb-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+.tb-account-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+}
+
+.tb-account-name {
+  color: var(--muted);
+}
+
+.tb-stub-login {
+  display: flex;
   gap: 6px;
 }
 
-.projects button {
-  width: 100%;
-  text-align: left;
+.tb-stub-login input {
+  width: 120px;
+  padding: 5px 10px;
 }
 
-.new-project {
-  display: grid;
-  gap: 8px;
-  margin-top: 16px;
+.tb-inline-error {
+  font-size: 0.8em;
+  margin: 0;
 }
 
 /* 3S */
@@ -586,6 +724,49 @@ pre.doc {
   overflow: hidden;
   padding: 6px;
   background: #000;
+}
+
+/* auto-update prompt */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  background: color-mix(in srgb, black 45%, transparent);
+  z-index: 100;
+}
+
+.update-dialog {
+  width: min(440px, 90vw);
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: Canvas;
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+
+.update-dialog h3 {
+  margin: 0;
+}
+
+.update-notes {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.update-progress {
+  display: grid;
+  gap: 6px;
 }
 
 /* graph */

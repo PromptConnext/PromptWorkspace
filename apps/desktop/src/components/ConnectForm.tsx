@@ -69,18 +69,30 @@ export default function ConnectForm({
   };
 
   if (!picked) {
+    const free = recs.filter((rec) => !rec.needsKey);
+    const keyed = [...recs.filter((rec) => rec.needsKey), CUSTOM];
+    const card = (rec: Recommendation) => (
+      <button key={rec.label} type="button" className="provider-card" onClick={() => pick(rec)}>
+        <span className="pc-head">
+          <span className="pc-label">{rec.label}</span>
+          <span className="pc-tag">{rec.role === "code" ? "coding" : "planning"}</span>
+        </span>
+        {rec.cost && <span className="pc-cost">{rec.cost}</span>}
+        {rec.hint && <span className="pc-hint">{rec.hint}</span>}
+      </button>
+    );
     return (
       <div className="provider-picker">
-        {[...recs, CUSTOM].map((rec) => (
-          <button key={rec.label} type="button" className="provider-card" onClick={() => pick(rec)}>
-            <span className="pc-head">
-              <span className="pc-label">{rec.label}</span>
-              {rec.role === "code" && <span className="pc-tag">coding</span>}
-            </span>
-            {rec.cost && <span className="pc-cost">{rec.cost}</span>}
-            {rec.hint && <span className="pc-hint">{rec.hint}</span>}
-          </button>
-        ))}
+        {free.length > 0 && (
+          <div className="provider-group">
+            <h3>Free · runs on your machine</h3>
+            {free.map(card)}
+          </div>
+        )}
+        <div className="provider-group">
+          <h3>Bring your own key</h3>
+          {keyed.map(card)}
+        </div>
       </div>
     );
   }
