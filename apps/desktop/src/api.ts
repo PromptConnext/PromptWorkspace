@@ -369,3 +369,44 @@ export const createDiscussion = (
     method: "POST",
     body: JSON.stringify({ parentNodeType, parentNodeId, body }),
   });
+
+// Cloud-projected roster (ADR 0015 §2, plan 0006 G2/G3) ----------------
+// The cloud is authoritative for *which* workspaces/projects a signed-in user
+// has; the engine mirrors it into a local cache so the desktop renders offline.
+// These wrap G2's already-shipped engine routes — no new endpoints.
+
+export type RosterWorkspace = { id: string; name: string };
+export type RosterProject = { id: string; name: string; workspace_id: string };
+
+export type CloudRoster = {
+  workspaces: RosterWorkspace[];
+  projects: RosterProject[];
+  syncedAt: string | null;
+};
+
+// Refresh distinguishes a live pull from a cached fallback: `offline: true`
+// means the cloud was unreachable and the cache was served — NOT that the user
+// has no workspaces (ADR 0015 state 4).
+export type CloudRosterRefresh = CloudRoster & { offline: boolean; error?: string };
+
+// Read the cached roster — no network, renders offline from the last sync.
+export const getCloudRoster = () => request<CloudRoster>("/engine/cloud/roster");
+
+// Pull the roster live (on sign-in / focus / explicit refresh); falls back to
+// the cache with offline:true when the cloud is unreachable.
+export const refreshCloudRoster = () =>
+  request<CloudRosterRefresh>("/engine/cloud/roster/refresh", { method: "POST" });
+
+export type OpenCloudProjectResult = {
+  localProjectId: string;
+  hydrated: boolean;
+};
+
+// Resolve a roster (cloud) project to a usable local project: returns the
+// existing local id if this machine already has it, otherwise materializes a
+// local shell and full-graph bootstrap-pulls the cloud's merged state into it.
+export const openCloudProject = (cloudProjectId: string) =>
+  request<OpenCloudProjectResult>(
+    `/engine/cloud/projects/${encodeURIComponent(cloudProjectId)}/open`,
+    { method: "POST" },
+  );

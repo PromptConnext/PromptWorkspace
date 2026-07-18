@@ -15,7 +15,6 @@ import {
   type CloudConfig,
   type CloudSession,
   type CloudWorkspace,
-  type Project,
 } from "../api";
 
 export type WorkspaceContext = {
@@ -23,25 +22,33 @@ export type WorkspaceContext = {
   active: ActiveWorkspace | null;
 };
 
+// A navigable project tab. `key` encodes the source: `cloud:<cloudProjectId>`
+// for a roster project (resolved to a local project on select) or
+// `local:<localProjectId>` for a purely-local / pending-sync one. Workspace
+// owns the roster-driven tab list (ADR 0015 G3); TopBar just renders it.
+export type ProjectTab = { key: string; name: string };
+
 // Global navigation shell (replaces the old sidebar project list): one bar
 // always visible above the 3S flow, so switching workspace/project or seeing
 // who's signed in never requires leaving the current project. Three zones —
 // workspace switcher, project tabs, account status — read left to right as
 // "where am I, what's in it, who am I".
 export default function TopBar({
-  projects,
-  activeProjectId,
-  onSelectProject,
+  tabs,
+  activeTabKey,
+  onSelectTab,
   onCreateProject,
   reloadSignal,
   onWorkspaceContextChange,
+  onGateRecheck,
 }: {
-  projects: Project[];
-  activeProjectId: string | null;
-  onSelectProject: (project: Project) => void;
+  tabs: ProjectTab[];
+  activeTabKey: string | null;
+  onSelectTab: (key: string) => void;
   onCreateProject: (name: string) => Promise<void>;
   reloadSignal: number;
   onWorkspaceContextChange: (ctx: WorkspaceContext) => void;
+  onGateRecheck?: () => void;
 }) {
   const [connected, setConnected] = useState(false);
   const [workspaces, setWorkspaces] = useState<CloudWorkspace[]>([]);
@@ -55,7 +62,6 @@ export default function TopBar({
   const [waiting, setWaiting] = useState(false);
   const [acctError, setAcctError] = useState<string | null>(null);
 
-  const [showUnassigned, setShowUnassigned] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -64,8 +70,10 @@ export default function TopBar({
   const resolveWorkspace = async () => {
     const cloudSession = await getCloudSession();
     if (!cloudSession.connected) {
-      // Logged out (or never logged in): clear all workspace state so the
-      // project list falls back to a flat, unfiltered, local-first view.
+      // Logged out (or never logged in): clear all workspace state. Under the
+      // enforced membership gate (ADR 0015) TopBar only mounts post-gate, so
+      // this signed-out path is reached only when the gate is relaxed
+      // (stub/dev/cloud-off), where the project list falls back to local.
       setConnected(false);
       setActive(null);
       setWorkspaces([]);
@@ -80,7 +88,7 @@ export default function TopBar({
     } catch {
       // Cloud is unreachable — this is NOT the same as "no workspaces". Keep
       // whatever workspace was previously remembered/active instead of
-      // dropping to the "no workspaces" picker.
+      // dropping to the "no workspaces" picker (ADR 0015 state 4).
       if (stored) {
         setActive(stored);
         onWorkspaceContextChange({ connected: true, active: stored });
@@ -140,9 +148,10 @@ export default function TopBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Deep-link round trip (Task 5): the Rust shell forwards a
-  // promptconnext:// callback here as `{ url }`, we pull code/state off the
-  // query string and redeem it against the engine.
+  // Deep-link round trip (ADR 0014): the Rust shell forwards a promptconnext://
+  // callback here as `{ url }`; we pull code/state off the query string and
+  // redeem it against the engine. Under the enforced gate the App-level AuthGate
+  // owns first sign-in, but this keeps in-app re-auth working in relaxed mode.
   useEffect(() => {
     const unlisten = listen<{ url: string }>("auth-callback", async (event) => {
       try {
@@ -182,6 +191,9 @@ export default function TopBar({
     try {
       await cloudLogout();
       await refreshSession();
+      // Drop straight to the auth gate under the enforced membership gate
+      // (ADR 0015) instead of leaving a stale signed-in shell mounted.
+      onGateRecheck?.();
     } catch (err) {
       setAcctError((err as Error).message);
     } finally {
@@ -218,15 +230,6 @@ export default function TopBar({
     }
   };
 
-  const grouped = connected;
-  const activeWorkspaceId = active?.id ?? null;
-  const tabs = !grouped
-    ? projects
-    : activeWorkspaceId
-      ? projects.filter((p) => p.cloud_workspace_id === activeWorkspaceId)
-      : [];
-  const unassigned = grouped ? projects.filter((p) => p.cloud_workspace_id === null) : [];
-
   const workspaceLabel = !connected
     ? "Local workspace"
     : active
@@ -234,6 +237,11 @@ export default function TopBar({
       : workspaces.length === 0
         ? "No cloud workspace yet"
         : "Choose a workspace";
+
+  // A new project must be born into an active workspace once a cloud identity
+  // is in play (ADR 0015 §5). Reflect that in the UI — disable creation until a
+  // workspace is chosen — rather than surfacing the engine's 400 after the fact.
+  const canCreateProject = !connected || Boolean(active);
 
   return (
     <header className="top-bar">
@@ -260,45 +268,21 @@ export default function TopBar({
       </div>
 
       <nav className="tb-projects">
-        {tabs.map((p) => (
+        {tabs.map((t) => (
           <button
-            key={p.id}
+            key={t.key}
             type="button"
-            className={"tb-tab" + (p.id === activeProjectId ? " active" : "")}
-            onClick={() => onSelectProject(p)}
+            className={"tb-tab" + (t.key === activeTabKey ? " active" : "")}
+            onClick={() => onSelectTab(t.key)}
           >
-            {p.name}
+            {t.name}
           </button>
         ))}
-        {grouped && unassigned.length > 0 && (
-          <div className="tb-unassigned">
-            <button
-              type="button"
-              className="tb-tab tb-tab-muted"
-              onClick={() => setShowUnassigned((v) => !v)}
-            >
-              +{unassigned.length} not in a workspace
-            </button>
-            {showUnassigned && (
-              <div className="tb-unassigned-menu">
-                {unassigned.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={"tb-tab" + (p.id === activeProjectId ? " active" : "")}
-                    onClick={() => {
-                      onSelectProject(p);
-                      setShowUnassigned(false);
-                    }}
-                  >
-                    {p.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {creating ? (
+        {!canCreateProject ? (
+          <span className="tb-tab tb-tab-muted" title="Choose a workspace first">
+            + New project
+          </span>
+        ) : creating ? (
           <span className="tb-new-form">
             <input
               autoFocus

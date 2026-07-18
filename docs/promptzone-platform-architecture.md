@@ -206,6 +206,8 @@ Flow:
 
 State: a `ModelOnboardingState` (`not_started → in_progress → satisfied`) gates workspace entry. `satisfied` requires ≥1 health-checked connection.
 
+Under ADR 0015 (feature-flagged for staged rollout, `VITE_MEMBERSHIP_GATE`), model onboarding is no longer the outermost gate: two access gates sit *ahead* of it, so the desktop's launch order is **engine health → identity (signed in?) → membership (≥1 workspace?) → model onboarding → Workspace/3S**. Identity is the outer gate — model onboarding answers "can this user *do* 3S work"; the new gates answer "is this user *allowed in*, and *whose* workspace." A cached, refresh-extended session counts as signed in (offline-first holds after a first sign-in on the machine), so the gates are evaluated at cold-start/focus, never as a live network check on launch. When the flag is off, or under stub/dev auth (`AUTH_MODE=stub`) or a cloud-disabled build, the gates relax and the launch order is unchanged from the pre-0015 behavior.
+
 ### 3.5 Error handling
 - Model call fails → retry with backoff, then surface a clear "provider X errored" with a switch-model option (never a silent stall).
 - Spec Kit step fails → mark StageState failed with the underlying error; offer retry (mirrors Ideva Kit's orphan-detection pattern).
