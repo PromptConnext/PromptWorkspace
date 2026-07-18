@@ -232,6 +232,40 @@ class SupabaseRepository(Repository):
         res = self._client.table(_PROJECTS).select("*").in_("workspace_id", ids).execute()
         return [Project(**row) for row in (res.data or [])]
 
+    def list_projects_by_workspace(self, workspace_id: str) -> list[Project]:
+        res = self._client.table(_PROJECTS).select("*").eq("workspace_id", workspace_id).execute()
+        return [Project(**row) for row in (res.data or [])]
+
+    def list_invitations(
+        self, workspace_id: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]:
+        query = self._client.table(_INVITATIONS).select("*").eq("workspace_id", workspace_id)
+        if status is not None:
+            query = query.eq("status", status.value)
+        res = query.execute()
+        return [Invitation(**row) for row in (res.data or [])]
+
+    def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation:
+        res = (
+            self._client.table(_INVITATIONS)
+            .select("*")
+            .eq("id", invitation_id)
+            .eq("workspace_id", workspace_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            raise KeyError("invitation_not_found")
+        inv = Invitation(**rows[0])
+        if inv.status != InvitationStatus.pending:
+            raise ValueError("invitation_not_pending")
+        self._client.table(_INVITATIONS).update({"status": "revoked"}).eq(
+            "id", invitation_id
+        ).execute()
+        inv.status = InvitationStatus.revoked
+        return inv
+
     # -- graph ------------------------------------------------------------ #
     def upsert_graph(
         self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"

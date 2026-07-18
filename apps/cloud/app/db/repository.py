@@ -108,6 +108,17 @@ class Repository(abc.ABC):
         """Projects across every workspace the user is a member of."""
 
     @abc.abstractmethod
+    def list_projects_by_workspace(self, workspace_id: str) -> list[Project]: ...
+
+    @abc.abstractmethod
+    def list_invitations(
+        self, workspace_id: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]: ...
+
+    @abc.abstractmethod
+    def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation: ...
+
+    @abc.abstractmethod
     def upsert_graph(
         self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
     ) -> dict[str, int]: ...
@@ -374,6 +385,33 @@ class InMemoryRepository(Repository):
             ws_id for ws_id, members in self._members.items() if user_id in members
         }
         return [p for p in self._projects.values() if p.workspace_id in member_ws]
+
+    def list_projects_by_workspace(self, workspace_id: str) -> list[Project]:
+        return [p for p in self._projects.values() if p.workspace_id == workspace_id]
+
+    def list_invitations(
+        self, workspace_id: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]:
+        out = [i for i in self._invitations.values() if i.workspace_id == workspace_id]
+        if status is not None:
+            out = [i for i in out if i.status == status]
+        return out
+
+    def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation:
+        inv = next(
+            (
+                i
+                for i in self._invitations.values()
+                if i.id == invitation_id and i.workspace_id == workspace_id
+            ),
+            None,
+        )
+        if inv is None:
+            raise KeyError("invitation_not_found")
+        if inv.status != InvitationStatus.pending:
+            raise ValueError("invitation_not_pending")
+        inv.status = InvitationStatus.revoked
+        return inv
 
     # -- graph ------------------------------------------------------------ #
     def upsert_graph(
