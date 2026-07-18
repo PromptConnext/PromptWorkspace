@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
 
+    # Personal-workspace auto-provision (ADR 0015 §5, plan 0006 G1). When an
+    # authenticated user resolves to ZERO workspace memberships on GET
+    # /workspaces, mint a default "{user}'s workspace" with that user as admin.
+    # Removes the zero-workspace dead-end the desktop membership gate would
+    # otherwise create on every fresh account. Idempotent (a no-op once any
+    # membership exists). Set to false to stage the rollout / disable.
+    auto_provision_personal_workspace: bool = True
+
     cors_origins: str = "http://localhost:3000,http://localhost:1420"
 
     # Where invitation accept links point (the web app). Used to build the
