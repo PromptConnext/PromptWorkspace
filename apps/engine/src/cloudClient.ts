@@ -9,6 +9,13 @@ const SESSION_KEY = "cloud_session";
 const SESSION_CRED = "cloud.session";
 const REFRESH_CRED = "cloud.refresh";
 const ACTIVE_WS_KEY = "active_workspace";
+// Roster cache (ADR 0015, plan 0006 G2): the cloud-authoritative mirror of the
+// workspaces/projects this identity can see. Metadata only — never a model key,
+// never code (ADR 0010 §5). Persisted so the desktop renders fully offline from
+// the last sync, with no live network check required to read it.
+const ROSTER_WORKSPACES_KEY = "roster_workspaces";
+const ROSTER_PROJECTS_KEY = "roster_projects";
+const ROSTER_SYNCED_AT_KEY = "roster_synced_at";
 
 export type CloudSession = { mode: "stub" | "supabase"; userId: string };
 
@@ -41,6 +48,53 @@ export function clearCloudSession(): void {
   deleteSecret(REFRESH_CRED);
   setAppState(SESSION_KEY, JSON.stringify(null));
   setAppState(ACTIVE_WS_KEY, JSON.stringify(null)); // active workspace is tied to the session
+  // Sign-out teardown (ADR 0015 §3.4): scrub the roster so workspace/project
+  // names can't leak to the next user of a shared machine. Local project
+  // *graphs* on disk are retained (unreachable until re-auth), not wiped here.
+  clearRoster();
+}
+
+// --- Roster cache (ADR 0015 §2, plan 0006 G2) ------------------------------
+// The desktop reads this to render workspaces/projects fully offline. It is a
+// mirror of the cloud-authoritative GET /workspaces + GET /projects — the
+// engine never treats it as a source of truth, only a last-known snapshot.
+
+export type RosterWorkspace = { id: string; name: string };
+export type RosterProject = { id: string; name: string; workspace_id: string };
+
+export function storeRoster(workspaces: RosterWorkspace[], projects: RosterProject[]): void {
+  setAppState(ROSTER_WORKSPACES_KEY, JSON.stringify(workspaces));
+  setAppState(ROSTER_PROJECTS_KEY, JSON.stringify(projects));
+  setAppState(ROSTER_SYNCED_AT_KEY, JSON.stringify(new Date().toISOString()));
+}
+
+function loadJson<T>(key: string, fallback: T): T {
+  const raw = getAppState(key);
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw) as T | null;
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function loadRosterWorkspaces(): RosterWorkspace[] {
+  return loadJson<RosterWorkspace[]>(ROSTER_WORKSPACES_KEY, []);
+}
+
+export function loadRosterProjects(): RosterProject[] {
+  return loadJson<RosterProject[]>(ROSTER_PROJECTS_KEY, []);
+}
+
+export function rosterSyncedAt(): string | null {
+  return loadJson<string | null>(ROSTER_SYNCED_AT_KEY, null);
+}
+
+export function clearRoster(): void {
+  setAppState(ROSTER_WORKSPACES_KEY, JSON.stringify(null));
+  setAppState(ROSTER_PROJECTS_KEY, JSON.stringify(null));
+  setAppState(ROSTER_SYNCED_AT_KEY, JSON.stringify(null));
 }
 
 export type ActiveWorkspace = { id: string; name: string };
