@@ -221,6 +221,11 @@ class Workspace(BaseModel):
 class WorkspaceMember(BaseModel):
     workspace_id: str
     user_id: str
+    # Denormalized from the inviting user's session / the accepted invitation
+    # at membership-creation time — avoids a cross-schema join into
+    # auth.users, which only service_role can read directly. May be null for
+    # members added before this field existed.
+    email: str | None = None
     role: Role = Role.member
     invited_by: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

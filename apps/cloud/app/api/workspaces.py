@@ -38,7 +38,7 @@ def create_workspace(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Workspace:
-    return repo.create_workspace(name=body.name, created_by=user.id)
+    return repo.create_workspace(name=body.name, created_by=user.id, created_by_email=user.email)
 
 
 @router.get("/workspaces", response_model=list[Workspace])

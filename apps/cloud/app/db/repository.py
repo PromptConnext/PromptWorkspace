@@ -44,7 +44,9 @@ class Repository(abc.ABC):
 
     # -- workspaces ------------------------------------------------------- #
     @abc.abstractmethod
-    def create_workspace(self, name: str, created_by: str) -> Workspace:
+    def create_workspace(
+        self, name: str, created_by: str, created_by_email: str | None = None
+    ) -> Workspace:
         """Create a workspace and add the creator as its first admin."""
 
     @abc.abstractmethod
@@ -80,7 +82,12 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def add_member(
-        self, workspace_id: str, user_id: str, role: Role, invited_by: str | None = None
+        self,
+        workspace_id: str,
+        user_id: str,
+        role: Role,
+        invited_by: str | None = None,
+        email: str | None = None,
     ) -> WorkspaceMember: ...
 
     @abc.abstractmethod
@@ -288,11 +295,15 @@ class InMemoryRepository(Repository):
         self._code_chunks: dict[str, dict[tuple[str, str], dict[int, CodeChunk]]] = {}
 
     # -- workspaces ------------------------------------------------------- #
-    def create_workspace(self, name: str, created_by: str) -> Workspace:
+    def create_workspace(
+        self, name: str, created_by: str, created_by_email: str | None = None
+    ) -> Workspace:
         ws = Workspace(name=name, created_by=created_by)
         self._workspaces[ws.id] = ws
         self._members[ws.id] = {}
-        self.add_member(ws.id, created_by, Role.admin, invited_by=created_by)
+        self.add_member(
+            ws.id, created_by, Role.admin, invited_by=created_by, email=created_by_email
+        )
         return ws
 
     def get_workspace(self, workspace_id: str) -> Workspace | None:
@@ -340,10 +351,19 @@ class InMemoryRepository(Repository):
         return list(self._members.get(workspace_id, {}).values())
 
     def add_member(
-        self, workspace_id: str, user_id: str, role: Role, invited_by: str | None = None
+        self,
+        workspace_id: str,
+        user_id: str,
+        role: Role,
+        invited_by: str | None = None,
+        email: str | None = None,
     ) -> WorkspaceMember:
         member = WorkspaceMember(
-            workspace_id=workspace_id, user_id=user_id, role=role, invited_by=invited_by
+            workspace_id=workspace_id,
+            user_id=user_id,
+            role=role,
+            invited_by=invited_by,
+            email=email,
         )
         self._members.setdefault(workspace_id, {})[user_id] = member
         return member
@@ -368,7 +388,9 @@ class InMemoryRepository(Repository):
             inv.status = InvitationStatus.expired
             raise ValueError("invitation_expired")
         inv.status = InvitationStatus.accepted
-        return self.add_member(inv.workspace_id, user_id, inv.role, invited_by=inv.invited_by)
+        return self.add_member(
+            inv.workspace_id, user_id, inv.role, invited_by=inv.invited_by, email=inv.email
+        )
 
     # -- projects --------------------------------------------------------- #
     def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:

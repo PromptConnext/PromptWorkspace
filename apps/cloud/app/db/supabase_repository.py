@@ -89,7 +89,9 @@ class SupabaseRepository(Repository):
         return scoped
 
     # -- workspaces ------------------------------------------------------- #
-    def create_workspace(self, name: str, created_by: str) -> Workspace:
+    def create_workspace(
+        self, name: str, created_by: str, created_by_email: str | None = None
+    ) -> Workspace:
         ws = Workspace(name=name, created_by=created_by)
         # `returning="minimal"`: Postgres subjects INSERT...RETURNING to the
         # table's SELECT policy too, and `pz_ws_read` requires membership —
@@ -101,7 +103,9 @@ class SupabaseRepository(Repository):
         # (docs/plans/0004) — the in-memory backend's tests never exercise
         # RLS and couldn't have caught this.
         self._client.table(_WORKSPACES).insert(_dump(ws), returning="minimal").execute()
-        self.add_member(ws.id, created_by, Role.admin, invited_by=created_by)
+        self.add_member(
+            ws.id, created_by, Role.admin, invited_by=created_by, email=created_by_email
+        )
         return ws
 
     def get_workspace(self, workspace_id: str) -> Workspace | None:
@@ -169,10 +173,19 @@ class SupabaseRepository(Repository):
         return [WorkspaceMember(**row) for row in (res.data or [])]
 
     def add_member(
-        self, workspace_id: str, user_id: str, role: Role, invited_by: str | None = None
+        self,
+        workspace_id: str,
+        user_id: str,
+        role: Role,
+        invited_by: str | None = None,
+        email: str | None = None,
     ) -> WorkspaceMember:
         member = WorkspaceMember(
-            workspace_id=workspace_id, user_id=user_id, role=role, invited_by=invited_by
+            workspace_id=workspace_id,
+            user_id=user_id,
+            role=role,
+            invited_by=invited_by,
+            email=email,
         )
         # returning="minimal": same RLS-vs-RETURNING issue as create_workspace
         # above — the SELECT policy (pz_members_read) can't see a just-added
@@ -211,7 +224,9 @@ class SupabaseRepository(Repository):
         self._client.table(_INVITATIONS).update({"status": "accepted"}).eq(
             "token", token
         ).execute()
-        return self.add_member(inv.workspace_id, user_id, inv.role, invited_by=inv.invited_by)
+        return self.add_member(
+            inv.workspace_id, user_id, inv.role, invited_by=inv.invited_by, email=inv.email
+        )
 
     # -- projects --------------------------------------------------------- #
     def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
