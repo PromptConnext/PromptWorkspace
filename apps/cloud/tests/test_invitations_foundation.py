@@ -10,10 +10,12 @@ def _invite(**kw):
 
 
 def test_invitation_token_is_high_entropy_secret():
+    import string
+
     tok = _invite().token
-    # token_urlsafe(32) yields 43 url-safe chars; a uuid4 is 36 chars with dashes.
-    assert "-" not in tok
+    # token_urlsafe(32) => 43 url-safe base64 chars; a uuid4 is 36 chars.
     assert len(tok) >= 43
+    assert set(tok) <= set(string.ascii_letters + string.digits + "-_")
 
 
 def test_two_invitations_get_distinct_tokens():
