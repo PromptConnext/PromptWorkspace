@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use } from "react";
+import { InviteForm } from "@/components/InviteForm";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
@@ -11,7 +12,9 @@ import type { Workspace, WorkspaceMember } from "@/lib/types";
 function MembersView({ workspaceId }: { workspaceId: string }) {
   const { user } = useAuth();
   const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
-  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
+  const { data: members, refetch: refetchMembers } = useCloudGet<WorkspaceMember[]>(
+    `/workspaces/${workspaceId}/members`,
+  );
   const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 
   return (
@@ -42,7 +45,7 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
 
         {isAdmin && (
           <>
-            {/* Task 2 mounts <InviteForm> here */}
+            <InviteForm workspaceId={workspaceId} onInvited={refetchMembers} />
             {/* Task 3 mounts <PendingInvitations> here */}
           </>
         )}
