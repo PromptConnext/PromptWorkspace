@@ -20,8 +20,13 @@ export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
 // Where the browser is sent for interactive sign-in (ADR 0014). Defaults to
 // the deployed hosted web app; override for local dev against `pnpm web`
 // (http://localhost:3000). Not nullable — browser login needs a destination.
-// This is a real TLS-served, team-owned origin (closes the phishing gate: the
-// desktop opens it for credential entry, so an unregistered placeholder would
-// be a takeover vector).
+//
+// SECURITY: the desktop opens this for credential entry, so whoever controls
+// this origin can phish users. The default below is a `*.vercel.app` subdomain,
+// which is only owned while the Vercel project exists — if it is ever deleted or
+// renamed, the name becomes reclaimable by anyone (dangling-subdomain takeover).
+// Acceptable for dev/staging; BEFORE distributing a desktop installer, set this
+// default (or the shipped build's CLOUD_WEB_URL) to a custom domain the org owns
+// at the DNS level (e.g. app.promptconnext.com), not a shared-platform subdomain.
 export const CLOUD_WEB_URL =
   process.env.CLOUD_WEB_URL || "https://prompt-zone-web-app.vercel.app";
