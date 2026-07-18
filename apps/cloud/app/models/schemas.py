@@ -11,6 +11,7 @@ milestone's sync payload.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -235,7 +236,7 @@ class Invitation(BaseModel):
     workspace_id: str
     email: str
     role: Role = Role.member
-    token: str = Field(default_factory=new_id)
+    token: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     status: InvitationStatus = InvitationStatus.pending
     invited_by: str
     expires_at: datetime
