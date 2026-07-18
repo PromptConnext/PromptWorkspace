@@ -7,6 +7,7 @@
   "scripts": {
     "engine": "pnpm --dir apps/engine start",
     "desktop": "pnpm --dir apps/desktop tauri dev",
-    "web": "pnpm --dir apps/web dev"
+    "web": "pnpm --dir apps/web dev",
+    "corp": "pnpm --dir apps/corp dev"
   }
 }
