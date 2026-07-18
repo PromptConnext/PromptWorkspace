@@ -90,7 +90,7 @@ export function softwareApplicationJsonLd() {
     "@type": "SoftwareApplication",
     name: siteConfig.name,
     applicationCategory: "DeveloperApplication",
-    operatingSystem: "macOS, Windows, Linux",
+    operatingSystem: "macOS, Windows",
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     description: siteConfig.description,
     url: siteConfig.url,

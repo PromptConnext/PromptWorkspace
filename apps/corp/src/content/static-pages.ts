@@ -63,7 +63,7 @@ const en: Bundle = {
     eyebrow: "Download",
     title: "Get PromptConnext free",
     description:
-      "The desktop app is free and runs on macOS, Windows, and Linux. Your code and model keys stay on your machine.",
+      "The desktop app is free and runs on macOS and Windows. Your code and model keys stay on your machine.",
     stepsTitle: "What happens after you install",
     steps: [
       { title: "1. Install", description: "Download and open PromptConnext. No account required to get started." },
@@ -108,7 +108,7 @@ const en: Bundle = {
       {
         heading: "1. Install the app",
         body: [
-          "Download PromptConnext for macOS, Windows, or Linux from the download page and open it. No account is required to start.",
+          "Download PromptConnext for macOS or Windows from the download page and open it. No account is required to start.",
         ],
       },
       {
@@ -247,7 +247,7 @@ const th: Bundle = {
     eyebrow: "ดาวน์โหลด",
     title: "รับ PromptConnext ฟรี",
     description:
-      "แอปเดสก์ท็อปฟรีและทำงานบน macOS, Windows และ Linux โค้ดและคีย์โมเดลของคุณอยู่บนเครื่องของคุณ",
+      "แอปเดสก์ท็อปฟรีและทำงานบน macOS และ Windows โค้ดและคีย์โมเดลของคุณอยู่บนเครื่องของคุณ",
     stepsTitle: "สิ่งที่เกิดขึ้นหลังติดตั้ง",
     steps: [
       { title: "1. ติดตั้ง", description: "ดาวน์โหลดและเปิด PromptConnext ไม่ต้องมีบัญชีเพื่อเริ่มต้น" },
@@ -292,7 +292,7 @@ const th: Bundle = {
       {
         heading: "1. ติดตั้งแอป",
         body: [
-          "ดาวน์โหลด PromptConnext สำหรับ macOS, Windows หรือ Linux จากหน้าดาวน์โหลดแล้วเปิดขึ้นมา ไม่ต้องมีบัญชีเพื่อเริ่ม",
+          "ดาวน์โหลด PromptConnext สำหรับ macOS หรือ Windows จากหน้าดาวน์โหลดแล้วเปิดขึ้นมา ไม่ต้องมีบัญชีเพื่อเริ่ม",
         ],
       },
       {

@@ -173,7 +173,7 @@ const faq: Record<Locale, FaqContent> = {
       },
       {
         question: "Which platforms are supported?",
-        answer: "macOS, Windows, and Linux. Download the desktop app to get started.",
+        answer: "macOS and Windows. Download the desktop app to get started.",
       },
       {
         question: "Do I need to know how to code?",
@@ -214,7 +214,7 @@ const faq: Record<Locale, FaqContent> = {
       },
       {
         question: "รองรับแพลตฟอร์มใดบ้าง",
-        answer: "macOS, Windows และ Linux ดาวน์โหลดแอปเดสก์ท็อปเพื่อเริ่มต้น",
+        answer: "macOS และ Windows ดาวน์โหลดแอปเดสก์ท็อปเพื่อเริ่มต้น",
       },
       {
         question: "ต้องรู้วิธีเขียนโค้ดไหม",
