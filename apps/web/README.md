@@ -1,4 +1,4 @@
-# PromptZone Web
+# PromptConnext Web
 
 Collaborative, read-only web workspace (plan 0005, Milestone M8). Lets a
 stakeholder without a desktop install sign in, accept a workspace invitation,

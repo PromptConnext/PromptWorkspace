@@ -1,6 +1,6 @@
-# PromptZone Deployment Guide
+# PromptConnext Deployment Guide
 
-How to ship the three deployable halves of PromptZone:
+How to ship the three deployable halves of PromptConnext:
 
 1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Railway** (public HTTPS).
 2. **Web app** (`apps/web`, M8) — Next.js read-only workspace UI → **Vercel**.
@@ -14,7 +14,7 @@ Railway is used (not Vercel) for the cloud app because it's a long-lived contain
 
 ```
 ┌─────────────────────────────┐        ┌──────────────────────────────┐
-│  Desktop app (per user)     │  HTTPS │  PromptZone Cloud (Railway)  │
+│  Desktop app (per user)     │  HTTPS │  PromptConnext Cloud (Railway)  │
 │  Tauri shell + engine       │───────▶│  FastAPI, 1 instance         │
 │  models/keys stay local     │  WS    │  DATA_BACKEND=supabase       │
 └─────────────────────────────┘        └──────────────┬───────────────┘
@@ -55,7 +55,7 @@ The repo already has a working `apps/cloud/Dockerfile` (respects `$PORT`, single
 
 ```bash
 cd apps/cloud
-railway init                 # create project, e.g. "promptzone-cloud"
+railway init                 # create project, e.g. "promptconnext-cloud"
 railway up                   # builds the Dockerfile, deploys
 ```
 
@@ -162,7 +162,7 @@ cd apps/desktop
 pnpm tauri build
 ```
 
-Output: `apps/desktop/src-tauri/target/release/bundle/macos/PromptZone.app` (~192 MB, self-contained engine + bundled Node).
+Output: `apps/desktop/src-tauri/target/release/bundle/macos/PromptConnext.app` (~192 MB, self-contained engine + bundled Node).
 
 **Produce a DMG for distribution** — add `"dmg"` to bundle targets in `src-tauri/tauri.conf.json`:
 
@@ -175,7 +175,7 @@ Rebuild; the `.dmg` lands in `bundle/dmg/`.
 **Unsigned-app reality:** without an Apple Developer account, Gatekeeper blocks downloaded copies. Ship with instructions for testers:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/PromptZone.app
+xattr -dr com.apple.quarantine /Applications/PromptConnext.app
 ```
 
 or right-click → Open → Open. When you get an Apple Developer account later: set `bundle.macOS.signingIdentity` in `tauri.conf.json`, export `APPLE_ID`, `APPLE_PASSWORD` (app-specific) or `APPLE_API_KEY`, and `APPLE_TEAM_ID`, and Tauri signs + notarizes during `tauri build`. Treat signing as a prerequisite for any public (non-tester) distribution.
@@ -204,7 +204,7 @@ Bump `version` in `apps/desktop/src-tauri/tauri.conf.json` (and keep `apps/deskt
 
 ### 4.1 One-time bucket setup
 
-1. Cloudflare dashboard → **R2 Object Storage** → Create bucket, e.g. `promptzone-releases`. Location: automatic.
+1. Cloudflare dashboard → **R2 Object Storage** → Create bucket, e.g. `promptconnext-releases`. Location: automatic.
 2. Create an **R2 API token** (R2 → Manage API Tokens): *Object Read & Write*, scoped to this bucket. Note the Access Key ID / Secret.
 3. **Public access** — two options:
    - **Custom domain (recommended):** bucket → Settings → Public access → Connect Domain → `downloads.<yourdomain>` (the domain must be on Cloudflare DNS). Cloudflare creates the DNS record and proxies/caches automatically.
@@ -226,21 +226,21 @@ aws configure --profile r2          # use the R2 Access Key ID / Secret
 # endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 
 VERSION=0.0.1
-aws s3 cp apps/desktop/src-tauri/target/release/bundle/dmg/PromptZone_${VERSION}_aarch64.dmg \
-  s3://promptzone-releases/desktop/${VERSION}/PromptZone_${VERSION}_macos-arm64.dmg \
+aws s3 cp apps/desktop/src-tauri/target/release/bundle/dmg/PromptConnext_${VERSION}_aarch64.dmg \
+  s3://promptconnext-releases/desktop/${VERSION}/PromptConnext_${VERSION}_macos-arm64.dmg \
   --profile r2 --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
   --content-type application/x-apple-diskimage
 ```
 
-Alternatively with Wrangler: `wrangler r2 object put promptzone-releases/desktop/${VERSION}/... --file=...`.
+Alternatively with Wrangler: `wrangler r2 object put promptconnext-releases/desktop/${VERSION}/... --file=...`.
 
 ### 4.3 Suggested layout
 
 ```
 desktop/
-  latest.json                        # {"version":"0.0.1","macos-arm64":"https://downloads.../PromptZone_0.0.1_macos-arm64.dmg"}
+  latest.json                        # {"version":"0.0.1","macos-arm64":"https://downloads.../PromptConnext_0.0.1_macos-arm64.dmg"}
   0.0.1/
-    PromptZone_0.0.1_macos-arm64.dmg
+    PromptConnext_0.0.1_macos-arm64.dmg
     checksums.txt                    # shasum -a 256 *.dmg
 ```
 
@@ -263,7 +263,7 @@ Using Railway's default `*.up.railway.app` URL is fine to start; add `api.<domai
 
 Manual is fine now; when ready, GitHub Actions is the natural fit:
 
-**Cloud (deploy on push to `main`, path-filtered to `apps/cloud/**`):** run `pytest` + `ruff`, then `railway up --service promptzone-cloud` using a `RAILWAY_TOKEN` secret. Gate the production environment behind a manual approval (GitHub Environments).
+**Cloud (deploy on push to `main`, path-filtered to `apps/cloud/**`):** run `pytest` + `ruff`, then `railway up --service promptconnext-cloud` using a `RAILWAY_TOKEN` secret. Gate the production environment behind a manual approval (GitHub Environments).
 
 **Desktop (release on tag `v*`):** matrix build — `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 with the S3 action/CLI (secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists.
 

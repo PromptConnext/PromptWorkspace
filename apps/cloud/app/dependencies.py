@@ -85,7 +85,7 @@ def get_current_user(
     settings = request.app.state.settings
     if settings.auth_mode == "stub":
         uid = x_user_id or "dev-user"
-        return User(id=uid, email=f"{uid}@promptzone.local")
+        return User(id=uid, email=f"{uid}@promptconnext.local")
 
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:

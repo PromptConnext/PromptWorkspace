@@ -87,7 +87,7 @@ Engineering-side questions ("which PR implemented T014?", "where is the rate lim
 - **Fallback** for unreachable Git hosts: desktop-side embedding sync (ADR 0011 sub-option 3) — spec only if demanded.
 
 ### Exit criteria
-Code-content questions answered with file/line citations linking to the Git host; a dump of all PromptZone-cloud storage contains no source-code plaintext (embeddings + refs only) — verified by test.
+Code-content questions answered with file/line citations linking to the Git host; a dump of all PromptConnext-cloud storage contains no source-code plaintext (embeddings + refs only) — verified by test.
 
 ---
 
@@ -97,7 +97,7 @@ Code-content questions answered with file/line citations linking to the Git host
 Team members comment on requirements/tasks in the web workspace; the assistant can cite those discussions. Fills the gap descoped from M10.
 
 ### Shape
-- **Entity:** `Discussion` (id, project_id, parent node_type/node_id, author, body, `source: pz|pmo`, timestamps, tombstone) — schema migration + sync payload + memory-backend parity. Per-field authority (M3): `pz`-native comments are PromptZone-authoritative; Jira-mirrored comments (via the M5 boundary) arrive as `pmo`.
+- **Entity:** `Discussion` (id, project_id, parent node_type/node_id, author, body, `source: pz|pmo`, timestamps, tombstone) — schema migration + sync payload + memory-backend parity. Per-field authority (M3): `pz`-native comments are PromptConnext-authoritative; Jira-mirrored comments (via the M5 boundary) arrive as `pmo`.
 - **Web UI (extends M8):** comment threads on graph nodes; authoring is allowed here — discussions are collaboration data, not planning artifacts, so this doesn't violate the read-first rule for the graph itself.
 - **RAG ingestion (extends M9):** add `discussions` to `RAG_NODE_TYPES` / `node_text()`; native discussions index by default; `pmo`-mirrored comments are **workspace opt-in** (third-party content, per ADR 0011). Same embed-on-ingest queue, tombstone-driven chunk deletion, and membership-scoped retrieval.
 - **Also close here:** `Artifact` has no content field (same `source.py` finding) — either add one during this milestone or record a deliberate exclusion in the ADR.

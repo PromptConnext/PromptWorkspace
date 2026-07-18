@@ -1,7 +1,7 @@
 def test_root(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert res.json()["service"] == "promptzone-cloud"
+    assert res.json()["service"] == "promptconnext-cloud"
 
 
 def test_health(client):

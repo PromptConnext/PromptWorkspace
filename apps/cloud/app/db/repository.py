@@ -167,7 +167,7 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
-        """Resolve an inbound webhook's external key to a PromptZone task."""
+        """Resolve an inbound webhook's external key to a PromptConnext task."""
 
     @abc.abstractmethod
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:

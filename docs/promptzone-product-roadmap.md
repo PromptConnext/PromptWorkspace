@@ -1,27 +1,27 @@
-# PromptZone — Long-Term Product Roadmap & Vision
+# PromptConnext — Long-Term Product Roadmap & Vision
 
 **Date:** 2026-06-29
 **Status:** Living document. Supersedes the model-strategy assumptions in the earlier local-first memo where they conflict; keeps its risk analysis and the task-management memo intact.
-**Companion docs:** [`promptzone-platform-architecture.md`](./promptzone-platform-architecture.md) (this repo). Background research memos live in the `ideva-kit` repo under `docs/`: `local-first-ai-workspace-decision-memo.md`, `local-first-ai-workspace-architecture.md`, and `promptzone-task-management-decision-memo.md`.
+**Companion docs:** [`promptconnext-platform-architecture.md`](./promptconnext-platform-architecture.md) (this repo). Background research memos live in the `ideva-kit` repo under `docs/`: `local-first-ai-workspace-decision-memo.md`, `local-first-ai-workspace-architecture.md`, and `promptconnext-task-management-decision-memo.md`.
 
 ---
 
 ## 1. Vision
 
-**PromptZone is an AI-native development workspace — think VS Code, but equally approachable for business teams and developers — that orchestrates whichever AI models a team already pays for, according to each model's strengths.**
+**PromptConnext is an AI-native development workspace — think VS Code, but equally approachable for business teams and developers — that orchestrates whichever AI models a team already pays for, according to each model's strengths.**
 
-One workspace carries a project from business requirement to running code, with full transparency at every step. Business users work with scope, planning, and specifications; developers continue in the same workspace for implementation and coding. PromptZone does not sell a proprietary model. It is the **orchestration layer** that makes a team's existing AI investments work together on the software lifecycle.
+One workspace carries a project from business requirement to running code, with full transparency at every step. Business users work with scope, planning, and specifications; developers continue in the same workspace for implementation and coding. PromptConnext does not sell a proprietary model. It is the **orchestration layer** that makes a team's existing AI investments work together on the software lifecycle.
 
 Two shifts define the product:
 
-1. **Bring-your-own-model (BYO), not proprietary.** Teams connect the AI they already have — cloud API keys, agentic-tool subscriptions, or local models. PromptZone's value is orchestration and workflow, not the model.
+1. **Bring-your-own-model (BYO), not proprietary.** Teams connect the AI they already have — cloud API keys, agentic-tool subscriptions, or local models. PromptConnext's value is orchestration and workflow, not the model.
 2. **One workspace, two personas.** The same tool serves a business analyst writing requirements and a developer shipping code, without either feeling like they're in the wrong product.
 
 ---
 
 ## 2. Positioning: "VS Code for the whole team"
 
-VS Code won by being a light, extensible shell that developers made their own. PromptZone borrows the shape but widens the door:
+VS Code won by being a light, extensible shell that developers made their own. PromptConnext borrows the shape but widens the door:
 
 - **For business users:** a guided, jargon-free surface for defining scope, reviewing plans, and approving specifications. They never see a CLI or a Spec Kit command.
 - **For developers:** the same project, continued into implementation — models, MCP servers, and coding settings under their control.
@@ -31,11 +31,11 @@ The competitive wedge is not "a better editor" or "a better model." It's that **
 
 ---
 
-## 3. The 3S experience — PromptZone's product language
+## 3. The 3S experience — PromptConnext's product language
 
 Spec Kit (GitHub) is the **implementation engine**. **3S is the product experience** layered over it. Users move through Scope → Spec → Skill and never need to know Spec Kit exists.
 
-| Stage | What the user does | What PromptZone runs underneath | Primary persona |
+| Stage | What the user does | What PromptConnext runs underneath | Primary persona |
 |---|---|---|---|
 | **Scope** | Describes what the project should achieve, in business terms | `speckit.specify` | Business |
 | **Spec** | Reviews and approves the generated plan, presented as *the project specification* | `speckit.plan` | Business + Tech Lead |
@@ -66,14 +66,14 @@ A **Thai-language model is a future evaluation**, not a requirement — kept as 
 
 ### 4.2 Two connection modes (this is the important architectural nuance)
 
-"Leverage existing AI subscriptions" is not one thing, because providers bill chat and programmatic access differently. PromptZone must support **both** of these, and be honest about which is which:
+"Leverage existing AI subscriptions" is not one thing, because providers bill chat and programmatic access differently. PromptConnext must support **both** of these, and be honest about which is which:
 
 | Mode | What it is | Works with | Caveat |
 |---|---|---|---|
 | **API key / endpoint** | User pastes an API key or OpenAI-compatible base URL | OpenAI, Anthropic, Google, Z.AI (GLM), OpenRouter, local Ollama/vLLM | Metered per-token, billed separately from any chat subscription |
 | **Subscription / agentic auth** | User signs in with an existing plan where the provider allows programmatic use | Agentic tools that permit subscription login (e.g. Claude Code on Pro/Max plans, with a dedicated programmatic budget) | Availability and terms vary by provider; some prohibit proxying a chat plan as an API |
 
-**Critical honesty for the product and the marketing:** a consumer chat subscription (ChatGPT Plus, Claude Pro) does **not** automatically grant general API access — that's separately billed. So "use the AI you already pay for" is true *sometimes* (local models always; agentic-tool sign-in where supported; API keys the user already holds) and *not* a blanket promise. Position it as **"connect your own models and keys — cloud or local — no PromptZone model tax,"** not "reuse your ChatGPT subscription for everything."
+**Critical honesty for the product and the marketing:** a consumer chat subscription (ChatGPT Plus, Claude Pro) does **not** automatically grant general API access — that's separately billed. So "use the AI you already pay for" is true *sometimes* (local models always; agentic-tool sign-in where supported; API keys the user already holds) and *not* a blanket promise. Position it as **"connect your own models and keys — cloud or local — no PromptConnext model tax,"** not "reuse your ChatGPT subscription for everything."
 
 ### 4.3 Model-agnostic router
 
@@ -81,7 +81,7 @@ The orchestration layer routes each task to the connected model best suited to i
 
 ### 4.4 Local vs. cloud is now the user's choice, not the platform's
 
-The earlier local-first memo treated local models as the default engine. Under BYO, **local becomes one connection option among several.** A privacy-sensitive team connects Ollama; a team optimizing for capability connects GLM-5.2 or a frontier API. PromptZone stays neutral and orchestrates either. This is a strictly more flexible position and resolves the "laptop hardware caps quality" risk — teams that need more just connect a bigger model.
+The earlier local-first memo treated local models as the default engine. Under BYO, **local becomes one connection option among several.** A privacy-sensitive team connects Ollama; a team optimizing for capability connects GLM-5.2 or a frontier API. PromptConnext stays neutral and orchestrates either. This is a strictly more flexible position and resolves the "laptop hardware caps quality" risk — teams that need more just connect a bigger model.
 
 ---
 
@@ -94,7 +94,7 @@ The earlier local-first memo treated local models as the default engine. Under B
 | **Never forced to touch** | CLI, Spec Kit, model config | — |
 | **Shared** | The same project, the same traceable requirement→spec→task→agent-run graph |
 
-The seam between personas is the **Skill stage**: business hands an approved spec to the Tech Lead, who equips the project with models/skills/MCP and lets implementation proceed. Both keep watching the same progress view afterward — the end-to-end transparency that is Ideva Kit's founding goal, now the shared surface of PromptZone.
+The seam between personas is the **Skill stage**: business hands an approved spec to the Tech Lead, who equips the project with models/skills/MCP and lets implementation proceed. Both keep watching the same progress view afterward — the end-to-end transparency that is Ideva Kit's founding goal, now the shared surface of PromptConnext.
 
 ---
 
@@ -102,7 +102,7 @@ The seam between personas is the **Skill stage**: business hands an approved spe
 
 - **Task management (from its memo):** unchanged and reinforced. The AI-native execution graph (requirement → spec → task → artefact → agent-run → progress) is what makes 3S transparent and what no external tracker can hold. Jira/ClickUp remain a thin sync boundary.
 - **Model architecture:** the router survives; it becomes provider-agnostic rather than local-only. GLM-5.2 becomes *a model a team may connect for the coding/strong role*, not a built-in tier.
-- **Ideva Kit:** stays as-is; PromptZone is the separate, BYO, dual-persona productization of the same requirement-to-code transparency thesis.
+- **Ideva Kit:** stays as-is; PromptConnext is the separate, BYO, dual-persona productization of the same requirement-to-code transparency thesis.
 
 ---
 
@@ -122,17 +122,17 @@ The seam between personas is the **Skill stage**: business hands an approved spe
 
 1. **BYO connection honesty.** Over-promising "reuse your subscription" will burn trust when a user's ChatGPT Plus can't be used as an API. Mitigate with clear connection UX that names the mode and its billing. *(Decided: dual-mode, honestly labeled.)*
 2. **Two-persona product is hard to keep coherent.** One workspace that's genuinely comfortable for both audiences is a real design challenge; resist forking into two products. The 3S spine and shared graph are the unifying device.
-3. **"VS Code but for everyone" scope risk.** VS Code is enormous. Stay disciplined: PromptZone is the *3S workflow + model orchestration + transparency graph*, not a general editor. Coding depth can lean on developers' existing IDEs via integration rather than rebuilding an editor.
+3. **"VS Code but for everyone" scope risk.** VS Code is enormous. Stay disciplined: PromptConnext is the *3S workflow + model orchestration + transparency graph*, not a general editor. Coding depth can lean on developers' existing IDEs via integration rather than rebuilding an editor.
 4. **Model quality variance across BYO setups.** A team that connects two weak models gets a weak experience you don't control. Mitigate with recommended model profiles per role and honest capability signals — analogous to the hardware-aware onboarding from the first memo.
 5. **Provider terms of service.** Agentic/subscription auth must respect each provider's ToS on programmatic use. Legal review before shipping Mode 2 per provider.
 
-**Open decisions to confirm:** (a) which providers to support at launch for each connection mode; (b) whether developers code *in* PromptZone or in their IDE with PromptZone orchestrating; (c) the minimum recommended model profile per role.
+**Open decisions to confirm:** (a) which providers to support at launch for each connection mode; (b) whether developers code *in* PromptConnext or in their IDE with PromptConnext orchestrating; (c) the minimum recommended model profile per role.
 
 ---
 
 ## 9. Bottom line
 
-PromptZone's durable advantage is the combination no one else offers: **a business-friendly 3S workflow and a developer's implementation workspace, over a single transparent AI-native task graph, orchestrating the models a team already owns.** The model layer is deliberately not proprietary — that's a feature, not a gap. Build the 3S experience and the orchestration/transparency spine deeply; keep the model layer open and the editor scope disciplined.
+PromptConnext's durable advantage is the combination no one else offers: **a business-friendly 3S workflow and a developer's implementation workspace, over a single transparent AI-native task graph, orchestrating the models a team already owns.** The model layer is deliberately not proprietary — that's a feature, not a gap. Build the 3S experience and the orchestration/transparency spine deeply; keep the model layer open and the editor scope disciplined.
 
 ---
 

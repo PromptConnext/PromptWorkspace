@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getProjectAgent, listAgents, setProjectAgent, type AgentInfo } from "../api";
 
-// Choose which external coding agent runs implementation (ADR 0009). PromptZone
+// Choose which external coding agent runs implementation (ADR 0009). PromptConnext
 // orchestrates the agent the developer already uses; it doesn't ship its own.
 export default function AgentPicker({ projectId }: { projectId: string }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -37,7 +37,7 @@ export default function AgentPicker({ projectId }: { projectId: string }) {
         {saving && <span className="muted"> · saving…</span>}
       </div>
       <p className="muted">
-        PromptZone runs the agent you already use — it ships none of its own. Pick which one
+        PromptConnext runs the agent you already use — it ships none of its own. Pick which one
         implements tasks here.
       </p>
       <div className="agent-chips">

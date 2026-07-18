@@ -33,7 +33,7 @@ export const gemini: AgentAdapter = {
       env: {
         NO_COLOR: "1",
         // Headless Gemini refuses to act in an "untrusted" folder (exit 55) and
-        // silently downgrades --approval-mode to "default". PromptZone owns the
+        // silently downgrades --approval-mode to "default". PromptConnext owns the
         // project directory, so trusting it is correct. (Verified live: without
         // this, no file is written; with it, edits apply.)
         GEMINI_CLI_TRUST_WORKSPACE: "true",

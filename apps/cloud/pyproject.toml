@@ -1,7 +1,7 @@
 [project]
-name = "promptzone-cloud"
+name = "promptconnext-cloud"
 version = "0.1.0"
-description = "Thin sync + collaboration backend for the PromptZone task graph."
+description = "Thin sync + collaboration backend for the PromptConnext task graph."
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]

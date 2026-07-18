@@ -30,7 +30,7 @@ from app.models.schemas import (
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
-logger = logging.getLogger("promptzone.integrations")
+logger = logging.getLogger("promptconnext.integrations")
 router = APIRouter(tags=["integrations"])
 
 # Provider-specific webhook signature headers.

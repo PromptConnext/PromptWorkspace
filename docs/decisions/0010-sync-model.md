@@ -8,7 +8,7 @@ Per ADR 0003, each desktop engine owns a local `node:sqlite` task graph that is 
 
 ## Decision
 
-**1 — Hub-and-spoke through the cloud, not peer-to-peer.** Every engine has its own local graph; PromptZone Cloud holds the **shared** copy. A user's changes reach teammates only after they travel *up* (push) to the cloud, and teammates' changes reach that user only after they come *down* (pull). Convergence is always through the cloud hub; engines never talk directly to each other.
+**1 — Hub-and-spoke through the cloud, not peer-to-peer.** Every engine has its own local graph; PromptConnext Cloud holds the **shared** copy. A user's changes reach teammates only after they travel *up* (push) to the cloud, and teammates' changes reach that user only after they come *down* (pull). Convergence is always through the cloud hub; engines never talk directly to each other.
 
 ```
 Engine A (sqlite) --push--> Cloud graph <--pull-- Engine B (sqlite)
@@ -19,7 +19,7 @@ Engine A (sqlite) --push--> Cloud graph <--pull-- Engine B (sqlite)
 
 **3 — Trigger is manual for v1 (Git-like).** Sync happens on an explicit user push/pull, not continuously. It is predictable, matches the developer mental model, and sidesteps concurrent-edit conflicts while the product is young. **Automatic background sync** (debounced push + periodic pull) is deferred until the conflict story (decision 4) is hardened.
 
-**4 — Conflict policy is last-write-wins by `updated_at` for v1.** Adequate under manual, low-contention sync. The refinement — **per-field ownership** (PromptZone authoritative for AI-native fields: agent-runs, artifacts, spec traceability, acceptance criteria; external trackers authoritative for PMO fields: assignee, sprint) — lands together with auto-sync and the Jira/ClickUp mirror, per the task-management memo. LWW is knowingly lossy under concurrent offline edits; that is accepted until then.
+**4 — Conflict policy is last-write-wins by `updated_at` for v1.** Adequate under manual, low-contention sync. The refinement — **per-field ownership** (PromptConnext authoritative for AI-native fields: agent-runs, artifacts, spec traceability, acceptance criteria; external trackers authoritative for PMO fields: assignee, sprint) — lands together with auto-sync and the Jira/ClickUp mirror, per the task-management memo. LWW is knowingly lossy under concurrent offline edits; that is accepted until then.
 
 **5 — Sync boundaries.** Only the **task graph** flows through this path. Model **credentials never sync** (they stay in the local OS-keychain vault — architecture §2.3). **Source code does not sync here** either — it goes through Git (ADR 0003 G3). The cloud makes no model calls and stores no code.
 

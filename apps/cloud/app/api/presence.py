@@ -28,7 +28,7 @@ _TRY_AGAIN_LATER = 1013  # room at capacity
 def _identify(websocket: WebSocket, settings) -> User | None:
     if settings.auth_mode == "stub":
         uid = websocket.query_params.get("user_id") or "dev-user"
-        return User(id=uid, email=f"{uid}@promptzone.local")
+        return User(id=uid, email=f"{uid}@promptconnext.local")
     token = websocket.query_params.get("token")
     if not token:
         return None

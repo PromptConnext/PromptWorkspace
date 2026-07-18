@@ -1,9 +1,9 @@
 # Plan — PromptConnext Marketing Website (IA · Content · SEO · Conversion)
 
 **Date:** 2026-07-06 · **Status:** Proposed · **Scope:** new `apps/website` (or separate repo)
-**Grounded in:** `docs/promptzone-product-roadmap.md`, `docs/promptzone-platform-architecture.md`, `docs/promptzone-design-system-plan.md`, root `README.md`
+**Grounded in:** `docs/promptconnext-product-roadmap.md`, `docs/promptconnext-platform-architecture.md`, `docs/promptconnext-design-system-plan.md`, root `README.md`
 
-**Brand:** product is **PromptConnext** (renamed from PromptZone). All site copy, brand keywords, comparison slugs, and the domain use *PromptConnext*. Internal repo/doc filenames (e.g. `docs/promptzone-*.md`) are left as-is here and are covered by a separate repo-wide rename if the team wants one.
+**Brand:** product is **PromptConnext** (renamed from PromptConnext). All site copy, brand keywords, comparison slugs, and the domain use *PromptConnext*. Internal repo/doc filenames (e.g. `docs/promptconnext-*.md`) are left as-is here and are covered by a separate repo-wide rename if the team wants one.
 
 **Locked decisions (from intake):**
 - **Pricing:** desktop app **free** (BYO-model, no model tax); **enterprise is contact-sales** (SSO, Jira/ClickUp sync, workspaces, support).
@@ -201,7 +201,7 @@ Google Search Console (per-locale properties), GA4 (or privacy-friendly Plausibl
 
 ## 8. Tech implementation (Next.js App Router)
 
-- **Framework:** Next.js App Router, SSG/ISR; TypeScript; Tailwind mapped to the **design-system tokens** so the site matches the product. **Token source of truth = the cloud-app design system in `.claude/skills/design-system/SKILL.md`** (not the older `docs/promptzone-design-system-plan.md`, which is superseded for the website). Reuse `packages/ui` where sensible. Concrete tokens to mirror (dark-first, Anthropic Sans):
+- **Framework:** Next.js App Router, SSG/ISR; TypeScript; Tailwind mapped to the **design-system tokens** so the site matches the product. **Token source of truth = the cloud-app design system in `.claude/skills/design-system/SKILL.md`** (not the older `docs/promptconnext-design-system-plan.md`, which is superseded for the website). Reuse `packages/ui` where sensible. Concrete tokens to mirror (dark-first, Anthropic Sans):
   - **Type:** `font.family = Anthropic Sans, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif`; base 14px / weight 500 / line-height 19.6px; scale xs 12 / sm 14 / md 16.
   - **Color:** text `#f8f8f6` / `#c3c2b7` / `#2c2c2a` / inverse `#ffffff`; surface base `#000000` / muted `#1f1f1e`; border `#e2e1da` / muted `rgba(255,255,255,.1)`; focus ring `#5599e7`.
   - **Space:** 8 / 10 / 16 (extend to a full marketing scale using these as anchors). **Radius:** 6px. **Motion:** 100ms / 150ms.

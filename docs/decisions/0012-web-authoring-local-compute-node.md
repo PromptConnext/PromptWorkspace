@@ -14,15 +14,15 @@ The obvious way to let a browser generate is the one 0011 already opened: a **wo
 Four forces are in tension:
 
 - **The trigger is a browser, the credential is on a laptop.** Something has to bridge them, and only one of the two is addressable from the internet.
-- **The engine's front door is deliberately shut.** ADR 0008 binds `127.0.0.1`, allowlists origins (`tauri://localhost`, vite dev) and requires a per-session bearer (`PROMPTZONE_AUTH_TOKEN`). A public web origin is *not* on that list, by design — the CSWSH→RCE finding is what put it there.
+- **The engine's front door is deliberately shut.** ADR 0008 binds `127.0.0.1`, allowlists origins (`tauri://localhost`, vite dev) and requires a per-session bearer (`PROMPTCONNEXT_AUTH_TOKEN`). A public web origin is *not* on that list, by design — the CSWSH→RCE finding is what put it there.
 - **The browser can no longer quietly reach loopback anyway.** Chrome ships Local Network Access enforcement from 142: a public origin hitting `127.0.0.1` triggers a user permission prompt, split into a distinct `loopback-network` permission in 145 and extended to WebSocket/WebTransport in 147. Enterprise policy can deny it outright.
-- **BYO-model is identity, not a cost hack** (0011). Whatever we build must not quietly become "PromptZone calls the model for you."
+- **BYO-model is identity, not a cost hack** (0011). Whatever we build must not quietly become "PromptConnext calls the model for you."
 
 The enabling asset is that **the engine already authenticates to the cloud as the cloud user** — `cloudClient.ts` holds a Supabase session in the keychain and `sync/loop.ts` already pushes the graph up on an interval. The engine is, today, an outbound cloud client. It does not need a new identity to become a compute node; it needs a new socket.
 
 ## Decision
 
-**1 — The engine becomes a compute node, not just a desktop sidecar.** Ship the same `apps/engine` binary as **PromptZone Connector**: a tray/menu-bar installer with no Tauri window, no terminal, no repo. Business users install one thing, sign in once, and close it. Developers already have it — the desktop app registers as a node too.
+**1 — The engine becomes a compute node, not just a desktop sidecar.** Ship the same `apps/engine` binary as **PromptConnext Connector**: a tray/menu-bar installer with no Tauri window, no terminal, no repo. Business users install one thing, sign in once, and close it. Developers already have it — the desktop app registers as a node too.
 
 **2 — The node dials out. The browser never dials in.** The connector opens a persistent WebSocket *from* the engine *to* the cloud (`apps/cloud/app/ws/`, alongside presence) and registers as a compute node for the signed-in user. There is **no change to ADR 0008**: loopback stays closed, the origin allowlist is not widened to a public origin, no new inbound surface exists on the user's machine. This also sidesteps Chrome LNA entirely — no page ever fetches `127.0.0.1`.
 
@@ -99,7 +99,7 @@ Browser (apps/web) --job--> Cloud (queue + relay) <==WS== Connector (engine) -->
 
 **Pros:** the only option with true zero-install and server-side background jobs. **Cons:** ruled out by the stated constraint; the team's existing subscription goes unused and they pay twice. **Kept alive as the coexisting alternative** (per this ADR's header) — a workspace picks one.
 
-### E. Cloud runs models on PromptZone's own key
+### E. Cloud runs models on PromptConnext's own key
 
 Rejected without analysis: reverses BYO-model, which 0011 named as identity rather than cost policy.
 

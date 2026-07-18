@@ -1,18 +1,18 @@
-# PromptZone — Platform Architecture
+# PromptConnext — Platform Architecture
 
 **Date:** 2026-06-29
 **Status:** Draft v1 for review. Produced with the system-design framework (requirements → high-level design → deep dive → scale/reliability → trade-offs).
-**Companion:** [`promptzone-product-roadmap.md`](./promptzone-product-roadmap.md) (vision, 3S, phasing). Background memos in the `ideva-kit` repo `docs/`.
+**Companion:** [`promptconnext-product-roadmap.md`](./promptconnext-product-roadmap.md) (vision, 3S, phasing). Background memos in the `ideva-kit` repo `docs/`.
 
 ---
 
 ## 0. Key assumptions (stated explicitly)
 
 1. **Deployment shape = hybrid desktop client + cloud sync** (the pivotal decision; see §2.1). A local engine keeps compute, model keys, and code on the user's machine; a thin cloud service holds the shared task graph, identity, and collaboration. This is the only shape consistent with "VS Code-like," "bring your own model," "local models," and "computation stays local when possible." *If the product is instead a pure web app, §2–§4 change materially — flag before building.*
-2. **Spec Kit (GitHub) is the workflow engine**, wrapped and hidden behind the 3S experience. PromptZone owns the UX and the task graph; Spec Kit owns spec/plan generation mechanics.
+2. **Spec Kit (GitHub) is the workflow engine**, wrapped and hidden behind the 3S experience. PromptConnext owns the UX and the task graph; Spec Kit owns spec/plan generation mechanics.
 3. **Models are BYO** — no proprietary model. The platform ships a provider-agnostic gateway, not weights.
 4. **Reuse the Ideva Kit stack where sensible** (FastAPI / Python, Next.js / TypeScript, Supabase/Postgres) to move fast, unless the desktop shell dictates otherwise.
-5. **Ideva Kit stays as-is**; PromptZone is a clean, separate codebase that borrows proven data shapes (e.g. acceptance criteria as `{text}[]`).
+5. **Ideva Kit stays as-is**; PromptConnext is a clean, separate codebase that borrows proven data shapes (e.g. acceptance criteria as `{text}[]`).
 
 ---
 
@@ -34,7 +34,7 @@
 | **Privacy** | Code, model keys, and inference stay on the user's machine by default; cloud sees the task graph + metadata the user opts to share. |
 | **Latency** | 3S step feedback streamed; model latency is the connected provider's, not ours. |
 | **Availability** | Cloud sync 99.9%; the desktop engine must keep working **offline** for local-model workflows (degrade collaboration, not core work). |
-| **Cost** | No per-token cost to PromptZone — users pay their own providers. Our cost is sync infra + storage. |
+| **Cost** | No per-token cost to PromptConnext — users pay their own providers. Our cost is sync infra + storage. |
 | **Portability** | Any OpenAI-compatible provider or local runtime pluggable without code changes. |
 | **Security** | Model credentials stored in the OS keychain locally, never in the cloud in plaintext. |
 
@@ -59,7 +59,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph CLIENT["PromptZone Desktop App — user's machine (VS Code-like shell)"]
+    subgraph CLIENT["PromptConnext Desktop App — user's machine (VS Code-like shell)"]
         direction TB
         UI["Dual-Persona UI<br/><i>Business surface · Developer surface</i>"]
         subgraph ENGINE["Local Engine (background service)"]
@@ -81,7 +81,7 @@ flowchart TB
         LOCAL["Local (Ollama)"]
     end
 
-    subgraph CLOUD["PromptZone Cloud (thin sync + collaboration)"]
+    subgraph CLOUD["PromptConnext Cloud (thin sync + collaboration)"]
         direction TB
         API["Sync API<br/><i>task graph, identity</i>"]
         GRAPHDB["Task Graph DB<br/><i>Postgres/Supabase</i>"]
@@ -122,7 +122,7 @@ flowchart TB
 | **Model Gateway + Router** | Normalizes all providers to one interface; routes tasks to the right connected model by role; holds the two connection modes; degrades gracefully to the two required models. |
 | **Credential Vault** | Model keys/tokens in OS keychain. Never leaves the machine. |
 | **Local Task-Graph Cache** | Source of truth while offline; syncs to cloud when connected. |
-| **PromptZone Cloud** | Identity, the shared task graph, collaboration (presence/comments/roles), external-tracker sync, and a workspace-BYO RAG assistant (ADR 0011, plan 0005 M9). No source code at rest; no *end-user* credentials — only a workspace admin's own model key, encrypted server-side. |
+| **PromptConnext Cloud** | Identity, the shared task graph, collaboration (presence/comments/roles), external-tracker sync, and a workspace-BYO RAG assistant (ADR 0011, plan 0005 M9). No source code at rest; no *end-user* credentials — only a workspace admin's own model key, encrypted server-side. |
 
 ---
 
@@ -146,7 +146,7 @@ Project
  └─ ModelOnboardingState  not_started|in_progress|satisfied  ← gates workspace entry
 ```
 
-Design rules: **PromptZone is authoritative** for AI-native fields (AgentRun, Artifact, spec traceability, acceptance criteria). External trackers are authoritative only for the fields they own (assignee, sprint) — this per-field ownership avoids bidirectional-sync conflict logic (task-management memo).
+Design rules: **PromptConnext is authoritative** for AI-native fields (AgentRun, Artifact, spec traceability, acceptance criteria). External trackers are authoritative only for the fields they own (assignee, sprint) — this per-field ownership avoids bidirectional-sync conflict logic (task-management memo).
 
 ### 3.2 API contracts (representative)
 
@@ -218,7 +218,7 @@ State: a `ModelOnboardingState` (`not_started → in_progress → satisfied`) ga
 | **Per-field sync ownership** | Some fields one-way vs. avoiding conflict hell | If customers demand full bidirectional parity |
 
 **Open technical decisions to confirm (in priority order):**
-1. **Desktop shell** (Tauri vs. Electron) and whether developers code *in* PromptZone or in their own IDE with PromptZone orchestrating — biggest scope lever.
+1. **Desktop shell** (Tauri vs. Electron) and whether developers code *in* PromptConnext or in their own IDE with PromptConnext orchestrating — biggest scope lever.
 2. **Local engine language/runtime** — reuse FastAPI as a bundled local service, or a native sidecar.
 3. **Which providers** to support per connection mode at launch; ToS review for Mode 2.
 4. **Sync granularity & conflict policy** beyond per-field ownership.

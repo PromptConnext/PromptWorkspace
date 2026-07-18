@@ -1,6 +1,6 @@
-# Building & Distributing PromptZone
+# Building & Distributing PromptConnext
 
-How to run PromptZone in development and produce a distributable macOS app. Reflects the state as of the packaging pass (ADR 0001 / 0008).
+How to run PromptConnext in development and produce a distributable macOS app. Reflects the state as of the packaging pass (ADR 0001 / 0008).
 
 **Current support:** macOS on Apple Silicon (arm64), self-contained (no repo, no system Node needed to *run* the built app). Windows/Linux and code-signed distribution are not done yet — see [Limitations](#limitations).
 
@@ -22,7 +22,7 @@ Verify: `node -v` (≥ v24), `pnpm -v`, `cargo -v`.
 ## 2. First-time setup
 
 ```sh
-git clone <repo> && cd PromptZone
+git clone <repo> && cd PromptConnext
 pnpm install
 ```
 
@@ -61,9 +61,9 @@ This runs, in order (`beforeBuildCommand` + Tauri bundling):
 2. `pnpm stage:engine` — produces a **self-contained engine** at `src-tauri/.engine-pkg`:
    - a **hoisted `pnpm deploy`** (`--config.node-linker=hoisted`) — a symlink-free copy of the engine + its `node_modules` (raw pnpm `node_modules` is a symlink forest and can't be bundled).
    - `scripts/bundle-node.mjs` copies the build's own Node binary into `.engine-pkg/node` (ABI-matched to the bundled `node-pty`).
-3. Rust release compile + bundle into `PromptZone.app`, copying `.engine-pkg` to `Contents/Resources/engine`.
+3. Rust release compile + bundle into `PromptConnext.app`, copying `.engine-pkg` to `Contents/Resources/engine`.
 
-**Output:** `apps/desktop/src-tauri/target/release/bundle/macos/PromptZone.app` (~192 MB).
+**Output:** `apps/desktop/src-tauri/target/release/bundle/macos/PromptConnext.app` (~192 MB).
 
 At runtime the Rust shell resolves the engine from `Contents/Resources/engine` and runs it with the **bundled** `Contents/Resources/engine/node` — so the app needs neither the repo nor a system Node. Verified by launching a copy outside the repo with `node` stripped from `PATH`.
 
@@ -72,8 +72,8 @@ At runtime the Rust shell resolves the engine from `Contents/Resources/engine` a
 ## 5. What's inside the bundle
 
 ```
-PromptZone.app/Contents/
-├── MacOS/promptzone-desktop         # Rust shell (spawns engine, injects auth token)
+PromptConnext.app/Contents/
+├── MacOS/promptconnext-desktop         # Rust shell (spawns engine, injects auth token)
 └── Resources/engine/
     ├── node                         # bundled Node 24 runtime (~120 MB)
     ├── src/index.ts                 # engine entry (run with the bundled node)
@@ -91,7 +91,7 @@ Security posture (already in place): the engine binds `127.0.0.1` only; every re
 
 **Quick workaround (for a trusted tester, not real distribution):**
 ```sh
-xattr -dr com.apple.quarantine /path/to/PromptZone.app   # strip the download quarantine
+xattr -dr com.apple.quarantine /path/to/PromptConnext.app   # strip the download quarantine
 ```
 or right-click the app → **Open** → **Open** on the warning dialog.
 

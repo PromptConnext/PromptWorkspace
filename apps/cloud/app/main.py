@@ -37,7 +37,7 @@ from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
 
-logger = logging.getLogger("promptzone")
+logger = logging.getLogger("promptconnext")
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI):
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
     logger.info(
-        "PromptZone Cloud %s started (backend=%s)",
+        "PromptConnext Cloud %s started (backend=%s)",
         __version__,
         app.state.repository.backend_name,
     )
@@ -132,9 +132,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="PromptZone Cloud",
+        title="PromptConnext Cloud",
         version=__version__,
-        summary="Thin sync + collaboration backend for the PromptZone task graph.",
+        summary="Thin sync + collaboration backend for the PromptConnext task graph.",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -169,7 +169,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", tags=["health"])
     def root() -> dict:
-        return {"service": "promptzone-cloud", "version": __version__, "docs": "/docs"}
+        return {"service": "promptconnext-cloud", "version": __version__, "docs": "/docs"}
 
     return app
 

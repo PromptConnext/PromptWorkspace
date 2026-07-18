@@ -4,7 +4,7 @@
 // get a shell (CSWSH → RCE). Browsers always send an accurate Origin on both
 // fetch and WS handshakes and cannot forge it, so an allowlist is the effective
 // gate against the browser-driven threat. Extra origins via
-// PROMPTZONE_ALLOWED_ORIGINS (comma-separated) for custom dev setups.
+// PROMPTCONNEXT_ALLOWED_ORIGINS (comma-separated) for custom dev setups.
 const DEFAULT_ORIGINS = [
   "tauri://localhost", // packaged app (macOS/Linux webview)
   "https://tauri.localhost", // packaged app (Windows webview)
@@ -14,7 +14,7 @@ const DEFAULT_ORIGINS = [
 
 export const ALLOWED_ORIGINS = new Set([
   ...DEFAULT_ORIGINS,
-  ...(process.env.PROMPTZONE_ALLOWED_ORIGINS ?? "")
+  ...(process.env.PROMPTCONNEXT_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
@@ -25,12 +25,12 @@ export function isAllowedOrigin(origin: string | undefined | null): boolean {
 }
 
 // Per-session auth token (ADR 0008/0001). The packaged Tauri shell mints a
-// random token, passes it to the engine via PROMPTZONE_AUTH_TOKEN, and injects
+// random token, passes it to the engine via PROMPTCONNEXT_AUTH_TOKEN, and injects
 // it into the webview. When set, every request must present it — defending
 // against same-origin XSS and non-browser local processes that the origin
 // allowlist alone can't stop. Unset in dev (`pnpm engine`) so local iteration
 // and browser tests keep working.
-export const AUTH_TOKEN = process.env.PROMPTZONE_AUTH_TOKEN ?? null;
+export const AUTH_TOKEN = process.env.PROMPTCONNEXT_AUTH_TOKEN ?? null;
 
 // Accept the token via header (HTTP) or `?token=` (WebSocket handshakes, where
 // browsers can't set headers). Returns true when no token is configured.

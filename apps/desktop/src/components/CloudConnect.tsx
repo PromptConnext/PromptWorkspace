@@ -22,7 +22,7 @@ import {
   type CloudWorkspace,
 } from "../api";
 
-// D1 (docs/plans/0004): opt-in "Connect to PromptZone Cloud" panel per
+// D1 (docs/plans/0004): opt-in "Connect to PromptConnext Cloud" panel per
 // project. Renders nothing when cloud sync isn't configured server-side
 // (CLOUD_API_URL unset) — most desktop users today are single-player.
 export default function CloudConnect({ projectId }: { projectId: string }) {
@@ -111,7 +111,7 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
   if (!session?.connected) {
     return (
       <div className="cloud-connect">
-        <h3>Connect to PromptZone Cloud</h3>
+        <h3>Connect to PromptConnext Cloud</h3>
         {config.mode === "supabase" ? (
           <>
             <p className="muted">

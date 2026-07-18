@@ -1,7 +1,7 @@
 {
-  "name": "promptzone",
+  "name": "promptconnext",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "packageManager": "pnpm@9.11.0",
   "description": "AI-native development workspace — 3S workflow (Scope → Spec → Skill) over a BYO-model orchestration engine",
   "scripts": {

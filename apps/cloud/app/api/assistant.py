@@ -52,7 +52,7 @@ from app.rag.lineage import compute_facts, facts_to_text, resolve_target
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
-logger = logging.getLogger("promptzone.assistant")
+logger = logging.getLogger("promptconnext.assistant")
 router = APIRouter(tags=["assistant"])
 
 

@@ -3,7 +3,7 @@ import type { AgentAdapter } from "./types.ts";
 
 // Claude Code — routed to the connected BYO model through the engine's
 // Anthropic façade (bringsOwnModel: false). Safe default is file tools only;
-// PROMPTZONE_AGENT_ALLOW_BASH=1 adds shell (see ADR 0006/0008).
+// PROMPTCONNEXT_AGENT_ALLOW_BASH=1 adds shell (see ADR 0006/0008).
 type StreamJsonLine = {
   type?: string;
   result?: string;
@@ -41,7 +41,7 @@ export const claudeCode: AgentAdapter = {
         ANTHROPIC_BASE_URL: `${engineBaseUrl}/anthropic`,
         // Becomes the Bearer on the agent's façade calls — must be the session
         // token when one is configured, so the auth middleware accepts it.
-        ANTHROPIC_API_KEY: process.env.PROMPTZONE_AUTH_TOKEN ?? "promptzone-local-proxy",
+        ANTHROPIC_API_KEY: process.env.PROMPTCONNEXT_AUTH_TOKEN ?? "promptconnext-local-proxy",
         // Isolate from the user's personal Claude Code setup: no global
         // plugins/hooks leaking tools or state files into the workspace.
         CLAUDE_CONFIG_DIR: configDir,

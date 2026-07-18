@@ -1,6 +1,6 @@
-# PromptZone — Diagrams
+# PromptConnext — Diagrams
 
-Editable Mermaid sources for the system architecture and the usage flow. Render in GitHub, VS Code, or any Mermaid viewer. Companion to [`promptzone-platform-architecture.md`](./promptzone-platform-architecture.md).
+Editable Mermaid sources for the system architecture and the usage flow. Render in GitHub, VS Code, or any Mermaid viewer. Companion to [`promptconnext-platform-architecture.md`](./promptconnext-platform-architecture.md).
 
 - **Blue = local** (runs on the user's machine: compute, keys, code).
 - **Amber = remote** (cloud / external services).
@@ -12,7 +12,7 @@ Editable Mermaid sources for the system architecture and the usage flow. Render 
 
 ```mermaid
 flowchart TB
-    subgraph DESKTOP["🖥️ PromptZone Desktop App — user's machine (VS Code-like shell)"]
+    subgraph DESKTOP["🖥️ PromptConnext Desktop App — user's machine (VS Code-like shell)"]
         direction TB
         subgraph UI["Dual-Persona UI"]
             direction LR
@@ -39,7 +39,7 @@ flowchart TB
         OLLAMA["Local runtime · Ollama"]
     end
 
-    subgraph CLOUD["☁️ PromptZone Cloud — thin sync + collaboration"]
+    subgraph CLOUD["☁️ PromptConnext Cloud — thin sync + collaboration"]
         direction TB
         SYNC["Sync API<br/><i>task graph · identity</i>"]
         GDB["Task Graph DB<br/><i>Postgres / Supabase</i>"]

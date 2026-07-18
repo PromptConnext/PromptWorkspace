@@ -1,10 +1,10 @@
-export const ENGINE_PORT = Number(process.env.PROMPTZONE_ENGINE_PORT ?? 47131);
+export const ENGINE_PORT = Number(process.env.PROMPTCONNEXT_ENGINE_PORT ?? 47131);
 
-// Cloud sync (apps/cloud) defaults to the hosted PromptZone Cloud instance.
+// Cloud sync (apps/cloud) defaults to the hosted PromptConnext Cloud instance.
 // Override with CLOUD_API_URL (e.g. http://localhost:8080 for local dev
 // against a source checkout of apps/cloud, see docs/DEVELOPMENT.md). Set it
 // to an empty string to disable cloud sync entirely.
-const DEFAULT_CLOUD_API_URL = "https://promptzonecloud-production.up.railway.app";
+const DEFAULT_CLOUD_API_URL = "https://promptconnextcloud-production.up.railway.app";
 export const CLOUD_API_URL =
   process.env.CLOUD_API_URL === ""
     ? null

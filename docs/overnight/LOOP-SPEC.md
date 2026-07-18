@@ -1,4 +1,4 @@
-# Overnight Loop Spec — PromptZone
+# Overnight Loop Spec — PromptConnext
 
 > An autonomous overnight loop that ships mechanically-safe changes and queues
 > everything else for a 5-minute morning review. Never does anything irreversible.
@@ -84,7 +84,7 @@ Never push. Never deploy. Never touch `.env` / secrets. Hand over the morning qu
 - Never rewrite git history (no branch deletes, no tag changes, no rebases of shared history)
 - When uncertain → **queue, don't act**
 
-**PromptZone-specific (this stage):**
+**PromptConnext-specific (this stage):**
 - **Never modify `.env` / secrets / keys / tokens** — the one file-level fence.
 
 *Note:* At this pre-production stage, no other file-level fences are set. Migrations,

@@ -30,7 +30,7 @@ export default function App() {
   if (!engineUp) {
     return (
       <main className="center">
-        <h1>PromptZone</h1>
+        <h1>PromptConnext</h1>
         <p className="error">
           Local engine unreachable — it normally starts with the app. Check the logs
           and relaunch.

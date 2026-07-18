@@ -1,7 +1,7 @@
 """Field-level merge engine with declared ownership (M3).
 
 Row-level last-write-wins (LWW) silently drops concurrent edits and cannot
-coexist with an external tracker: if Jira owns `assignee` and PromptZone owns
+coexist with an external tracker: if Jira owns `assignee` and PromptConnext owns
 `status`, a whole-row overwrite corrupts one of them. We instead merge
 field-by-field, honouring each field's *authority domain*:
 

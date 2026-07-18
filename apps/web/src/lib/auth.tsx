@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (AUTH_MODE === "stub") {
       const stored = typeof window !== "undefined" ? localStorage.getItem(STUB_USER_KEY) : null;
-      if (stored) setUser({ id: stored, email: `${stored}@promptzone.local` });
+      if (stored) setUser({ id: stored, email: `${stored}@promptconnext.local` });
       setLoading(false);
       return;
     }
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInStub = useCallback((userId: string) => {
     localStorage.setItem(STUB_USER_KEY, userId);
-    setUser({ id: userId, email: `${userId}@promptzone.local` });
+    setUser({ id: userId, email: `${userId}@promptconnext.local` });
   }, []);
 
   const signInSupabase = useCallback(async (email: string, password: string) => {

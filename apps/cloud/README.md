@@ -1,6 +1,6 @@
-# PromptZone Cloud
+# PromptConnext Cloud
 
-**Sync + collaboration** backend for the PromptZone task graph, plus a
+**Sync + collaboration** backend for the PromptConnext task graph, plus a
 workspace-BYO RAG assistant (ADR 0011). It holds the shared requirement →
 spec → task → artifact → agent-run lineage so collaborators and business
 stakeholders see the same truth, and answers questions grounded in that
@@ -9,7 +9,7 @@ to store), and no *end-user* credentials — a workspace admin's own model API
 key is the only credential the cloud ever holds, encrypted server-side
 (`app/secrets.py`), never in a Supabase row.
 
-See [`../../docs/promptzone-platform-architecture.md`](../../docs/promptzone-platform-architecture.md)
+See [`../../docs/promptconnext-platform-architecture.md`](../../docs/promptconnext-platform-architecture.md)
 and the roadmap in [`../../docs/plans/`](../../docs/plans).
 
 [`apps/web`](../web) (M8) is a read-only browser client of this API's
@@ -55,8 +55,8 @@ pytest -q
 ## Deploy (container / Cloud Run)
 
 ```bash
-docker build -t promptzone-cloud .
-docker run -p 8080:8080 --env-file .env.local promptzone-cloud
+docker build -t promptconnext-cloud .
+docker run -p 8080:8080 --env-file .env.local promptconnext-cloud
 ```
 
 Cloud Run reads `$PORT` automatically. **Run a single instance** for now:
@@ -113,7 +113,7 @@ keyset (`after_ts`,`after_id`); the response carries `next_id` / `has_more`.
 Instead of row-level last-write-wins (which silently drops concurrent edits),
 each field has an **authority domain**:
 
-- **`pz`** — PromptZone-authoritative (agent evidence, spec lineage, `status`).
+- **`pz`** — PromptConnext-authoritative (agent evidence, spec lineage, `status`).
 - **`pmo`** — external-tracker-authoritative (`assignee`, `sprint`, `feature_tag`).
 - **`shared`** — `title` / `description`, LWW acceptable.
 
@@ -124,7 +124,7 @@ field and vice-versa. The sync payload carries `source: "pz" | "pmo"`.
 ### Jira / ClickUp mirror (M5, extended M12)
 
 A thin, field-scoped two-way boundary — only status/assignment/linkage (and,
-as of M12, comments) mirror; the AI-native graph stays in PromptZone.
+as of M12, comments) mirror; the AI-native graph stays in PromptConnext.
 
 | Method | Path | Guard |
 |---|---|---|

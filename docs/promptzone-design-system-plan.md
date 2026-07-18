@@ -1,15 +1,15 @@
-# PromptZone — Design System & Component Library: Build Plan
+# PromptConnext — Design System & Component Library: Build Plan
 
 **Date:** 2026-06-29
-**Reference:** the uploaded `design-system` skill (`.claude/skills/design-system/SKILL.md`), derived from the Claude artifact `PromptZone_Platform.jsx`. It provides tokens + system rules, not screens.
-**Scope (agreed):** design system + components first — the reusable foundation the PromptZone client is built on.
-**Companion:** [`promptzone-platform-architecture.md`](./promptzone-platform-architecture.md) · [`promptzone-diagrams.md`](./promptzone-diagrams.md)
+**Reference:** the uploaded `design-system` skill (`.claude/skills/design-system/SKILL.md`), derived from the Claude artifact `PromptConnext_Platform.jsx`. It provides tokens + system rules, not screens.
+**Scope (agreed):** design system + components first — the reusable foundation the PromptConnext client is built on.
+**Companion:** [`promptconnext-platform-architecture.md`](./promptconnext-platform-architecture.md) · [`promptconnext-diagrams.md`](./promptconnext-diagrams.md)
 
 ---
 
 ## 1. Intent (one sentence)
 
-Turn the reference tokens and rules into a **tokenized, accessible, implementation-ready React component library** that both the business and developer surfaces of PromptZone consume, so every screen is consistent by construction rather than by convention.
+Turn the reference tokens and rules into a **tokenized, accessible, implementation-ready React component library** that both the business and developer surfaces of PromptConnext consume, so every screen is consistent by construction rather than by convention.
 
 ---
 
@@ -33,7 +33,7 @@ Turn the reference tokens and rules into a **tokenized, accessible, implementati
 | **Accessible primitives** | Radix UI (headless) | The mandated states (focus-visible, keyboard, disabled, dialog focus-trap) are exactly what Radix solves; don't hand-roll a11y | Extra dep; must style from scratch (fine — we own the tokens) |
 | **Styling** | CSS variables for tokens + Tailwind mapped to those vars | Tokens become the single source of truth; Tailwind gives ergonomics without hardcoded values | Tailwind config must be token-locked (lint against raw hex) |
 | **Workshop / docs** | Storybook + `@storybook/addon-a11y` (axe) | Every component's 7 states become visible, testable stories; a11y checked in CI | Setup cost |
-| **Location** | `packages/ui/` in the PromptZone repo (consumed by the desktop client app) | Shared library, versionable, not tied to one app | Introduces a light monorepo layout |
+| **Location** | `packages/ui/` in the PromptConnext repo (consumed by the desktop client app) | Shared library, versionable, not tied to one app | Introduces a light monorepo layout |
 
 Net: **tokens → CSS vars → Tailwind + Radix components → Storybook (with axe) → consumed by the client.** No raw hex in components (enforced by lint), per the reference's "semantic tokens only" rule.
 
@@ -55,13 +55,13 @@ Naming stays semantic (`--color-text-primary`, `--space-3`, `--radius-md`), neve
 **Primitives (build first — everything depends on them):**
 Button (variants: primary/secondary/ghost/danger), Input, Textarea, Select, Checkbox, Radio, Switch, Card, Badge/StatusPill, Tabs, Dialog/Modal, Toast, Tooltip, ProgressBar, Spinner/Loader, Skeleton, Table, EmptyState, Banner/Callout.
 
-**Domain components (compose primitives into PromptZone's surfaces):**
+**Domain components (compose primitives into PromptConnext's surfaces):**
 - **3S flow:** `StageStepper` (Scope→Spec→Skill with gate/approval states), `GateBanner` (blocked/approve).
 - **Onboarding:** `ModelConnectionCard` (provider + connection mode), `ConnectionHealthState` (untested/verifying/valid/failed), `ZeroCostPathCallout`.
 - **Task graph:** `RequirementRow`, `SpecReviewPanel`, `TaskCard` (with `{text}[]` acceptance criteria — reuse the Ideva Kit shape), `AgentRunEvidence`, `ProgressTimeline`.
 - **Shell:** `AppSidebar`, `PersonaSurfaceToggle` (business ↔ developer), `ProjectListItem`.
 
-Primitives are theme/domain-agnostic; domain components encode PromptZone semantics and map 1:1 to the architecture's task graph.
+Primitives are theme/domain-agnostic; domain components encode PromptConnext semantics and map 1:1 to the architecture's task graph.
 
 ---
 
@@ -96,7 +96,7 @@ Every component ships with: **anatomy**, **variants**, **all 7 states** (default
 ## 9. Deliverables & structure
 
 ```
-PromptZone/
+PromptConnext/
   packages/
     ui/
       tokens/           tokens.json · tokens.css · tokens.ts · tailwind-preset.ts
@@ -108,7 +108,7 @@ PromptZone/
       tests/            a11y + interaction
       README.md
   docs/
-    promptzone-design-system-plan.md   ← this file
+    promptconnext-design-system-plan.md   ← this file
     design-system-guidelines.md        ← per-component rules (authored alongside build)
 ```
 

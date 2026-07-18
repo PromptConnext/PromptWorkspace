@@ -58,7 +58,7 @@ export class CloudNotConfiguredError extends Error {
 
 export class CloudNotLoggedInError extends Error {
   constructor() {
-    super("not logged in to PromptZone Cloud");
+    super("not logged in to PromptConnext Cloud");
   }
 }
 

@@ -29,7 +29,7 @@ from app.rag.chunker import chunk_text
 from app.rag.code_chunker import chunk_code
 from app.rag.source import node_text
 
-logger = logging.getLogger("promptzone.rag")
+logger = logging.getLogger("promptconnext.rag")
 
 
 @dataclass(frozen=True)

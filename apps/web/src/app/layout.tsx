@@ -4,8 +4,8 @@ import { WorkspaceProvider } from "@/lib/workspace";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PromptZone",
-  description: "PromptZone collaborative web workspace",
+  title: "PromptConnext",
+  description: "PromptConnext collaborative web workspace",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

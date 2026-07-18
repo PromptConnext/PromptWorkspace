@@ -1,6 +1,6 @@
-# PromptZone — Development & Cross-Platform Build Guide
+# PromptConnext — Development & Cross-Platform Build Guide
 
-How to develop PromptZone and how to build the desktop app for **both macOS and Windows from a Mac M1** (Apple Silicon). For deep macOS packaging detail (bundle contents, security posture, notarization), see [BUILD_AND_DISTRIBUTE.md](./BUILD_AND_DISTRIBUTE.md) — this guide covers the day-to-day workflow and extends it with the Windows story.
+How to develop PromptConnext and how to build the desktop app for **both macOS and Windows from a Mac M1** (Apple Silicon). For deep macOS packaging detail (bundle contents, security posture, notarization), see [BUILD_AND_DISTRIBUTE.md](./BUILD_AND_DISTRIBUTE.md) — this guide covers the day-to-day workflow and extends it with the Windows story.
 
 ## Layout
 
@@ -10,7 +10,7 @@ How to develop PromptZone and how to build the desktop app for **both macOS and 
 | `apps/engine` | Node 24 / TypeScript (Hono, `node:sqlite`, `node-pty`) | Local engine on `127.0.0.1:47131` — runs TS natively, no build step |
 | `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to the hosted Railway instance, override with `CLOUD_API_URL`, or set it to `""` to disable |
 
-Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptZone orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTZONE_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
+Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptConnext orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTCONNEXT_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
 
 ## Prerequisites (Mac M1)
 
@@ -54,7 +54,7 @@ pytest                                         # cloud is the only app with a te
 
 Point the engine at it with `CLOUD_API_URL=http://localhost:8080` — otherwise the engine talks to the hosted production instance by default. For real auth/persistence against your local instance, set `DATA_BACKEND=supabase`, `SUPABASE_URL`, `SUPABASE_KEY` (see `apps/cloud/README.md`).
 
-**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTZONE_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to the hosted Railway instance; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTZONE_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
+**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTCONNEXT_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to the hosted Railway instance; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTCONNEXT_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
 
 ## How packaging works — read this before any cross-build
 
@@ -67,10 +67,10 @@ The consequence: **the bundled Node runtime and `node-pty` addon are host-platfo
 ```bash
 cd apps/desktop
 pnpm tauri build
-# → src-tauri/target/release/bundle/macos/PromptZone.app  (~192 MB)
+# → src-tauri/target/release/bundle/macos/PromptConnext.app  (~192 MB)
 ```
 
-The result is fully self-contained (no repo, no system Node needed to run it). For a distributable disk image add `"dmg"` to `bundle.targets` in `tauri.conf.json`. The app is unsigned — testers must `xattr -dr com.apple.quarantine PromptZone.app` or right-click → Open; signing/notarization steps are in [BUILD_AND_DISTRIBUTE.md §6](./BUILD_AND_DISTRIBUTE.md).
+The result is fully self-contained (no repo, no system Node needed to run it). For a distributable disk image add `"dmg"` to `bundle.targets` in `tauri.conf.json`. The app is unsigned — testers must `xattr -dr com.apple.quarantine PromptConnext.app` or right-click → Open; signing/notarization steps are in [BUILD_AND_DISTRIBUTE.md §6](./BUILD_AND_DISTRIBUTE.md).
 
 ## Build target 2 — macOS Intel / universal: one caveat
 

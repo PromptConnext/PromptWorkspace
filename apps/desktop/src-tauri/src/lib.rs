@@ -26,7 +26,7 @@ fn mint_token() -> String {
 // the app's resource dir (packaged), else the repo checkout this binary was
 // compiled from (dev / `cargo build`).
 fn engine_dir<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> PathBuf {
-    if let Ok(dir) = std::env::var("PROMPTZONE_ENGINE_DIR") {
+    if let Ok(dir) = std::env::var("PROMPTCONNEXT_ENGINE_DIR") {
         return PathBuf::from(dir);
     }
     if let Ok(res) = handle.path().resource_dir() {
@@ -51,8 +51,8 @@ fn spawn_engine(token: &str, dir: &Path) -> std::io::Result<Child> {
     Command::new(node)
         .arg("src/index.ts")
         .current_dir(dir)
-        .env("PROMPTZONE_PARENT_PID", std::process::id().to_string())
-        .env("PROMPTZONE_AUTH_TOKEN", token)
+        .env("PROMPTCONNEXT_PARENT_PID", std::process::id().to_string())
+        .env("PROMPTCONNEXT_AUTH_TOKEN", token)
         .spawn()
 }
 
@@ -78,7 +78,7 @@ pub fn run() {
             let child = match spawn_engine(&token, &dir) {
                 Ok(child) => {
                     println!(
-                        "[promptzone] engine started (pid {}) from {}",
+                        "[promptconnext] engine started (pid {}) from {}",
                         child.id(),
                         dir.display()
                     );
@@ -87,7 +87,7 @@ pub fn run() {
                 Err(err) => {
                     // The UI polls /engine/health and surfaces "unreachable";
                     // never block the shell on a failed sidecar.
-                    eprintln!("[promptzone] failed to start engine: {err}");
+                    eprintln!("[promptconnext] failed to start engine: {err}");
                     None
                 }
             };
@@ -97,9 +97,9 @@ pub fn run() {
             // before any app script runs (ADR 0008). Window chrome mirrors what
             // tauri.conf.json used to declare.
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("PromptZone")
+                .title("PromptConnext")
                 .inner_size(1280.0, 840.0)
-                .initialization_script(&format!("window.__PROMPTZONE_TOKEN__ = \"{token}\";"))
+                .initialization_script(&format!("window.__PROMPTCONNEXT_TOKEN__ = \"{token}\";"))
                 .build()?;
 
             // On Linux, packaging (e.g. an AppImage launched without a proper
@@ -110,7 +110,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 if let Err(err) = app.deep_link().register("promptconnext") {
-                    eprintln!("[promptzone] failed to register promptconnext:// scheme: {err}");
+                    eprintln!("[promptconnext] failed to register promptconnext:// scheme: {err}");
                 }
             }
 

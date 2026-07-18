@@ -174,7 +174,7 @@ def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
     pid = project["id"]
     headers = {"X-User-Id": "alice"}
 
-    # PromptZone (default source="pz") sets an agent-driven status.
+    # PromptConnext (default source="pz") sets an agent-driven status.
     client.put(
         f"/sync/projects/{pid}/graph",
         json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "in_progress"}]},

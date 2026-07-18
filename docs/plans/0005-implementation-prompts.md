@@ -7,11 +7,11 @@ Copy-paste prompts for driving Claude (Sonnet) through plan 0005, one milestone 
 ## Kickoff preamble (prepend to every session)
 
 ```
-You are implementing part of PromptZone. Before writing any code, read these in order:
+You are implementing part of PromptConnext. Before writing any code, read these in order:
 
 1. docs/decisions/0011-cloud-workspace-rag-assistant.md — the decision and its boundaries
 2. docs/plans/0005-cloud-workspace-rag-assistant.md — the milestone plan; you are implementing exactly ONE milestone (specified below)
-3. docs/promptzone-platform-architecture.md §2 — the deployment shape you must not break
+3. docs/promptconnext-platform-architecture.md §2 — the deployment shape you must not break
 4. apps/cloud/README.md and the existing code in apps/cloud/app/ — match its conventions
 
 Hard rules:

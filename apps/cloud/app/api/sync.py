@@ -35,7 +35,7 @@ from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
 router = APIRouter(tags=["sync"])
-logger = logging.getLogger("promptzone.sync")
+logger = logging.getLogger("promptconnext.sync")
 
 
 @router.post("/projects", response_model=Project, status_code=201)

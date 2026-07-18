@@ -3,8 +3,8 @@ export const ENGINE_URL = "http://127.0.0.1:47131";
 // The packaged Tauri shell injects the per-session token (ADR 0008); undefined
 // in the browser/dev, where the engine runs without a token.
 const AUTH_TOKEN: string | undefined = (
-  globalThis as { __PROMPTZONE_TOKEN__?: string }
-).__PROMPTZONE_TOKEN__;
+  globalThis as { __PROMPTCONNEXT_TOKEN__?: string }
+).__PROMPTCONNEXT_TOKEN__;
 
 function authHeaders(): Record<string, string> {
   return AUTH_TOKEN ? { authorization: `Bearer ${AUTH_TOKEN}` } : {};

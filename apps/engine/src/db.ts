@@ -120,13 +120,13 @@ CREATE TABLE IF NOT EXISTS discussions (
 
 export function dataDir(): string {
   const dir =
-    process.env.PROMPTZONE_DATA_DIR ??
-    join(homedir(), "Library", "Application Support", "PromptZone");
+    process.env.PROMPTCONNEXT_DATA_DIR ??
+    join(homedir(), "Library", "Application Support", "PromptConnext");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-export const db = new DatabaseSync(join(dataDir(), "promptzone.db"));
+export const db = new DatabaseSync(join(dataDir(), "promptconnext.db"));
 db.exec("PRAGMA foreign_keys = ON;");
 db.exec(SCHEMA);
 

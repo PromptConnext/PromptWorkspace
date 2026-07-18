@@ -20,11 +20,11 @@ Baseline assumed after plan 0001: `deleted_at` tombstones exist; identity is rea
 ## M3 — Per-field conflict ownership (keystone)
 
 ### Problem
-LWW by `updated_at` (ADR 0010 §4) silently drops concurrent edits and can't coexist with an external tracker: if Jira owns `assignee` and PromptZone owns `status`, a whole-row overwrite corrupts one of them. ADR 0010 mandates fixing this before auto-sync.
+LWW by `updated_at` (ADR 0010 §4) silently drops concurrent edits and can't coexist with an external tracker: if Jira owns `assignee` and PromptConnext owns `status`, a whole-row overwrite corrupts one of them. ADR 0010 mandates fixing this before auto-sync.
 
 ### Decision
 Move from **row-level LWW** to **field-level merge with declared ownership**. Each entity field belongs to an *authority domain*:
-- **`pz`** (PromptZone-authoritative, AI-native): agent-runs, artifacts, spec traceability, `acceptance_criteria`, `status` transitions driven by agent evidence.
+- **`pz`** (PromptConnext-authoritative, AI-native): agent-runs, artifacts, spec traceability, `acceptance_criteria`, `status` transitions driven by agent evidence.
 - **`pmo`** (external-tracker-authoritative): `assignee`, `sprint`, `feature_tag`, human-set priority.
 - **`shared`** (LWW still acceptable): `title`, `description` — free-text with low contention.
 
@@ -117,10 +117,10 @@ Because M3 makes merges safe, auto-sync no longer risks silent loss — but keep
 
 ## M5 — Jira / ClickUp two-way mirror
 
-**Depends on M3.** Phase 2 roadmap item ("one enterprise sync"). The field-ownership split from M3 decides direction per field: PromptZone pushes `pz` fields *out*, the tracker pushes `pmo` fields *in*.
+**Depends on M3.** Phase 2 roadmap item ("one enterprise sync"). The field-ownership split from M3 decides direction per field: PromptConnext pushes `pz` fields *out*, the tracker pushes `pmo` fields *in*.
 
 ### Decision
-A **thin sync boundary**, not deep integration. Mirror only status/assignment/linkage — the AI-native execution graph stays in PromptZone (nothing external can hold it). Start with **Jira** (roadmap names it explicitly); ClickUp is a second adapter behind the same interface.
+A **thin sync boundary**, not deep integration. Mirror only status/assignment/linkage — the AI-native execution graph stays in PromptConnext (nothing external can hold it). Start with **Jira** (roadmap names it explicitly); ClickUp is a second adapter behind the same interface.
 
 ### Changes
 - **Adapter interface — `app/integrations/tracker.py`** (new): `push_task(task) -> external_ref`, `handle_webhook(payload) -> list[GraphUpsertRequest]` with `source="pmo"`, `link(task_id, external_key)`.
@@ -186,7 +186,7 @@ Small, independent items; land opportunistically alongside the above.
 4. **M7 ops** — continuous; fold GC/pagination/rate-limits in as M4/M5 create the need.
 
 ## Open decisions to confirm
-- **Status mapping** PromptZone↔Jira/ClickUp (which local `TaskStatus` maps to which external status) — needs product sign-off before M5.
+- **Status mapping** PromptConnext↔Jira/ClickUp (which local `TaskStatus` maps to which external status) — needs product sign-off before M5.
 - **Presence transport:** in-app WebSocket vs. Supabase Realtime (affects Cloud Run scaling) — decide before M6.
 - **`shared`-field policy:** keep LWW for `title`/`description`, or make them `pz` too? Affects M3 field map.
 - Tombstone TTL and auto-sync poll/debounce intervals — tune with real usage.

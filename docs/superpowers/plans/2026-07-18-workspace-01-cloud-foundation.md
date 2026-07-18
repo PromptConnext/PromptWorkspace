@@ -518,7 +518,7 @@ from typing import Protocol
 
 from app.config import Settings
 
-logger = logging.getLogger("promptzone")
+logger = logging.getLogger("promptconnext")
 
 
 class InvitationMailer(Protocol):

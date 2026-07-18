@@ -224,7 +224,7 @@ def get_current_user(request: Request,
     settings = request.app.state.settings
     if settings.auth_mode == "stub":
         uid = x_user_id or "dev-user"
-        return User(id=uid, email=f"{uid}@promptzone.local")
+        return User(id=uid, email=f"{uid}@promptconnext.local")
     # supabase: verify HS256 bearer JWT (pyjwt), aud="authenticated"
     token = (authorization or "").removeprefix("Bearer ").strip()
     try:

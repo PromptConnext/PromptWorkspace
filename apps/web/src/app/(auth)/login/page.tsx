@@ -90,7 +90,7 @@ function LoginForm() {
 
   if (AUTH_MODE === "stub") {
     return (
-      <AuthCard title="Sign in to PromptZone" subtitle="Local dev (stub auth) — any user id works, no password.">
+      <AuthCard title="Sign in to PromptConnext" subtitle="Local dev (stub auth) — any user id works, no password.">
         <form onSubmit={handleStubSubmit} className="flex flex-col gap-4">
           <Field
             label="User id"
@@ -105,7 +105,7 @@ function LoginForm() {
   }
 
   return (
-    <AuthCard title="Sign in to PromptZone">
+    <AuthCard title="Sign in to PromptConnext">
       <form onSubmit={handleSupabaseSubmit} className="flex flex-col gap-4">
         <Field
           label="Email"

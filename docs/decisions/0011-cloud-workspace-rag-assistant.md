@@ -2,13 +2,13 @@
 
 **Date:** 2026-07-11 · **Status:** Proposed · **Deciders:** product + engineering
 **Amends:** the "thin cloud" posture of ADR 0003 / ADR 0010 and architecture doc §2.1 ("does not run models, store credentials, or hold source code"). **Does not reverse** the hybrid deployment shape — the desktop app remains the authoring/execution surface.
-Prompted by the question: *what do collaborators and business stakeholders actually get from PromptZone Cloud beyond sync?*
+Prompted by the question: *what do collaborators and business stakeholders actually get from PromptConnext Cloud beyond sync?*
 
 ## Context
 
 `apps/cloud` today is a headless sync/collaboration API: task-graph sync (ADR 0010), workspaces + membership + RLS (plan 0001), per-field conflict ownership, the Jira/ClickUp mirror, and presence (plan 0002). Stakeholders without the desktop app see the project only through the tracker mirror — status fields, not understanding. Sync alone is also commercially weak: it's plumbing, not a product.
 
-Meanwhile the cloud already holds a uniquely good substrate for grounded AI answers: the task graph with full lineage (**requirement → spec → task → artifact → agent-run**). Generic "chat with your docs" products retrieve over flat documents; PromptZone can answer "why does this task exist?" by *walking provenance*, then ground the prose with vector retrieval over the artifact text.
+Meanwhile the cloud already holds a uniquely good substrate for grounded AI answers: the task graph with full lineage (**requirement → spec → task → artifact → agent-run**). Generic "chat with your docs" products retrieve over flat documents; PromptConnext can answer "why does this task exist?" by *walking provenance*, then ground the prose with vector retrieval over the artifact text.
 
 Forces in tension:
 
@@ -27,7 +27,7 @@ Three amendments to the §2.1 posture, each deliberately narrow:
 
 - **"No models" → workspace-BYO models.** A workspace admin connects the team's model key (chat + embedding). Keys live in the server secret store (same handling as Jira credentials — env/secret manager, never in Supabase rows). Personal keys stay in the local keychain; the cloud never sees them.
 - **"No credentials" → no *end-user* credentials.** Workspace-level service credentials (model key, Git-host app token) are held server-side; this is the same class of secret the Jira mirror already required.
-- **"No source code" → no source code *at rest*.** For v2, the cloud stores **embeddings + chunk references** (repo, path, SHA, line range) only, fetching raw chunks on demand from the team's Git host with the workspace's token. The code already lives in a cloud the team chose (GitHub/GitLab); PromptZone indexes it, it does not become a second copy of record.
+- **"No source code" → no source code *at rest*.** For v2, the cloud stores **embeddings + chunk references** (repo, path, SHA, line range) only, fetching raw chunks on demand from the team's Git host with the workspace's token. The code already lives in a cloud the team chose (GitHub/GitLab); PromptConnext indexes it, it does not become a second copy of record.
 
 Retrieval is **membership-scoped before similarity**: every vector query is filtered to the caller's workspace/project (RLS + explicit predicate) ahead of nearest-neighbour search, mirroring how sync scopes reads today.
 

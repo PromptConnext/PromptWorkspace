@@ -74,7 +74,7 @@ Scope covers four surfaces: `apps/web`, `apps/cloud`, `apps/engine`,
   where to point the browser.
 
 ### apps/desktop
-- Add `tauri-plugin-deep-link`; register `promptzone` scheme (tauri.conf +
+- Add `tauri-plugin-deep-link`; register `promptconnext` scheme (tauri.conf +
   per-OS: macOS `CFBundleURLTypes`, Windows registry via plugin, Linux .desktop).
 - Rust: on deep-link event, parse `promptconnext://auth/callback`, pass `code` +
   `state` to the webview (event) or straight to a Tauri command that calls the

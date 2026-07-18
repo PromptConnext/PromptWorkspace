@@ -83,9 +83,9 @@ storage should move to a cross-platform keyring crate/lib as part of that
 same pass, not ahead of it.
 
 **`CLOUD_API_URL` is opt-in, disabled by default.** Unset = cloud sync off;
-a user must explicitly complete the "Connect to PromptZone Cloud" step below
+a user must explicitly complete the "Connect to PromptConnext Cloud" step below
 per project. Most desktop users today are single-player (per
-`promptzone-product-roadmap.md`), so this avoids prompting everyone on first
+`promptconnext-product-roadmap.md`), so this avoids prompting everyone on first
 launch for a feature most won't use yet.
 
 ### Changes
@@ -108,7 +108,7 @@ launch for a feature most won't use yet.
   project is bound to) in its existing JSON config column — no schema
   migration needed, this table already models exactly this shape.
 - **UI**: extend `apps/desktop/src/components/Onboarding.tsx` /
-  `ConnectForm.tsx` pattern with a "Connect to PromptZone Cloud" step (login →
+  `ConnectForm.tsx` pattern with a "Connect to PromptConnext Cloud" step (login →
   pick/create workspace → link project); reuses the same connect-form UX
   users already know from model connections.
 

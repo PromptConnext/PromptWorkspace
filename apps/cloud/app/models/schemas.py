@@ -1,8 +1,8 @@
 """Pydantic models for the AI-native task graph and the Sync API.
 
-The task graph is PromptZone's moat: every entity ties a business requirement all
+The task graph is PromptConnext's moat: every entity ties a business requirement all
 the way down to the AI agent run that produced code for it. See
-docs/promptzone-platform-architecture.md (section 3.1).
+docs/promptconnext-platform-architecture.md (section 3.1).
 
 IMPORTANT: model *credentials* never live in the cloud. `ModelConnection` here is
 metadata-only (role/provider/mode) — no keys — and is not part of this first
@@ -160,7 +160,7 @@ class AgentRun(GraphEntity):
 
 class Discussion(GraphEntity):
     """A comment threaded on any graph node (M12). `source` distinguishes a
-    PromptZone-native comment (web/desktop) from a Jira-mirrored one — unlike
+    PromptConnext-native comment (web/desktop) from a Jira-mirrored one — unlike
     Task, both sources create their *own* rows rather than fighting over the
     same one, so `body`/`author` are "shared" authority (see FIELD_AUTHORITY
     below), not a pz/pmo split."""
@@ -253,7 +253,7 @@ class InvitationCreateResponse(BaseModel):
 # External-tracker links (M5)
 # --------------------------------------------------------------------------- #
 class TaskLink(BaseModel):
-    """Maps a PromptZone task to its mirror in an external tracker."""
+    """Maps a PromptConnext task to its mirror in an external tracker."""
 
     task_id: str
     project_id: str
@@ -269,7 +269,7 @@ class JiraIntegrationConfig(BaseModel):
 
     base_url: str  # https://your-org.atlassian.net
     project_key: str  # "PZ"
-    # PromptZone TaskStatus value -> Jira status name used in transitions.
+    # PromptConnext TaskStatus value -> Jira status name used in transitions.
     status_map: dict[str, str] = Field(
         default_factory=lambda: {
             "todo": "To Do",
@@ -322,7 +322,7 @@ ENTITY_TYPES: dict[str, type[GraphEntity]] = {
 
 
 # Per-field authority domains (M3). A field is one of:
-#   "pz"     — PromptZone-authoritative (AI-native: agent evidence, spec lineage)
+#   "pz"     — PromptConnext-authoritative (AI-native: agent evidence, spec lineage)
 #   "pmo"    — external-tracker-authoritative (assignee/sprint/human priority)
 #   "shared" — low-contention free text; row-level LWW is acceptable
 # Fields absent from an entity's map default to "pz" (the moat stays local).

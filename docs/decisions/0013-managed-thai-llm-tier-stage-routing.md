@@ -1,17 +1,17 @@
 # ADR 0013 — A managed Thai-LLM tier (Typhoon) for web-app planning, reached through stage-based model routing
 
 **Date:** 2026-07-13 · **Status:** Proposed · **Deciders:** product + engineering
-**Extends:** ADR 0011 (cloud as product pillar; workspace-BYO key) and ADR 0012 (paired local compute node). This adds a **third** way the web app can reach a model — a PromptZone-operated managed tier — and the routing layer that decides which of the three runs each Spec Kit stage.
-**Prompted by:** business users won't install a desktop app or a Connector; they expect an online service to plan requirements and write PRDs. That forces a hosted model, which forces the cost question — and, since PromptZone targets Thailand, the Typhoon question.
+**Extends:** ADR 0011 (cloud as product pillar; workspace-BYO key) and ADR 0012 (paired local compute node). This adds a **third** way the web app can reach a model — a PromptConnext-operated managed tier — and the routing layer that decides which of the three runs each Spec Kit stage.
+**Prompted by:** business users won't install a desktop app or a Connector; they expect an online service to plan requirements and write PRDs. That forces a hosted model, which forces the cost question — and, since PromptConnext targets Thailand, the Typhoon question.
 
 ## Context
 
-ADR 0012 solved "web-app authoring without a token-brokered provider" by routing jobs to a laptop. Its own §2/§6 admit the limit: the business persona *is* the population least likely to run a node, and "your node is offline" is a poor first experience for a PM writing a PRD. The honest conclusion is that a fully-online path needs a model **PromptZone operates** — the exact thing ADR 0011's "workspace-BYO key" made optional and ADR 0003/§2.1 originally forbade.
+ADR 0012 solved "web-app authoring without a token-brokered provider" by routing jobs to a laptop. Its own §2/§6 admit the limit: the business persona *is* the population least likely to run a node, and "your node is offline" is a poor first experience for a PM writing a PRD. The honest conclusion is that a fully-online path needs a model **PromptConnext operates** — the exact thing ADR 0011's "workspace-BYO key" made optional and ADR 0003/§2.1 originally forbade.
 
 Operating a model means paying for it, so two questions collapse into one:
 
 1. **Which model** gives acceptable quality for Thai-language business planning at a cost we can run as a default (ideally free) tier?
-2. **How** do we wire it into `constitution → specify → plan → tasks` without abandoning BYO-model as PromptZone's identity (ADR 0009/0011)?
+2. **How** do we wire it into `constitution → specify → plan → tasks` without abandoning BYO-model as PromptConnext's identity (ADR 0009/0011)?
 
 Typhoon (SCB 10X / SCB DataX) is the obvious candidate for (1) because it is Thai-first and open-weight. The rest of this ADR assesses it, then answers (2) with a routing layer.
 
@@ -57,11 +57,11 @@ The headline: **at self-host concurrency, a Thai planning turn costs a fraction 
 
 ### Scalability & lock-in
 
-Open weights = **no vendor lock**: PromptZone can start on the free API, move to self-host, or adopt the AWS API, swapping without rewriting anything above the OpenAI-compatible boundary. That is strategically aligned with BYO-model. The **near-term risk** is purely operational: the production managed offering is mid-transition, so anything needing an SLA today means **self-hosting**, which means we run GPUs.
+Open weights = **no vendor lock**: PromptConnext can start on the free API, move to self-host, or adopt the AWS API, swapping without rewriting anything above the OpenAI-compatible boundary. That is strategically aligned with BYO-model. The **near-term risk** is purely operational: the production managed offering is mid-transition, so anything needing an SLA today means **self-hosting**, which means we run GPUs.
 
 ### Verdict
 
-**Good fit — as the Thai-language, business-facing default — provided PromptZone self-hosts (or the AWS API ships).** Use the **30B (Qwen3-based)** as the standard model for its clean license, 128K context, and function calling. Do **not** make Typhoon the default for `speckit.plan`. Treat the free API as the pilot tier and self-host FP8 30B on a shared H100 pool as the production tier.
+**Good fit — as the Thai-language, business-facing default — provided PromptConnext self-hosts (or the AWS API ships).** Use the **30B (Qwen3-based)** as the standard model for its clean license, 128K context, and function calling. Do **not** make Typhoon the default for `speckit.plan`. Treat the free API as the pilot tier and self-host FP8 30B on a shared H100 pool as the production tier.
 
 ---
 
@@ -73,7 +73,7 @@ Open weights = **no vendor lock**: PromptZone can start on the free API, move to
 
 | Tier | Who runs the model | Credential location | From ADR |
 |---|---|---|---|
-| **Managed (new)** | PromptZone-operated Typhoon pool | none (platform-side) | this ADR |
+| **Managed (new)** | PromptConnext-operated Typhoon pool | none (platform-side) | this ADR |
 | **BYO workspace key** | vendor cloud, team's key | server secret store | 0011 |
 | **Local node** | user's laptop | OS keychain | 0012 |
 
@@ -111,9 +111,9 @@ Task graph (ADR 0010 projection)  ◄── artifacts, citations, lineage
 
 ### Options considered
 
-**A. Managed Typhoon + stage routing (chosen).** Medium complexity (a GPU pool + a router). Product value high: business users plan online in Thai, cost stays sub-cent, BYO preserved as override. Con: PromptZone now operates inference infra and eats idle-GPU cost.
+**A. Managed Typhoon + stage routing (chosen).** Medium complexity (a GPU pool + a router). Product value high: business users plan online in Thai, cost stays sub-cent, BYO preserved as override. Con: PromptConnext now operates inference infra and eats idle-GPU cost.
 
-**B. Managed frontier model (GPT/Claude/Gemini) for everyone.** Lowest complexity (just an API key). **Fails the cost test** at scale and **fails the Thailand/BYO thesis** — you'd pay frontier rates to write Thai a specialised 30B does well, and you'd re-introduce exactly the token-brokered spend ADR 0012 rejected, now on *PromptZone's* bill.
+**B. Managed frontier model (GPT/Claude/Gemini) for everyone.** Lowest complexity (just an API key). **Fails the cost test** at scale and **fails the Thailand/BYO thesis** — you'd pay frontier rates to write Thai a specialised 30B does well, and you'd re-introduce exactly the token-brokered spend ADR 0012 rejected, now on *PromptConnext's* bill.
 
 **C. Local node only (ADR 0012 as-is).** Zero new infra. **Fails the usability test** for business users — the whole reason this ADR exists.
 
@@ -134,7 +134,7 @@ The load-bearing risk is **operational, not architectural**: running a GPU pool 
 - Thai-first positioning gets a concrete technical expression for the Thailand market.
 
 **Harder**
-- PromptZone now **operates inference infrastructure** — GPU pool, autoscaling, vLLM ops, idle-cost management. New competency, new on-call surface.
+- PromptConnext now **operates inference infrastructure** — GPU pool, autoscaling, vLLM ops, idle-cost management. New competency, new on-call surface.
 - The **§2.1 "no models in the cloud" posture is now amended twice** (0011 workspace keys, this ADR's managed pool). The privacy story narrows to "compute you *chose*; your credentials never leave your machine" — must be stated plainly to users.
 - A **router** is a new correctness-and-cost-critical component (wrong route = surprise frontier bill or low-quality plan). Needs tests and per-workspace override UX.
 - Dependency on Typhoon's **production hosting maturing** if we don't self-host; **licensing diligence** on whichever base model we standardise (prefer the Qwen3-based 30B).

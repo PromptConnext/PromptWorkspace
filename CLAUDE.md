@@ -4,16 +4,16 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Project overview
 
-PromptZone is an **AI-native development workspace**: the **3S flow** (Scope → Spec → Skill) over a **BYO-model** orchestration engine, with a traceable task graph. Under the hood the process follows Spec Kit faithfully — **constitution → specify → plan → tasks → implement** — presented to users as 3S.
+PromptConnext is an **AI-native development workspace**: the **3S flow** (Scope → Spec → Skill) over a **BYO-model** orchestration engine, with a traceable task graph. Under the hood the process follows Spec Kit faithfully — **constitution → specify → plan → tasks → implement** — presented to users as 3S.
 
 Two load-bearing decisions shape everything (see `docs/decisions/`):
 
 - **Tauri shell + Node sidecar** (ADR 0001) — the desktop app is a thin Rust window; the engine runs locally as a spawned process.
-- **BYO-agent / BYO-model** (ADR 0009) — PromptZone orchestrates the coding agent and model you already pay for (Claude Code, Gemini CLI, Codex CLI, Ollama, or any CLI via `PROMPTZONE_AGENT_CMD`); it ships no model runtime of its own. Compute, keys, and code stay on the user's machine.
+- **BYO-agent / BYO-model** (ADR 0009) — PromptConnext orchestrates the coding agent and model you already pay for (Claude Code, Gemini CLI, Codex CLI, Ollama, or any CLI via `PROMPTCONNEXT_AGENT_CMD`); it ships no model runtime of its own. Compute, keys, and code stay on the user's machine.
 
 ## Layout
 
-This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo build tool. The four apps are independent.
+This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo build tool. The five apps are independent.
 
 | App | Stack | Purpose |
 |---|---|---|
@@ -21,8 +21,9 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 | `apps/engine` | Node 24 / TypeScript — Hono, `node:sqlite`, `node-pty` | Local engine on `127.0.0.1:47131`; runs TS natively, **no build step** |
 | `apps/cloud` | FastAPI (Python ≥ 3.10) + Supabase/Postgres | **Optional** sync + collaboration backend (task-graph hub, RAG assistant) |
 | `apps/web` | Next.js 16 App Router, React 19, TypeScript | Team-member web UI; read/collaborate against `apps/cloud` |
+| `apps/corp` | Next.js 16 App Router, React 19, `next-intl` (EN/TH), Tailwind v4 | Public **marketing website** + the **desktop-app download page**; static/SEO-first, no backend |
 
-`apps/desktop` (React 18) and `apps/web` (React 19) share one pnpm store; `pnpm-workspace.yaml` pins each package's `@types/react` edge explicitly — don't remove those `packageExtensions`.
+`apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; `pnpm-workspace.yaml` pins each package's `@types/react` edge explicitly — don't remove those `packageExtensions`. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
 
 ## Development commands
 
@@ -32,8 +33,11 @@ From the repo root:
 pnpm install
 pnpm desktop     # full app: Tauri window + engine sidecar + hot-reload UI (first run compiles Rust)
 pnpm engine      # engine alone on 127.0.0.1:47131 (tokenless dev mode)
-pnpm web         # apps/web on http://localhost:3000
+pnpm web         # apps/web (team UI) on http://localhost:3000
+pnpm corp        # apps/corp (marketing + download) on http://localhost:3002
 ```
+
+`apps/web` and `apps/corp` are both Next.js on different ports (3000 vs 3002) so they can run side by side.
 
 Browser-only UI iteration (no Rust compile): run `pnpm engine` in one terminal and `pnpm --dir apps/desktop dev` (Vite on `:1420`) in another.
 
@@ -51,6 +55,8 @@ ruff check .                                   # lint (line-length 100)
 ```
 
 **Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck).
+
+**Corp** (`apps/corp`): `pnpm --dir apps/corp dev` (port 3002) / `build` / `typecheck` / `lint`. Copy `.env.example` → `.env.local` and set `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (leave the last empty to render the download page's "coming soon" state).
 
 The cloud app is **optional** for desktop work: the engine defaults to the hosted Railway instance. Point it locally with `CLOUD_API_URL=http://localhost:8080`, or disable sync with `CLOUD_API_URL=""`.
 
@@ -79,29 +85,36 @@ FastAPI entrypoint `main.py` (`uvicorn app.main:app --port 8080`). Routers in `a
 
 Next.js App Router, **read/collaborate-first**. `lib/api.ts` (`apiFetch` → `CLOUD_API_URL`) hits `apps/cloud`; there are **no Next.js API routes**. Routes: `/login`, `/invite/[token]`, `/w/[workspaceId]`, `/w/[workspaceId]/p/[projectId]` (tabs: Graph / Tasks / Progress / Discussion). The only WebSocket is a **client-side** connection to `apps/cloud`'s presence endpoint (`lib/presence.ts` → `CLOUD_WS_URL`) — the web app hosts no socket server.
 
+### Corp / marketing (`apps/corp/src`)
+
+Next.js App Router, **static/SEO-first, backend-free**. Bilingual (EN/TH) via `next-intl` with a `[locale]` route segment (`/en`, `/th`, `x-default → /en`); config in `src/i18n/{routing,request,navigation}.ts`. Use the locale-aware `Link`/hooks from `@/i18n/navigation`, **never** `next/link`, for internal links. Content is data-driven: product/pricing/FAQ/prose pages are typed modules in `src/content/*`, article clusters in `src/content/articles/{en,th}.ts`, and the blog is MDX in `content/blog/{en,th}/*.mdx` (`next-mdx-remote` + `gray-matter`). SEO is built in — Metadata API, `robots.ts`, `sitemap.ts` (both locales + `hreflang`), dynamic OG images, JSON-LD. Design tokens live in `src/app/globals.css` under `@theme` (dark-first, WCAG AA); use semantic classes, never raw hex. The **`/download` page** is the primary conversion surface: it reads `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (the desktop release host — see Deployment) and falls back to a "coming soon" state when unset. One API route, `/api/contact`, forwards form submissions to `CONTACT_WEBHOOK_URL` (logs only if unset). This app is public and unauthenticated — it never reaches the engine or the cloud API.
+
 ## Spec Kit workflow
 
 `runStage()` fills Spec Kit document templates from the BYO model. The constitution (`.specify/memory/constitution.md`) steers specify → plan → tasks. Task `acceptance_criteria` is stored and sent to the frontend as `{text: string}[]`, **not** plain strings — don't change the shape. Implementation is external-agent-orchestrated (ADR 0009), with a one-shot `runImplementation` fallback for users with no agent CLI (ADR 0005).
 
 ## Security posture
 
-The engine binds loopback but any web page can still reach it, so (ADR 0008): an **origin allowlist** (`tauri://localhost`, vite dev; extend via `PROMPTZONE_ALLOWED_ORIGINS`) governs browsers, and a **per-session bearer** (`PROMPTZONE_AUTH_TOKEN`, minted by the Tauri shell) is required on every request when set — `Authorization: Bearer` for HTTP, `?token=` for the terminal WS. Dev mode (`pnpm engine`, no token) enforces nothing. Native clients send no `Origin` and are unaffected. The terminal WS closes 1008 before spawning a shell if the origin isn't allowlisted (prevents CSWSH→RCE).
+The engine binds loopback but any web page can still reach it, so (ADR 0008): an **origin allowlist** (`tauri://localhost`, vite dev; extend via `PROMPTCONNEXT_ALLOWED_ORIGINS`) governs browsers, and a **per-session bearer** (`PROMPTCONNEXT_AUTH_TOKEN`, minted by the Tauri shell) is required on every request when set — `Authorization: Bearer` for HTTP, `?token=` for the terminal WS. Dev mode (`pnpm engine`, no token) enforces nothing. Native clients send no `Origin` and are unaffected. The terminal WS closes 1008 before spawning a shell if the origin isn't allowlisted (prevents CSWSH→RCE).
 
 ## Key environment variables
 
-**Engine** (`apps/engine/src/config.ts`): `PROMPTZONE_ENGINE_PORT` (default 47131) · `CLOUD_API_URL` (default hosted Railway; `""` disables sync; `http://localhost:8080` targets a local cloud) · `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth) · `PROMPTZONE_AGENT_CMD` (custom agent CLI; task text in `$TASK_PROMPT`) · `PROMPTZONE_AGENT_ALLOW_BASH=1` (let agents run shell).
+**Engine** (`apps/engine/src/config.ts`): `PROMPTCONNEXT_ENGINE_PORT` (default 47131) · `CLOUD_API_URL` (default hosted Railway; `""` disables sync; `http://localhost:8080` targets a local cloud) · `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth) · `PROMPTCONNEXT_AGENT_CMD` (custom agent CLI; task text in `$TASK_PROMPT`) · `PROMPTCONNEXT_AGENT_ALLOW_BASH=1` (let agents run shell).
 
 **Cloud** (`apps/cloud`): `DATA_BACKEND` (`memory` | `supabase`) · `AUTH_MODE` (`stub` | `supabase`) · `SUPABASE_URL` / `SUPABASE_KEY` / `SUPABASE_JWT_SECRET` · `CORS_ORIGINS` (includes `localhost:3000` by default).
 
 **Web** (`apps/web`): `NEXT_PUBLIC_CLOUD_API_URL`, `NEXT_PUBLIC_CLOUD_WS_URL`, `NEXT_PUBLIC_AUTH_MODE` (`stub` fails *closed* to supabase), `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
+**Corp** (`apps/corp`): `NEXT_PUBLIC_SITE_URL` (canonical/OG/sitemap base) · `NEXT_PUBLIC_APP_URL` (cloud sign-in/signup target) · `NEXT_PUBLIC_APP_VERSION` (shown on `/download`) · `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (desktop release asset base; **empty ⇒ "coming soon"**) · `CONTACT_WEBHOOK_URL` (optional `/api/contact` sink). See `apps/corp/.env.example`.
+
 ## Deployment
 
-Three deployable halves (`docs/DEPLOYMENT.md`):
+Four deployable pieces (`docs/DEPLOYMENT.md`):
 
 - **`apps/cloud` → Railway** (or any container host; `Dockerfile` targets Cloud Run too). **Not Vercel** — it's a long-lived container with WebSocket presence and in-process state that requires a **single instance**. On Cloud Run, enable session affinity and pin one instance until a backplane exists.
 - **`apps/web` → Vercel.** Static/client rendering, no server WS — a clean fit. Wire `NEXT_PUBLIC_CLOUD_*` to the cloud origin and add the Vercel domain to the cloud's `CORS_ORIGINS`.
-- **`apps/desktop` → installers** built in CI (`.github/workflows/desktop-build.yml`, matrix macOS + Windows) and published for download.
+- **`apps/corp` → Vercel.** Static/SEO marketing site, no backend — another clean Vercel fit (separate project/domain from `apps/web`). Point `NEXT_PUBLIC_DOWNLOAD_BASE_URL` at the desktop release host below so `/download` links resolve.
+- **`apps/desktop` → installers** built in CI (`.github/workflows/desktop-build.yml`, matrix macos-latest **arm64** + windows-latest **x64**) via `tauri-action` (bundle targets `app` + `nsis`). The workflow zips the macOS `.app` and uploads both installers **flat to a Cloudflare R2 bucket under `installation/`** — `PromptConnext.app.zip` and `PromptConnext_<version>_x64-setup.exe`. `apps/corp`'s `NEXT_PUBLIC_DOWNLOAD_BASE_URL` must point at that R2 prefix's public URL (no version subfolder), and `NEXT_PUBLIC_APP_VERSION` must match `tauri.conf.json` version (baked into the Windows filename). No Linux build; the `/download` page offers macOS + Windows only.
 
 **Packaging is host-platform-bound:** `pnpm tauri build` stages the engine and copies the **build machine's own Node binary** + `node-pty` prebuild into the bundle. Build each platform *on* that platform (hence the CI matrix); cross-compiling the Rust shell alone won't produce a working app. Details in `docs/DEVELOPMENT.md` and `docs/BUILD_AND_DISTRIBUTE.md`.
 

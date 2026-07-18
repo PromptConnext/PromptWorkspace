@@ -48,7 +48,7 @@ projects.post("/engine/projects", async (c) => {
   const name = body.name;
   if (!name) return c.json({ error: "name is required" }, 400);
   const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
-  const path = body.path ?? join(homedir(), "PromptZone-Projects", slug);
+  const path = body.path ?? join(homedir(), "PromptConnext-Projects", slug);
 
   mkdirSync(path, { recursive: true });
   if (!existsSync(join(path, ".git"))) {
@@ -429,7 +429,7 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
 
   // The one-shot loop and façade-routed Claude Code run on the connected BYO
   // model; agents that bring their own account/model (Gemini/Codex/custom) do
-  // not need a PromptZone code connection.
+  // not need a PromptConnext code connection.
   const needsCodeModel = !useAgent || adapter.bringsOwnModel === false;
   const conn = connectionForRoleStrict("code");
   if (needsCodeModel && !conn) {
