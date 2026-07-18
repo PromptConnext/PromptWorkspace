@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { use, useRef } from "react";
+import { Avatar } from "@/components/Avatar";
 import { InviteForm } from "@/components/InviteForm";
 import { PendingInvitations } from "@/components/PendingInvitations";
 import { RequireAuth } from "@/components/RequireAuth";
+import { RoleBadge } from "@/components/RoleBadge";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
+import { displayName } from "@/lib/identity";
 import type { Workspace, WorkspaceMember } from "@/lib/types";
 
 function MembersView({ workspaceId }: { workspaceId: string }) {
@@ -25,19 +28,28 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
           { label: "Members" },
         ]}
       />
-      <main className="mx-auto max-w-3xl px-4 py-10">
-        <h1 className="mb-6 text-xl font-semibold">Members</h1>
+      <main className="mx-auto max-w-2xl px-4 py-10">
+        <Link
+          href={`/w/${workspaceId}`}
+          className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900"
+        >
+          ← {workspace?.name ?? "Workspace"}
+        </Link>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Members</h1>
+        <p className="mt-1 mb-8 text-sm text-slate-500">
+          {members?.length ?? 0} {members?.length === 1 ? "person has" : "people have"} access to
+          this workspace.
+        </p>
 
-        <section className="mb-10">
-          <h2 className="mb-3 text-sm font-medium text-slate-500">People</h2>
-          <ul className="flex flex-col gap-2">
+        <section className="mb-10 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <ul className="divide-y divide-slate-100">
             {members?.map((m) => (
-              <li
-                key={m.user_id}
-                className="flex items-center justify-between rounded border border-slate-200 bg-white px-4 py-3"
-              >
-                <span className="font-medium">{m.user_id}</span>
-                <span className="text-sm text-slate-500">{m.role}</span>
+              <li key={m.user_id} className="flex items-center gap-3 px-4 py-3">
+                <Avatar identity={m} />
+                <span className="min-w-0 flex-1 truncate font-medium text-slate-900">
+                  {displayName(m)}
+                </span>
+                <RoleBadge role={m.role} />
               </li>
             ))}
           </ul>
@@ -57,9 +69,6 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
             />
           </>
         )}
-        <Link href={`/w/${workspaceId}`} className="text-sm text-slate-500 hover:text-slate-900">
-          ← Back to workspace
-        </Link>
       </main>
     </>
   );

@@ -55,42 +55,42 @@ export function InviteForm({
   }
 
   return (
-    <section className="mb-10">
-      <h2 className="mb-3 text-sm font-medium text-slate-500">Invite someone</h2>
+    <section className="mb-10 rounded-xl border border-slate-200 bg-white p-5">
+      <h2 className="mb-3 text-sm font-medium text-slate-900">Invite someone</h2>
       <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-700">Email</span>
+        <label className="flex flex-1 min-w-[12rem] flex-col gap-1 text-sm">
+          <span className="text-slate-500">Email</span>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="person@example.com"
-            className="rounded border border-slate-300 px-3 py-2"
+            className="rounded-lg border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
             required
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-700">Role</span>
+          <span className="text-slate-500">Role</span>
           <select
             value={role}
             onChange={(e) => setRole(e.target.value as Role)}
-            className="rounded border border-slate-300 px-3 py-2"
+            className="rounded-lg border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
           >
-            <option value="member">member</option>
-            <option value="admin">admin</option>
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
           </select>
         </label>
         <button
           type="submit"
           disabled={pending}
-          className="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-60"
+          className="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700 disabled:opacity-60"
         >
           {pending ? "Sending…" : "Send invite"}
         </button>
       </form>
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {manualLink && (
-        <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
+        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
           <p className="text-amber-800">
             Couldn&apos;t email this address automatically (they may already have an account).
             Share this invite link with them:
@@ -102,7 +102,7 @@ export function InviteForm({
             <button
               type="button"
               onClick={copyLink}
-              className="rounded border border-slate-300 px-2 py-1 text-xs"
+              className="rounded border border-slate-300 px-2 py-1 text-xs hover:border-slate-400"
             >
               {copied ? "Copied" : "Copy"}
             </button>

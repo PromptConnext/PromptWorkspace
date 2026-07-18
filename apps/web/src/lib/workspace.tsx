@@ -86,9 +86,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setActiveWorkspace(ws.id);
       return ws;
     },
-    // authHeaders() is stable per user/token (useCallback in AuthProvider).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [setActiveWorkspace],
+    [authHeaders, setActiveWorkspace],
   );
 
   // Derived: only resolve to a workspace the user is actually a member of, so a
