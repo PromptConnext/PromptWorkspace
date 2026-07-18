@@ -1,0 +1,36 @@
+{
+  "name": "@promptzone/corp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PromptConnext marketing website + desktop download page — Next.js 16 App Router.",
+  "scripts": {
+    "dev": "next dev -p 3002",
+    "build": "next build",
+    "start": "next start -p 3002",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "gray-matter": "^4.0.3",
+    "next": "^16.2.10",
+    "next-intl": "^4.13.1",
+    "next-mdx-remote": "^6.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.1.0",
+    "@tailwindcss/postcss": "^4.3.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.2.10",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=24.15.0"
+  }
+}

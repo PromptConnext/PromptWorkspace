@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+/*
+ * PromptConnext design tokens.
+ * Source of truth: cloud-app design system (.claude/skills/design-system/SKILL.md).
+ * Dark-first, Anthropic Sans. WCAG 2.2 AA. Semantic tokens only — no raw hex in components.
+ */
+@theme {
+  /* Typography */
+  --font-sans: "Anthropic Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --text-xs: 0.75rem; /* 12px */
+  --text-sm: 0.875rem; /* 14px — base */
+  --text-base: 1rem; /* 16px */
+
+  /* Surfaces */
+  --color-surface-base: #000000;
+  --color-surface-muted: #1f1f1e;
+  --color-surface-raised: #26262400;
+  --color-surface-elevated: #2a2a28;
+
+  /* Text — note: the source token text.tertiary #2c2c2a fails AA on black,
+     so the website uses an AA-passing tertiary and keeps #2c2c2a for
+     disabled/decorative use only. */
+  --color-text-primary: #f8f8f6;
+  --color-text-secondary: #c3c2b7;
+  --color-text-tertiary: #8b8a80;
+  --color-text-disabled: #6b6a62;
+  --color-text-inverse: #000000;
+
+  /* Borders */
+  --color-border-default: rgba(255, 255, 255, 0.14);
+  --color-border-strong: rgba(255, 255, 255, 0.24);
+  --color-border-muted: rgba(255, 255, 255, 0.08);
+
+  /* Brand / accent */
+  --color-accent: #5599e7;
+  --color-accent-hover: #6ba7ec;
+  --color-accent-muted: rgba(85, 153, 231, 0.14);
+  --color-focus-ring: #5599e7;
+
+  /* Semantic status (AA on dark surfaces) */
+  --color-success: #4ec98a;
+  --color-warning: #e7b355;
+  --color-danger: #e77b7b;
+  --color-info: #5599e7;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+
+  /* Motion */
+  --animate-duration-instant: 100ms;
+  --animate-duration-fast: 150ms;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    border-color: var(--color-border-default);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface-base);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Respect reduced-motion preferences. */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* Visible focus is mandatory (design-system rule). */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: var(--color-accent-muted);
+    color: var(--color-text-primary);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+/* Utility: subtle radial hero glow, used by marketing sections. */
+@utility hero-glow {
+  background-image: radial-gradient(
+    60% 50% at 50% 0%,
+    rgba(85, 153, 231, 0.12) 0%,
+    transparent 70%
+  );
+}
