@@ -18,6 +18,10 @@ export const SUPABASE_URL = process.env.SUPABASE_URL || null;
 export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
 
 // Where the browser is sent for interactive sign-in (ADR 0014). Defaults to
-// the hosted web app; override for local dev against `pnpm web`
+// the deployed hosted web app; override for local dev against `pnpm web`
 // (http://localhost:3000). Not nullable — browser login needs a destination.
-export const CLOUD_WEB_URL = process.env.CLOUD_WEB_URL || "https://app.promptconnext.com";
+// This is a real TLS-served, team-owned origin (closes the phishing gate: the
+// desktop opens it for credential entry, so an unregistered placeholder would
+// be a takeover vector).
+export const CLOUD_WEB_URL =
+  process.env.CLOUD_WEB_URL || "https://prompt-zone-web-app.vercel.app";
