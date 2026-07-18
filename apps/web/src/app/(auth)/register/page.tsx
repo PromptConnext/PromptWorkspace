@@ -49,7 +49,9 @@ function RegisterForm() {
       await signUpSupabase(email, password);
       setDone(true);
     } catch (err) {
-      setError((err as Error).message);
+      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred";
+      console.log('[SUP]', err);
+      setError(errorMessage);
       setPending(false);
     }
   }
