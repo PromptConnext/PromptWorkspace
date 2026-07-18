@@ -9,13 +9,33 @@
 // own the actual content.
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { TopBar } from "@/components/TopBar";
+import { ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace";
 
 export function WorkspaceGate() {
   const router = useRouter();
-  const { memberships, activeWorkspace, loading, error, setActiveWorkspace } = useWorkspace();
+  const { memberships, activeWorkspace, loading, error, setActiveWorkspace, createWorkspace } =
+    useWorkspace();
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await createWorkspace(name);
+    } catch (err) {
+      setCreateError(err instanceof ApiError ? err.message : "Failed to create workspace");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // Auto-enter a single membership (no point showing a one-item picker).
   useEffect(() => {
@@ -46,11 +66,11 @@ export function WorkspaceGate() {
       <main className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="mb-6 text-xl font-semibold">Your workspaces</h1>
         {memberships.length === 0 ? (
-          <p className="text-sm text-slate-500">
-            No workspaces yet. Ask an admin to invite you, or create one from the desktop app.
+          <p className="mb-6 text-sm text-slate-500">
+            No workspaces yet. Ask an admin to invite you, or create one below.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="mb-6 flex flex-col gap-2">
             {memberships.map((w) => (
               <li key={w.id}>
                 <button
@@ -64,6 +84,30 @@ export function WorkspaceGate() {
             ))}
           </ul>
         )}
+        <form onSubmit={handleCreate} className="flex flex-col gap-2 border-t border-slate-200 pt-6">
+          <label htmlFor="new-workspace-name" className="text-sm font-medium text-slate-700">
+            Create a new workspace
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="new-workspace-name"
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Workspace name"
+              className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+              disabled={creating}
+            />
+            <button
+              type="submit"
+              disabled={creating || !newName.trim()}
+              className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {creating ? "Creating…" : "Create"}
+            </button>
+          </div>
+          {createError ? <p className="text-sm text-red-600">{createError}</p> : null}
+        </form>
       </main>
     </>
   );

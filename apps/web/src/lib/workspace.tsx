@@ -19,6 +19,7 @@ interface WorkspaceContextValue {
   setActiveWorkspace: (id: string) => void;
   clearActiveWorkspace: () => void;
   refetch: () => void;
+  createWorkspace: (name: string) => Promise<Workspace>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -75,6 +76,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const refetch = useCallback(() => setNonce((n) => n + 1), []);
 
+  const createWorkspace = useCallback(
+    async (name: string) => {
+      const ws = await apiFetch<Workspace>("/workspaces", authHeaders(), {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setMemberships((prev) => [...prev, ws]);
+      setActiveWorkspace(ws.id);
+      return ws;
+    },
+    // authHeaders() is stable per user/token (useCallback in AuthProvider).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setActiveWorkspace],
+  );
+
   // Derived: only resolve to a workspace the user is actually a member of, so a
   // stale persisted id (left/removed workspace) silently falls back to null.
   const activeWorkspace = useMemo(
@@ -91,8 +107,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setActiveWorkspace,
       clearActiveWorkspace,
       refetch,
+      createWorkspace,
     }),
-    [memberships, activeWorkspace, loading, error, setActiveWorkspace, clearActiveWorkspace, refetch],
+    [
+      memberships,
+      activeWorkspace,
+      loading,
+      error,
+      setActiveWorkspace,
+      clearActiveWorkspace,
+      refetch,
+      createWorkspace,
+    ],
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
