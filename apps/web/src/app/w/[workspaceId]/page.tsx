@@ -11,7 +11,7 @@ import type { Project, Workspace, WorkspaceMember } from "@/lib/types";
 
 function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
-  const { memberships, loading: wsLoading, setActiveWorkspace } = useWorkspace();
+  const { memberships, loading: wsLoading, error: wsError, setActiveWorkspace } = useWorkspace();
   const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
   const { data: projects, error, loading } = useCloudGet<Project[]>(
@@ -19,16 +19,17 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
   );
 
   // Treat visiting /w/{id} as an explicit selection: if it's a real membership,
-  // make it the active workspace; if the memberships are loaded and it is NOT
-  // one, bounce to the gate.
+  // make it the active workspace. Only bounce to the gate when memberships
+  // loaded successfully and the id is genuinely NOT one — never on a transient
+  // memberships-fetch error, which would otherwise discard a valid deep link.
   useEffect(() => {
     if (wsLoading) return;
     if (memberships.some((w) => w.id === workspaceId)) {
       setActiveWorkspace(workspaceId);
-    } else {
+    } else if (!wsError) {
       router.replace("/");
     }
-  }, [wsLoading, memberships, workspaceId, setActiveWorkspace, router]);
+  }, [wsLoading, wsError, memberships, workspaceId, setActiveWorkspace, router]);
 
   return (
     <>
