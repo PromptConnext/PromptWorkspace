@@ -189,8 +189,13 @@ export async function cloudFetch<T>(path: string, init: RequestInit = {}): Promi
     try {
       await refreshCloudSession(session);
       res = await requestCloud(path, init, session);
-    } catch {
-      // keep the original 401 response; fall through to the error below.
+    } catch (err) {
+      // A definitive rejection (not a network-level failure) means the
+      // session is unrenewable — clear it so the next session check reports
+      // signed-out (ADR 0015 state 5) instead of staying "connected" forever
+      // on stale keychain data. Keep the original 401 response either way;
+      // fall through to the error below.
+      if (err instanceof CloudRefreshInvalidError) clearCloudSession();
     }
   }
 
@@ -225,6 +230,13 @@ export async function supabasePasswordLogin(
   return { token: ok.access_token, userId: ok.user.id };
 }
 
+// Thrown when Supabase returns a definitive HTTP rejection of the refresh
+// token (e.g. invalid_grant — expired, revoked, or already rotated away).
+// Distinct from a network-level failure (fetch() itself throwing, e.g.
+// offline): only a definitive rejection means the session is unrenewable
+// (ADR 0015 state 5), not merely unreachable (state 4).
+export class CloudRefreshInvalidError extends Error {}
+
 // Exchange a rotating refresh token for a fresh access token (Supabase rotates
 // the refresh token on every use, so the new one must be persisted too). Used by
 // cloudFetch's refresh-on-401 retry.
@@ -241,8 +253,11 @@ export async function supabaseRefresh(
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = data as { error_description?: string; msg?: string };
-    throw new Error(err.error_description ?? err.msg ?? "token refresh failed");
+    const err = data as { error?: string; error_description?: string; msg?: string };
+    const message = err.error_description ?? err.msg ?? "token refresh failed";
+    // A response was received (we're not offline) and Supabase rejected the
+    // token outright — this is unrenewable, not transient.
+    throw new CloudRefreshInvalidError(message);
   }
   const ok = data as { access_token: string; refresh_token: string };
   return { token: ok.access_token, refreshToken: ok.refresh_token };
