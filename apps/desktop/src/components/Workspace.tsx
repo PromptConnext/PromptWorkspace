@@ -10,6 +10,7 @@ export default function Workspace() {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [sessionTick, setSessionTick] = useState(0);
 
   const refresh = () =>
     listProjects().then((r) => setProjects(r.projects)).catch(() => {});
@@ -52,6 +53,7 @@ export default function Workspace() {
     <div className="workspace">
       <aside>
         <WorkspaceBar
+          reloadSignal={sessionTick}
           onActiveChange={(id) => {
             setActiveWorkspaceId(id);
             void refresh();
@@ -82,7 +84,13 @@ export default function Workspace() {
           </button>
         </div>
         {error && <p className="error">{error}</p>}
-        {active && <CloudConnect key={active.id} projectId={active.id} />}
+        {active && (
+          <CloudConnect
+            key={active.id}
+            projectId={active.id}
+            onSessionChange={() => setSessionTick((t) => t + 1)}
+          />
+        )}
       </aside>
       <div className="content">
         {active ? (

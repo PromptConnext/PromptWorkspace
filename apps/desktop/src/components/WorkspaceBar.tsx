@@ -13,8 +13,10 @@ import {
 // remember-last → auto-enter single → picker for many.
 export default function WorkspaceBar({
   onActiveChange,
+  reloadSignal,
 }: {
   onActiveChange: (id: string | null) => void;
+  reloadSignal: number;
 }) {
   const [connected, setConnected] = useState(false);
   const [workspaces, setWorkspaces] = useState<CloudWorkspace[]>([]);
@@ -24,15 +26,33 @@ export default function WorkspaceBar({
   const resolve = async () => {
     const session = await getCloudSession();
     if (!session.connected) {
+      // Logged out (or never logged in): clear all local state so the
+      // project list falls back to a flat, unfiltered, local-first view.
       setConnected(false);
+      setActive(null);
+      setWorkspaces([]);
       onActiveChange(null);
       return;
     }
     setConnected(true);
-    const [stored, ws] = await Promise.all([
-      getActiveWorkspace().catch(() => null),
-      listCloudWorkspaces().then((r) => r.workspaces).catch(() => []),
-    ]);
+    const stored = await getActiveWorkspace().catch(() => null);
+    let ws: CloudWorkspace[];
+    try {
+      ws = (await listCloudWorkspaces()).workspaces;
+    } catch {
+      // Cloud is unreachable — this is NOT the same as "no workspaces".
+      // Keep whatever workspace was previously remembered/active instead of
+      // dropping to the "no workspaces" picker.
+      if (stored) {
+        setActive(stored);
+        onActiveChange(stored.id);
+        return;
+      }
+      setWorkspaces([]);
+      setActive(null);
+      onActiveChange(null);
+      return;
+    }
     setWorkspaces(ws);
     // remember-last: stored active still a membership?
     if (stored && ws.some((w) => w.id === stored.id)) {
@@ -63,8 +83,11 @@ export default function WorkspaceBar({
 
   useEffect(() => {
     resolve().catch(() => {});
+    // Re-runs on mount AND whenever reloadSignal changes (cloud session
+    // login/logout, signaled by the parent via CloudConnect's
+    // onSessionChange), so the bar never stays inert after a session flip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reloadSignal]);
 
   if (!connected) return null;
 
