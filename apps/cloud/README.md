@@ -80,6 +80,7 @@ Git metadata. Access is by membership, not project ownership.
 |---|---|---|
 | POST | `/workspaces` | authed (becomes admin) |
 | GET | `/workspaces` · `/workspaces/{id}` | member |
+| GET | `/workspaces` (0 memberships) | authed → auto-provisions a personal workspace |
 | PATCH | `/workspaces/{id}` | admin (name / git_config) |
 | GET | `/workspaces/{id}/members` | member |
 | POST | `/workspaces/{id}/invitations` | admin |
@@ -88,6 +89,15 @@ Git metadata. Access is by membership, not project ownership.
 
 RLS policies (migration 0003) enforce the same membership rules in Postgres when
 the backend forwards the caller's JWT.
+
+**Personal-workspace auto-provision (ADR 0015 §5).** When an authenticated user
+resolves to **zero** memberships on `GET /workspaces`, the cloud mints a default
+`"{user}'s workspace"` with that user as admin — so the desktop membership gate
+never dead-ends a brand-new account. It is idempotent (a no-op once any
+membership exists, so an invited user who already accepted gets none) and reuses
+the same create path migration 0007 fixed, so the new admin row satisfies
+`pz_is_admin` without a bootstrap deadlock. Disable / stage the rollout with
+`AUTO_PROVISION_PERSONAL_WORKSPACE=false`.
 
 ### Projects & sync
 

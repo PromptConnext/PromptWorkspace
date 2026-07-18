@@ -150,6 +150,78 @@ def test_cross_workspace_isolation(client):
 
 
 # --------------------------------------------------------------------------- #
+# Personal-workspace auto-provision (ADR 0015 §5, plan 0006 G1)
+# --------------------------------------------------------------------------- #
+def test_first_list_auto_provisions_personal_workspace(client):
+    # A brand-new user with zero memberships gets exactly one workspace on their
+    # first GET /workspaces — theirs, with them as admin.
+    listed = client.get("/workspaces", headers={"X-User-Id": "newbie"}).json()
+    assert len(listed) == 1
+    ws = listed[0]
+    assert ws["created_by"] == "newbie"
+    assert "newbie" in ws["name"]
+
+    members = client.get(
+        f"/workspaces/{ws['id']}/members", headers={"X-User-Id": "newbie"}
+    ).json()
+    assert len(members) == 1
+    assert members[0]["user_id"] == "newbie"
+    assert members[0]["role"] == "admin"
+
+
+def test_auto_provision_is_idempotent(client):
+    # Two successive calls must not mint two workspaces.
+    first = client.get("/workspaces", headers={"X-User-Id": "newbie"}).json()
+    second = client.get("/workspaces", headers={"X-User-Id": "newbie"}).json()
+    assert len(first) == 1
+    assert len(second) == 1
+    assert first[0]["id"] == second[0]["id"]
+
+
+def test_auto_provisioned_admin_can_act_without_bootstrap_deadlock(client):
+    # The auto-provisioned admin row must satisfy pz_is_admin — demonstrated at
+    # the app layer by the user immediately performing an admin-only action.
+    ws = client.get("/workspaces", headers={"X-User-Id": "newbie"}).json()[0]
+    invited = client.post(
+        f"/workspaces/{ws['id']}/invitations",
+        json={"email": "friend@x.com"},
+        headers={"X-User-Id": "newbie"},
+    )
+    assert invited.status_code == 201, invited.text
+
+
+def test_invited_user_gets_no_personal_workspace(client):
+    # Alice owns a workspace and invites bob; bob accepts, then lists.
+    ws = _ws(client, user="alice")
+    inv = client.post(
+        f"/workspaces/{ws['id']}/invitations",
+        json={"email": "bob@x.com"},
+        headers={"X-User-Id": "alice"},
+    ).json()
+    client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
+
+    listed = client.get("/workspaces", headers={"X-User-Id": "bob"}).json()
+    # Only the workspace he was invited into — no auto-personal one.
+    assert [w["id"] for w in listed] == [ws["id"]]
+
+
+def test_auto_provision_disabled_by_flag(monkeypatch):
+    monkeypatch.setenv("AUTO_PROVISION_PERSONAL_WORKSPACE", "false")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    app = create_app()
+    try:
+        with TestClient(app) as c:
+            listed = c.get("/workspaces", headers={"X-User-Id": "newbie"}).json()
+            assert listed == []
+    finally:
+        get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
 # Supabase JWT auth mode
 # --------------------------------------------------------------------------- #
 JWT_SECRET = "test-secret-please-change-0123456789abcdef"

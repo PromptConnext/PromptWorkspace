@@ -32,6 +32,16 @@ router = APIRouter(tags=["workspaces"])
 INVITATION_TTL_DAYS = 14
 
 
+def _personal_workspace_name(user: User) -> str:
+    """Default name for an auto-provisioned personal workspace.
+
+    Prefers the email local-part (friendlier, and in stub mode that is just the
+    user id) and falls back to the raw user id when no email is present.
+    """
+    handle = user.email.split("@", 1)[0] if user.email else user.id
+    return f"{handle}'s workspace"
+
+
 @router.post("/workspaces", response_model=Workspace, status_code=201)
 def create_workspace(
     body: WorkspaceCreate,
@@ -43,10 +53,25 @@ def create_workspace(
 
 @router.get("/workspaces", response_model=list[Workspace])
 def list_workspaces(
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[Workspace]:
-    return repo.list_workspaces(user_id=user.id)
+    workspaces = repo.list_workspaces(user_id=user.id)
+    # ADR 0015 §5 / plan 0006 G1: on a first authenticated resolve with ZERO
+    # memberships, auto-provision a personal workspace so the desktop
+    # membership gate never dead-ends a brand-new account. Idempotent — a
+    # no-op once any membership exists (an invited user who already accepted
+    # gets none). Reuses the same create path migration 0007 fixed, so the
+    # creator's admin row satisfies pz_is_admin without a bootstrap deadlock.
+    if not workspaces and request.app.state.settings.auto_provision_personal_workspace:
+        repo.create_workspace(
+            name=_personal_workspace_name(user),
+            created_by=user.id,
+            created_by_email=user.email or None,
+        )
+        workspaces = repo.list_workspaces(user_id=user.id)
+    return workspaces
 
 
 @router.get("/workspaces/{workspace_id}", response_model=Workspace)
