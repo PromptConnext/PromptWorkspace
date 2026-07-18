@@ -177,7 +177,10 @@ cloud.post("/engine/projects/:id/cloud-link", async (c) => {
   if (!project) return c.json({ error: "project not found" }, 404);
 
   const body = await c.req.json<{ workspaceId?: string; cloudProjectId?: string }>();
-  if (!body.workspaceId?.trim()) return c.json({ error: "workspaceId is required" }, 400);
+  const workspaceId = body.workspaceId?.trim() || loadActiveWorkspace()?.id;
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required (no active workspace set)" }, 400);
+  }
 
   try {
     // Link to an existing cloud project if given, otherwise create one in the
@@ -186,12 +189,12 @@ cloud.post("/engine/projects/:id/cloud-link", async (c) => {
     if (!cloudProjectId) {
       const created = await cloudFetch<{ id: string }>("/projects", {
         method: "POST",
-        body: JSON.stringify({ name: project.name, workspace_id: body.workspaceId }),
+        body: JSON.stringify({ name: project.name, workspace_id: workspaceId }),
       });
       cloudProjectId = created.id;
     }
 
-    const config: CloudLinkConfig = { workspace_id: body.workspaceId, project_id: cloudProjectId };
+    const config: CloudLinkConfig = { workspace_id: workspaceId, project_id: cloudProjectId };
     const existing = db
       .prepare("SELECT id FROM integrations WHERE project_id = ? AND kind = 'cloud'")
       .get(projectId) as { id: string } | undefined;
