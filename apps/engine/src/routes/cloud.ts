@@ -6,9 +6,13 @@ import {
   cloudFetch,
   cloudMode,
   clearCloudSession,
+  clearActiveWorkspace,
   loadCloudSession,
+  loadActiveWorkspace,
   redeemDesktopCode,
   storeCloudSession,
+  storeActiveWorkspace,
+  type ActiveWorkspace,
 } from "../cloudClient.ts";
 import { lastSyncResult, pushProjectSnapshot } from "../sync/loop.ts";
 
@@ -109,6 +113,30 @@ cloud.post("/engine/cloud/workspaces", async (c) => {
   } catch (err) {
     return c.json({ error: (err as Error).message }, 502);
   }
+});
+
+cloud.get("/engine/cloud/active-workspace", (c) => c.json(loadActiveWorkspace()));
+
+cloud.put("/engine/cloud/active-workspace", async (c) => {
+  const body = await c.req.json<{ id?: string }>();
+  const id = body.id?.trim();
+  if (!id) return c.json({ error: "id is required" }, 400);
+  try {
+    // Validate membership against the caller's cloud workspaces before storing.
+    const workspaces = await cloudFetch<{ id: string; name: string }[]>("/workspaces");
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return c.json({ error: "not a member of that workspace" }, 400);
+    const active: ActiveWorkspace = { id: ws.id, name: ws.name };
+    storeActiveWorkspace(active);
+    return c.json(active);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 502);
+  }
+});
+
+cloud.delete("/engine/cloud/active-workspace", (c) => {
+  clearActiveWorkspace();
+  return c.json({ ok: true });
 });
 
 cloud.post("/engine/cloud/invitations/:token/accept", async (c) => {

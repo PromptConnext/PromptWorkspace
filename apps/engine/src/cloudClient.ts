@@ -8,6 +8,7 @@ import { CLOUD_API_URL, SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.ts";
 const SESSION_KEY = "cloud_session";
 const SESSION_CRED = "cloud.session";
 const REFRESH_CRED = "cloud.refresh";
+const ACTIVE_WS_KEY = "active_workspace";
 
 export type CloudSession = { mode: "stub" | "supabase"; userId: string };
 
@@ -39,6 +40,27 @@ export function clearCloudSession(): void {
   deleteSecret(SESSION_CRED);
   deleteSecret(REFRESH_CRED);
   setAppState(SESSION_KEY, JSON.stringify(null));
+  setAppState(ACTIVE_WS_KEY, JSON.stringify(null)); // active workspace is tied to the session
+}
+
+export type ActiveWorkspace = { id: string; name: string };
+
+export function loadActiveWorkspace(): ActiveWorkspace | null {
+  const raw = getAppState(ACTIVE_WS_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ActiveWorkspace;
+  } catch {
+    return null;
+  }
+}
+
+export function storeActiveWorkspace(ws: ActiveWorkspace): void {
+  setAppState(ACTIVE_WS_KEY, JSON.stringify(ws));
+}
+
+export function clearActiveWorkspace(): void {
+  setAppState(ACTIVE_WS_KEY, JSON.stringify(null));
 }
 
 function authHeaders(session: CloudSession): Record<string, string> {
