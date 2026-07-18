@@ -17,6 +17,8 @@ from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     Invitation,
     InvitationCreate,
+    InvitationStatus,
+    Project,
     Workspace,
     WorkspaceCreate,
     WorkspaceMember,
@@ -81,6 +83,16 @@ def list_members(
     return repo.list_members(workspace_id)
 
 
+@router.get("/workspaces/{workspace_id}/projects", response_model=list[Project])
+def list_workspace_projects(
+    workspace_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[Project]:
+    require_workspace(repo, workspace_id, user)
+    return repo.list_projects_by_workspace(workspace_id)
+
+
 @router.delete(
     "/workspaces/{workspace_id}/members/{user_id}",
     status_code=204,
@@ -119,6 +131,39 @@ def create_invitation(
         expires_at=utcnow() + timedelta(days=INVITATION_TTL_DAYS),
     )
     return repo.create_invitation(invitation)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/invitations", response_model=list[Invitation]
+)
+def list_workspace_invitations(
+    workspace_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[Invitation]:
+    require_admin(repo, workspace_id, user)
+    return repo.list_invitations(workspace_id, status=InvitationStatus.pending)
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/invitations/{invitation_id}",
+    status_code=204,
+    response_class=Response,
+)
+def revoke_workspace_invitation(
+    workspace_id: str,
+    invitation_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Response:
+    require_admin(repo, workspace_id, user)
+    try:
+        repo.revoke_invitation(workspace_id, invitation_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="invitation_not_found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 
 @router.post("/invitations/{token}/accept", response_model=WorkspaceMember)

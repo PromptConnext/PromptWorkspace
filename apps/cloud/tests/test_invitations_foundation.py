@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from fastapi.testclient import TestClient
+
 from app.db.repository import InMemoryRepository
+from app.main import create_app
 from app.models.schemas import Invitation, InvitationStatus, utcnow
 
 
@@ -75,3 +78,60 @@ def test_revoke_invitation_sets_status_and_guards():
     # unknown / cross-workspace id raises KeyError
     with pytest.raises(KeyError):
         repo.revoke_invitation(ws.id, "does-not-exist")
+
+
+def _client():
+    return TestClient(create_app())
+
+
+def _mk_ws(c, user="alice", name="Acme"):
+    return c.post("/workspaces", json={"name": name}, headers={"X-User-Id": user}).json()
+
+
+def test_scoped_projects_endpoint_member_only():
+    with _client() as c:
+        ws = _mk_ws(c)
+        c.post(
+            "/projects",
+            json={"name": "P1", "workspace_id": ws["id"]},
+            headers={"X-User-Id": "alice"},
+        )
+        ok = c.get(f"/workspaces/{ws['id']}/projects", headers={"X-User-Id": "alice"})
+        assert ok.status_code == 200
+        assert [p["name"] for p in ok.json()] == ["P1"]
+        denied = c.get(f"/workspaces/{ws['id']}/projects", headers={"X-User-Id": "mallory"})
+        assert denied.status_code == 403
+
+
+def test_list_and_revoke_invitations_admin_only():
+    with _client() as c:
+        ws = _mk_ws(c)
+        inv = c.post(
+            f"/workspaces/{ws['id']}/invitations",
+            json={"email": "new@b.com", "role": "member"},
+            headers={"X-User-Id": "alice"},
+        ).json()
+        # object under test in task 4 may wrap this; here we read the invitation id
+        inv_id = inv["invitation"]["id"] if "invitation" in inv else inv["id"]
+
+        listed = c.get(f"/workspaces/{ws['id']}/invitations", headers={"X-User-Id": "alice"})
+        assert listed.status_code == 200
+        assert any(i["id"] == inv_id for i in listed.json())
+
+        # non-admin cannot list
+        assert c.get(
+            f"/workspaces/{ws['id']}/invitations", headers={"X-User-Id": "mallory"}
+        ).status_code == 403
+
+        # revoke
+        rev = c.delete(
+            f"/workspaces/{ws['id']}/invitations/{inv_id}", headers={"X-User-Id": "alice"}
+        )
+        assert rev.status_code == 204
+        assert c.get(
+            f"/workspaces/{ws['id']}/invitations", headers={"X-User-Id": "alice"}
+        ).json() == []
+        # revoking again → 409
+        assert c.delete(
+            f"/workspaces/{ws['id']}/invitations/{inv_id}", headers={"X-User-Id": "alice"}
+        ).status_code == 409
