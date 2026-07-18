@@ -5,6 +5,7 @@
 // need to reach desktop, and unlike tasks/requirements/etc. there's no local
 // column-shape conflict to resolve first (a wholly new local table, nothing
 // to reconcile against). Every other entity stays push-only, unchanged.
+import { randomUUID } from "node:crypto";
 import { db, getAppState, setAppState } from "../db.ts";
 import { cloudFetch } from "../cloudClient.ts";
 
@@ -32,13 +33,55 @@ const REQUIREMENT_STATUS_TO_CLOUD: Record<string, string> = {
   approved: "approved",
 };
 
-type CloudLinkConfig = { workspace_id: string; project_id: string };
+// project_id is optional: a project created offline into a workspace is linked
+// (workspace_id known) but has no cloud project row yet — it stays pending until
+// ensureCloudProject() mints one on reconnect (ADR 0015 §5, plan 0006 G2).
+export type CloudLinkConfig = { workspace_id: string; project_id?: string | null };
 
-function getCloudLink(projectId: string): CloudLinkConfig | null {
+export function getCloudLink(projectId: string): CloudLinkConfig | null {
   const row = db
     .prepare("SELECT config FROM integrations WHERE project_id = ? AND kind = 'cloud'")
     .get(projectId) as { config: string | null } | undefined;
   return row?.config ? (JSON.parse(row.config) as CloudLinkConfig) : null;
+}
+
+// Upsert the per-project cloud link row (kind='cloud' in `integrations`). Used
+// by the cloud-link route and by workspace-scoped project creation.
+export function writeCloudLink(localProjectId: string, config: CloudLinkConfig): void {
+  const existing = db
+    .prepare("SELECT id FROM integrations WHERE project_id = ? AND kind = 'cloud'")
+    .get(localProjectId) as { id: string } | undefined;
+  if (existing) {
+    db.prepare("UPDATE integrations SET config = ? WHERE id = ?").run(
+      JSON.stringify(config),
+      existing.id,
+    );
+  } else {
+    db.prepare(
+      "INSERT INTO integrations (id, project_id, kind, config, required) VALUES (?, ?, 'cloud', ?, 0)",
+    ).run(randomUUID(), localProjectId, JSON.stringify(config));
+  }
+}
+
+// Resolve a pending link into a real cloud project. A project born into a
+// workspace while offline has a link with no project_id; on reconnect this
+// creates the cloud project (POST /projects, membership-gated server-side) and
+// fills in the returned id. Requires the network — throws when offline, leaving
+// the link pending so the next sync tick retries (plan 0006 G2 test 5).
+export async function ensureCloudProject(localProjectId: string): Promise<string | null> {
+  const link = getCloudLink(localProjectId);
+  if (!link) return null;
+  if (link.project_id) return link.project_id;
+  const project = db
+    .prepare("SELECT name FROM projects WHERE id = ?")
+    .get(localProjectId) as { name: string } | undefined;
+  if (!project) return null;
+  const created = await cloudFetch<{ id: string }>("/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: project.name, workspace_id: link.workspace_id }),
+  });
+  writeCloudLink(localProjectId, { workspace_id: link.workspace_id, project_id: created.id });
+  return created.id;
 }
 
 function linkedProjectIds(): string[] {
@@ -242,11 +285,37 @@ export function lastSyncResult(localProjectId: string): SyncResult | null {
 }
 
 export async function pushProjectSnapshot(localProjectId: string): Promise<SyncResult> {
-  const link = getCloudLink(localProjectId);
+  let link = getCloudLink(localProjectId);
   if (!link) {
     const result: SyncResult = { at: new Date().toISOString(), ok: false, error: "not linked" };
     recordResult(localProjectId, result);
     return result;
+  }
+  // A project born into a workspace while offline is linked but has no cloud
+  // project yet — mint it on reconnect before pushing. If still offline this
+  // throws and the push is recorded as failed (pending), flushing next tick.
+  if (!link.project_id) {
+    try {
+      await ensureCloudProject(localProjectId);
+      link = getCloudLink(localProjectId);
+    } catch (err) {
+      const result: SyncResult = {
+        at: new Date().toISOString(),
+        ok: false,
+        error: (err as Error).message,
+      };
+      recordResult(localProjectId, result);
+      return result;
+    }
+    if (!link?.project_id) {
+      const result: SyncResult = {
+        at: new Date().toISOString(),
+        ok: false,
+        error: "pending workspace link (no cloud project yet)",
+      };
+      recordResult(localProjectId, result);
+      return result;
+    }
   }
   try {
     const snapshot = assembleSnapshot(localProjectId, link.project_id);
@@ -302,7 +371,7 @@ function pullCursorKey(localProjectId: string): string {
 // engine remains the source of truth for the rest of the graph.
 export async function pullProjectDiscussions(localProjectId: string): Promise<void> {
   const link = getCloudLink(localProjectId);
-  if (!link) return;
+  if (!link?.project_id) return; // unlinked or pending (no cloud project yet)
 
   const cursor = getAppState(pullCursorKey(localProjectId));
   const path = cursor
@@ -346,11 +415,212 @@ export function stopCloudSyncLoop(): void {
   loopTimer = null;
 }
 
+// --- Full-graph bootstrap-pull (ADR 0015 §2, plan 0006 G2) ----------------
+// Hydrate a cloud project that has NO local graph yet (a new device, or a
+// project a teammate created). Unlike a general incremental pull-and-apply
+// (still not built — see the note at the bottom), a bootstrap is a one-shot
+// replica of the cloud's *already-merged* state into empty local tables: the
+// client re-runs no merge, and pmo-only fields (assignee/sprint) simply have
+// no local column and are dropped, exactly as the push omits them.
+
+// Cloud status vocabularies are coarser than local; reverse the push maps so a
+// hydrated graph reads back in the local vocabulary the rest of the engine
+// expects. Unknown values fall back to the local default.
+const TASK_STATUS_FROM_CLOUD: Record<string, string> = {
+  todo: "todo",
+  in_progress: "running",
+  implemented: "done",
+  verified: "done",
+};
+
+const REQUIREMENT_STATUS_FROM_CLOUD: Record<string, string> = {
+  draft: "draft",
+  approved: "approved",
+};
+
+type CloudGraphPage = {
+  requirements: { id: string; title: string; description: string; status: string }[];
+  spec_documents: {
+    id: string;
+    requirement_id: string;
+    content: string;
+    version: number;
+    approved_by: string | null;
+  }[];
+  tasks: {
+    id: string;
+    spec_id: string | null;
+    title: string;
+    status: string;
+    feature_tag: string | null;
+    acceptance_criteria: { text: string }[];
+  }[];
+  artifacts: { id: string; task_id: string; kind: string; uri: string; commit_sha: string | null }[];
+  agent_runs: {
+    id: string;
+    task_id: string;
+    action: string;
+    status: string;
+    evidence: Record<string, unknown> | null;
+  }[];
+  discussions: CloudDiscussion[];
+  cursor: string | null;
+  next_id: string | null;
+  has_more: boolean;
+};
+
+const upsertRequirement = db.prepare(`
+  INSERT INTO requirements (id, project_id, title, description, status)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title, description = excluded.description, status = excluded.status
+`);
+const upsertSpecDocument = db.prepare(`
+  INSERT INTO spec_documents (id, requirement_id, content, version, approved_by)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    content = excluded.content, version = excluded.version, approved_by = excluded.approved_by
+`);
+const upsertTask = db.prepare(`
+  INSERT INTO tasks (id, spec_id, title, status, feature_tag)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    spec_id = excluded.spec_id, title = excluded.title,
+    status = excluded.status, feature_tag = excluded.feature_tag
+`);
+const deleteCriteriaForTask = db.prepare("DELETE FROM acceptance_criteria WHERE task_id = ?");
+const insertCriterion = db.prepare(
+  "INSERT INTO acceptance_criteria (id, task_id, text) VALUES (?, ?, ?)",
+);
+const upsertArtifact = db.prepare(`
+  INSERT INTO artifacts (id, task_id, kind, uri, commit_sha)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    task_id = excluded.task_id, kind = excluded.kind,
+    uri = excluded.uri, commit_sha = excluded.commit_sha
+`);
+const upsertAgentRun = db.prepare(`
+  INSERT INTO agent_runs (id, project_id, task_id, action, status, evidence)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    task_id = excluded.task_id, action = excluded.action,
+    status = excluded.status, evidence = excluded.evidence
+`);
+
+// Apply one drained page of the cloud graph into local SQLite (dumb replica).
+// Cloud entity ids ARE the local ids (the push uses local ids as cloud ids),
+// so a bootstrap on a fresh device reconstructs the same id space.
+function applyGraphPage(localProjectId: string, page: CloudGraphPage): void {
+  for (const r of page.requirements) {
+    upsertRequirement.run(
+      r.id,
+      localProjectId,
+      r.title,
+      r.description ?? "",
+      REQUIREMENT_STATUS_FROM_CLOUD[r.status] ?? "draft",
+    );
+  }
+  for (const sd of page.spec_documents) {
+    upsertSpecDocument.run(sd.id, sd.requirement_id, sd.content ?? "", sd.version ?? 1, sd.approved_by);
+  }
+  for (const t of page.tasks) {
+    if (!t.spec_id) continue; // a task with no spec has no local parent to attach to
+    upsertTask.run(
+      t.id,
+      t.spec_id,
+      t.title,
+      TASK_STATUS_FROM_CLOUD[t.status] ?? "todo",
+      t.feature_tag,
+    );
+    // acceptance_criteria are embedded (not separately keyed) in the cloud
+    // shape — replace the local set wholesale, minting fresh local ids.
+    deleteCriteriaForTask.run(t.id);
+    for (const c of t.acceptance_criteria ?? []) {
+      insertCriterion.run(randomUUID(), t.id, c.text);
+    }
+  }
+  for (const a of page.artifacts) {
+    upsertArtifact.run(a.id, a.task_id, a.kind, a.uri, a.commit_sha);
+  }
+  for (const ar of page.agent_runs) {
+    // local `evidence` is free text; cloud's is a dict — reverse the push's
+    // {note: ...} wrapping, else serialize whatever shape came back.
+    const note =
+      ar.evidence && typeof ar.evidence.note === "string"
+        ? ar.evidence.note
+        : ar.evidence && Object.keys(ar.evidence).length
+          ? JSON.stringify(ar.evidence)
+          : null;
+    upsertAgentRun.run(ar.id, localProjectId, ar.task_id, ar.action, ar.status, note);
+  }
+  for (const d of page.discussions) {
+    upsertLocalDiscussion.run(
+      d.id,
+      localProjectId,
+      d.parent_node_type,
+      d.parent_node_id,
+      d.author,
+      d.body,
+      d.source,
+      d.deleted_at,
+    );
+  }
+}
+
+export type HydrateResult = { pages: number; counts: Record<string, number> };
+
+// Drain the bootstrap graph (no `since` = tombstones hidden) page by page via
+// keyset pagination (limit + after_ts + after_id), exactly like plan 0004 D2's
+// incremental drain, applying each page before fetching the next. Never assume
+// a single response — a multi-page graph must be fully drained.
+const HYDRATE_PAGE_LIMIT = 500;
+
+export async function hydrateProjectGraph(
+  localProjectId: string,
+  cloudProjectId: string,
+): Promise<HydrateResult> {
+  const counts: Record<string, number> = {
+    requirements: 0,
+    spec_documents: 0,
+    tasks: 0,
+    artifacts: 0,
+    agent_runs: 0,
+    discussions: 0,
+  };
+  let afterTs: string | null = null;
+  let afterId: string | null = null;
+  let pages = 0;
+
+  // Bound the loop defensively so a server that never clears has_more can't
+  // spin forever; 10k pages * 500 rows is far beyond any real desktop project.
+  for (let guard = 0; guard < 10_000; guard++) {
+    const params = new URLSearchParams({ limit: String(HYDRATE_PAGE_LIMIT) });
+    if (afterTs) params.set("after_ts", afterTs);
+    if (afterId) params.set("after_id", afterId);
+    const page = await cloudFetch<CloudGraphPage>(
+      `/sync/projects/${cloudProjectId}/graph?${params.toString()}`,
+      { method: "GET" },
+    );
+    applyGraphPage(localProjectId, page);
+    pages++;
+    for (const key of Object.keys(counts)) {
+      counts[key] += (page[key as keyof CloudGraphPage] as unknown[] | undefined)?.length ?? 0;
+    }
+    if (!page.has_more || !page.next_id || !page.cursor) break;
+    afterTs = page.cursor;
+    afterId = page.next_id;
+  }
+
+  return { pages, counts };
+}
+
 // --- Still deliberately not built ---------------------------------------
-// General pull-and-apply for requirements/specs/tasks/artifacts/agent_runs
-// (cloud graph -> local SQLite) remains out of scope: the local `tasks`
-// table has no `assignee`/`sprint` columns, so there's nowhere to put the
-// pmo fields a pull would bring back from a Jira/ClickUp mirror. M12's
-// discussions pull (above) didn't need to solve this — a wholly new local
-// table has nothing to reconcile against. This gap is unchanged by M12 and
-// stays a follow-up once those columns exist.
+// General *incremental* pull-and-apply (cloud graph -> local SQLite on an
+// ongoing basis, honoring `since` and tombstones for requirements/specs/
+// tasks/artifacts/agent_runs) remains out of scope: the local `tasks` table
+// has no `assignee`/`sprint` columns, so there's nowhere to put the pmo
+// fields a live pull would bring back from a Jira/ClickUp mirror. The
+// bootstrap hydrate above is a one-shot replica into empty tables, not an
+// ongoing reconciliation — it sidesteps that gap the same way M12's
+// discussions pull did. Ongoing pull stays a follow-up once those columns
+// exist.

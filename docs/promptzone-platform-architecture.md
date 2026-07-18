@@ -171,6 +171,22 @@ POST  /sync/integrations/jira/mirror     → project a task to external tracker
 WS    /sync/projects/{id}/presence       → live collaboration
 ```
 
+Two things flow in opposite directions, and ADR 0015 keeps them strictly
+separate. The **task graph** stays **local-authoritative** (the engine is the
+source of truth; the cloud graph is a projection with per-field ownership for
+the few tracker-owned fields). But the **workspace/project roster** — which
+workspaces a signed-in user belongs to and which projects live in them — is
+**cloud-authoritative**: the engine mirrors the existing member-scoped
+`GET /workspaces` + `GET /projects` into a local roster cache so the desktop
+renders fully offline, refreshing it on sign-in / focus / explicit refresh and
+scrubbing it on sign-out. Opening a roster project this machine has never seen
+triggers a one-shot **full-graph bootstrap-pull** (`GET /sync/projects/{id}/graph`
+with no `since`, keyset-paginated) that replicates the cloud's already-merged
+state into empty local tables — after which the graph is local-authoritative as
+usual. Consequently, offline-first now holds **after a first successful sign-in
+on that machine**, not on a cold, never-signed-in install (ADR 0015 narrows
+ADR 0003's "works with no network" for the roster, not the graph).
+
 ### 3.3 Model Gateway — the two connection modes
 - **Mode 1 — API key / endpoint:** user supplies key or OpenAI-compatible base URL (OpenAI, Anthropic, Google, Z.AI/GLM, OpenRouter, Ollama, vLLM). Universal; metered by provider.
 - **Mode 2 — Subscription / agentic auth:** sign in with a plan where the provider permits programmatic use (e.g. Claude Code on Pro/Max with its dedicated programmatic budget). Per-provider ToS review required before enabling.

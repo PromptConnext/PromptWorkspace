@@ -10,6 +10,8 @@ import { connectionForRole, connectionForRoleStrict } from "./models.ts";
 import { parseTaskLines, runImplementation, runStage } from "../agent/loop.ts";
 import { runAgentTask } from "../agent/agent-runner.ts";
 import { resolveAdapter } from "../agent/adapters/index.ts";
+import { loadActiveWorkspace, loadCloudSession } from "../cloudClient.ts";
+import { ensureCloudProject, writeCloudLink } from "../sync/loop.ts";
 
 export const projects = new Hono();
 
@@ -59,21 +61,20 @@ projects.get("/engine/projects", (c) => {
 });
 
 // Project bootstrap (gap G3): pick/create a folder, engine git-inits it.
-// The business persona never touches Git directly.
-projects.post("/engine/projects", async (c) => {
-  const body = await c.req.json<{ name?: string; path?: string }>();
-  const name = body.name;
-  if (!name) return c.json({ error: "name is required" }, 400);
+// The business persona never touches Git directly. Exported so the cloud
+// roster's bootstrap-pull (routes/cloud.ts) can materialize a local project
+// for a cloud project it's about to hydrate.
+export function createLocalProjectShell(name: string, path?: string): ProjectRow {
   const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
-  const path = body.path ?? join(homedir(), "PromptConnext-Projects", slug);
+  const resolvedPath = path ?? join(homedir(), "PromptConnext-Projects", slug);
 
-  mkdirSync(path, { recursive: true });
-  if (!existsSync(join(path, ".git"))) {
-    execFileSync("git", ["init", "-b", "main"], { cwd: path, stdio: "pipe" });
+  mkdirSync(resolvedPath, { recursive: true });
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    execFileSync("git", ["init", "-b", "main"], { cwd: resolvedPath, stdio: "pipe" });
   }
 
   const id = randomUUID();
-  db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, path);
+  db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, resolvedPath);
   const insertStage = db.prepare(
     "INSERT INTO stage_states (project_id, stage, status) VALUES (?, ?, 'not_started')",
   );
@@ -83,7 +84,38 @@ projects.post("/engine/projects", async (c) => {
     "INSERT INTO integrations (id, project_id, kind, required) VALUES (?, ?, 'git', 1)",
   ).run(randomUUID(), id);
 
-  return c.json({ id, name, path });
+  return { id, name, path: resolvedPath };
+}
+
+projects.post("/engine/projects", async (c) => {
+  const body = await c.req.json<{ name?: string; path?: string; workspaceId?: string }>();
+  const name = body.name;
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  // ADR 0015 §5: once a cloud identity is in play, a new project must be born
+  // into an active workspace (workspace_id required) rather than the old
+  // "unassigned, optionally link later" path. When no cloud session exists
+  // (single-player / stub-dev / cloud disabled) the old local-only path stays,
+  // so offline-first and local testing are preserved (plan 0006 G2).
+  const session = loadCloudSession();
+  const workspaceId = session ? body.workspaceId?.trim() || loadActiveWorkspace()?.id : undefined;
+  if (session && !workspaceId) {
+    return c.json({ error: "an active workspace is required to create a project" }, 400);
+  }
+
+  const project = createLocalProjectShell(name, body.path);
+
+  // Bind the project to the workspace immediately, even offline: the link is
+  // written now (cloud project pending), and the sync loop mints the cloud
+  // project + pushes on reconnect (ensureCloudProject / pushProjectSnapshot).
+  if (workspaceId) {
+    writeCloudLink(project.id, { workspace_id: workspaceId });
+    // Best-effort immediate materialize+push when online; offline this fails
+    // silently and stays pending for the next tick (no data loss).
+    void ensureCloudProject(project.id).catch(() => {});
+  }
+
+  return c.json(project);
 });
 
 // Refine-before-approve (business surface): regenerating a stage replaces its

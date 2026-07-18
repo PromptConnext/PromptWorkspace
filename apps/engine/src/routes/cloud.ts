@@ -9,12 +9,25 @@ import {
   clearActiveWorkspace,
   loadCloudSession,
   loadActiveWorkspace,
+  loadRosterProjects,
+  loadRosterWorkspaces,
   redeemDesktopCode,
+  rosterSyncedAt,
   storeCloudSession,
   storeActiveWorkspace,
+  storeRoster,
   type ActiveWorkspace,
+  type RosterProject,
+  type RosterWorkspace,
 } from "../cloudClient.ts";
-import { lastSyncResult, pushProjectSnapshot } from "../sync/loop.ts";
+import {
+  getCloudLink,
+  hydrateProjectGraph,
+  lastSyncResult,
+  pushProjectSnapshot,
+  writeCloudLink,
+} from "../sync/loop.ts";
+import { createLocalProjectShell } from "./projects.ts";
 
 export const cloud = new Hono();
 
@@ -49,6 +62,10 @@ cloud.post("/engine/cloud/login", async (c) => {
   }
   const userId = body.userId.trim();
   storeCloudSession({ mode: "stub", userId });
+  // Prime the roster on sign-in so the desktop has a cloud-authoritative
+  // workspace/project list to render (ADR 0015 §2). Best-effort — a failure
+  // here doesn't block login; the desktop can retry via /roster/refresh.
+  void refreshRoster().catch(() => {});
   return c.json({ connected: true, mode: "stub", userId });
 });
 
@@ -79,6 +96,7 @@ cloud.post("/engine/cloud/login/redeem", async (c) => {
   try {
     const { accessToken, refreshToken, userId } = await redeemDesktopCode(body.code.trim());
     storeCloudSession({ mode: "supabase", userId }, accessToken, refreshToken);
+    void refreshRoster().catch(() => {}); // prime roster on sign-in (ADR 0015 §2)
     return c.json({ connected: true, mode: "supabase", userId });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 401);
@@ -86,8 +104,104 @@ cloud.post("/engine/cloud/login/redeem", async (c) => {
 });
 
 cloud.post("/engine/cloud/logout", (c) => {
+  // clearCloudSession() also scrubs the roster cache (ADR 0015 §3.4) so
+  // workspace/project names don't leak to the next user of the machine.
   clearCloudSession();
   return c.json({ ok: true });
+});
+
+// --- Roster cache (ADR 0015 §2, plan 0006 G2) ------------------------------
+// The cloud-authoritative roster is mirrored locally so the desktop renders
+// fully offline. Reuses the existing member-scoped GET /workspaces + GET
+// /projects — no new cloud endpoint (ADR 0015 decision: none in v1).
+
+async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; projects: RosterProject[] }> {
+  // apps/cloud returns bare arrays (response_model=list[...]). Keep metadata
+  // only — id/name/workspace_id — never anything secret (ADR 0010 §5).
+  const rawWorkspaces = await cloudFetch<{ id: string; name: string }[]>("/workspaces");
+  const rawProjects = await cloudFetch<{ id: string; name: string; workspace_id: string }[]>(
+    "/projects",
+  );
+  const workspaces: RosterWorkspace[] = rawWorkspaces.map((w) => ({ id: w.id, name: w.name }));
+  const projects: RosterProject[] = rawProjects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    workspace_id: p.workspace_id,
+  }));
+  storeRoster(workspaces, projects);
+  return { workspaces, projects };
+}
+
+// Read the cached roster. No network — renders offline from the last sync
+// (plan 0006 G2: "no live network check required to read it").
+cloud.get("/engine/cloud/roster", (c) =>
+  c.json({
+    workspaces: loadRosterWorkspaces(),
+    projects: loadRosterProjects(),
+    syncedAt: rosterSyncedAt(),
+  }),
+);
+
+// Refresh from the cloud (called on sign-in, on app focus, on explicit
+// refresh). Offline, it falls back to the cached roster with offline:true so
+// the desktop can still render and distinguish "cloud unreachable" from
+// "signed out" (ADR 0015 state 4).
+cloud.post("/engine/cloud/roster/refresh", async (c) => {
+  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptConnext Cloud" }, 401);
+  try {
+    const { workspaces, projects } = await refreshRoster();
+    return c.json({ workspaces, projects, syncedAt: rosterSyncedAt(), offline: false });
+  } catch (err) {
+    return c.json({
+      workspaces: loadRosterWorkspaces(),
+      projects: loadRosterProjects(),
+      syncedAt: rosterSyncedAt(),
+      offline: true,
+      error: (err as Error).message,
+    });
+  }
+});
+
+// Find the local project bound to a given cloud project id, if any.
+function findLocalProjectByCloudId(cloudProjectId: string): string | null {
+  const rows = db
+    .prepare("SELECT project_id, config FROM integrations WHERE kind = 'cloud'")
+    .all() as { project_id: string; config: string | null }[];
+  for (const r of rows) {
+    if (!r.config) continue;
+    try {
+      const cfg = JSON.parse(r.config) as { project_id?: string };
+      if (cfg.project_id === cloudProjectId) return r.project_id;
+    } catch {
+      // ignore malformed link config
+    }
+  }
+  return null;
+}
+
+// Open a roster project on this machine: if it already has a local graph,
+// return its local id; otherwise materialize a local project shell and
+// full-graph bootstrap-pull the cloud's merged state into it (ADR 0015 §2,
+// state 9 "new device"). The task graph stays local-authoritative afterward —
+// this is a one-shot hydrate, not an ongoing merge.
+cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
+  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptConnext Cloud" }, 401);
+  const cloudProjectId = c.req.param("cloudProjectId");
+
+  const existing = findLocalProjectByCloudId(cloudProjectId);
+  if (existing) return c.json({ localProjectId: existing, hydrated: false });
+
+  const rosterProject = loadRosterProjects().find((p) => p.id === cloudProjectId);
+  if (!rosterProject) return c.json({ error: "project not in roster (refresh first)" }, 404);
+
+  const local = createLocalProjectShell(rosterProject.name);
+  writeCloudLink(local.id, { workspace_id: rosterProject.workspace_id, project_id: cloudProjectId });
+  try {
+    const result = await hydrateProjectGraph(local.id, cloudProjectId);
+    return c.json({ localProjectId: local.id, hydrated: true, ...result });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 502);
+  }
 });
 
 cloud.get("/engine/cloud/workspaces", async (c) => {
@@ -154,15 +268,7 @@ cloud.post("/engine/cloud/invitations/:token/accept", async (c) => {
 // --- Per-project cloud link ------------------------------------------------
 // Stored in the existing `integrations` table (kind='cloud'); no schema
 // migration needed beyond widening the kind CHECK constraint (db.ts).
-
-type CloudLinkConfig = { workspace_id: string; project_id: string };
-
-function getCloudLink(projectId: string): CloudLinkConfig | null {
-  const row = db
-    .prepare("SELECT config FROM integrations WHERE project_id = ? AND kind = 'cloud'")
-    .get(projectId) as { config: string | null } | undefined;
-  return row?.config ? (JSON.parse(row.config) as CloudLinkConfig) : null;
-}
+// getCloudLink / writeCloudLink are shared with sync/loop.ts.
 
 cloud.get("/engine/projects/:id/cloud-link", (c) => {
   const link = getCloudLink(c.req.param("id"));
@@ -194,20 +300,8 @@ cloud.post("/engine/projects/:id/cloud-link", async (c) => {
       cloudProjectId = created.id;
     }
 
-    const config: CloudLinkConfig = { workspace_id: workspaceId, project_id: cloudProjectId };
-    const existing = db
-      .prepare("SELECT id FROM integrations WHERE project_id = ? AND kind = 'cloud'")
-      .get(projectId) as { id: string } | undefined;
-    if (existing) {
-      db.prepare("UPDATE integrations SET config = ? WHERE id = ?").run(
-        JSON.stringify(config),
-        existing.id,
-      );
-    } else {
-      db.prepare(
-        "INSERT INTO integrations (id, project_id, kind, config, required) VALUES (?, ?, 'cloud', ?, 0)",
-      ).run(randomUUID(), projectId, JSON.stringify(config));
-    }
+    const config = { workspace_id: workspaceId, project_id: cloudProjectId };
+    writeCloudLink(projectId, config);
     return c.json({ linked: true, ...config });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 502);
