@@ -30,9 +30,27 @@ export default function Workspace() {
     }
   };
 
+  const inActive = activeWorkspaceId
+    ? projects.filter((p) => p.cloud_workspace_id === activeWorkspaceId)
+    : [];
+  const unassigned = projects.filter((p) => p.cloud_workspace_id === null);
+  const grouped = activeWorkspaceId !== null;
+
+  const renderProject = (p: Project) => (
+    <li key={p.id}>
+      <button
+        type="button"
+        className={active?.id === p.id ? "active" : ""}
+        onClick={() => setActive(p)}
+      >
+        {p.name}
+      </button>
+    </li>
+  );
+
   return (
     <div className="workspace">
-      <aside data-active-workspace={activeWorkspaceId ?? undefined}>
+      <aside>
         <WorkspaceBar
           onActiveChange={(id) => {
             setActiveWorkspaceId(id);
@@ -40,19 +58,19 @@ export default function Workspace() {
           }}
         />
         <h2>Projects</h2>
-        <ul className="projects">
-          {projects.map((p) => (
-            <li key={p.id}>
-              <button
-                type="button"
-                className={active?.id === p.id ? "active" : ""}
-                onClick={() => setActive(p)}
-              >
-                {p.name}
-              </button>
-            </li>
-          ))}
-        </ul>
+        {grouped ? (
+          <>
+            <ul className="projects">{inActive.map(renderProject)}</ul>
+            {unassigned.length > 0 && (
+              <>
+                <h3 className="muted">Local / unassigned</h3>
+                <ul className="projects">{unassigned.map(renderProject)}</ul>
+              </>
+            )}
+          </>
+        ) : (
+          <ul className="projects">{projects.map(renderProject)}</ul>
+        )}
         <div className="new-project">
           <input
             value={name}
