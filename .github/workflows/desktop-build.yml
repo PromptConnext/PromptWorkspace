@@ -35,6 +35,11 @@ jobs:
           projectPath: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater artifact signing (minisign). With createUpdaterArtifacts:true
+          # in tauri.conf.json this makes tauri-action emit the .tar.gz/.sig
+          # updater bundles alongside the installers.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Upload bundles to Cloudflare R2
         shell: bash # Git Bash on Windows runners; native on macOS
         run: |
@@ -68,3 +73,54 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }} # https://<accountid>.r2.cloudflarestorage.com
           REF_NAME: ${{ github.ref_name }} # via env to avoid run-command injection
+
+  # Fan-in: both matrix platforms have uploaded their signed updater artifacts
+  # (+ .sig) to installation/. Assemble the cross-platform latest.json the
+  # updater endpoint serves, then upload it. Runs once, after both builds.
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Assemble and upload latest.json to Cloudflare R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(jq -r '.version' apps/desktop/src-tauri/tauri.conf.json)
+          mac_name="PromptConnext.app.tar.gz"
+          win_name="PromptConnext_${version}_x64-setup.exe"
+          # Pull the two signatures back from R2 (the build jobs already
+          # uploaded them). Each .sig is a single-line minisign blob.
+          mac_sig=$(aws s3 cp "s3://$R2_BUCKET/installation/${mac_name}.sig" - --endpoint-url "$R2_ENDPOINT")
+          win_sig=$(aws s3 cp "s3://$R2_BUCKET/installation/${win_name}.sig" - --endpoint-url "$R2_ENDPOINT")
+          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # jq -n --arg keeps signatures/urls as data (no shell interpolation
+          # into the JSON body).
+          jq -n \
+            --arg version "$version" \
+            --arg pub_date "$pub_date" \
+            --arg mac_sig "$mac_sig" \
+            --arg mac_url "$DOWNLOAD_PUBLIC_BASE_URL/${mac_name}" \
+            --arg win_sig "$win_sig" \
+            --arg win_url "$DOWNLOAD_PUBLIC_BASE_URL/${win_name}" \
+            '{
+              version: $version,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { signature: $mac_sig, url: $mac_url },
+                "windows-x86_64": { signature: $win_sig, url: $win_url }
+              }
+            }' > latest.json
+          echo "Assembled latest.json for ${version}"
+          aws s3 cp latest.json "s3://$R2_BUCKET/installation/latest.json" \
+            --endpoint-url "$R2_ENDPOINT"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          # Public base URL of the R2 installation/ prefix — same value the corp
+          # site uses for NEXT_PUBLIC_DOWNLOAD_BASE_URL, and the host of the
+          # updater endpoint in tauri.conf.json. No trailing slash.
+          DOWNLOAD_PUBLIC_BASE_URL: ${{ secrets.DOWNLOAD_PUBLIC_BASE_URL }}

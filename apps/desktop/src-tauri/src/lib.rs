@@ -73,6 +73,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        // Auto-update (in-app download + install) and process control for the
+        // post-install relaunch. Desktop-only plugins; the webview drives the
+        // check/skip/remind UX and calls downloadAndInstall() + relaunch().
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             let dir = engine_dir(app.handle());
             let child = match spawn_engine(&token, &dir) {
