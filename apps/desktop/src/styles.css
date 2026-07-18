@@ -76,6 +76,39 @@ textarea {
   font-size: 0.9em;
 }
 
+/* identity + membership gates (ADR 0015): auth gate & no-workspace state */
+.gate {
+  max-width: 480px;
+  margin: 12vh auto;
+  padding: 0 24px;
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+}
+
+.gate h1 {
+  margin: 0;
+}
+
+.gate p {
+  margin: 0;
+}
+
+.gate .hint {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.gate-form {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.gate-form input {
+  flex: 1;
+}
+
 .connect-form {
   display: grid;
   gap: 12px;

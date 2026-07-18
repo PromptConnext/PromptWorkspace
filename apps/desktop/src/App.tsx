@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { engineHealth, getOnboardingState, type OnboardingState } from "./api";
+import { membershipGateEnabled, resolveGate, type CloudGate } from "./cloudGate";
 import { checkForUpdate } from "./update";
 import Onboarding from "./components/Onboarding";
+import AuthGate from "./components/AuthGate";
+import NoWorkspace from "./components/NoWorkspace";
 import UpdatePrompt from "./components/UpdatePrompt";
 import Workspace from "./components/Workspace";
 
@@ -12,6 +15,12 @@ const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 export default function App() {
   const [engineUp, setEngineUp] = useState<boolean | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  // Identity + membership gate (ADR 0015). With the feature flag off it starts
+  // synchronously "disabled" so the app renders exactly as before — no flash,
+  // no roster pulls. Only when enabled does it start null (still resolving).
+  const [gate, setGate] = useState<CloudGate | null>(
+    membershipGateEnabled ? null : { kind: "disabled" },
+  );
   const [update, setUpdate] = useState<Update | null>(null);
 
   const refresh = useCallback(async () => {
@@ -27,11 +36,38 @@ export default function App() {
     }
   }, []);
 
+  // Re-drive the identity + membership gate. Runs once the engine is up, on
+  // window focus (so a live membership revocation or sign-out transitions the
+  // app — ADR 0015 states 6/7), and on demand from the gate screens. A cached,
+  // refresh-extended session still counts as signed in, so this never becomes a
+  // hard live-network check on launch.
+  const recheckGate = useCallback(async () => {
+    try {
+      setGate(await resolveGate());
+    } catch {
+      // Never lock the user out on an unexpected error — fall open to the
+      // existing (ungated) flow.
+      setGate({ kind: "disabled" });
+    }
+  }, []);
+
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!membershipGateEnabled) return;
+    if (engineUp) recheckGate();
+  }, [engineUp, recheckGate]);
+
+  useEffect(() => {
+    if (!membershipGateEnabled) return;
+    const onFocus = () => recheckGate();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [recheckGate]);
 
   // Auto-update: check on launch and periodically. checkForUpdate() is a no-op
   // outside Tauri and swallows the skipped version, so we only get a non-null
@@ -69,6 +105,28 @@ export default function App() {
     <UpdatePrompt update={update} onDismiss={() => setUpdate(null)} />
   ) : null;
 
+  // Identity + membership gates sit AHEAD of model onboarding (ADR 0015):
+  // engine → auth → membership → onboarding → Workspace. `gate === null` means
+  // it is still resolving; show a light placeholder rather than briefly
+  // flashing the onboarding/workspace screen.
+  if (gate === null) return <main className="center">Loading…</main>;
+  if (gate.kind === "auth") {
+    return (
+      <>
+        <AuthGate onSignedIn={recheckGate} />
+        {updatePrompt}
+      </>
+    );
+  }
+  if (gate.kind === "no-workspace") {
+    return (
+      <>
+        <NoWorkspace onChanged={recheckGate} />
+        {updatePrompt}
+      </>
+    );
+  }
+
   if (onboarding !== "satisfied") {
     return (
       <>
@@ -79,7 +137,7 @@ export default function App() {
   }
   return (
     <>
-      <Workspace />
+      <Workspace onGateRecheck={recheckGate} />
       {updatePrompt}
     </>
   );
