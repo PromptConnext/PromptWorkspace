@@ -1,17 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { use } from "react";
+import { useRouter } from "next/navigation";
+import { use, useEffect } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useCloudGet } from "@/lib/hooks";
+import { useWorkspace } from "@/lib/workspace";
 import type { Project, Workspace, WorkspaceMember } from "@/lib/types";
 
 function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
+  const router = useRouter();
+  const { memberships, loading: wsLoading, setActiveWorkspace } = useWorkspace();
   const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
-  const { data: allProjects, error, loading } = useCloudGet<Project[]>("/projects");
-  const projects = allProjects?.filter((p) => p.workspace_id === workspaceId) ?? [];
+  const { data: projects, error, loading } = useCloudGet<Project[]>(
+    `/workspaces/${workspaceId}/projects`,
+  );
+
+  // Treat visiting /w/{id} as an explicit selection: if it's a real membership,
+  // make it the active workspace; if the memberships are loaded and it is NOT
+  // one, bounce to the gate.
+  useEffect(() => {
+    if (wsLoading) return;
+    if (memberships.some((w) => w.id === workspaceId)) {
+      setActiveWorkspace(workspaceId);
+    } else {
+      router.replace("/");
+    }
+  }, [wsLoading, memberships, workspaceId, setActiveWorkspace, router]);
 
   return (
     <>
@@ -24,13 +41,13 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
 
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {!loading && projects.length === 0 && (
+        {!loading && (projects?.length ?? 0) === 0 && (
           <p className="text-sm text-slate-500">
             No projects yet in this workspace. Link one from the desktop app.
           </p>
         )}
         <ul className="flex flex-col gap-2">
-          {projects.map((p) => (
+          {projects?.map((p) => (
             <li key={p.id}>
               <Link
                 href={`/w/${workspaceId}/p/${p.id}`}
