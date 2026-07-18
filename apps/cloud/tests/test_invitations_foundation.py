@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import timedelta
 
 from fastapi.testclient import TestClient
@@ -135,3 +136,55 @@ def test_list_and_revoke_invitations_admin_only():
         assert c.delete(
             f"/workspaces/{ws['id']}/invitations/{inv_id}", headers={"X-User-Id": "alice"}
         ).status_code == 409
+
+
+class _FakeMailer:
+    def __init__(self, result: bool):
+        self.result = result
+        self.calls = []
+
+    def send(self, email: str, token: str) -> bool:
+        self.calls.append((email, token))
+        return self.result
+
+
+@contextlib.contextmanager
+def _client_with_mailer(mailer):
+    # app.state.invitation_mailer is set during lifespan startup (main.py), so
+    # the override must happen after entering the TestClient context — the
+    # same pattern tests/test_github_ingest.py uses for app.state.github_client.
+    app = create_app()
+    with TestClient(app) as c:
+        c.app.state.invitation_mailer = mailer
+        yield c
+
+
+def test_create_invitation_emails_and_returns_accept_url():
+    mailer = _FakeMailer(result=True)
+    with _client_with_mailer(mailer) as c:
+        ws = _mk_ws(c)
+        res = c.post(
+            f"/workspaces/{ws['id']}/invitations",
+            json={"email": "new@b.com", "role": "member"},
+            headers={"X-User-Id": "alice"},
+        )
+        assert res.status_code == 201, res.text
+        body = res.json()
+        assert body["email_sent"] is True
+        assert body["accept_url"].endswith(f"/invite/{body['invitation']['token']}")
+        assert mailer.calls == [("new@b.com", body["invitation"]["token"])]
+
+
+def test_create_invitation_survives_email_failure():
+    mailer = _FakeMailer(result=False)  # e.g. existing user / SMTP down
+    with _client_with_mailer(mailer) as c:
+        ws = _mk_ws(c)
+        res = c.post(
+            f"/workspaces/{ws['id']}/invitations",
+            json={"email": "existing@b.com", "role": "member"},
+            headers={"X-User-Id": "alice"},
+        )
+        assert res.status_code == 201
+        body = res.json()
+        assert body["email_sent"] is False
+        assert body["accept_url"].endswith(f"/invite/{body['invitation']['token']}")

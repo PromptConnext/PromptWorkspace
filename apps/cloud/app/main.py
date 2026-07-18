@@ -108,6 +108,9 @@ async def lifespan(app: FastAPI):
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
+    from app.invitations_email import build_invitation_mailer
+
+    app.state.invitation_mailer = build_invitation_mailer(settings)
     logger.info(
         "PromptZone Cloud %s started (backend=%s)",
         __version__,

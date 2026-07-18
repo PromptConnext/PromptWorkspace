@@ -243,6 +243,12 @@ class Invitation(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class InvitationCreateResponse(BaseModel):
+    invitation: Invitation
+    accept_url: str
+    email_sent: bool
+
+
 # --------------------------------------------------------------------------- #
 # External-tracker links (M5)
 # --------------------------------------------------------------------------- #

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://localhost:1420"
 
+    # Where invitation accept links point (the web app). Used to build the
+    # accept URL emailed to invitees; also the Supabase invite redirect target.
+    web_app_url: str = "http://localhost:3000"
+
     # External-tracker credentials (M5). Kept in the server env / secret manager,
     # never in a workspace row (ADR 0010 §5). Outbound Jira uses Basic auth
     # (email + API token); inbound webhooks are HMAC-verified with the secret.

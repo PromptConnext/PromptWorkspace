@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api._guards import require_admin, require_workspace
 from app.db.repository import Repository
@@ -17,6 +17,7 @@ from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     Invitation,
     InvitationCreate,
+    InvitationCreateResponse,
     InvitationStatus,
     Project,
     Workspace,
@@ -114,14 +115,17 @@ def remove_member(
 
 
 @router.post(
-    "/workspaces/{workspace_id}/invitations", response_model=Invitation, status_code=201
+    "/workspaces/{workspace_id}/invitations",
+    response_model=InvitationCreateResponse,
+    status_code=201,
 )
 def create_invitation(
     workspace_id: str,
     body: InvitationCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> Invitation:
+) -> InvitationCreateResponse:
     require_admin(repo, workspace_id, user)
     invitation = Invitation(
         workspace_id=workspace_id,
@@ -130,7 +134,11 @@ def create_invitation(
         invited_by=user.id,
         expires_at=utcnow() + timedelta(days=INVITATION_TTL_DAYS),
     )
-    return repo.create_invitation(invitation)
+    saved = repo.create_invitation(invitation)
+    web = request.app.state.settings.web_app_url.rstrip("/")
+    accept_url = f"{web}/invite/{saved.token}"
+    email_sent = request.app.state.invitation_mailer.send(saved.email, saved.token)
+    return InvitationCreateResponse(invitation=saved, accept_url=accept_url, email_sent=email_sent)
 
 
 @router.get(

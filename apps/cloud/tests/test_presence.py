@@ -20,7 +20,9 @@ def _project_with_two_members(client):
         json={"email": "bob@x.com"},
         headers={"X-User-Id": "alice"},
     ).json()
-    client.post(f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"})
+    client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
     return pid
 
 

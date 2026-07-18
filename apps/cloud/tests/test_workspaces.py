@@ -69,7 +69,9 @@ def test_only_admin_can_invite_and_edit_git_config(client):
         json={"email": "bob@x.com"},
         headers={"X-User-Id": "alice"},
     ).json()
-    client.post(f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"})
+    client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
 
     # Member bob cannot invite or edit git config.
     assert (
@@ -107,7 +109,9 @@ def test_invitation_accept_adds_member(client):
         headers={"X-User-Id": "alice"},
     ).json()
 
-    accepted = client.post(f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"})
+    accepted = client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
     assert accepted.status_code == 200
     assert accepted.json()["user_id"] == "bob"
 
@@ -117,7 +121,9 @@ def test_invitation_accept_adds_member(client):
     assert {m["user_id"] for m in members} == {"alice", "bob"}
 
     # Re-accepting the same (now consumed) invitation is rejected.
-    again = client.post(f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"})
+    again = client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
     assert again.status_code == 409
 
 
