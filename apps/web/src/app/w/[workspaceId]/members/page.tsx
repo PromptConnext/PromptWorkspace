@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { use } from "react";
+import { use, useRef } from "react";
 import { InviteForm } from "@/components/InviteForm";
+import { PendingInvitations } from "@/components/PendingInvitations";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
@@ -12,10 +13,9 @@ import type { Workspace, WorkspaceMember } from "@/lib/types";
 function MembersView({ workspaceId }: { workspaceId: string }) {
   const { user } = useAuth();
   const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
-  const { data: members, refetch: refetchMembers } = useCloudGet<WorkspaceMember[]>(
-    `/workspaces/${workspaceId}/members`,
-  );
+  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
   const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
+  const refetchInvitesRef = useRef<() => void>(() => {});
 
   return (
     <>
@@ -45,8 +45,16 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
 
         {isAdmin && (
           <>
-            <InviteForm workspaceId={workspaceId} onInvited={refetchMembers} />
-            {/* Task 3 mounts <PendingInvitations> here */}
+            <InviteForm
+              workspaceId={workspaceId}
+              onInvited={() => refetchInvitesRef.current()}
+            />
+            <PendingInvitations
+              workspaceId={workspaceId}
+              registerRefetch={(fn) => {
+                refetchInvitesRef.current = fn;
+              }}
+            />
           </>
         )}
         <Link href={`/w/${workspaceId}`} className="text-sm text-slate-500 hover:text-slate-900">
