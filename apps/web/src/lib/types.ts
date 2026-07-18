@@ -7,7 +7,7 @@ export type TaskStatus = "todo" | "in_progress" | "implemented" | "verified";
 export type ArtifactKind = "code" | "doc" | "test" | "other";
 export type AgentRunStatus = "running" | "succeeded" | "failed";
 export type Role = "admin" | "member";
-export type InvitationStatus = "pending" | "accepted" | "expired";
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
 
 export interface Workspace {
   id: string;
@@ -144,4 +144,10 @@ export interface Invitation {
   invited_by: string;
   expires_at: string;
   created_at: string;
+}
+
+export interface InvitationCreateResponse {
+  invitation: Invitation;
+  accept_url: string;
+  email_sent: boolean;
 }
