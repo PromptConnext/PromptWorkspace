@@ -39,7 +39,9 @@ export type Connection = {
   healthy: boolean;
 };
 
-export type Project = { id: string; name: string; path: string };
+// Project gains its cloud-linked workspace id (null when unlinked) — see engine
+// GET /engine/projects annotation.
+export type Project = { id: string; name: string; path: string; cloud_workspace_id: string | null };
 
 export type Graph = {
   project: Project;
@@ -259,6 +261,20 @@ export type CloudConfig = { enabled: boolean; mode: "stub" | "supabase" };
 export type CloudSession = { connected: boolean; mode: "stub" | "supabase" | null; userId: string | null };
 export type CloudWorkspace = { id: string; name: string };
 export type CloudLink = { linked: boolean; workspace_id?: string; project_id?: string };
+
+export type ActiveWorkspace = { id: string; name: string };
+
+export const getActiveWorkspace = () =>
+  request<ActiveWorkspace | null>("/engine/cloud/active-workspace");
+
+export const setActiveWorkspace = (id: string) =>
+  request<ActiveWorkspace>("/engine/cloud/active-workspace", {
+    method: "PUT",
+    body: JSON.stringify({ id }),
+  });
+
+export const clearActiveWorkspace = () =>
+  request<{ ok: boolean }>("/engine/cloud/active-workspace", { method: "DELETE" });
 
 export const getCloudConfig = () => request<CloudConfig>("/engine/cloud/config");
 

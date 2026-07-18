@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { createProject, listProjects, type Project } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
+import WorkspaceBar from "./WorkspaceBar";
 
 export default function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [active, setActive] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
 
   const refresh = () =>
     listProjects().then((r) => setProjects(r.projects)).catch(() => {});
@@ -30,7 +32,13 @@ export default function Workspace() {
 
   return (
     <div className="workspace">
-      <aside>
+      <aside data-active-workspace={activeWorkspaceId ?? undefined}>
+        <WorkspaceBar
+          onActiveChange={(id) => {
+            setActiveWorkspaceId(id);
+            void refresh();
+          }}
+        />
         <h2>Projects</h2>
         <ul className="projects">
           {projects.map((p) => (
