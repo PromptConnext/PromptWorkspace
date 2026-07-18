@@ -6,9 +6,13 @@ import {
   cloudFetch,
   cloudMode,
   clearCloudSession,
+  clearActiveWorkspace,
   loadCloudSession,
+  loadActiveWorkspace,
   redeemDesktopCode,
   storeCloudSession,
+  storeActiveWorkspace,
+  type ActiveWorkspace,
 } from "../cloudClient.ts";
 import { lastSyncResult, pushProjectSnapshot } from "../sync/loop.ts";
 
@@ -111,6 +115,30 @@ cloud.post("/engine/cloud/workspaces", async (c) => {
   }
 });
 
+cloud.get("/engine/cloud/active-workspace", (c) => c.json(loadActiveWorkspace()));
+
+cloud.put("/engine/cloud/active-workspace", async (c) => {
+  const body = await c.req.json<{ id?: string }>();
+  const id = body.id?.trim();
+  if (!id) return c.json({ error: "id is required" }, 400);
+  try {
+    // Validate membership against the caller's cloud workspaces before storing.
+    const workspaces = await cloudFetch<{ id: string; name: string }[]>("/workspaces");
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return c.json({ error: "not a member of that workspace" }, 400);
+    const active: ActiveWorkspace = { id: ws.id, name: ws.name };
+    storeActiveWorkspace(active);
+    return c.json(active);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 502);
+  }
+});
+
+cloud.delete("/engine/cloud/active-workspace", (c) => {
+  clearActiveWorkspace();
+  return c.json({ ok: true });
+});
+
 cloud.post("/engine/cloud/invitations/:token/accept", async (c) => {
   try {
     const data = await cloudFetch<unknown>(
@@ -149,7 +177,10 @@ cloud.post("/engine/projects/:id/cloud-link", async (c) => {
   if (!project) return c.json({ error: "project not found" }, 404);
 
   const body = await c.req.json<{ workspaceId?: string; cloudProjectId?: string }>();
-  if (!body.workspaceId?.trim()) return c.json({ error: "workspaceId is required" }, 400);
+  const workspaceId = body.workspaceId?.trim() || loadActiveWorkspace()?.id;
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required (no active workspace set)" }, 400);
+  }
 
   try {
     // Link to an existing cloud project if given, otherwise create one in the
@@ -158,12 +189,12 @@ cloud.post("/engine/projects/:id/cloud-link", async (c) => {
     if (!cloudProjectId) {
       const created = await cloudFetch<{ id: string }>("/projects", {
         method: "POST",
-        body: JSON.stringify({ name: project.name, workspace_id: body.workspaceId }),
+        body: JSON.stringify({ name: project.name, workspace_id: workspaceId }),
       });
       cloudProjectId = created.id;
     }
 
-    const config: CloudLinkConfig = { workspace_id: body.workspaceId, project_id: cloudProjectId };
+    const config: CloudLinkConfig = { workspace_id: workspaceId, project_id: cloudProjectId };
     const existing = db
       .prepare("SELECT id FROM integrations WHERE project_id = ? AND kind = 'cloud'")
       .get(projectId) as { id: string } | undefined;

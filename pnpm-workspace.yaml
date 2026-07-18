@@ -6,17 +6,7 @@ packages:
 # don't declare @types/react as a real dependency (styled-jsx via next,
 # @monaco-editor/react, next-intl) otherwise fall back to a single shared
 # phantom-hoisted @types/react — which can only match one app, and which
-# re-hoists non-deterministically across installs. Give each such package an
-# explicit, correctly scoped edge instead of relying on that shared phantom slot.
-packageExtensions:
-  "@monaco-editor/react":
-    dependencies:
-      "@types/react": "18.3.31"
-  styled-jsx:
-    dependencies:
-      "@types/react": "19.2.17"
-  # next-intl's locale-aware <Link> (apps/corp) must resolve corp's own
-  # @types/react (19.2.x) or its children type mismatches corp components.
-  next-intl:
-    dependencies:
-      "@types/react": "19.2.17"
+# re-hoists non-deterministically across installs. Each such package gets an
+# explicit, correctly scoped edge via `pnpm.packageExtensions` in the root
+# package.json — NOT here: this repo pins pnpm 9.x, which reads packageExtensions
+# from package.json only (the pnpm-workspace.yaml location is pnpm 10+ only).

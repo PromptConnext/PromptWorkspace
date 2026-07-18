@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { createProject, listProjects, type Project } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
+import WorkspaceBar from "./WorkspaceBar";
 
 export default function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [active, setActive] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [sessionTick, setSessionTick] = useState(0);
 
   const refresh = () =>
     listProjects().then((r) => setProjects(r.projects)).catch(() => {});
@@ -28,23 +31,48 @@ export default function Workspace() {
     }
   };
 
+  const inActive = activeWorkspaceId
+    ? projects.filter((p) => p.cloud_workspace_id === activeWorkspaceId)
+    : [];
+  const unassigned = projects.filter((p) => p.cloud_workspace_id === null);
+  const grouped = activeWorkspaceId !== null;
+
+  const renderProject = (p: Project) => (
+    <li key={p.id}>
+      <button
+        type="button"
+        className={active?.id === p.id ? "active" : ""}
+        onClick={() => setActive(p)}
+      >
+        {p.name}
+      </button>
+    </li>
+  );
+
   return (
     <div className="workspace">
       <aside>
+        <WorkspaceBar
+          reloadSignal={sessionTick}
+          onActiveChange={(id) => {
+            setActiveWorkspaceId(id);
+            void refresh();
+          }}
+        />
         <h2>Projects</h2>
-        <ul className="projects">
-          {projects.map((p) => (
-            <li key={p.id}>
-              <button
-                type="button"
-                className={active?.id === p.id ? "active" : ""}
-                onClick={() => setActive(p)}
-              >
-                {p.name}
-              </button>
-            </li>
-          ))}
-        </ul>
+        {grouped ? (
+          <>
+            <ul className="projects">{inActive.map(renderProject)}</ul>
+            {unassigned.length > 0 && (
+              <>
+                <h3 className="muted">Local / unassigned</h3>
+                <ul className="projects">{unassigned.map(renderProject)}</ul>
+              </>
+            )}
+          </>
+        ) : (
+          <ul className="projects">{projects.map(renderProject)}</ul>
+        )}
         <div className="new-project">
           <input
             value={name}
@@ -56,7 +84,13 @@ export default function Workspace() {
           </button>
         </div>
         {error && <p className="error">{error}</p>}
-        {active && <CloudConnect key={active.id} projectId={active.id} />}
+        {active && (
+          <CloudConnect
+            key={active.id}
+            projectId={active.id}
+            onSessionChange={() => setSessionTick((t) => t + 1)}
+          />
+        )}
       </aside>
       <div className="content">
         {active ? (

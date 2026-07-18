@@ -37,8 +37,25 @@ function setStage(projectId: string, stage: string, status: string): void {
 projects.get("/engine/projects", (c) => {
   const rows = db
     .prepare("SELECT id, name, path, created_at FROM projects ORDER BY created_at")
-    .all();
-  return c.json({ projects: rows });
+    .all() as { id: string; name: string; path: string; created_at: string }[];
+  const links = db
+    .prepare("SELECT project_id, config FROM integrations WHERE kind = 'cloud'")
+    .all() as { project_id: string; config: string | null }[];
+  const wsByProject = new Map<string, string>();
+  for (const l of links) {
+    if (!l.config) continue;
+    try {
+      const cfg = JSON.parse(l.config) as { workspace_id?: string };
+      if (cfg.workspace_id) wsByProject.set(l.project_id, cfg.workspace_id);
+    } catch {
+      // ignore malformed link config
+    }
+  }
+  const projectsOut = rows.map((r) => ({
+    ...r,
+    cloud_workspace_id: wsByProject.get(r.id) ?? null,
+  }));
+  return c.json({ projects: projectsOut });
 });
 
 // Project bootstrap (gap G3): pick/create a folder, engine git-inits it.

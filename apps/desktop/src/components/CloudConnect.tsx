@@ -25,7 +25,13 @@ import {
 // D1 (docs/plans/0004): opt-in "Connect to PromptConnext Cloud" panel per
 // project. Renders nothing when cloud sync isn't configured server-side
 // (CLOUD_API_URL unset) — most desktop users today are single-player.
-export default function CloudConnect({ projectId }: { projectId: string }) {
+export default function CloudConnect({
+  projectId,
+  onSessionChange,
+}: {
+  projectId: string;
+  onSessionChange?: () => void;
+}) {
   const [config, setConfig] = useState<CloudConfig | null>(null);
   const [session, setSession] = useState<CloudSession | null>(null);
   const [link, setLink] = useState<CloudLink | null>(null);
@@ -44,6 +50,10 @@ export default function CloudConnect({ projectId }: { projectId: string }) {
     if (!cfg.enabled) return;
     const sess = await getCloudSession();
     setSession(sess);
+    // Notify any listener (e.g. the WorkspaceBar) that the cloud session may
+    // have changed — covers login, logout, and the browser-redeem callback,
+    // since all of them route through this refresh().
+    onSessionChange?.();
     if (sess.connected) {
       const [ws, l] = await Promise.all([listCloudWorkspaces(), getCloudLink(projectId)]);
       setWorkspaces(ws.workspaces);

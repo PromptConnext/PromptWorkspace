@@ -9,5 +9,24 @@
     "desktop": "pnpm --dir apps/desktop tauri dev",
     "web": "pnpm --dir apps/web dev",
     "corp": "pnpm --dir apps/corp dev"
+  },
+  "pnpm": {
+    "packageExtensions": {
+      "@monaco-editor/react": {
+        "dependencies": {
+          "@types/react": "18.3.31"
+        }
+      },
+      "styled-jsx": {
+        "dependencies": {
+          "@types/react": "19.2.17"
+        }
+      },
+      "next-intl": {
+        "dependencies": {
+          "@types/react": "19.2.17"
+        }
+      }
+    }
   }
 }
