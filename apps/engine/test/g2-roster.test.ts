@@ -213,6 +213,20 @@ test("opening a cloud project absent locally hydrates its full graph, draining >
   assert.equal(againBody.localProjectId, localId);
 });
 
+test("G4: GET /engine/projects surfaces cloud_project_id for a linked project", async () => {
+  // The prior test opened cp-remote, which links a local project to that cloud
+  // project id. Surfacing it lets the desktop dedupe roster tabs precisely by
+  // id instead of by name (plan 0006 G4, resolving G3's duplicate-name gap).
+  const res = await req("/engine/projects");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    projects: { id: string; cloud_workspace_id: string | null; cloud_project_id: string | null }[];
+  };
+  const linked = body.projects.find((p) => p.cloud_project_id === "cp-remote");
+  assert.ok(linked, "the opened cloud project surfaces its cloud_project_id");
+  assert.equal(linked.cloud_workspace_id, "ws-1", "workspace id still surfaced alongside");
+});
+
 test("creating a project without an active workspace is rejected with a clear error", async () => {
   await req("/engine/cloud/active-workspace", { method: "DELETE" }); // ensure none active
   const res = await req("/engine/projects", {
