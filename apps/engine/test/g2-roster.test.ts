@@ -227,6 +227,38 @@ test("G4: GET /engine/projects surfaces cloud_project_id for a linked project", 
   assert.equal(linked.cloud_workspace_id, "ws-1", "workspace id still surfaced alongside");
 });
 
+test("opening a cloud project with an explicit path uses it instead of the default location", async () => {
+  cloud.projects.push({ id: "cp-custom-path", name: "Custom Path Project", workspace_id: "ws-1" });
+  await req("/engine/cloud/roster/refresh", { method: "POST" });
+
+  const chosen = join(dataDir, "chosen-folder");
+  const res = await req("/engine/cloud/projects/cp-custom-path/open", {
+    method: "POST",
+    body: JSON.stringify({ path: chosen }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { localProjectId: string };
+
+  const row = db.prepare("SELECT path FROM projects WHERE id = ?").get(body.localProjectId) as {
+    path: string;
+  };
+  assert.equal(row.path, chosen, "the caller-supplied path is used verbatim, not the default root");
+});
+
+test("opening a cloud project at a path already used by another project returns 409", async () => {
+  const taken = join(dataDir, "chosen-folder"); // claimed by the previous test
+  cloud.projects.push({ id: "cp-collide", name: "Collide Project", workspace_id: "ws-1" });
+  await req("/engine/cloud/roster/refresh", { method: "POST" });
+
+  const res = await req("/engine/cloud/projects/cp-collide/open", {
+    method: "POST",
+    body: JSON.stringify({ path: taken }),
+  });
+  assert.equal(res.status, 409);
+  const body = (await res.json()) as { error: string };
+  assert.match(body.error, /already used/i);
+});
+
 test("creating a project without an active workspace is rejected with a clear error", async () => {
   await req("/engine/cloud/active-workspace", { method: "DELETE" }); // ensure none active
   const res = await req("/engine/projects", {

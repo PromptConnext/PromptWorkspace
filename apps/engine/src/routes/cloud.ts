@@ -197,7 +197,22 @@ cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
   const rosterProject = loadRosterProjects().find((p) => p.id === cloudProjectId);
   if (!rosterProject) return c.json({ error: "project not in roster (refresh first)" }, 404);
 
-  const local = createLocalProjectShell(rosterProject.name);
+  // The desktop offers a folder picker on first open (plan: docs/superpowers/
+  // plans/2026-07-19-desktop-local-project-path.md); omitted, this falls back
+  // to createLocalProjectShell's own default root, same as before.
+  const { path } = await c.req.json<{ path?: string }>().catch(() => ({}) as { path?: string });
+
+  let local: ReturnType<typeof createLocalProjectShell>;
+  try {
+    local = createLocalProjectShell(rosterProject.name, path?.trim() || undefined);
+  } catch (err) {
+    const message = (err as Error).message;
+    if (/UNIQUE constraint failed/i.test(message)) {
+      return c.json({ error: "That folder is already used by another project." }, 409);
+    }
+    return c.json({ error: message }, 500);
+  }
+
   writeCloudLink(local.id, { workspace_id: rosterProject.workspace_id, project_id: cloudProjectId });
   try {
     const result = await hydrateProjectGraph(local.id, cloudProjectId);
