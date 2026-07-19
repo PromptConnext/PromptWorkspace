@@ -176,6 +176,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
       <TopBar
         tabs={tabs}
         activeTabKey={activeTabKey}
+        activeProject={active}
         onSelectTab={selectTab}
         onCreateProject={create}
         reloadSignal={refreshTick}

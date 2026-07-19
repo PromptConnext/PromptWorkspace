@@ -405,6 +405,14 @@ button.link {
   border-style: dashed;
 }
 
+.tb-cloud-link {
+  white-space: nowrap;
+  font-size: 0.85em;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
 .tb-unassigned {
   position: relative;
 }

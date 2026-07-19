@@ -15,6 +15,7 @@ import {
   type CloudConfig,
   type CloudSession,
   type CloudWorkspace,
+  type Project,
 } from "../api";
 
 export type WorkspaceContext = {
@@ -36,6 +37,7 @@ export type ProjectTab = { key: string; name: string };
 export default function TopBar({
   tabs,
   activeTabKey,
+  activeProject,
   onSelectTab,
   onCreateProject,
   reloadSignal,
@@ -44,6 +46,7 @@ export default function TopBar({
 }: {
   tabs: ProjectTab[];
   activeTabKey: string | null;
+  activeProject: Project | null;
   onSelectTab: (key: string) => void;
   onCreateProject: (name: string) => Promise<void>;
   reloadSignal: number;
@@ -286,6 +289,23 @@ export default function TopBar({
   // workspace is chosen — rather than surfacing the engine's 400 after the fact.
   const canCreateProject = !connected || Boolean(active);
 
+  // Only the active project's own cloud page — no workspace-level link, no
+  // sub-tab deep link (spec: out of scope). Absent whenever the open project
+  // isn't linked yet, or config hasn't loaded.
+  const cloudProjectLink =
+    config?.webUrl && activeProject?.cloud_workspace_id && activeProject?.cloud_project_id
+      ? `${config.webUrl}/w/${activeProject.cloud_workspace_id}/p/${activeProject.cloud_project_id}`
+      : null;
+
+  const openInCloud = async () => {
+    if (!cloudProjectLink) return;
+    try {
+      await openUrl(cloudProjectLink);
+    } catch (err) {
+      setAcctError((err as Error).message);
+    }
+  };
+
   return (
     <header className="top-bar">
       <div className="tb-workspace">
@@ -321,6 +341,16 @@ export default function TopBar({
             {t.name}
           </button>
         ))}
+        {cloudProjectLink && (
+          <button
+            type="button"
+            className="tb-cloud-link"
+            title={`Open "${activeProject?.name}" in the cloud`}
+            onClick={openInCloud}
+          >
+            ↗ Cloud
+          </button>
+        )}
         {!canCreateProject ? (
           <span className="tb-tab tb-tab-muted" title="Choose a workspace first">
             + New project
