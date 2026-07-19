@@ -7,6 +7,7 @@ import {
   cloudMode,
   clearCloudSession,
   clearActiveWorkspace,
+  emailFromAccessToken,
   loadCloudSession,
   loadActiveWorkspace,
   loadRosterProjects,
@@ -45,6 +46,7 @@ cloud.get("/engine/cloud/session", (c) => {
     connected: Boolean(session),
     mode: session?.mode ?? null,
     userId: session?.userId ?? null,
+    email: session?.email ?? null,
   });
 });
 
@@ -95,9 +97,10 @@ cloud.post("/engine/cloud/login/redeem", async (c) => {
   pendingLoginState = null; // consume regardless of outcome
   try {
     const { accessToken, refreshToken, userId } = await redeemDesktopCode(body.code.trim());
-    storeCloudSession({ mode: "supabase", userId }, accessToken, refreshToken);
+    const email = emailFromAccessToken(accessToken);
+    storeCloudSession({ mode: "supabase", userId, email }, accessToken, refreshToken);
     void refreshRoster().catch(() => {}); // prime roster on sign-in (ADR 0015 §2)
-    return c.json({ connected: true, mode: "supabase", userId });
+    return c.json({ connected: true, mode: "supabase", userId, email: email ?? null });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 401);
   }

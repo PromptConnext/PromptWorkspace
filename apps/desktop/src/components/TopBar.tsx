@@ -61,6 +61,16 @@ export default function TopBar({
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [acctError, setAcctError] = useState<string | null>(null);
+  // Manual fallback for the ADR 0014 browser handoff: the promptconnext://
+  // redirect relies on the OS having a registered handler for the scheme,
+  // which macOS only sets up for a bundled+installed .app (Info.plist) — an
+  // unbundled `tauri dev` binary has no such registration and the browser
+  // just sits on the cloud app after sign-in with no way back. `pendingState`
+  // is the state startBrowserLogin() minted, needed to redeem a manually
+  // pasted code.
+  const [pendingState, setPendingState] = useState<string | null>(null);
+  const [manualCode, setManualCode] = useState("");
+  const [showManualCode, setShowManualCode] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -176,11 +186,29 @@ export default function TopBar({
   const beginBrowserLogin = async () => {
     setAcctError(null);
     setWaiting(true);
+    setShowManualCode(false);
+    setManualCode("");
     try {
-      const { url } = await startBrowserLogin();
+      const { url, state } = await startBrowserLogin();
+      setPendingState(state);
       await openUrl(url);
     } catch (err) {
       setWaiting(false);
+      setAcctError((err as Error).message);
+    }
+  };
+
+  const submitManualCode = async () => {
+    if (!manualCode.trim() || !pendingState) return;
+    setAcctError(null);
+    try {
+      await redeemBrowserLogin(manualCode.trim(), pendingState);
+      setWaiting(false);
+      setShowManualCode(false);
+      setManualCode("");
+      setPendingState(null);
+      await refreshSession();
+    } catch (err) {
       setAcctError((err as Error).message);
     }
   };
@@ -312,9 +340,30 @@ export default function TopBar({
       <div className="tb-account">
         {!config?.enabled ? null : !session?.connected ? (
           config.mode === "supabase" ? (
-            <button type="button" disabled={waiting} onClick={beginBrowserLogin}>
-              {waiting ? "Waiting for browser…" : "Sign in"}
-            </button>
+            <span className="tb-browser-login">
+              <button type="button" disabled={waiting} onClick={beginBrowserLogin}>
+                {waiting ? "Waiting for browser…" : "Sign in"}
+              </button>
+              {waiting && !showManualCode && (
+                <button type="button" className="link" onClick={() => setShowManualCode(true)}>
+                  Didn&apos;t redirect? Paste code
+                </button>
+              )}
+              {waiting && showManualCode && (
+                <span className="tb-manual-code">
+                  <input
+                    autoFocus
+                    value={manualCode}
+                    placeholder="Code from the browser"
+                    onChange={(e) => setManualCode(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submitManualCode()}
+                  />
+                  <button type="button" disabled={!manualCode.trim()} onClick={submitManualCode}>
+                    Submit
+                  </button>
+                </span>
+              )}
+            </span>
           ) : (
             <span className="tb-stub-login" title="Dev cloud backend (AUTH_MODE=stub) — type any name to simulate a user, no real account">
               <input
@@ -329,7 +378,7 @@ export default function TopBar({
           )
         ) : (
           <span className="tb-account-body">
-            <span className="tb-account-name">{session.userId}</span>
+            <span className="tb-account-name">{session.email ?? session.userId}</span>
             <button type="button" className="link" disabled={busy} onClick={signOut}>
               Sign out
             </button>

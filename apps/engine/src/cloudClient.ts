@@ -17,7 +17,22 @@ const ROSTER_WORKSPACES_KEY = "roster_workspaces";
 const ROSTER_PROJECTS_KEY = "roster_projects";
 const ROSTER_SYNCED_AT_KEY = "roster_synced_at";
 
-export type CloudSession = { mode: "stub" | "supabase"; userId: string };
+export type CloudSession = { mode: "stub" | "supabase"; userId: string; email?: string };
+
+// Pulls the `email` claim off a Supabase access token's payload, without
+// verifying the signature — the token was already validated by the cloud's
+// redeem exchange (or is about to be sent to the cloud, which will reject it
+// if forged), so this is display-only, not an auth decision.
+export function emailFromAccessToken(token: string): string | undefined {
+  try {
+    const payload = token.split(".")[1];
+    const json = Buffer.from(payload, "base64url").toString("utf8");
+    const claims = JSON.parse(json) as { email?: string };
+    return claims.email;
+  } catch {
+    return undefined;
+  }
+}
 
 export function cloudMode(): "stub" | "supabase" {
   return SUPABASE_URL && SUPABASE_ANON_KEY ? "supabase" : "stub";

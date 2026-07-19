@@ -107,7 +107,7 @@ export default function CloudConnect({
   return (
     <div className="cloud-connect">
       <p className="muted">
-        Signed in as <strong>{session.userId}</strong>. Link this project to a workspace to
+        Signed in as <strong>{session.email ?? session.userId}</strong>. Link this project to a workspace to
         start syncing.
       </p>
       {workspaces.length > 0 && (

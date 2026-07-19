@@ -266,7 +266,12 @@ export const listAgents = () => request<{ agents: AgentInfo[] }>("/engine/agents
 // Cloud sync (docs/plans/0004 D1) --------------------------------------
 
 export type CloudConfig = { enabled: boolean; mode: "stub" | "supabase" };
-export type CloudSession = { connected: boolean; mode: "stub" | "supabase" | null; userId: string | null };
+export type CloudSession = {
+  connected: boolean;
+  mode: "stub" | "supabase" | null;
+  userId: string | null;
+  email: string | null;
+};
 export type CloudWorkspace = { id: string; name: string };
 export type CloudLink = { linked: boolean; workspace_id?: string; project_id?: string };
 
