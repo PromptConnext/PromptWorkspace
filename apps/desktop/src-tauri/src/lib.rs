@@ -78,6 +78,7 @@ pub fn run() {
         // check/skip/remind UX and calls downloadAndInstall() + relaunch().
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let dir = engine_dir(app.handle());
             let child = match spawn_engine(&token, &dir) {
