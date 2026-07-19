@@ -10,7 +10,9 @@ import {
 } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
+import ImportLocalProjects from "./ImportLocalProjects";
 import TopBar, { type ProjectTab, type WorkspaceContext } from "./TopBar";
+import { membershipGateEnabled } from "../cloudGate";
 
 export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -73,13 +75,21 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     const rosterForWs = roster.projects.filter((p) => p.workspace_id === activeWorkspaceId);
     const rosterTabs = rosterForWs.map((p) => ({ key: `cloud:${p.id}`, name: p.name }));
     // Include locally-created projects bound to this workspace that haven't hit
-    // the roster yet (offline / pending-sync), matched off the roster by name so
-    // a just-created project never vanishes before its first successful sync.
-    // (Name-based dedupe is best-effort; a rare duplicate-name collision could
-    // hide a pending tab until sync — acceptable for v1, noted for G4.)
+    // the roster yet (offline / pending-sync), so a just-created project never
+    // vanishes before its first successful sync. G4 removes G3's name-based
+    // ambiguity: a project that already carries a cloud project id is deduped
+    // precisely by that id, so a duplicate name can no longer hide a distinct
+    // pending project behind the wrong roster tab. Name matching is kept only as
+    // the fallback for a project that has never been linked (no cloud id yet).
+    const rosterIds = new Set(rosterForWs.map((p) => p.id));
     const rosterNames = new Set(rosterForWs.map((p) => p.name));
     const pendingTabs = projects
-      .filter((p) => p.cloud_workspace_id === activeWorkspaceId && !rosterNames.has(p.name))
+      .filter((p) => {
+        if (p.cloud_workspace_id !== activeWorkspaceId) return false;
+        return p.cloud_project_id
+          ? !rosterIds.has(p.cloud_project_id)
+          : !rosterNames.has(p.name);
+      })
       .map((p) => ({ key: `local:${p.id}`, name: p.name }));
     return [...rosterTabs, ...pendingTabs];
   }, [workspaceCtx.connected, activeWorkspaceId, roster, projects]);
@@ -124,6 +134,15 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
 
   const activeTabKey = activeKey && tabs.some((t) => t.key === activeKey) ? activeKey : null;
 
+  // Existing local-only projects (never linked to a workspace) — the roster
+  // hides them under the gate, so offer a one-time import (plan 0006 G4). Only
+  // meaningful once a real cloud identity with a workspace is in play, so this
+  // stays behind the same feature flag as the rest of the gate (relaxed
+  // stub/dev/cloud-off keeps today's flat local list, where these are visible).
+  const localOnlyProjects = projects.filter((p) => p.cloud_workspace_id === null);
+  const showImport =
+    membershipGateEnabled && workspaceCtx.connected && roster.workspaces.length > 0;
+
   return (
     <div className="workspace">
       <TopBar
@@ -140,6 +159,16 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
         }}
       />
       <div className="content">
+        {showImport && (
+          <ImportLocalProjects
+            localOnly={localOnlyProjects}
+            workspaces={roster.workspaces}
+            onImported={() => {
+              void refresh();
+              void refreshRoster();
+            }}
+          />
+        )}
         {openError && <p className="error">{openError}</p>}
         {active ? (
           <>

@@ -44,11 +44,17 @@ projects.get("/engine/projects", (c) => {
     .prepare("SELECT project_id, config FROM integrations WHERE kind = 'cloud'")
     .all() as { project_id: string; config: string | null }[];
   const wsByProject = new Map<string, string>();
+  // The cloud project id is recorded per-project in the same link config
+  // (writeCloudLink stores { workspace_id, project_id }). Surfacing it lets the
+  // desktop match a local project to its roster tab precisely by id rather than
+  // by name (plan 0006 G4 — removes the duplicate-name ambiguity G3 flagged).
+  const cloudIdByProject = new Map<string, string>();
   for (const l of links) {
     if (!l.config) continue;
     try {
-      const cfg = JSON.parse(l.config) as { workspace_id?: string };
+      const cfg = JSON.parse(l.config) as { workspace_id?: string; project_id?: string };
       if (cfg.workspace_id) wsByProject.set(l.project_id, cfg.workspace_id);
+      if (cfg.project_id) cloudIdByProject.set(l.project_id, cfg.project_id);
     } catch {
       // ignore malformed link config
     }
@@ -56,6 +62,7 @@ projects.get("/engine/projects", (c) => {
   const projectsOut = rows.map((r) => ({
     ...r,
     cloud_workspace_id: wsByProject.get(r.id) ?? null,
+    cloud_project_id: cloudIdByProject.get(r.id) ?? null,
   }));
   return c.json({ projects: projectsOut });
 });

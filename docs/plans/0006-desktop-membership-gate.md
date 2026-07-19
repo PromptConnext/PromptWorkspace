@@ -1,6 +1,6 @@
 # Plan — desktop membership gate + cloud-projected roster (ADR 0015)
 
-**Date:** 2026-07-18 · **Status:** Proposed · **Scope:** `apps/cloud`, `apps/engine`, `apps/desktop`
+**Date:** 2026-07-18 · **Status:** Proposed · **G4 implemented 2026-07-19** · **Scope:** `apps/cloud`, `apps/engine`, `apps/desktop`
 **Implements:** [`docs/decisions/0015-desktop-requires-workspace-membership.md`](../decisions/0015-desktop-requires-workspace-membership.md)
 **Extends:** ADR 0010 (sync model), ADR 0014 (browser auth), plan `0004-desktop-cloud-sync-client.md` (D1–D4 cloud client)
 **Depth:** implementation-ready · **Sequencing:** Milestones **G1–G4**, see §Sequencing summary.
@@ -133,6 +133,23 @@ workspace. This avoids quietly pushing a user's private local project to a share
 ### Tests
 - a pre-existing `cloud_workspace_id = null` project is offered for import, not auto-linked;
 - declining leaves it local and unreachable under the gate until imported (documented behavior).
+
+### Implemented (2026-07-19)
+- New `apps/desktop/src/components/ImportLocalProjects.tsx`: on the workspace screen (behind
+  `VITE_MEMBERSHIP_GATE`, only when signed in with ≥1 workspace), a one-time panel lists every
+  local-only project (`cloud_workspace_id === null`) and imports each into a user-picked workspace
+  via `linkProjectToCloud` + `triggerCloudSync`. Nothing is auto-linked. "Not now" persists a
+  dismissal in `localStorage` (one-time, no per-launch nag) but leaves a compact re-entry link so
+  the user can still import later — declined projects stay local and, being absent from the roster,
+  unreachable under the gate until imported.
+- Resolved G3's name-based roster dedupe gap: the engine's `GET /engine/projects` now also surfaces
+  `cloud_project_id` (already recorded per-project by `writeCloudLink` in the `integrations` cloud
+  link config — no schema change). `Workspace.tsx` matches a local project to its roster tab by that
+  cloud id, falling back to name **only** for a project never linked, so a duplicate name can no
+  longer hide a distinct pending project behind the wrong tab.
+- Verification: desktop has no test runner (per G3), so the automated gate is `tsc --noEmit` +
+  `vite build` (both pass). Behavioral cases (offered-not-auto-linked; decline-leaves-unreachable)
+  are covered by manual steps in the milestone report.
 
 ## Decisions log
 

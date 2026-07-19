@@ -39,9 +39,17 @@ export type Connection = {
   healthy: boolean;
 };
 
-// Project gains its cloud-linked workspace id (null when unlinked) — see engine
-// GET /engine/projects annotation.
-export type Project = { id: string; name: string; path: string; cloud_workspace_id: string | null };
+// Project gains its cloud-linked workspace id and cloud project id (both null
+// when unlinked) — see engine GET /engine/projects annotation. cloud_project_id
+// lets the desktop match a local project to its roster tab precisely by id
+// rather than by name (plan 0006 G4).
+export type Project = {
+  id: string;
+  name: string;
+  path: string;
+  cloud_workspace_id: string | null;
+  cloud_project_id: string | null;
+};
 
 export type Graph = {
   project: Project;
