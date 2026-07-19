@@ -37,7 +37,7 @@ export const cloud = new Hono();
 // session token (security.ts) — unrelated auth layers, both must hold.
 
 cloud.get("/engine/cloud/config", (c) =>
-  c.json({ enabled: Boolean(CLOUD_API_URL), mode: cloudMode() }),
+  c.json({ enabled: Boolean(CLOUD_API_URL), mode: cloudMode(), webUrl: CLOUD_WEB_URL }),
 );
 
 cloud.get("/engine/cloud/session", (c) => {

@@ -176,6 +176,15 @@ test("roster cache renders the last-known workspaces/projects fully offline", as
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", () => r()));
 });
 
+test("GET /engine/cloud/config exposes the cloud web app URL", async () => {
+  const res = await req("/engine/cloud/config");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { enabled: boolean; mode: string; webUrl: string };
+  assert.equal(body.enabled, true);
+  assert.ok(body.webUrl, "webUrl is present and non-empty");
+  assert.match(body.webUrl, /^https?:\/\//, "webUrl is a full URL");
+});
+
 test("opening a cloud project absent locally hydrates its full graph, draining >1 page", async () => {
   seedGraph("cp-remote");
   await req("/engine/cloud/roster/refresh", { method: "POST" });
