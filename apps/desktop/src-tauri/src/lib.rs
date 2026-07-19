@@ -107,12 +107,27 @@ pub fn run() {
                 .initialization_script(&format!("window.__PROMPTCONNEXT_TOKEN__ = \"{token}\";"))
                 .build()?;
 
-            // On Linux, packaging (e.g. an AppImage launched without a proper
-            // installer) may not have registered the scheme; do it at
-            // runtime as a fallback. macOS and Windows register the scheme
-            // from the `plugins.deep-link.desktop.schemes` config at bundle
-            // time (Info.plist / installer registry keys respectively).
-            #[cfg(target_os = "linux")]
+            // Release Windows builds register the scheme from the
+            // `plugins.deep-link.desktop.schemes` config at bundle time
+            // (installer registry keys), and Linux packaging (e.g. an
+            // AppImage launched without a proper installer) may skip its
+            // equivalent step too — so register at runtime as a fallback in
+            // both cases, which also covers `tauri dev` on those two
+            // platforms (it never produces a bundle at all).
+            //
+            // macOS has no runtime equivalent: tauri-plugin-deep-link's
+            // register() unconditionally returns Error::UnsupportedPlatform
+            // there (Launch Services only reads CFBundleURLTypes from a
+            // bundle's Info.plist — there's no dynamic registration API for
+            // an unbundled process). So on `tauri dev` for macOS, the
+            // `promptconnext://` redirect after browser sign-in has no
+            // registered handler and silently goes nowhere; that's why
+            // TopBar's sign-in flow also has a "paste the code manually"
+            // fallback — it's not just a dev convenience, it's the only way
+            // ADR 0014 completes on an unbundled macOS build. Still call
+            // register() here on macOS too (cheap, harmlessly logged) in
+            // case a future plugin version adds support.
+            #[cfg(any(target_os = "linux", target_os = "macos", debug_assertions))]
             {
                 if let Err(err) = app.deep_link().register("promptconnext") {
                     eprintln!("[promptconnext] failed to register promptconnext:// scheme: {err}");

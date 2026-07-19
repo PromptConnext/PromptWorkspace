@@ -450,6 +450,22 @@ button.link {
   margin: 0;
 }
 
+.tb-browser-login {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tb-manual-code {
+  display: flex;
+  gap: 6px;
+}
+
+.tb-manual-code input {
+  width: 160px;
+  padding: 5px 10px;
+}
+
 /* 3S */
 .threes-header {
   display: flex;

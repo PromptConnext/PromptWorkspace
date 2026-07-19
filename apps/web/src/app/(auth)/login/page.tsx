@@ -28,6 +28,14 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Fallback for when the promptconnext:// redirect never arrives — e.g. a
+  // `tauri dev` build, where macOS never registers a handler for the scheme
+  // outside a bundled+installed .app (there's no Info.plist to source it
+  // from). We still attempt the automatic redirect, but keep the code
+  // visible so the user can paste it into the desktop app themselves.
+  const [handoffCode, setHandoffCode] = useState<string | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -51,18 +59,54 @@ function LoginForm() {
               }),
             },
           );
+          setHandoffCode(code);
           window.location.href =
             `promptconnext://auth/callback?code=${encodeURIComponent(code)}` +
             `&state=${encodeURIComponent(desktopState)}`;
-        } catch {
-          // fall through to normal redirect on failure
-          router.replace(next);
+        } catch (err) {
+          setHandoffError(err instanceof Error ? err.message : "Failed to hand off to the desktop app.");
         }
       })();
       return;
     }
     router.replace(next);
   }, [user, desktop, desktopState, getSessionTokens, next, router]);
+
+  if (user && desktop && desktopState) {
+    return (
+      <AuthCard title="Signed in">
+        {handoffError ? (
+          <FormError message={handoffError} />
+        ) : handoffCode ? (
+          <>
+            <p className="text-sm text-slate-600">
+              Redirecting you back to the desktop app… If nothing happens in a few seconds
+              (common when running the app in development), copy this code and paste it into
+              the desktop app&apos;s sign-in screen instead:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm">
+                {handoffCode}
+              </code>
+              <button
+                type="button"
+                className="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(handoffCode);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                }}
+              >
+                {copied ? "Copied ✓" : "Copy"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-slate-500">Preparing handoff…</p>
+        )}
+      </AuthCard>
+    );
+  }
 
   if (user) return null;
 
