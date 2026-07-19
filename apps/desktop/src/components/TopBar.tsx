@@ -144,6 +144,21 @@ export default function TopBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadSignal]);
 
+  // A transient listCloudWorkspaces() failure at startup (no active workspace
+  // stored yet to fall back on) permanently mislabels this as "no cloud
+  // workspace yet" — same failure class Workspace.tsx already guards its
+  // roster fetch against with a focus retry (ADR 0015 §2: refresh on
+  // sign-in/focus/explicit refresh). Mirror that here so a cold-start network
+  // blip self-heals instead of sticking until something else bumps reloadSignal.
+  useEffect(() => {
+    const onFocus = () => {
+      resolveWorkspace().catch(() => {});
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const refreshSession = async () => {
     const cfg = await getCloudConfig();
     setConfig(cfg);
