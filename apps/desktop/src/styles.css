@@ -296,6 +296,27 @@ button.link {
   gap: 10px;
 }
 
+.cloud-open-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  display: grid;
+  gap: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.cloud-open-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.project-path {
+  margin: 0 0 12px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
 .import-name {
   flex: 1;
   font-weight: 500;

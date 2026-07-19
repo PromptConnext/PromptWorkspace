@@ -10,6 +10,7 @@ import {
 } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
+import CloudOpenPanel from "./CloudOpenPanel";
 import ImportLocalProjects from "./ImportLocalProjects";
 import TopBar, { type ProjectTab, type WorkspaceContext } from "./TopBar";
 import { membershipGateEnabled } from "../cloudGate";
@@ -31,6 +32,10 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
   });
   const [refreshTick, setRefreshTick] = useState(0);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [pendingCloudOpen, setPendingCloudOpen] = useState<
+    { key: string; cloudId: string; name: string } | null
+  >(null);
+  const [openBusy, setOpenBusy] = useState(false);
 
   const refresh = () =>
     listProjects().then((r) => setProjects(r.projects)).catch(() => {});
@@ -94,9 +99,11 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     return [...rosterTabs, ...pendingTabs];
   }, [workspaceCtx.connected, activeWorkspaceId, roster, projects]);
 
-  // Resolve a tab selection to a usable local project. A cloud tab is
-  // materialized/hydrated via the engine's open endpoint (idempotent — returns
-  // the existing local id when present); a local tab is already local.
+  // Resolve a tab selection to a usable local project. A cloud tab that's
+  // already been opened before is idempotent/instant (unchanged); a cloud tab
+  // with no local project yet pauses on a folder-picker panel instead of
+  // silently materializing one at the default path. A local tab is already
+  // local.
   const selectTab = async (key: string) => {
     setOpenError(null);
     if (key.startsWith("local:")) {
@@ -105,19 +112,39 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
       if (p) {
         setActive(p);
         setActiveKey(key);
+        setPendingCloudOpen(null);
       }
       return;
     }
     const cloudId = key.slice("cloud:".length);
+    const alreadyLocal = projects.some((p) => p.cloud_project_id === cloudId);
+    if (alreadyLocal) {
+      await finishCloudOpen(cloudId, key);
+      return;
+    }
+    const rosterProject = roster.projects.find((p) => p.id === cloudId);
+    setActive(null);
+    setActiveKey(key);
+    setPendingCloudOpen({ key, cloudId, name: rosterProject?.name ?? "this project" });
+  };
+
+  // Shared by the already-opened fast path above and both CloudOpenPanel
+  // actions below — `path` is omitted for "Use default location".
+  const finishCloudOpen = async (cloudId: string, key: string, path?: string) => {
+    setOpenBusy(true);
+    setOpenError(null);
     try {
-      const { localProjectId } = await openCloudProject(cloudId);
+      const { localProjectId } = await openCloudProject(cloudId, path);
       const r = await listProjects();
       setProjects(r.projects);
       const p = r.projects.find((x) => x.id === localProjectId) ?? null;
       setActive(p);
       setActiveKey(key);
+      setPendingCloudOpen(null);
     } catch (err) {
       setOpenError((err as Error).message);
+    } finally {
+      setOpenBusy(false);
     }
   };
 
@@ -126,6 +153,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     // server-side (workspace_id required, ADR 0015 §5); when the gate is relaxed
     // it stays a plain local project. Either way, refresh both views and open it.
     const project = await createProject(name);
+    setPendingCloudOpen(null);
     await refresh();
     await refreshRoster();
     setActive(project);
@@ -170,8 +198,24 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
           />
         )}
         {openError && <p className="error">{openError}</p>}
-        {active ? (
+        {pendingCloudOpen ? (
+          <CloudOpenPanel
+            projectName={pendingCloudOpen.name}
+            busy={openBusy}
+            onChooseFolder={(path) =>
+              finishCloudOpen(pendingCloudOpen.cloudId, pendingCloudOpen.key, path)
+            }
+            onUseDefault={() => finishCloudOpen(pendingCloudOpen.cloudId, pendingCloudOpen.key)}
+          />
+        ) : active ? (
           <>
+            <p
+              className="project-path"
+              title="Click to copy"
+              onClick={() => void navigator.clipboard.writeText(active.path)}
+            >
+              {active.path}
+            </p>
             <CloudConnect
               key={active.id}
               projectId={active.id}

@@ -418,8 +418,8 @@ export type OpenCloudProjectResult = {
 // Resolve a roster (cloud) project to a usable local project: returns the
 // existing local id if this machine already has it, otherwise materializes a
 // local shell and full-graph bootstrap-pulls the cloud's merged state into it.
-export const openCloudProject = (cloudProjectId: string) =>
+export const openCloudProject = (cloudProjectId: string, path?: string) =>
   request<OpenCloudProjectResult>(
     `/engine/cloud/projects/${encodeURIComponent(cloudProjectId)}/open`,
-    { method: "POST" },
+    { method: "POST", body: JSON.stringify(path ? { path } : {}) },
   );
