@@ -23,6 +23,14 @@ model in v1). Unlike every other hit type, a code hit's `content` is never
 stored — the matching line range is fetched fresh from GitHub for this
 request only, using a freshly-minted installation token, and discarded once
 the answer streams (ADR 0011: no source code at rest).
+
+Keyless (plan 0008 M1): `resolve_assistant_models` (app/rag/models.py)
+resolves BYO-then-managed the same way generation's `select_model` does, but
+returns a *pair* — chat + a possibly-`None` embed connection, since the
+managed Typhoon chat model has no embeddings of its own. A project's chunks
+must stay embedded with one model (`pz_rag_chunks.embedding` is fixed-width);
+`get_project_embed_model` catches a switch and asks for a reindex instead of
+silently comparing incompatible vectors.
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ from app.rag.chat import HttpChatProvider
 from app.rag.classify import classify_question
 from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.lineage import compute_facts, facts_to_text, resolve_target
+from app.rag.models import resolve_assistant_models
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
@@ -129,16 +138,20 @@ async def chat(
     repo: Repository = Depends(get_repository),
 ) -> StreamingResponse:
     project = require_project(repo, project_id, user)
-    conn = repo.get_model_connection(project.workspace_id)
-    if conn is None:
+
+    managed_chat = getattr(request.app.state, "managed_connection", None)
+    managed_embed = getattr(request.app.state, "managed_embed_connection", None)
+    models = resolve_assistant_models(repo, project.workspace_id, managed_chat, managed_embed)
+    if models is None:
         raise HTTPException(status_code=400, detail="model_connection_not_configured")
+    conn = models.chat
 
     budget = request.app.state.token_budget
     if budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0:
         raise HTTPException(status_code=429, detail="daily_token_budget_exceeded")
 
     secret_store = request.app.state.secret_store
-    api_key = secret_store.decrypt(conn.secret_ref)
+    chat_api_key = secret_store.decrypt(conn.secret_ref)
     embedder = getattr(request.app.state, "embedding_provider", None) or HttpEmbeddingProvider()
     chat_provider = getattr(request.app.state, "chat_provider", None) or HttpChatProvider()
 
@@ -160,9 +173,22 @@ async def chat(
 
     hits: list = []
     code_hits: list[CodeChunkHit] = []
-    if classification in ("content", "mixed"):
+    if classification in ("content", "mixed") and models.embed is not None:
+        embed_conn = models.embed
+        existing_embed_model = repo.get_project_embed_model(project.workspace_id, project_id)
+        if existing_embed_model and existing_embed_model != embed_conn.embed_model:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"embed_model_mismatch: this project's chunks were embedded with "
+                    f"'{existing_embed_model}'; reindex required before switching to "
+                    f"'{embed_conn.embed_model}' "
+                    f"(POST /projects/{project_id}/assistant/reindex)"
+                ),
+            )
+        embed_api_key = secret_store.decrypt(embed_conn.secret_ref)
         [query_embedding] = await embedder.embed(
-            [body.question], conn.embed_model, api_key, conn.base_url
+            [body.question], embed_conn.embed_model, embed_api_key, embed_conn.base_url
         )
         hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
         code_hits = repo.code_vector_search(
@@ -179,7 +205,7 @@ async def chat(
 
         answer_parts: list[str] = []
         async for delta in chat_provider.stream_chat(
-            context, body.question, conn.model, api_key, conn.base_url
+            context, body.question, conn.model, chat_api_key, conn.base_url
         ):
             answer_parts.append(delta)
             yield f"data: {json.dumps({'delta': delta})}\n\n"

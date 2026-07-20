@@ -531,6 +531,7 @@ class SupabaseRepository(Repository):
         node_id: str,
         chunks: list[str],
         embeddings: list[list[float]],
+        embed_model: str = "",
     ) -> None:
         # Replace wholesale so a shrinking node doesn't leave stale trailing
         # chunks (e.g. index 5 survives after a re-embed only produces 3).
@@ -546,6 +547,7 @@ class SupabaseRepository(Repository):
                 "chunk_index": idx,
                 "content": content,
                 "embedding": embedding,
+                "embed_model": embed_model,
                 "updated_at": utcnow().isoformat(),
             }
             for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
@@ -555,6 +557,18 @@ class SupabaseRepository(Repository):
     def delete_rag_chunks_for_node(self, node_id: str) -> int:
         res = self._client.table(_RAG_CHUNKS).delete().eq("node_id", node_id).execute()
         return len(res.data or [])
+
+    def get_project_embed_model(self, workspace_id: str, project_id: str) -> str | None:
+        res = (
+            self._client.table(_RAG_CHUNKS)
+            .select("embed_model")
+            .eq("workspace_id", workspace_id)
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return rows[0]["embed_model"] if rows else None
 
     def vector_search(
         self,

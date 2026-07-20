@@ -32,7 +32,7 @@ from app.api import (
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.documents.storage import build_document_store
-from app.generation.managed import build_managed_connection
+from app.generation.managed import build_managed_connection, build_managed_embed_connection
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
 from app.rag.budget import DailyTokenBudget
@@ -123,6 +123,13 @@ async def lifespan(app: FastAPI):
     # encrypted a single time, not per request; None when unconfigured,
     # which select_model() treats identically to "no managed fallback".
     app.state.managed_connection = build_managed_connection(settings, app.state.secret_store)
+    # Managed embeddings for the assistant (plan 0008 M1): a separate
+    # platform embedding model, since Typhoon itself is chat-only. None when
+    # unconfigured — resolve_assistant_models() treats that as "no
+    # embeddings available," not an error.
+    app.state.managed_embed_connection = build_managed_embed_connection(
+        settings, app.state.secret_store
+    )
     # Global (not per-workspace) token bucket protecting the shared free
     # Typhoon key from the platform's own aggregate traffic — separate from
     # the per-workspace DailyTokenBudget check every stage already goes

@@ -216,12 +216,20 @@ class Repository(abc.ABC):
         node_id: str,
         chunks: list[str],
         embeddings: list[list[float]],
+        embed_model: str = "",
     ) -> None:
         """Replace all stored chunks for one node — wholesale, so a shrinking
         node doesn't leave stale trailing chunks behind."""
 
     @abc.abstractmethod
     def delete_rag_chunks_for_node(self, node_id: str) -> int: ...
+
+    @abc.abstractmethod
+    def get_project_embed_model(self, workspace_id: str, project_id: str) -> str | None:
+        """The embed model recorded on this project's existing chunks, or
+        `None` if it has none yet (plan 0008 M1) — used to detect an
+        embedding-source switch that would otherwise silently mix
+        incompatible vector dimensions in the same fixed-width column."""
 
     @abc.abstractmethod
     def vector_search(
@@ -715,6 +723,7 @@ class InMemoryRepository(Repository):
         node_id: str,
         chunks: list[str],
         embeddings: list[list[float]],
+        embed_model: str = "",
     ) -> None:
         project_store = self._rag_chunks.setdefault(project_id, {})
         project_store[node_id] = {
@@ -726,6 +735,7 @@ class InMemoryRepository(Repository):
                 chunk_index=idx,
                 content=content,
                 embedding=embedding,
+                embed_model=embed_model,
             )
             for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
         }
@@ -737,6 +747,13 @@ class InMemoryRepository(Repository):
             if popped:
                 removed += len(popped)
         return removed
+
+    def get_project_embed_model(self, workspace_id: str, project_id: str) -> str | None:
+        for chunks_by_index in self._rag_chunks.get(project_id, {}).values():
+            for chunk in chunks_by_index.values():
+                if chunk.workspace_id == workspace_id:
+                    return chunk.embed_model
+        return None
 
     def vector_search(
         self,

@@ -107,6 +107,22 @@ class Settings(BaseSettings):
     # check every generation stage already goes through.
     managed_daily_token_budget: int = 20_000
 
+    # Managed embeddings for the assistant (plan 0008 M1): Typhoon is
+    # generation-only, so a keyless (no BYO) workspace needs a separate
+    # platform-hosted embedding model to ground content questions. Any
+    # OpenAI-compatible /embeddings endpoint works (Text-Embeddings-Inference,
+    # vLLM, ...) — recommend a BGE-m3-class multilingual model for Thai+
+    # English. IMPORTANT: pz_rag_chunks.embedding is a fixed vector(1536)
+    # column (migrations/0009_rag.sql) — the chosen model's output dimension
+    # must be 1536, or chunks embedded with it won't fit the column at all.
+    # Left unset (empty base_url/model), the assistant still answers
+    # lineage/status questions on the managed chat model alone; content
+    # questions degrade to "no matching artifacts" rather than erroring.
+    managed_embed_base_url: str = ""
+    managed_embed_model: str = ""
+    managed_embed_dim: int = 1536
+    managed_embed_api_key: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

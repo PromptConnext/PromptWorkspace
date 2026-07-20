@@ -37,3 +37,30 @@ def build_managed_connection(
         created_by="platform",
         source="managed",
     )
+
+
+def build_managed_embed_connection(
+    settings: Settings, secret_store: SecretStore
+) -> ModelConnection | None:
+    """The separate platform embedding model (plan 0008 M1) a keyless
+    workspace's assistant uses to ground content questions — Typhoon itself
+    is chat-only. Returns `None` when unconfigured (empty base_url/model),
+    which the assistant treats as "no embeddings available" rather than an
+    error: lineage/status questions still answer on the managed chat model
+    alone."""
+    if not settings.managed_model_enabled:
+        return None
+    if not settings.managed_embed_base_url or not settings.managed_embed_model:
+        return None
+    return ModelConnection(
+        workspace_id=MANAGED_WORKSPACE_MARKER,
+        provider="platform-embed",
+        base_url=settings.managed_embed_base_url,
+        model="",
+        embed_model=settings.managed_embed_model,
+        embed_dim=settings.managed_embed_dim,
+        secret_ref=secret_store.encrypt(settings.managed_embed_api_key),
+        daily_token_budget=settings.managed_daily_token_budget,
+        created_by="platform",
+        source="managed",
+    )

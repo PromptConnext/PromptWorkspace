@@ -91,6 +91,12 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
     repo = app.state.repository
     conn = repo.get_model_connection(job.workspace_id)
     if conn is None:
+        # Plan 0008 M1: a keyless (no BYO) workspace still embeds via the
+        # platform embedding model, same fallback resolve_assistant_models()
+        # uses at query time — otherwise an upload never gets indexed at all
+        # for a business workspace on the managed tier.
+        conn = getattr(app.state, "managed_embed_connection", None)
+    if conn is None:
         logger.info("skip embed: no model connection workspace=%s", job.workspace_id)
         return
 
@@ -124,7 +130,13 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
     embedder = app.state.embedding_provider
     vectors = await embedder.embed(chunks, conn.embed_model, api_key, conn.base_url)
     repo.upsert_rag_chunks(
-        job.workspace_id, job.project_id, job.node_type, job.node_id, chunks, vectors
+        job.workspace_id,
+        job.project_id,
+        job.node_type,
+        job.node_id,
+        chunks,
+        vectors,
+        embed_model=conn.embed_model,
     )
 
 

@@ -470,7 +470,14 @@ class ModelConnectionOut(BaseModel):
 
 class RagChunk(BaseModel):
     """A stored, embedded chunk. `embedding` never leaves the repository
-    layer — retrieval returns `RagChunkHit`, which drops it."""
+    layer — retrieval returns `RagChunkHit`, which drops it.
+
+    `embed_model` (plan 0008 M1) records which model actually produced this
+    chunk's vector — a project's chunks must stay homogeneous in embed
+    model/dimension (pz_rag_chunks.embedding is a fixed-width column), so
+    this is how a query-time model switch (e.g. BYO -> managed embeddings)
+    gets caught as "reindex required" instead of silently comparing
+    incompatible vectors."""
 
     workspace_id: str
     project_id: str
@@ -479,6 +486,7 @@ class RagChunk(BaseModel):
     chunk_index: int
     content: str
     embedding: list[float]
+    embed_model: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
 
 
