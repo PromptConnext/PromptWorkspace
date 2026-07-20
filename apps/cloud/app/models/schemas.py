@@ -90,6 +90,12 @@ class DocumentStatus(str, Enum):
     failed = "failed"
 
 
+class GenerationRunStatus(str, Enum):
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
 # --------------------------------------------------------------------------- #
 # Graph entities
 # --------------------------------------------------------------------------- #
@@ -628,3 +634,27 @@ class DocumentOut(BaseModel):
     status: DocumentStatus
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
+# `generation_runs` is an audit/cost-accounting record, not itself part of
+# the task graph: the generated artifact lands as a Requirement/SpecDocument/
+# Task via the existing sync/upsert path instead (see app/api/generation.py).
+# --------------------------------------------------------------------------- #
+class GenerateRequest(BaseModel):
+    user_input: str
+    options: dict = Field(default_factory=dict)
+
+
+class GenerationRun(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    project_id: str
+    stage: str
+    model_source: str = "byo"
+    model: str
+    status: GenerationRunStatus = GenerationRunStatus.running
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    created_at: datetime = Field(default_factory=utcnow)

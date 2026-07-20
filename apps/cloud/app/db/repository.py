@@ -21,6 +21,7 @@ from app.models.schemas import (
     CodeChunk,
     CodeChunkHit,
     Document,
+    GenerationRun,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -31,7 +32,9 @@ from app.models.schemas import (
     PullRequest,
     RagChunk,
     RagChunkHit,
+    Requirement,
     Role,
+    SpecDocument,
     Task,
     TaskLink,
     Workspace,
@@ -290,6 +293,30 @@ class Repository(abc.ABC):
         extracted_text: str | None,
     ) -> Document: ...
 
+    # -- Generation (M1) ----------------------------------------------------- #
+    @abc.abstractmethod
+    def get_latest_requirement(self, project_id: str) -> Requirement | None:
+        """Most recently updated, non-tombstoned requirement — the "run
+        specify first" prerequisite for the `plan` stage."""
+
+    @abc.abstractmethod
+    def get_latest_spec_document(self, project_id: str) -> SpecDocument | None:
+        """Most recently updated, non-tombstoned spec document — the "run
+        plan first" prerequisite for the `tasks` stage."""
+
+    @abc.abstractmethod
+    def create_generation_run(self, run: GenerationRun) -> GenerationRun: ...
+
+    @abc.abstractmethod
+    def update_generation_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> GenerationRun: ...
+
 
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
@@ -317,6 +344,8 @@ class InMemoryRepository(Repository):
         self._code_chunks: dict[str, dict[tuple[str, str], dict[int, CodeChunk]]] = {}
         # project_id -> document_id -> Document (M0)
         self._documents: dict[str, dict[str, Document]] = {}
+        # generation_run_id -> GenerationRun (M1)
+        self._generation_runs: dict[str, GenerationRun] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -792,6 +821,39 @@ class InMemoryRepository(Repository):
         doc.extracted_text = extracted_text
         doc.updated_at = utcnow()
         return doc
+
+    # -- Generation (M1) ------------------------------------------------------ #
+    def get_latest_requirement(self, project_id: str) -> Requirement | None:
+        store = self._graph.get(project_id, {})
+        live = [r for r in store.get("requirements", {}).values() if r.deleted_at is None]
+        if not live:
+            return None
+        return copy.deepcopy(max(live, key=lambda r: r.updated_at or utcnow()))
+
+    def get_latest_spec_document(self, project_id: str) -> SpecDocument | None:
+        store = self._graph.get(project_id, {})
+        live = [s for s in store.get("spec_documents", {}).values() if s.deleted_at is None]
+        if not live:
+            return None
+        return copy.deepcopy(max(live, key=lambda s: s.updated_at or utcnow()))
+
+    def create_generation_run(self, run: GenerationRun) -> GenerationRun:
+        self._generation_runs[run.id] = run
+        return run
+
+    def update_generation_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> GenerationRun:
+        run = self._generation_runs[run_id]
+        run.status = status
+        run.prompt_tokens = prompt_tokens
+        run.completion_tokens = completion_tokens
+        return run
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

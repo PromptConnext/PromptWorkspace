@@ -28,32 +28,43 @@ class ChatProvider(Protocol):
     ) -> AsyncIterator[str]: ...
 
 
+async def stream_openai_chat(
+    messages: list[dict[str, str]], model: str, api_key: str, base_url: str
+) -> AsyncIterator[str]:
+    """Low-level OpenAI-compatible streaming call, shared by the assistant
+    chat provider (fixed system prompt + CONTEXT/QUESTION framing) and the
+    generation service (M1, plan 0007 — arbitrary stage driver prompt +
+    user input). One HTTP/SSE-parsing implementation for both."""
+    url = base_url.rstrip("/") + "/chat/completions"
+    async with httpx.AsyncClient(timeout=60) as client, client.stream(
+        "POST",
+        url,
+        json={"model": model, "messages": messages, "stream": True},
+        headers={"Authorization": f"Bearer {api_key}"},
+    ) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:") :].strip()
+            if payload == "[DONE]":
+                break
+            obj = json.loads(payload)
+            delta = obj["choices"][0]["delta"].get("content")
+            if delta:
+                yield delta
+
+
 class HttpChatProvider:
     async def stream_chat(
         self, context: str, question: str, model: str, api_key: str, base_url: str
     ) -> AsyncIterator[str]:
-        url = base_url.rstrip("/") + "/chat/completions"
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"CONTEXT:\n{context}\n\nQUESTION: {question}"},
         ]
-        async with httpx.AsyncClient(timeout=60) as client, client.stream(
-            "POST",
-            url,
-            json={"model": model, "messages": messages, "stream": True},
-            headers={"Authorization": f"Bearer {api_key}"},
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:") :].strip()
-                if payload == "[DONE]":
-                    break
-                obj = json.loads(payload)
-                delta = obj["choices"][0]["delta"].get("content")
-                if delta:
-                    yield delta
+        async for delta in stream_openai_chat(messages, model, api_key, base_url):
+            yield delta
 
 
 class FakeChatProvider:

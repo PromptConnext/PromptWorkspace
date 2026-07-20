@@ -20,6 +20,7 @@ from app.api import (
     desktop_auth,
     discussions,
     documents,
+    generation,
     github,
     health,
     integrations,
@@ -30,6 +31,7 @@ from app.api import (
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.documents.storage import build_document_store
+from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
@@ -112,6 +114,9 @@ async def lifespan(app: FastAPI):
     app.state.document_store = build_document_store(
         settings.data_backend, settings.supabase_url, settings.supabase_key
     )
+    # Generation (M1): stage-prompt generation, same OpenAI-compatible
+    # transport as the RAG chat provider (app/rag/chat.py::stream_openai_chat).
+    app.state.generation_provider = HttpGenerationProvider()
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
@@ -173,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(discussions.router)
     app.include_router(documents.router)
+    app.include_router(generation.router)
     app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])

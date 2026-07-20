@@ -24,6 +24,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     CodeChunkHit,
     Document,
+    GenerationRun,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -33,7 +34,9 @@ from app.models.schemas import (
     ProjectGraph,
     PullRequest,
     RagChunkHit,
+    Requirement,
     Role,
+    SpecDocument,
     Task,
     TaskLink,
     Workspace,
@@ -61,6 +64,7 @@ _PULL_REQUESTS = "pz_pull_requests"
 _CODE_CHUNKS = "pz_code_chunks"
 _CODE_MATCH_RPC = "pz_code_match_chunks"
 _DOCUMENTS = "pz_documents"
+_GENERATION_RUNS = "pz_generation_runs"
 
 
 class SupabaseRepository(Repository):
@@ -223,9 +227,7 @@ class SupabaseRepository(Repository):
                 "token", token
             ).execute()
             raise ValueError("invitation_expired")
-        self._client.table(_INVITATIONS).update({"status": "accepted"}).eq(
-            "token", token
-        ).execute()
+        self._client.table(_INVITATIONS).update({"status": "accepted"}).eq("token", token).execute()
         return self.add_member(
             inv.workspace_id, user_id, inv.role, invited_by=inv.invited_by, email=inv.email
         )
@@ -345,9 +347,7 @@ class SupabaseRepository(Repository):
             rows = [model(**row) for row in (res.data or [])]
             if after_ts is not None and after_id is not None:
                 rows = [
-                    r
-                    for r in rows
-                    if r.updated_at and (r.updated_at > after_ts or r.id > after_id)
+                    r for r in rows if r.updated_at and (r.updated_at > after_ts or r.id > after_id)
                 ]
             setattr(graph, etype, rows)
             for row in rows:
@@ -596,9 +596,9 @@ class SupabaseRepository(Repository):
         # Replace wholesale, same rationale as upsert_rag_chunks: a shrinking
         # file shouldn't leave stale trailing chunks, and a new `sha`
         # supersedes the old one for this path.
-        self._client.table(_CODE_CHUNKS).delete().eq("project_id", project_id).eq(
-            "repo", repo
-        ).eq("path", path).execute()
+        self._client.table(_CODE_CHUNKS).delete().eq("project_id", project_id).eq("repo", repo).eq(
+            "path", path
+        ).execute()
         if not line_ranges:
             return
         rows = [
@@ -692,6 +692,56 @@ class SupabaseRepository(Repository):
         if doc is None:
             raise KeyError("document_not_found")
         return doc
+
+    # -- Generation (M1) ------------------------------------------------------ #
+    def get_latest_requirement(self, project_id: str) -> Requirement | None:
+        res = (
+            self._client.table(_TABLE["requirements"])
+            .select("*")
+            .eq("project_id", project_id)
+            .is_("deleted_at", "null")
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return Requirement(**rows[0]) if rows else None
+
+    def get_latest_spec_document(self, project_id: str) -> SpecDocument | None:
+        res = (
+            self._client.table(_TABLE["spec_documents"])
+            .select("*")
+            .eq("project_id", project_id)
+            .is_("deleted_at", "null")
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return SpecDocument(**rows[0]) if rows else None
+
+    def create_generation_run(self, run: GenerationRun) -> GenerationRun:
+        self._client.table(_GENERATION_RUNS).insert(_dump(run), returning="minimal").execute()
+        return run
+
+    def update_generation_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> GenerationRun:
+        patch = {
+            "status": status,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        }
+        res = self._client.table(_GENERATION_RUNS).update(patch).eq("id", run_id).execute()
+        rows = res.data or []
+        if not rows:
+            raise KeyError("generation_run_not_found")
+        return GenerationRun(**rows[0])
 
 
 def _dump(model) -> dict:
