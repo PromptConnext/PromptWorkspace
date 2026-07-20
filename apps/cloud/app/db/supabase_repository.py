@@ -23,6 +23,7 @@ from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
     CodeChunkHit,
+    Document,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -59,6 +60,7 @@ _RAG_MATCH_RPC = "pz_rag_match_chunks"
 _PULL_REQUESTS = "pz_pull_requests"
 _CODE_CHUNKS = "pz_code_chunks"
 _CODE_MATCH_RPC = "pz_code_match_chunks"
+_DOCUMENTS = "pz_documents"
 
 
 class SupabaseRepository(Repository):
@@ -399,7 +401,7 @@ class SupabaseRepository(Repository):
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str
-    ) -> GraphEntity | PullRequest | None:
+    ) -> GraphEntity | PullRequest | Document | None:
         if node_type == "pull_requests":
             res = (
                 self._client.table(_PULL_REQUESTS)
@@ -411,6 +413,8 @@ class SupabaseRepository(Repository):
             )
             rows = res.data or []
             return PullRequest(**rows[0]) if rows else None
+        if node_type == "documents":
+            return self.get_document(project_id, node_id)
         model = ENTITY_TYPES[node_type]
         res = (
             self._client.table(_TABLE[node_type])
@@ -644,6 +648,50 @@ class SupabaseRepository(Repository):
             },
         ).execute()
         return [CodeChunkHit(**row) for row in (res.data or [])]
+
+    # -- Documents knowledge base (M0) --------------------------------------- #
+    def create_document(self, document: Document) -> Document:
+        self._client.table(_DOCUMENTS).insert(_dump(document), returning="minimal").execute()
+        return document
+
+    def get_document(self, project_id: str, document_id: str) -> Document | None:
+        res = (
+            self._client.table(_DOCUMENTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("id", document_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return Document(**rows[0]) if rows else None
+
+    def list_documents(self, project_id: str) -> list[Document]:
+        res = self._client.table(_DOCUMENTS).select("*").eq("project_id", project_id).execute()
+        return [Document(**row) for row in (res.data or [])]
+
+    def update_document_extraction(
+        self,
+        project_id: str,
+        document_id: str,
+        *,
+        status: str,
+        extract_method: str | None,
+        extracted_text: str | None,
+    ) -> Document:
+        patch = {
+            "status": status,
+            "extract_method": extract_method,
+            "extracted_text": extracted_text,
+            "updated_at": utcnow().isoformat(),
+        }
+        self._client.table(_DOCUMENTS).update(patch).eq("project_id", project_id).eq(
+            "id", document_id
+        ).execute()
+        doc = self.get_document(project_id, document_id)
+        if doc is None:
+            raise KeyError("document_not_found")
+        return doc
 
 
 def _dump(model) -> dict:

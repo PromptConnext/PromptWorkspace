@@ -9,6 +9,11 @@ httpx>=0.27,<0.29
 PyJWT[crypto]>=2.8,<3
 # Optional at runtime — only needed when DATA_BACKEND=supabase
 supabase>=2.6,<3
+# Documents knowledge base (M0, plan 0007): text-layer PDF extraction and the
+# multipart upload endpoint. typhoon-ocr fallback is a stubbed provider
+# (app/documents/ocr.py) — no extra dependency for it yet.
+pypdf>=5.0,<6
+python-multipart>=0.0.9,<0.1
 
 # Dev / test
 pytest>=8.2,<9

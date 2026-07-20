@@ -84,6 +84,12 @@ class InvitationStatus(str, Enum):
     expired = "expired"
 
 
+class DocumentStatus(str, Enum):
+    pending = "pending"
+    extracted = "extracted"
+    failed = "failed"
+
+
 # --------------------------------------------------------------------------- #
 # Graph entities
 # --------------------------------------------------------------------------- #
@@ -581,3 +587,44 @@ class CodeChunkHit(BaseModel):
     start_line: int
     end_line: int
     score: float
+
+
+# --------------------------------------------------------------------------- #
+# Documents knowledge base (M0, plan 0007) — uploaded PRDs/Markdown become a
+# first-class `documents` node_type flowing through the same RAG rails as
+# every other node (M9). Unlike GraphEntity rows, a Document has no pz/pmo
+# merge lifecycle — it's written once by the upload endpoint, not pushed by
+# the engine sync path — so it lives in its own store, the same shape as
+# PullRequest above. `extracted_text` IS persisted (unlike code): these are
+# business documents, not source code, so ADR 0011's "no source at rest" rule
+# doesn't apply here.
+class Document(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    project_id: str
+    title: str
+    mime: str
+    storage_ref: str
+    source_kind: Literal["upload"] = "upload"
+    extract_method: Literal["passthrough", "text_layer", "ocr"] | None = None
+    status: DocumentStatus = DocumentStatus.pending
+    extracted_text: str | None = None
+    created_by: str
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    # Always None in v1 — no delete endpoint yet — present so the embed
+    # worker's duck-typed tombstone check (`node.deleted_at`), shared with
+    # every other node_type, works unmodified for this one too.
+    deleted_at: datetime | None = None
+
+
+class DocumentOut(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    mime: str
+    source_kind: str
+    extract_method: str | None
+    status: DocumentStatus
+    created_at: datetime
+    updated_at: datetime

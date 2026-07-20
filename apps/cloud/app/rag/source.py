@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from app.models.schemas import (
     Discussion,
+    Document,
     GraphEntity,
     PullRequest,
     Requirement,
@@ -38,10 +39,17 @@ from app.models.schemas import (
     Task,
 )
 
-RAG_NODE_TYPES = ("requirements", "spec_documents", "tasks", "pull_requests", "discussions")
+RAG_NODE_TYPES = (
+    "requirements",
+    "spec_documents",
+    "tasks",
+    "pull_requests",
+    "discussions",
+    "documents",
+)
 
 
-def node_text(node_type: str, node: GraphEntity | PullRequest) -> str:
+def node_text(node_type: str, node: GraphEntity | PullRequest | Document) -> str:
     if node_type == "requirements" and isinstance(node, Requirement):
         return f"{node.title}\n\n{node.description}".strip()
     if node_type == "spec_documents" and isinstance(node, SpecDocument):
@@ -53,4 +61,6 @@ def node_text(node_type: str, node: GraphEntity | PullRequest) -> str:
         return f"{node.title}\n\n{node.body}".strip()
     if node_type == "discussions" and isinstance(node, Discussion):
         return node.body.strip()
+    if node_type == "documents" and isinstance(node, Document):
+        return (node.extracted_text or "").strip()
     return ""

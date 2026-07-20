@@ -20,6 +20,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     CodeChunk,
     CodeChunkHit,
+    Document,
     GraphEntity,
     GraphUpsertRequest,
     Invitation,
@@ -157,13 +158,13 @@ class Repository(abc.ABC):
     @abc.abstractmethod
     def get_node(
         self, project_id: str, node_type: str, node_id: str
-    ) -> GraphEntity | PullRequest | None:
+    ) -> GraphEntity | PullRequest | Document | None:
         """Fetch any graph entity by (project, type, id) — used by the RAG
         embed worker, which handles requirements/spec_documents/tasks
-        uniformly (M9). Also handles node_type="pull_requests" (M11), which
-        isn't a GraphEntity (GitHub is the source of truth for it, not a
-        pz/pmo merge), but still exposes `deleted_at` for the worker's
-        tombstone check."""
+        uniformly (M9). Also handles node_type="pull_requests" (M11) and
+        node_type="documents" (M0), neither of which is a GraphEntity (no
+        pz/pmo merge lifecycle), but both still expose `deleted_at` for the
+        worker's tombstone check."""
 
     # -- external-tracker links (M5) -------------------------------------- #
     @abc.abstractmethod
@@ -268,6 +269,27 @@ class Repository(abc.ABC):
         """Same membership-scoping-before-similarity contract as
         `vector_search`, over the separate no-content code index."""
 
+    # -- Documents knowledge base (M0) -------------------------------------- #
+    @abc.abstractmethod
+    def create_document(self, document: Document) -> Document: ...
+
+    @abc.abstractmethod
+    def get_document(self, project_id: str, document_id: str) -> Document | None: ...
+
+    @abc.abstractmethod
+    def list_documents(self, project_id: str) -> list[Document]: ...
+
+    @abc.abstractmethod
+    def update_document_extraction(
+        self,
+        project_id: str,
+        document_id: str,
+        *,
+        status: str,
+        extract_method: str | None,
+        extracted_text: str | None,
+    ) -> Document: ...
+
 
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
@@ -293,6 +315,8 @@ class InMemoryRepository(Repository):
         self._pull_requests: dict[str, dict[str, PullRequest]] = {}
         # project_id -> (repo, path) -> chunk_index -> CodeChunk (M11)
         self._code_chunks: dict[str, dict[tuple[str, str], dict[int, CodeChunk]]] = {}
+        # project_id -> document_id -> Document (M0)
+        self._documents: dict[str, dict[str, Document]] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -544,10 +568,13 @@ class InMemoryRepository(Repository):
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str
-    ) -> GraphEntity | PullRequest | None:
+    ) -> GraphEntity | PullRequest | Document | None:
         if node_type == "pull_requests":
             pr = self._pull_requests.get(project_id, {}).get(node_id)
             return copy.deepcopy(pr) if pr else None
+        if node_type == "documents":
+            doc = self._documents.get(project_id, {}).get(node_id)
+            return copy.deepcopy(doc) if doc else None
         store = self._graph.get(project_id)
         if not store:
             return None
@@ -737,6 +764,34 @@ class InMemoryRepository(Repository):
             )
             for score, c in scored[:top_k]
         ]
+
+    # -- Documents knowledge base (M0) --------------------------------------- #
+    def create_document(self, document: Document) -> Document:
+        self._documents.setdefault(document.project_id, {})[document.id] = document
+        return document
+
+    def get_document(self, project_id: str, document_id: str) -> Document | None:
+        doc = self._documents.get(project_id, {}).get(document_id)
+        return copy.deepcopy(doc) if doc else None
+
+    def list_documents(self, project_id: str) -> list[Document]:
+        return list(self._documents.get(project_id, {}).values())
+
+    def update_document_extraction(
+        self,
+        project_id: str,
+        document_id: str,
+        *,
+        status: str,
+        extract_method: str | None,
+        extracted_text: str | None,
+    ) -> Document:
+        doc = self._documents[project_id][document_id]
+        doc.status = status
+        doc.extract_method = extract_method
+        doc.extracted_text = extracted_text
+        doc.updated_at = utcnow()
+        return doc
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

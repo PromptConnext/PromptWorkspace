@@ -19,6 +19,7 @@ from app.api import (
     assistant,
     desktop_auth,
     discussions,
+    documents,
     github,
     health,
     integrations,
@@ -28,6 +29,7 @@ from app.api import (
 )
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
+from app.documents.storage import build_document_store
 from app.integrations.github import HttpGithubClient
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
@@ -105,6 +107,11 @@ async def lifespan(app: FastAPI):
     app.state.embedding_provider = HttpEmbeddingProvider()
     app.state.chat_provider = HttpChatProvider()
     app.state.token_budget = DailyTokenBudget()
+    # Documents knowledge base (M0): raw-file storage seam, same shape as the
+    # secret store above (memory in tests/local dev, Supabase Storage in prod).
+    app.state.document_store = build_document_store(
+        settings.data_backend, settings.supabase_url, settings.supabase_key
+    )
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
@@ -165,6 +172,7 @@ def create_app() -> FastAPI:
     app.include_router(sync.router)
     app.include_router(assistant.router)
     app.include_router(discussions.router)
+    app.include_router(documents.router)
     app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])

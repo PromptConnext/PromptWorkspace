@@ -106,11 +106,12 @@ def reindex_project(
     graph = repo.get_graph(project_id)  # bootstrap pull: live rows only
     enqueued = 0
     for node_type in RAG_NODE_TYPES:
-        if node_type == "pull_requests":
-            # Not a GraphEntity — PullRequest rows aren't part of
-            # ProjectGraph (GitHub is their source of truth, not sync), and
-            # they're indexed the moment their webhook arrives (M11). No
-            # backfill scenario exists for them the way there is for
+        if node_type in ("pull_requests", "documents"):
+            # Neither is a GraphEntity in ProjectGraph — PullRequest rows have
+            # GitHub as their source of truth (M11); Document rows are
+            # written once by the upload endpoint (M0), which enqueues its
+            # own embed job immediately. Both index the moment they arrive,
+            # so no backfill scenario exists for them the way there is for
             # requirements/specs/tasks that pre-date RAG.
             continue
         for item in getattr(graph, node_type):
