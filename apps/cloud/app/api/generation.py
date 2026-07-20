@@ -4,8 +4,10 @@ for business users with no desktop app to run the engine's own `runStage()`
 budget stack as the RAG assistant (app/api/assistant.py) — a parallel,
 self-contained generation path, not a relay to a running local engine.
 
-Model selection is a stub (`select_model` always returns the workspace's
-BYO connection) — the routing table (managed Typhoon vs BYO) is M2/M3.
+Model selection (`select_model`) prefers the workspace's BYO connection,
+falling back to the platform-operated managed Typhoon connection (M2) when
+the workspace has none configured. The stage routing table (which stages
+default to managed vs BYO, per-workspace/project overrides) is M3.
 
 Persistence mirrors what the engine's own stage routes already do
 (apps/engine/src/routes/projects.ts): `specify` creates a Requirement,
@@ -21,7 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -48,6 +52,10 @@ from app.rag.embedder import HttpEmbeddingProvider
 logger = logging.getLogger("promptconnext.generation")
 router = APIRouter(tags=["generation"])
 
+# Key for the managed source's *global* rate limiter (app.state.managed_limiter)
+# — one shared free Typhoon key, so this is deliberately not per-workspace.
+_MANAGED_LIMITER_KEY = "managed:typhoon"
+
 
 @router.post("/projects/{project_id}/generate/{stage}")
 async def generate(
@@ -60,9 +68,15 @@ async def generate(
 ) -> StreamingResponse:
     project = require_project(repo, project_id, user)
 
-    conn = select_model(repo, project.workspace_id, project_id, stage)
+    managed_connection = getattr(request.app.state, "managed_connection", None)
+    conn = select_model(repo, project.workspace_id, project_id, stage, managed_connection)
     if conn is None:
         raise HTTPException(status_code=400, detail="model_connection_not_configured")
+
+    if conn.source == "managed":
+        managed_limiter = request.app.state.managed_limiter
+        if not managed_limiter.allow(_MANAGED_LIMITER_KEY, time.monotonic()):
+            raise HTTPException(status_code=429, detail="managed_tier_rate_limited")
 
     budget = request.app.state.token_budget
     if budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0:
@@ -85,10 +99,13 @@ async def generate(
     provider = getattr(request.app.state, "generation_provider", None) or HttpGenerationProvider()
 
     context = ""
-    if stage in ("specify", "plan"):
+    if stage in ("specify", "plan") and conn.embed_model:
         # The M0 payoff: ground on the project's uploaded documents (and
         # every other embedded node type) via the same membership-scoped
-        # retrieval assistant.chat uses.
+        # retrieval assistant.chat uses. Skipped, not errored, when the
+        # resolved connection can't embed (the managed tier is chat-only in
+        # this pilot) — same "skip when ungrounded" shape the embed queue
+        # uses for a missing BYO connection.
         [query_embedding] = await embedder.embed(
             [body.user_input], conn.embed_model, api_key, conn.base_url
         )
@@ -106,18 +123,32 @@ async def generate(
             workspace_id=project.workspace_id,
             project_id=project_id,
             stage=stage,
-            model_source="byo",
+            model_source=conn.source,
             model=conn.model,
         )
     )
 
     async def stream():
         parts: list[str] = []
-        async for delta in provider.stream(
-            system_prompt, user_content, conn.model, api_key, conn.base_url
-        ):
-            parts.append(delta)
-            yield f"data: {json.dumps({'delta': delta})}\n\n"
+        try:
+            async for delta in provider.stream(
+                system_prompt, user_content, conn.model, api_key, conn.base_url
+            ):
+                parts.append(delta)
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            retryable = status == 429
+            if status == 429 and conn.source == "managed":
+                message = "managed tier busy, try again or connect your own key"
+            else:
+                message = f"model provider error ({status})"
+            repo.update_generation_run(
+                run.id, status="failed", prompt_tokens=0, completion_tokens=0
+            )
+            error_payload = {"error": message, "retryable": retryable}
+            yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
+            return
         raw = "".join(parts)
 
         prompt_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_content)

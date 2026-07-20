@@ -434,7 +434,13 @@ class ModelConnectionCreate(BaseModel):
 
 class ModelConnection(BaseModel):
     """Internal representation, includes `secret_ref` — never returned by an
-    API route; routes serialize `ModelConnectionOut` instead."""
+    API route; routes serialize `ModelConnectionOut` instead.
+
+    `source` (M2, plan 0007): "byo" for every real, persisted workspace row
+    (the default, so existing rows without this column still load fine) —
+    "managed" is synthesized on the fly by app/generation/managed.py, never
+    written to `pz_workspace_model_connections`, and carries the
+    platform-held Typhoon key instead of a workspace-supplied one."""
 
     workspace_id: str
     provider: str
@@ -445,6 +451,7 @@ class ModelConnection(BaseModel):
     secret_ref: str
     daily_token_budget: int = 200_000
     created_by: str
+    source: Literal["byo", "managed"] = "byo"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

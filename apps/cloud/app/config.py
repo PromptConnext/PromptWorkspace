@@ -88,6 +88,25 @@ class Settings(BaseSettings):
     github_app_private_key: str = ""
     github_webhook_secret: str = ""
 
+    # Managed Thai-LLM tier (M2, plan 0007 / ADR 0013 Part B pilot): the free
+    # opentyphoon.ai API as a platform-operated model source for workspaces
+    # with no BYO connection. Chat only in the pilot — no managed embedding
+    # model, so retrieval-grounded stages skip retrieval gracefully when this
+    # is the resolved connection (same "skip, don't error" shape the RAG
+    # embed queue already uses for a missing BYO connection, app/rag/queue.py).
+    # The API key is platform-held (env/secret store), never a per-user or
+    # per-workspace value.
+    managed_model_enabled: bool = False
+    managed_model_base_url: str = "https://api.opentyphoon.ai/v1"
+    managed_model_name: str = "typhoon-v2.5-30b-a3b-instruct"
+    managed_model_api_key: str = ""
+    # Conservative shared-key protection (ADR 0013 flags the free tier as
+    # 5 req/s / 200 req/min, shared across every workspace using it): a low
+    # per-workspace daily cap so one workspace can't exhaust the platform's
+    # shared budget, on top of the existing per-workspace DailyTokenBudget
+    # check every generation stage already goes through.
+    managed_daily_token_budget: int = 20_000
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

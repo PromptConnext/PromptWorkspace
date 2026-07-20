@@ -31,6 +31,7 @@ from app.api import (
 from app.config import Settings, get_settings
 from app.db.repository import InMemoryRepository, Repository
 from app.documents.storage import build_document_store
+from app.generation.managed import build_managed_connection
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
 from app.rag.budget import DailyTokenBudget
@@ -117,6 +118,16 @@ async def lifespan(app: FastAPI):
     # Generation (M1): stage-prompt generation, same OpenAI-compatible
     # transport as the RAG chat provider (app/rag/chat.py::stream_openai_chat).
     app.state.generation_provider = HttpGenerationProvider()
+    # Managed Typhoon tier (M2): built once here so its platform key is
+    # encrypted a single time, not per request; None when unconfigured,
+    # which select_model() treats identically to "no managed fallback".
+    app.state.managed_connection = build_managed_connection(settings, app.state.secret_store)
+    # Global (not per-workspace) token bucket protecting the shared free
+    # Typhoon key from the platform's own aggregate traffic — separate from
+    # the per-workspace DailyTokenBudget check every stage already goes
+    # through. Same in-process, single-instance shape as the sync/webhook
+    # limiter above.
+    app.state.managed_limiter = TokenBucketLimiter(per_minute=200, burst=5)
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
