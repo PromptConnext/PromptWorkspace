@@ -79,15 +79,23 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
             {workspace?.name ?? "Workspace"}
           </h1>
-          <Link
-            href={`/w/${workspaceId}/members`}
-            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 hover:border-slate-300"
-          >
-            {members && members.length > 0 && <MemberStack members={members} />}
-            <span className="text-sm text-slate-500">
-              {members?.length ?? 0} {members?.length === 1 ? "member" : "members"}
-            </span>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/w/${workspaceId}/members`}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 hover:border-slate-300"
+            >
+              {members && members.length > 0 && <MemberStack members={members} />}
+              <span className="text-sm text-slate-500">
+                {members?.length ?? 0} {members?.length === 1 ? "member" : "members"}
+              </span>
+            </Link>
+            <Link
+              href={`/w/${workspaceId}/settings`}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
+            >
+              Settings
+            </Link>
+          </div>
         </div>
 
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>

@@ -665,3 +665,39 @@ class GenerationRun(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# Stage routing (M3, plan 0007) — per-workspace/project overrides of
+# DEFAULT_STAGE_ROUTING (app/generation/routing.py). `project_id: None` is a
+# workspace-wide default; resolution order is project -> workspace -> the
+# hard-coded default.
+# --------------------------------------------------------------------------- #
+class StageRoutingUpdate(BaseModel):
+    stage: Literal["constitution", "specify", "plan", "tasks"]
+    model_source: Literal["byo", "managed"]
+    model: str | None = None
+
+
+class StageModelRouting(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    project_id: str | None = None
+    stage: str
+    model_source: str
+    model: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class EffectiveStageRouting(BaseModel):
+    stage: str
+    model_source: str
+    model: str | None = None
+    # Which level this value came from — lets the web settings panel show
+    # "inherited from workspace default" vs. "overridden here".
+    origin: Literal["project", "workspace", "default"]
+
+
+class RoutingTableOut(BaseModel):
+    routing: list[EffectiveStageRouting]

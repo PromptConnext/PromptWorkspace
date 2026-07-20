@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { use, useState } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
@@ -46,7 +47,15 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
               </button>
             ))}
           </div>
-          <PresenceBar projectId={projectId} />
+          <div className="flex items-center gap-3">
+            <PresenceBar projectId={projectId} />
+            <Link
+              href={`/w/${workspaceId}/p/${projectId}/settings`}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
+            >
+              Settings
+            </Link>
+          </div>
         </div>
 
         {loading && <p className="text-sm text-slate-500">Loading graph…</p>}

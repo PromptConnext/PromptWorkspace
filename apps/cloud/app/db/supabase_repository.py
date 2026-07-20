@@ -37,6 +37,7 @@ from app.models.schemas import (
     Requirement,
     Role,
     SpecDocument,
+    StageModelRouting,
     Task,
     TaskLink,
     Workspace,
@@ -65,6 +66,7 @@ _CODE_CHUNKS = "pz_code_chunks"
 _CODE_MATCH_RPC = "pz_code_match_chunks"
 _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
+_STAGE_ROUTING = "pz_stage_model_routing"
 
 
 class SupabaseRepository(Repository):
@@ -742,6 +744,58 @@ class SupabaseRepository(Repository):
         if not rows:
             raise KeyError("generation_run_not_found")
         return GenerationRun(**rows[0])
+
+    # -- Stage routing (M3) ---------------------------------------------------- #
+    @staticmethod
+    def _scope_stage_routing(builder, workspace_id: str, project_id: str | None):
+        builder = builder.eq("workspace_id", workspace_id)
+        return builder.is_("project_id", "null") if project_id is None else builder.eq(
+            "project_id", project_id
+        )
+
+    def get_stage_routing_override(
+        self, workspace_id: str, project_id: str | None, stage: str
+    ) -> StageModelRouting | None:
+        query = self._scope_stage_routing(
+            self._client.table(_STAGE_ROUTING).select("*"), workspace_id, project_id
+        )
+        res = query.eq("stage", stage).limit(1).execute()
+        rows = res.data or []
+        return StageModelRouting(**rows[0]) if rows else None
+
+    def list_stage_routing_overrides(
+        self, workspace_id: str, project_id: str | None
+    ) -> list[StageModelRouting]:
+        query = self._scope_stage_routing(
+            self._client.table(_STAGE_ROUTING).select("*"), workspace_id, project_id
+        )
+        res = query.execute()
+        return [StageModelRouting(**row) for row in (res.data or [])]
+
+    def upsert_stage_routing(
+        self,
+        workspace_id: str,
+        project_id: str | None,
+        stage: str,
+        model_source: str,
+        model: str | None,
+    ) -> StageModelRouting:
+        # No unique DB constraint to ON CONFLICT against (NULL project_id
+        # rows can't be uniquely constrained) — delete then insert instead,
+        # same wholesale-replace shape as upsert_rag_chunks.
+        delete_query = self._scope_stage_routing(
+            self._client.table(_STAGE_ROUTING).delete(), workspace_id, project_id
+        )
+        delete_query.eq("stage", stage).execute()
+        row = StageModelRouting(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            stage=stage,
+            model_source=model_source,
+            model=model,
+        )
+        self._client.table(_STAGE_ROUTING).insert(_dump(row), returning="minimal").execute()
+        return row
 
 
 def _dump(model) -> dict:
