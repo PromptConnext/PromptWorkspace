@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   spec_id TEXT NOT NULL REFERENCES spec_documents(id),
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
-  feature_tag TEXT
+  feature_tag TEXT,
+  assigned_user_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS acceptance_criteria (
@@ -129,6 +130,15 @@ export function dataDir(): string {
 export const db = new DatabaseSync(join(dataDir(), "promptconnext.db"));
 db.exec("PRAGMA foreign_keys = ON;");
 db.exec(SCHEMA);
+
+// Forward-only column adds for existing DBs (no migration framework).
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn("tasks", "assigned_user_id", "assigned_user_id TEXT");
 
 export function getAppState(key: string): string | null {
   const row = db

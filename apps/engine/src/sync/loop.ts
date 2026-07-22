@@ -165,8 +165,11 @@ function assembleSnapshot(localProjectId: string, cloudProjectId: string) {
     status: TASK_STATUS_TO_CLOUD[t.status] ?? "todo",
     feature_tag: t.feature_tag,
     acceptance_criteria: criteriaByTask.get(t.id) ?? [],
-    // assignee/sprint are pmo-owned and not stored locally — omit rather
-    // than push null, so a pz-sourced push can't clobber a tracker mirror.
+    // assignee/sprint are pmo-owned and not stored locally; assigned_user_id
+    // IS stored locally (ADR 0016) but is pz-owned and app-authored via the
+    // dedicated assignment endpoint — omit all three rather than push null,
+    // so this push can't clobber a tracker mirror or an app-set assignment.
+    // pullProjectTaskAssignments (below) is the sole writer of the local column.
   }));
 
   const artifacts = (
@@ -397,6 +400,36 @@ export async function pullProjectDiscussions(localProjectId: string): Promise<vo
   if (res.cursor) setAppState(pullCursorKey(localProjectId), res.cursor);
 }
 
+const updateLocalTaskAssignee = db.prepare("UPDATE tasks SET assigned_user_id = ? WHERE id = ?");
+
+function assignmentsPullCursorKey(localProjectId: string): string {
+  return `assignments_pull_cursor:${localProjectId}`;
+}
+
+// Ongoing pull of the one pz-owned field the app writes and the engine never
+// pushes (ADR 0016 §5). Reuses the incremental graph endpoint; reads only
+// tasks[].assigned_user_id, ignoring every other array (engine stays the
+// source of truth for the rest). Narrow, single-field mirror — NOT the general
+// pull-and-apply still deferred at the bottom of this file.
+export async function pullProjectTaskAssignments(localProjectId: string): Promise<void> {
+  const link = getCloudLink(localProjectId);
+  if (!link?.project_id) return;
+  const cursor = getAppState(assignmentsPullCursorKey(localProjectId));
+  const path = cursor
+    ? `/sync/projects/${link.project_id}/graph?since=${encodeURIComponent(cursor)}`
+    : `/sync/projects/${link.project_id}/graph`;
+  const res = await cloudFetch<{
+    tasks: { id: string; assigned_user_id: string | null }[];
+    cursor: string | null;
+  }>(path, { method: "GET" });
+  for (const t of res.tasks) {
+    // Only updates a row that already exists locally; a task the engine has
+    // never seen is created by the normal generate path / hydrate, not here.
+    updateLocalTaskAssignee.run(t.assigned_user_id ?? null, t.id);
+  }
+  if (res.cursor) setAppState(assignmentsPullCursorKey(localProjectId), res.cursor);
+}
+
 let loopTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startCloudSyncLoop(): void {
@@ -405,6 +438,7 @@ export function startCloudSyncLoop(): void {
     for (const projectId of linkedProjectIds()) {
       await pushProjectSnapshot(projectId).catch(() => {});
       await pullProjectDiscussions(projectId).catch(() => {});
+      await pullProjectTaskAssignments(projectId).catch(() => {});
     }
   }, CLOUD_SYNC_POLL_SECONDS * 1000);
   loopTimer.unref?.();
@@ -454,6 +488,7 @@ type CloudGraphPage = {
     status: string;
     feature_tag: string | null;
     acceptance_criteria: { text: string }[];
+    assigned_user_id: string | null;
   }[];
   artifacts: { id: string; task_id: string; kind: string; uri: string; commit_sha: string | null }[];
   agent_runs: {
@@ -482,11 +517,12 @@ const upsertSpecDocument = db.prepare(`
     content = excluded.content, version = excluded.version, approved_by = excluded.approved_by
 `);
 const upsertTask = db.prepare(`
-  INSERT INTO tasks (id, spec_id, title, status, feature_tag)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO tasks (id, spec_id, title, status, feature_tag, assigned_user_id)
+  VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     spec_id = excluded.spec_id, title = excluded.title,
-    status = excluded.status, feature_tag = excluded.feature_tag
+    status = excluded.status, feature_tag = excluded.feature_tag,
+    assigned_user_id = excluded.assigned_user_id
 `);
 const deleteCriteriaForTask = db.prepare("DELETE FROM acceptance_criteria WHERE task_id = ?");
 const insertCriterion = db.prepare(
@@ -531,6 +567,7 @@ function applyGraphPage(localProjectId: string, page: CloudGraphPage): void {
       t.title,
       TASK_STATUS_FROM_CLOUD[t.status] ?? "todo",
       t.feature_tag,
+      t.assigned_user_id ?? null,
     );
     // acceptance_criteria are embedded (not separately keyed) in the cloud
     // shape — replace the local set wholesale, minting fresh local ids.
@@ -618,9 +655,11 @@ export async function hydrateProjectGraph(
 // General *incremental* pull-and-apply (cloud graph -> local SQLite on an
 // ongoing basis, honoring `since` and tombstones for requirements/specs/
 // tasks/artifacts/agent_runs) remains out of scope: the local `tasks` table
-// has no `assignee`/`sprint` columns, so there's nowhere to put the pmo
-// fields a live pull would bring back from a Jira/ClickUp mirror. The
-// bootstrap hydrate above is a one-shot replica into empty tables, not an
-// ongoing reconciliation — it sidesteps that gap the same way M12's
-// discussions pull did. Ongoing pull stays a follow-up once those columns
-// exist.
+// still has no `assignee`/`sprint` columns, so there's nowhere to put the pmo
+// fields a live pull would bring back from a Jira/ClickUp mirror. The one
+// exception is `assigned_user_id` (ADR 0016): that pz-owned column now exists
+// locally and is kept live by pullProjectTaskAssignments above, the same
+// narrow-mirror shape M12's discussions pull established. The bootstrap
+// hydrate above is still a one-shot replica into empty tables, not an ongoing
+// reconciliation for the rest of the graph. General ongoing pull for
+// everything else stays a follow-up once the pmo columns exist.

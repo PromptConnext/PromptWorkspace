@@ -673,7 +673,7 @@ projects.get("/engine/projects/:id/graph", (c) => {
       ...spec,
       tasks: (
         db
-          .prepare("SELECT id, title, status, feature_tag FROM tasks WHERE spec_id = ?")
+          .prepare("SELECT id, title, status, feature_tag, assigned_user_id FROM tasks WHERE spec_id = ?")
           .all(spec.id) as { id: string }[]
       ).map((task) => ({
         ...task,
