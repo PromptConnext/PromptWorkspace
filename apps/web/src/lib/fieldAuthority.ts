@@ -12,6 +12,7 @@ export const FIELD_AUTHORITY: Record<string, Record<string, Authority>> = {
     feature_tag: "pmo",
     assignee: "pmo",
     sprint: "pmo",
+    assigned_user_id: "pz",
   },
   requirements: { title: "shared", description: "shared", status: "pz" },
   spec_documents: { content: "pz", status: "pz", version: "pz" },

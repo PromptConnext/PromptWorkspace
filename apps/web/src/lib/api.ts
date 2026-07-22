@@ -2,6 +2,7 @@
 // apps/engine/src/cloudClient.ts on the browser side.
 
 import { CLOUD_API_URL } from "./config";
+import type { Task, WorkspaceMember } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -29,4 +30,20 @@ export async function apiFetch<T>(
     throw new ApiError(res.status, (data as { detail?: string }).detail ?? `cloud HTTP ${res.status}`);
   }
   return data as T;
+}
+
+export function listMembers(workspaceId: string, authHeaders: Record<string, string>) {
+  return apiFetch<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`, authHeaders);
+}
+
+export function assignTask(
+  projectId: string,
+  taskId: string,
+  assignedUserId: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Task>(`/projects/${projectId}/tasks/${taskId}/assignment`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ assigned_user_id: assignedUserId }),
+  });
 }

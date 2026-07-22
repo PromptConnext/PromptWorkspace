@@ -63,7 +63,9 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
         {graph && (
           <>
             {tab === "Graph" && <GraphBrowser graph={graph} />}
-            {tab === "Tasks" && <TaskBoard graph={graph} />}
+            {tab === "Tasks" && (
+              <TaskBoard graph={graph} workspaceId={workspaceId} projectId={projectId} onChange={refetch} />
+            )}
             {tab === "Progress" && <ProgressRollup graph={graph} />}
             {tab === "Discussion" && (
               <DiscussionThread graph={graph} projectId={projectId} onPosted={refetch} />

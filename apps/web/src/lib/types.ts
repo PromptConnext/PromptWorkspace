@@ -77,6 +77,7 @@ export interface Task {
   acceptance_criteria: AcceptanceCriterion[];
   assignee: string | null;
   sprint: string | null;
+  assigned_user_id: string | null;
   updated_at: string | null;
   deleted_at: string | null;
   field_versions: Record<string, unknown>;
