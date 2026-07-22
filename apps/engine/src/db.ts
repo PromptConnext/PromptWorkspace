@@ -106,6 +106,18 @@ CREATE TABLE IF NOT EXISTS app_state (
 -- The first local table needing updated_at/deleted_at: it's also the first
 -- table this engine pulls from the cloud rather than only ever pushing, so
 -- it needs the same tombstone/cursor shape the cloud side already has.
+-- Workspace-members cache (ADR 0016 M4): resolves assigned_user_id -> a
+-- display name on the desktop. Mirrors GET /workspaces/{id}/members, fed by
+-- the roster refresh (sign-in/focus/explicit) and scrubbed on sign-out
+-- alongside the roster (same privacy obligation ADR 0015 §3 established).
+CREATE TABLE IF NOT EXISTS workspace_members_cache (
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  email TEXT,
+  role TEXT,
+  PRIMARY KEY (workspace_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS discussions (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

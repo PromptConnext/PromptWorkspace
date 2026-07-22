@@ -12,12 +12,15 @@ import {
   loadActiveWorkspace,
   loadRosterProjects,
   loadRosterWorkspaces,
+  loadWorkspaceMembers,
   redeemDesktopCode,
   rosterSyncedAt,
   storeCloudSession,
   storeActiveWorkspace,
   storeRoster,
+  storeWorkspaceMembers,
   type ActiveWorkspace,
+  type CachedMember,
   type RosterProject,
   type RosterWorkspace,
 } from "../cloudClient.ts";
@@ -132,6 +135,26 @@ async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; project
     workspace_id: p.workspace_id,
   }));
   storeRoster(workspaces, projects);
+  // Members cache (ADR 0016 M4): small addition to the same roster refresh —
+  // best-effort per workspace so one workspace's failure doesn't drop the rest.
+  for (const ws of workspaces) {
+    try {
+      const rawMembers = await cloudFetch<
+        { workspace_id: string; user_id: string; email: string | null; role: string }[]
+      >(`/workspaces/${ws.id}/members`);
+      storeWorkspaceMembers(
+        ws.id,
+        rawMembers.map((m) => ({
+          workspace_id: ws.id,
+          user_id: m.user_id,
+          email: m.email,
+          role: m.role,
+        })),
+      );
+    } catch {
+      // keep whatever was cached before; not fatal to the roster refresh
+    }
+  }
   return { workspaces, projects };
 }
 
@@ -163,6 +186,13 @@ cloud.post("/engine/cloud/roster/refresh", async (c) => {
       error: (err as Error).message,
     });
   }
+});
+
+// Cached workspace members, for resolving assigned_user_id -> a display name
+// (ADR 0016 M4). No network — reads the cache the roster refresh populates.
+cloud.get("/engine/workspaces/:id/members", (c) => {
+  const members: CachedMember[] = loadWorkspaceMembers(c.req.param("id"));
+  return c.json({ members });
 });
 
 // Find the local project bound to a given cloud project id, if any.

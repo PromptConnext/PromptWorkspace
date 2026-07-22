@@ -1,7 +1,7 @@
 // Thin fetch wrapper around apps/cloud's REST API (docs/plans/0004 D1-D2).
 // Mirrors apps/desktop/src/api.ts's request<T> shape on the other side of the
 // engine, but authenticates as the *cloud* user, not the local engine session.
-import { getAppState, setAppState } from "./db.ts";
+import { db, getAppState, setAppState } from "./db.ts";
 import { readSecret, storeSecret, deleteSecret } from "./keychain.ts";
 import { CLOUD_API_URL, SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.ts";
 
@@ -110,6 +110,39 @@ export function clearRoster(): void {
   setAppState(ROSTER_WORKSPACES_KEY, JSON.stringify(null));
   setAppState(ROSTER_PROJECTS_KEY, JSON.stringify(null));
   setAppState(ROSTER_SYNCED_AT_KEY, JSON.stringify(null));
+  clearWorkspaceMembersCache();
+}
+
+// --- Workspace-members cache (ADR 0016 M4) ---------------------------------
+// Resolves a task's assigned_user_id to a display name on the desktop.
+// Refreshed alongside the roster; scrubbed on sign-out for the same privacy
+// reason the roster itself is (ADR 0015 §3.4).
+
+export type CachedMember = { workspace_id: string; user_id: string; email: string | null; role: string };
+
+const upsertMember = db.prepare(`
+  INSERT INTO workspace_members_cache (workspace_id, user_id, email, role)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(workspace_id, user_id) DO UPDATE SET email = excluded.email, role = excluded.role
+`);
+
+export function storeWorkspaceMembers(workspaceId: string, members: CachedMember[]): void {
+  db.prepare("DELETE FROM workspace_members_cache WHERE workspace_id = ?").run(workspaceId);
+  for (const m of members) {
+    upsertMember.run(workspaceId, m.user_id, m.email, m.role);
+  }
+}
+
+export function loadWorkspaceMembers(workspaceId: string): CachedMember[] {
+  return db
+    .prepare(
+      "SELECT workspace_id, user_id, email, role FROM workspace_members_cache WHERE workspace_id = ?",
+    )
+    .all(workspaceId) as CachedMember[];
+}
+
+export function clearWorkspaceMembersCache(): void {
+  db.prepare("DELETE FROM workspace_members_cache").run();
 }
 
 export type ActiveWorkspace = { id: string; name: string };

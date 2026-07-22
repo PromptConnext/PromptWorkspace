@@ -64,7 +64,13 @@ export type Graph = {
       version: number;
       approved_by: string | null;
       content: string;
-      tasks: { id: string; title: string; status: string; feature_tag?: string | null }[];
+      tasks: {
+        id: string;
+        title: string;
+        status: string;
+        feature_tag?: string | null;
+        assigned_user_id?: string | null;
+      }[];
     }[];
   }[];
   agentRuns: {
@@ -409,6 +415,13 @@ export const getCloudRoster = () => request<CloudRoster>("/engine/cloud/roster")
 // the cache with offline:true when the cloud is unreachable.
 export const refreshCloudRoster = () =>
   request<CloudRosterRefresh>("/engine/cloud/roster/refresh", { method: "POST" });
+
+// Cached workspace members (ADR 0016 M4) — resolves a task's assigned_user_id
+// to a display name. No network; reads the cache the roster refresh fed.
+export type WorkspaceMember = { workspace_id: string; user_id: string; email: string | null; role: string };
+
+export const getWorkspaceMembers = (workspaceId: string) =>
+  request<{ members: WorkspaceMember[] }>(`/engine/workspaces/${workspaceId}/members`);
 
 export type OpenCloudProjectResult = {
   localProjectId: string;
