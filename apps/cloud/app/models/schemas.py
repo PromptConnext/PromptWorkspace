@@ -151,6 +151,9 @@ class Task(GraphEntity):
     # PMO fields, populated by the external-tracker mirror (M5).
     assignee: str | None = None
     sprint: str | None = None
+    # pz-owned: a workspace member's user_id, set by the app (ADR 0016).
+    # Distinct from the pmo `assignee` free-text tracker name above.
+    assigned_user_id: str | None = None
 
 
 class Artifact(GraphEntity):
@@ -183,6 +186,12 @@ class Discussion(GraphEntity):
     author: str
     body: str
     source: Literal["pz", "pmo"] = "pz"
+
+
+class TaskAssignmentUpdate(BaseModel):
+    """Set or clear a task's PromptConnext assignee. `null` unassigns."""
+
+    assigned_user_id: str | None = None
 
 
 class DiscussionCreate(BaseModel):
@@ -351,6 +360,7 @@ FIELD_AUTHORITY: dict[str, dict[str, str]] = {
         "feature_tag": "pmo",
         "assignee": "pmo",
         "sprint": "pmo",
+        "assigned_user_id": "pz",
     },
     "requirements": {"title": "shared", "description": "shared", "status": "pz"},
     "spec_documents": {"content": "pz", "status": "pz", "version": "pz"},

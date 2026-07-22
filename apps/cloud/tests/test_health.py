@@ -12,5 +12,5 @@ def test_health(client):
     assert body["backend"] == "memory"
     assert "time" in body
     # Ops surface (M7): schema version + in-process counters.
-    assert body["schema_version"].startswith("0016")
+    assert body["schema_version"].startswith("0017")
     assert set(body["metrics"]) == {"pushed", "pulled", "merged", "conflicts"}

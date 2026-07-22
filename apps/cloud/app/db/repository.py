@@ -14,6 +14,7 @@ import abc
 import copy
 from datetime import datetime, timedelta
 
+from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -159,6 +160,13 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
+
+    @abc.abstractmethod
+    def assign_task(
+        self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime
+    ) -> Task:
+        """Single-field pz write of `assigned_user_id`, stamping its field
+        version. Raises KeyError if the task doesn't exist."""
 
     @abc.abstractmethod
     def get_node(
@@ -543,7 +551,7 @@ class InMemoryRepository(Repository):
                 stored = store[etype].get(item.id)
                 stored_dict = stored.model_dump(mode="json") if stored else None
                 merged = merge_entity(
-                    stored_dict, item.model_dump(mode="json"), authority, source, now
+                    stored_dict, _incoming_dump(item), authority, source, now
                 )
                 store[etype][item.id] = model(**merged)
             counts[etype] = len(items)
@@ -633,6 +641,20 @@ class InMemoryRepository(Repository):
             return None
         task = store["tasks"].get(task_id)
         return copy.deepcopy(task) if task else None
+
+    def assign_task(
+        self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime
+    ) -> Task:
+        store = self._graph.get(project_id)
+        task = store["tasks"].get(task_id) if store else None
+        if task is None:
+            raise KeyError(task_id)
+        versions = dict(task.field_versions or {})
+        versions["assigned_user_id"] = {"updated_at": now.isoformat(), "source": "pz"}
+        task.assigned_user_id = assigned_user_id
+        task.field_versions = versions
+        task.updated_at = now
+        return copy.deepcopy(task)
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str

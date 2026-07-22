@@ -28,6 +28,26 @@ from datetime import datetime, timezone
 # engine so it has no import cycle with schemas.
 _RESERVED = frozenset({"id", "project_id", "updated_at", "deleted_at", "field_versions"})
 
+# Fields whose default (unset) value must never merge as an implicit write —
+# the engine literally never sends them (ADR 0016: assigned_user_id is
+# app-authored via a dedicated endpoint, not the graph push). Unlike ordinary
+# pz fields, a full model dump can't distinguish "the writer wants to clear
+# this" from "the writer never touches this field at all", so these are
+# dropped from the incoming dict when the caller didn't explicitly set them.
+_OMIT_IF_UNSET = frozenset({"assigned_user_id"})
+
+
+def incoming_dump(item) -> dict:
+    """JSON-safe dict of `item` for merge_entity, dropping any `_OMIT_IF_UNSET`
+    field the caller didn't explicitly set (so an engine push that has never
+    heard of it can't clobber an app-authored value with an implicit None)."""
+    dumped = item.model_dump(mode="json")
+    fields_set = getattr(item, "model_fields_set", set())
+    for field in _OMIT_IF_UNSET:
+        if field in dumped and field not in fields_set:
+            dumped.pop(field)
+    return dumped
+
 
 def _as_dt(value) -> datetime | None:
     if value is None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.db.merge import _as_dt, merge_entity
+from app.db.merge import incoming_dump as _incoming_dump
 from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -301,7 +302,7 @@ class SupabaseRepository(Repository):
             rows = []
             for item in items:
                 stored = self._fetch_row(etype, item.id)
-                incoming = _dump(item)
+                incoming = _incoming_dump(item)
                 merged = merge_entity(stored, incoming, authority, source, now)
                 merged["project_id"] = project_id
                 rows.append(merged)
@@ -400,6 +401,23 @@ class SupabaseRepository(Repository):
         )
         rows = res.data or []
         return Task(**rows[0]) if rows else None
+
+    def assign_task(
+        self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime
+    ) -> Task:
+        stored = self._fetch_row("tasks", task_id)
+        if stored is None or stored.get("project_id") != project_id:
+            raise KeyError(task_id)
+        versions = dict(stored.get("field_versions") or {})
+        versions["assigned_user_id"] = {"updated_at": now.isoformat(), "source": "pz"}
+        self._client.table(_TABLE["tasks"]).update(
+            {
+                "assigned_user_id": assigned_user_id,
+                "field_versions": versions,
+                "updated_at": now.isoformat(),
+            }
+        ).eq("id", task_id).eq("project_id", project_id).execute()
+        return self.get_task(project_id, task_id)  # type: ignore[return-value]
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str

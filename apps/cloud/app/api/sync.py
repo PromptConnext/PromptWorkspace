@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
@@ -30,6 +30,10 @@ from app.models.schemas import (
     Project,
     ProjectCreate,
     ProjectGraph,
+    Role,
+    Task,
+    TaskAssignmentUpdate,
+    utcnow,
 )
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
@@ -66,6 +70,39 @@ def get_project(
     repo: Repository = Depends(get_repository),
 ) -> Project:
     return require_project(repo, project_id, user)
+
+
+@router.patch("/projects/{project_id}/tasks/{task_id}/assignment", response_model=Task)
+def assign_task(
+    project_id: str,
+    task_id: str,
+    body: TaskAssignmentUpdate,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Task:
+    project = require_project(repo, project_id, user)  # membership-gated
+    task = repo.get_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task_not_found")
+
+    caller_role = repo.get_membership(project.workspace_id, user.id)
+    target = body.assigned_user_id
+
+    # Permission: admins assign/clear anyone; a member may only assign a task
+    # to themselves or clear a task currently assigned to themselves.
+    if caller_role != Role.admin:
+        self_assign = target == user.id and target is not None
+        self_unassign = target is None and task.assigned_user_id == user.id
+        if not (self_assign or self_unassign):
+            raise HTTPException(status_code=403, detail="assignment_forbidden")
+
+    # Target must be a current member of the task's workspace (null = unassign).
+    if target is not None:
+        member_ids = {m.user_id for m in repo.list_members(project.workspace_id)}
+        if target not in member_ids:
+            raise HTTPException(status_code=400, detail="assignee_not_a_member")
+
+    return repo.assign_task(project_id, task_id, target, utcnow())
 
 
 @router.put("/sync/projects/{project_id}/graph", response_model=GraphUpsertResponse)
