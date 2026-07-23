@@ -14,7 +14,7 @@ on:
 
 jobs:
   windows-check:
-    runs-on: windows-latest
+    runs-on: windows-2022 # windows-latest ships VS "18", unrecognized by node-gyp's version table
     defaults:
       run:
         working-directory: spikes/theia-shell
