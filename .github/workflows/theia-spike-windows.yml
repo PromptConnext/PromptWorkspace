@@ -1,0 +1,36 @@
+name: ADR 0016 M0 spike — Windows check
+
+# The M0 decision spike (spikes/theia-shell/) was verified manually on macOS
+# arm64 (see spikes/theia-shell/docs/m0-report.md). This workflow covers the
+# other exit-criteria leg — Windows x64 — which has no local machine
+# available. Isolated from the main desktop build: touches nothing under
+# apps/desktop, no release artifacts, CI-only.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["spike/0016-theia-m0"]
+    paths: ["spikes/theia-shell/**", ".github/workflows/theia-spike-windows.yml"]
+
+jobs:
+  windows-check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: spikes/theia-shell
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24 # matches the engine's node:sqlite / native-TS floor
+      - run: npm install
+      - run: npx theia build --mode development
+      - name: Run engine + origin-allowlist + Electron smoke checks
+        run: node ci-verify.js
+      - name: Upload spike logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: theia-spike-windows-logs
+          path: spikes/theia-shell/*.log
+          if-no-files-found: ignore
