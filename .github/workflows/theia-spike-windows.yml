@@ -25,8 +25,13 @@ jobs:
           node-version: 24 # matches the engine's node:sqlite / native-TS floor
       - name: Install (skip native postinstall builds)
         run: npm install --ignore-scripts
-      - name: Restore Electron binary (only native install this spike needs)
+      - name: Restore Electron binary
         run: node node_modules/electron/install.js
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+      - name: Compile @theia/ffmpeg (checksum addon, no prebuild available)
+        run: npm rebuild @theia/ffmpeg
+        env:
+          GYP_MSVS_VERSION: "2022"
       - run: npx theia build --mode development
       - name: Run engine + origin-allowlist + Electron smoke checks
         run: node ci-verify.js
