@@ -212,13 +212,6 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
           />
         ) : active ? (
           <>
-            <p
-              className="project-path"
-              title="Click to copy"
-              onClick={() => void navigator.clipboard.writeText(active.path)}
-            >
-              {active.path}
-            </p>
             <CloudConnect
               key={active.id}
               projectId={active.id}

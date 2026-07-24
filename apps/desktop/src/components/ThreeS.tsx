@@ -158,6 +158,16 @@ export default function ThreeS({
         </nav>
       </header>
 
+      {(tab === "editor" || tab === "terminal") && (
+        <p
+          className="project-path"
+          title="Click to copy"
+          onClick={() => void navigator.clipboard.writeText(project.path)}
+        >
+          {project.path}
+        </p>
+      )}
+
       {/* keep terminal + editor mounted so shell sessions and editor state
           survive tab switches */}
       <div style={{ display: tab === "terminal" ? "block" : "none" }}>
