@@ -108,9 +108,11 @@ function wsOriginTest(origin, projectId, token) {
         check('allowlisted origin opens the terminal WS', allowed.opened === true);
 
         const evil = await wsOriginTest('http://evil.example.com', projectId, token);
+        console.log('evil origin result:', JSON.stringify(evil));
         check('evil origin is rejected (1008)', evil.opened === false && evil.code === 1008);
 
         const missing = await wsOriginTest(undefined, projectId, token);
+        console.log('missing origin result:', JSON.stringify(missing));
         check('missing origin is rejected (1008)', missing.opened === false && missing.code === 1008);
     } finally {
         killEngine(engine);
