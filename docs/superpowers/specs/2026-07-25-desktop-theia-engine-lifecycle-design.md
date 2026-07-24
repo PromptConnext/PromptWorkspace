@@ -27,7 +27,7 @@ M0 (`spikes/theia-shell/`, merged to `main`) already proved this works end to en
 
 Promote `spikes/theia-shell/` into `apps/desktop-theia/`, added to `pnpm-workspace.yaml` as a real workspace member (currently the spike's `package.json` deliberately excludes it — "not part of the pnpm workspace" was an M0 isolation choice, no longer appropriate once this is real product work). Rename the package from `promptconnext-theia-spike` to a real name (`@promptconnext/desktop-theia`, matching the `@promptconnext/engine` naming convention already used by `apps/engine`).
 
-Directory carries over largely as-is: `theia` config block in `package.json`, `webpack.config.js`, the `@theia/*` dependency set. Files specific to spike CI/orchestration (`ci-verify.js`, `start-spike.js`, `docs/m0-report.md`, `docs/m0-tasks.md`, `docs/open-vsx-audit.md`, the native-module stubs under `stubs/`) do not carry over — those were CI-scaffolding for the go/no-go gate, not app code. (The stubs may need to return in sub-project 4 if the same Windows CI toolchain bug resurfaces — noted there, not solved here.)
+Directory carries over largely as-is: `theia` config block in `package.json`, `webpack.config.js`, the `@theia/*` dependency set. Files specific to spike CI/orchestration (`ci-verify.js`, `start-spike.js`, `docs/m0-report.md`, `docs/m0-tasks.md`, `docs/open-vsx-audit.md`, the native-module stubs under `stubs/`) do not carry over — those were CI-scaffolding for the go/no-go gate, not app code. (The stubs may need to return in sub-project 4 if the same Windows CI toolchain bug resurfaces — noted there, not solved here.) `src/inject-preload.js` also does not carry over — it's the superseded `NODE_OPTIONS=--require` preload-injection mechanism the spike itself replaced with `electron-entry.js` (see M0 session history); `electron-entry.js`'s approach is what this sub-project builds on.
 
 ### 2. `src/engine-lifecycle.js` — real directory resolution
 
@@ -54,10 +54,17 @@ The packaged branch has no bundled `engine/` directory yet in this sub-project �
 
 ### 3. Kill-on-exit wiring
 
-In the app's Electron main entry point (renamed/adapted from `electron-entry.js`), add:
+**Architectural correction from the M0 spike:** the spike is actually *two* processes — an outer Node launcher (`start-spike.js`) that mints the token, spawns the engine itself, waits for health, and only then spawns Electron as a *child process* with the token passed via env (`PROMPTCONNEXT_TOKEN`). `electron-entry.js` itself never spawns the engine — it only wires the preload and requires Theia's own `electron-main.js`. The spike's own comment says as much: "mirrors what `lib.rs` does in one process instead of two languages... that's M2." `start-spike.js` does not carry over (it's CI/spike launcher scaffolding); this sub-project collapses the two processes into one, matching `lib.rs`'s single-binary shape.
+
+In the app's Electron main entry point (renamed/adapted from `electron-entry.js`), the main process itself now mints the token, spawns the engine, and — since the preload runs in the *same* process space (not a spawned subprocess) — can just set `process.env.PROMPTCONNEXT_TOKEN` directly before the preload loads, no subprocess env-passing needed:
 
 ```js
+const { app } = require('electron');
+const { mintToken } = require('./token');
 const { spawnEngine, killEngine } = require('./engine-lifecycle');
+
+const token = mintToken();
+process.env.PROMPTCONNEXT_TOKEN = token; // same-process: preload.js reads this directly
 let engineChild = null;
 
 app.whenReady().then(() => {
@@ -70,7 +77,7 @@ app.on('before-quit', () => {
 });
 ```
 
-Matches `lib.rs`'s `RunEvent::Exit` handler: no engine process survives a real app quit.
+`preload.js`'s existing `process.env.PROMPTCONNEXT_TOKEN` read stays unchanged — it already expects exactly this. Matches `lib.rs`'s `RunEvent::Exit` handler: no engine process survives a real app quit.
 
 ### 4. Preload API fix
 
