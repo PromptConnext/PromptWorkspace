@@ -123,34 +123,38 @@ export default function ThreeS({
       <header className="threes-header">
         <h2>{project.name}</h2>
         <nav>
-          <button
-            type="button"
-            className={tab === "threes" ? "active" : ""}
-            onClick={() => setTab("threes")}
-          >
-            3S Workflow
-          </button>
-          <button
-            type="button"
-            className={tab === "graph" ? "active" : ""}
-            onClick={() => setTab("graph")}
-          >
-            Task Graph
-          </button>
-          <button
-            type="button"
-            className={tab === "editor" ? "active" : ""}
-            onClick={() => setTab("editor")}
-          >
-            Editor
-          </button>
-          <button
-            type="button"
-            className={tab === "terminal" ? "active" : ""}
-            onClick={() => setTab("terminal")}
-          >
-            Terminal
-          </button>
+          <div className="nav-group">
+            <button
+              type="button"
+              className={tab === "threes" ? "active" : ""}
+              onClick={() => setTab("threes")}
+            >
+              Planner
+            </button>
+            <button
+              type="button"
+              className={tab === "graph" ? "active" : ""}
+              onClick={() => setTab("graph")}
+            >
+              Task Graph
+            </button>
+          </div>
+          <div className="nav-group nav-group-dev">
+            <button
+              type="button"
+              className={tab === "editor" ? "active" : ""}
+              onClick={() => setTab("editor")}
+            >
+              Editor
+            </button>
+            <button
+              type="button"
+              className={tab === "terminal" ? "active" : ""}
+              onClick={() => setTab("terminal")}
+            >
+              Terminal
+            </button>
+          </div>
         </nav>
       </header>
 

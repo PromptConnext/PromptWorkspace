@@ -524,7 +524,17 @@ button.link {
 
 .threes-header nav {
   display: flex;
+  gap: 16px;
+}
+
+.nav-group {
+  display: flex;
   gap: 8px;
+}
+
+.nav-group-dev {
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
 }
 
 .stepper {
