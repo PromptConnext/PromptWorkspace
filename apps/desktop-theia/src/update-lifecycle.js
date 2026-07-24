@@ -12,20 +12,23 @@
 // own YAML format instead of minisign. No shared manifest with apps/desktop:
 // each shell ships and updates independently while both exist (through M4).
 //
-// KNOWN GAP, accepted per the sub-project 4 unsigned-parity decision (this
-// app ships with mac.identity: null, matching apps/desktop's own current
-// unsigned posture — see .github/workflows/desktop-theia-build.yml): unlike
-// Tauri's updater, which verifies a minisign signature (tauri.conf.json's
-// updater.pubkey) before installing, electron-updater here has no signature
-// to check — only the sha512 checksum electron-builder embeds in its own
-// latest-mac.yml/latest.yml, served by the same origin as the payload. That
-// is a corruption check, not an authenticity one; anyone who can serve or
-// MITM the R2 origin below could hand this app an arbitrary executable.
-// Revisit if/when this app ships signed builds. Separately, on macOS
-// specifically, Squirrel.Mac (which MacUpdater delegates to) validates the
-// downloaded bundle's code signature against the running app's before
-// install — with no identity to match, quitAndInstall() is expected to
-// error on macOS today. Windows NSIS installs are unaffected by that.
+// Signing status (see .github/workflows/desktop-theia-build.yml):
+// - Windows is code-signed when WINDOWS_CSC_LINK/WINDOWS_CSC_KEY_PASSWORD
+//   CI secrets are configured. electron-updater's NsisUpdater defaults
+//   verifyUpdateCodeSignature to true, which checks the downloaded
+//   installer's Authenticode publisher matches the running app's — a real
+//   authenticity check once those secrets exist, closer to Tauri's minisign
+//   verification than the raw sha512-checksum-only story below.
+// - macOS has NO Apple Developer ID / notarization yet (needs a paid Apple
+//   Developer Program membership the team doesn't have), so mac.identity:
+//   null still ships unsigned. Squirrel.Mac (which MacUpdater delegates to)
+//   validates the downloaded bundle's code signature against the running
+//   app's before install — with no identity to match, quitAndInstall() is
+//   expected to error on macOS until notarization lands. Its only integrity
+//   check meanwhile is the sha512 checksum electron-builder embeds in
+//   latest-mac.yml, served by the same origin as the payload — a corruption
+//   check, not an authenticity one; anyone who can serve or MITM that R2
+//   origin could hand this app an arbitrary executable on macOS specifically.
 //
 // Unpackaged dev runs have no app-update.yml and no installed-app identity
 // for electron-updater to reason about, so every export here is a no-op

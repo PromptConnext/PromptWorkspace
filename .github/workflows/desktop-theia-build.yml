@@ -2,11 +2,16 @@ name: Desktop-Theia build
 
 # ADR 0016 M2 sub-project 4: matches desktop-build.yml's matrix/upload shape
 # for apps/desktop-theia, using electron-builder instead of tauri-action.
-# Unsigned/unnotarized by design — apps/desktop's own build ships the same
-# way today (no Apple Developer ID or Windows code-signing cert configured),
-# so this matches current parity rather than adding new signing scope. Each
-# shell publishes to its own R2 prefix (installation-theia/) and updates
+# Each shell publishes to its own R2 prefix (installation-theia/) and updates
 # independently of apps/desktop's installation/ manifest.
+#
+# Signing: Windows is code-signed (WINDOWS_CSC_LINK/WINDOWS_CSC_KEY_PASSWORD
+# secrets — see below); macOS stays unsigned/unnotarized until an Apple
+# Developer Program membership exists (apps/desktop's own Tauri build has
+# neither today either, so this is at least no worse than current parity on
+# that platform). Once signed, Squirrel.Mac would refuse an update built
+# from an unsigned .app anyway, so macOS auto-update should be treated as
+# non-functional until notarization is added — see update-lifecycle.js.
 
 on:
   workflow_dispatch:
@@ -50,10 +55,20 @@ jobs:
           echo "Set package.json version to $version"
         env:
           REF_NAME: ${{ github.ref_name }}
-      - name: Build and package (unsigned)
+      - name: Build and package
         run: pnpm run package # stage:engine + theia build (production) + electron-builder
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false" # never auto-sign with a runner-local ad-hoc identity
+          # electron-builder auto-signs Windows when WIN_CSC_LINK is present
+          # (base64-encoded .pfx, or a file path/URL) alongside
+          # WIN_CSC_KEY_PASSWORD — no config-file change needed. Empty
+          # secrets on a PR/dispatch run without them configured just no-op
+          # (electron-builder skips signing when WIN_CSC_LINK is unset).
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          # macOS: mac.identity:null in package.json already forces unsigned
+          # regardless of this, but keep it explicit so a runner-local ad-hoc
+          # identity is never picked up by accident.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Upload artifacts to Cloudflare R2
         shell: bash # Git Bash on Windows runners; native on macOS
         run: |
