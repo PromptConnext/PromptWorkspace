@@ -9,7 +9,7 @@
 - [x] Engine allowlist extended via `PROMPTCONNEXT_ALLOWED_ORIGINS` env (no engine code change)
 - [x] Open a project folder; confirm file routes (`/files`, `/file`, `/status`) work against the spawned engine — verified with a real project row + bearer token
 - [x] Confirm terminal WS (`/engine/projects/:id/terminal`) works end-to-end, including the ADR 0008 origin-allowlist test (allowed / evil / missing origin)
-- [ ] Repeat the above on Windows x64 — **not run, no Windows machine available in this environment.** Flagged as the one open item before fully closing M0 (see `docs/m0-report.md`).
+- [x] Repeat the above on Windows x64 — verified via GitHub Actions CI (`windows-2022`), all checks pass (see `docs/m0-report.md`).
 - [x] Open VSX extension audit (`docs/open-vsx-audit.md`)
 - [x] Deep-link + keychain re-home prototype writeup (`src/deep-link-keychain-prototype.md`)
 - [x] Test: non-allowlisted origin rejected (WS closes 1008) — reproduced ADR 0008's test on the new shell
