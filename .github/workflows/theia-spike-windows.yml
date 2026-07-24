@@ -32,6 +32,8 @@ jobs:
         run: npm rebuild @theia/ffmpeg
         env:
           GYP_MSVS_VERSION: "2022"
+      - name: Fetch ripgrep binary (postinstall download, no compile)
+        run: node node_modules/@vscode/ripgrep/lib/postinstall.js
       - run: npx theia build --mode development
       - name: Run engine + origin-allowlist + Electron smoke checks
         run: node ci-verify.js
