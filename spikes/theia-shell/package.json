@@ -44,7 +44,10 @@
     "terser-webpack-plugin": "^5.3.0"
   },
   "overrides": {
-    "@vscode/ripgrep": "1.15.9"
+    "@vscode/ripgrep": "1.15.9",
+    "drivelist": "file:./stubs/drivelist",
+    "keytar": "file:./stubs/keytar",
+    "native-keymap": "file:./stubs/native-keymap"
   },
   "scripts": {
     "prepare": "theia build --mode development",
