@@ -131,7 +131,13 @@ importers:
       '@theia/electron':
         specifier: 1.66.0
         version: 1.66.0(electron@38.4.0)
+      '@theia/file-search':
+        specifier: 1.66.0
+        version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
       '@theia/filesystem':
+        specifier: 1.66.0
+        version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
+      '@theia/markers':
         specifier: 1.66.0
         version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
       '@theia/monaco':
@@ -143,6 +149,9 @@ importers:
       '@theia/navigator':
         specifier: 1.66.0
         version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
+      '@theia/outline-view':
+        specifier: 1.66.0
+        version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))
       '@theia/preferences':
         specifier: 1.66.0
         version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
@@ -152,6 +161,12 @@ importers:
       '@theia/terminal':
         specifier: 1.66.0
         version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
+      '@theia/userstorage':
+        specifier: 1.66.0
+        version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
+      '@theia/variable-resolver':
+        specifier: 1.66.0
+        version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))
       '@theia/workspace':
         specifier: 1.66.0
         version: 1.66.0(@theia/electron@1.66.0(electron@38.4.0))(typescript@5.9.3)
