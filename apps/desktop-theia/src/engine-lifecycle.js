@@ -1,17 +1,30 @@
-// Engine sidecar lifecycle for the Theia spike (ADR 0016 M0).
-// Deliberately mirrors apps/desktop/src-tauri/src/lib.rs 1:1: same env vars,
-// same "prefer bundled node, else PATH" resolution, same parent-pid watch
+// Engine sidecar lifecycle (ADR 0016 M2). Deliberately mirrors
+// apps/desktop/src-tauri/src/lib.rs 1:1: same env vars, same
+// "prefer bundled node, else PATH" resolution, same parent-pid watch
 // contract on the engine side. The engine itself (apps/engine) is untouched.
 const path = require('path');
 const { spawn } = require('child_process');
+const { app } = require('electron');
 
-const ENGINE_DIR =
-    process.env.PROMPTCONNEXT_ENGINE_DIR ||
-    path.resolve(__dirname, '../../../apps/engine');
+// Engine resolution (ADR 0001, mirrors apps/desktop/src-tauri/src/lib.rs::engine_dir):
+// explicit override, else the packaged app's bundled resource dir, else the
+// repo checkout this file is running from (dev). The packaged branch has no
+// bundled engine/ yet — that's ADR 0016 M2 sub-project 4 (CI + packaging) —
+// but the resolution logic is correct now so that sub-project doesn't need
+// to touch this function again.
+function engineDir() {
+    if (process.env.PROMPTCONNEXT_ENGINE_DIR) {
+        return process.env.PROMPTCONNEXT_ENGINE_DIR;
+    }
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, 'engine');
+    }
+    return path.resolve(__dirname, '../../../apps/engine');
+}
 
 function spawnEngine(token, port) {
     const child = spawn('node', ['src/index.ts'], {
-        cwd: ENGINE_DIR,
+        cwd: engineDir(),
         env: {
             ...process.env,
             PROMPTCONNEXT_PARENT_PID: String(process.pid),
@@ -39,4 +52,4 @@ function killEngine(child) {
     }
 }
 
-module.exports = { spawnEngine, killEngine, ENGINE_DIR };
+module.exports = { spawnEngine, killEngine, engineDir };
