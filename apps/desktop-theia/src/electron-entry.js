@@ -15,7 +15,14 @@ const { spawnEngine, killEngine } = require('./engine-lifecycle');
 
 const PORT = 47199; // dedicated dev port, avoids clashing with `pnpm engine` on 47131
 const token = mintToken();
-console.log('[promptconnext-desktop-theia] minted token', token);
+// Unlike lib.rs (which never logs the token, only the engine pid/dir), this
+// prints the full value for dev convenience — gated to unpackaged runs so a
+// packaged build's stdout (Console.app, a CI log) never captures the
+// credential that gates the terminal-WS-to-shell path.
+console.log(
+    '[promptconnext-desktop-theia] minted token',
+    app.isPackaged ? `(${token.length} chars)` : token,
+);
 
 // Same-process: preload.js reads process.env.PROMPTCONNEXT_TOKEN directly,
 // no subprocess env-passing needed (unlike the retired start-spike.js).
@@ -33,7 +40,12 @@ app.once('ready', () => {
     console.log('[promptconnext-desktop-theia] preload injected:', path.join(__dirname, 'preload.js'));
 });
 
-app.on('before-quit', () => {
+// will-quit, not before-quit: Theia's own window-close handler negotiates
+// unsaved-editor confirmation and can abort the quit after before-quit has
+// already fired, which would kill the engine with no path to restart it.
+// will-quit only fires once the quit is actually going through — the closest
+// analogue to lib.rs's RunEvent::Exit.
+app.on('will-quit', () => {
     killEngine(engineChild);
 });
 
