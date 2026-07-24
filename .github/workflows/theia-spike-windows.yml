@@ -23,9 +23,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24 # matches the engine's node:sqlite / native-TS floor
-      - run: npm install
-        env:
-          npm_config_build_from_source: "false"
+      - name: Install (skip native postinstall builds)
+        run: npm install --ignore-scripts
+      - name: Restore Electron binary (only native install this spike needs)
+        run: node node_modules/electron/install.js
       - run: npx theia build --mode development
       - name: Run engine + origin-allowlist + Electron smoke checks
         run: node ci-verify.js
