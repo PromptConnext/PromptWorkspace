@@ -4,3 +4,5 @@ src-gen/
 gen-webpack.config.js
 gen-webpack.node.config.js
 *.log
+.engine-pkg/
+dist/

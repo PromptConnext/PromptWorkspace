@@ -7,6 +7,7 @@
   "build": {
     "appId": "dev.ideva.promptconnext.theia",
     "productName": "PromptConnext (Theia)",
+    "npmRebuild": false,
     "directories": {
       "output": "dist"
     },
@@ -16,9 +17,16 @@
       "package.json",
       "!lib/backend/native-webpack-plugin/**/*.d.ts"
     ],
+    "extraResources": [
+      {
+        "from": ".engine-pkg",
+        "to": "engine"
+      }
+    ],
     "mac": {
       "target": ["zip"],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null
     },
     "win": {
       "target": ["nsis"]
@@ -97,6 +105,7 @@
     "prepare": "theia build --mode development",
     "start": "electron .",
     "postinstall": "theia check:theia-version",
-    "package": "theia build && electron-builder --publish never"
+    "stage:engine": "node -e \"require('fs').rmSync('.engine-pkg',{recursive:true,force:true})\" && pnpm --filter @promptconnext/engine deploy --prod --config.node-linker=hoisted .engine-pkg && node scripts/bundle-node.mjs",
+    "package": "pnpm run stage:engine && theia build && electron-builder --publish never"
   }
 }

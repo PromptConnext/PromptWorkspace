@@ -1,33 +1,40 @@
 // Engine sidecar lifecycle (ADR 0016 M2). Mirrors apps/desktop/src-tauri/
-// src/lib.rs's env vars and parent-pid watch contract on the engine side.
-// Does NOT yet mirror lib.rs's "prefer bundled node, else PATH" node
-// resolution — spawnEngine() below does a bare PATH lookup, which is fine
-// for dev but will need the bundled-node preference before packaging
-// (ADR 0016 M2 sub-project 4). The engine itself (apps/engine) is untouched.
+// src/lib.rs's env vars, node-binary preference, and parent-pid watch
+// contract on the engine side. The engine itself (apps/engine) is untouched.
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { app } = require('electron');
 
 // Engine resolution (ADR 0001, mirrors apps/desktop/src-tauri/src/lib.rs::engine_dir):
-// explicit override, else the packaged app's bundled resource dir, else the
-// repo checkout this file is running from (dev). Unlike lib.rs, the packaged
-// branch here doesn't check the bundled dir actually exists before returning
-// it — there's no bundled engine/ yet to check against — so sub-project 4
-// (CI + packaging) will need to add that guard when it starts populating
-// resourcesPath/engine.
+// explicit override, else the packaged app's bundled resource dir — only if
+// scripts/bundle-node.mjs (sub-project 4) actually staged one there, else
+// falling through to dev — else the repo checkout this file is running from.
 function engineDir() {
     if (process.env.PROMPTCONNEXT_ENGINE_DIR) {
         return process.env.PROMPTCONNEXT_ENGINE_DIR;
     }
     if (app.isPackaged) {
-        return path.join(process.resourcesPath, 'engine');
+        const bundled = path.join(process.resourcesPath, 'engine');
+        if (fs.existsSync(path.join(bundled, 'src', 'index.ts'))) {
+            return bundled;
+        }
     }
     return path.resolve(__dirname, '../../../apps/engine');
 }
 
+// Node binary resolution (mirrors lib.rs's node/node.exe preference): the
+// staged bundle's own Node first (guarantees the ABI matches the node-pty
+// prebuilt it was staged with), else whatever `node` resolves to on PATH.
+function nodeBinary(dir) {
+    const bundled = path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node');
+    return fs.existsSync(bundled) ? bundled : 'node';
+}
+
 function spawnEngine(token, port) {
-    const child = spawn('node', ['src/index.ts'], {
-        cwd: engineDir(),
+    const dir = engineDir();
+    const child = spawn(nodeBinary(dir), ['src/index.ts'], {
+        cwd: dir,
         env: {
             ...process.env,
             PROMPTCONNEXT_PARENT_PID: String(process.pid),
