@@ -1,0 +1,69 @@
+name: Desktop-Theia build
+
+# ADR 0016 M2 sub-project 4: matches desktop-build.yml's matrix/upload shape
+# for apps/desktop-theia, using electron-builder instead of tauri-action.
+# Unsigned/unnotarized by design — apps/desktop's own build ships the same
+# way today (no Apple Developer ID or Windows code-signing cert configured),
+# so this matches current parity rather than adding new signing scope. Each
+# shell publishes to its own R2 prefix (installation-theia/) and updates
+# independently of apps/desktop's installation/ manifest.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["theia-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest] # arm64 macOS + x64 Windows
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: apps/desktop-theia
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24 # becomes the bundled engine runtime (scripts/bundle-node.mjs)
+          cache: pnpm
+      - name: Install workspace deps
+        working-directory: .
+        run: pnpm install --frozen-lockfile
+      - name: Stage the engine (hoisted deploy + bundle this Node binary)
+        run: pnpm run stage:engine
+      - name: Build the Theia frontend/backend bundle
+        run: npx theia build --mode development
+      - name: Package (unsigned)
+        run: npx electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false" # never auto-sign with a runner-local ad-hoc identity
+      - name: Upload artifacts to Cloudflare R2
+        shell: bash # Git Bash on Windows runners; native on macOS
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          for f in *.zip *.blockmap *.exe *.yml; do
+            echo "Uploading $f"
+            aws s3 cp "$f" "s3://$R2_BUCKET/installation-theia/$f" \
+              --endpoint-url "$R2_ENDPOINT"
+          done
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-theia-${{ matrix.platform }}-dist
+          path: |
+            apps/desktop-theia/dist/*.yml
+            apps/desktop-theia/dist/builder-debug.yml
+          if-no-files-found: ignore
