@@ -7,8 +7,9 @@
 // macOS: 'open-url' fires directly on the OS event, before or after
 // app.ready depending on launch timing. Windows/Linux have no such event —
 // a second launch instead re-invokes the app, which requestSingleInstanceLock
-// intercepts and relays via 'second-instance' argv, the same relay lib.rs
-// wires through tauri-plugin-single-instance's second-instance callback.
+// intercepts and relays via 'second-instance''s additionalData (the argv we
+// pass to requestSingleInstanceLock below), the same relay lib.rs wires
+// through tauri-plugin-single-instance's second-instance callback.
 //
 // Same caveat as lib.rs's comment on macOS registration: Launch Services
 // only reads CFBundleURLTypes from a bundle's Info.plist, so an unpackaged
@@ -50,15 +51,26 @@ function onDeepLink(callback) {
 // setup — the second instance quits immediately if another is already
 // running, so nothing else in electron-entry.js should execute after a
 // `false` return here.
+//
+// Theia registers its own single-instance lock inside the electron-main.js
+// this file requires further down (src-gen/backend/electron-main.js calls
+// app.requestSingleInstanceLock(process.argv), and its own 'second-instance'
+// handler reads process.argv back out of the event's fourth ("additionalData")
+// parameter — NOT the raw argv this callback receives). Because Electron only
+// honors the *first* requestSingleInstanceLock() call per process, we have to
+// make that first call ourselves (to gate spawning the engine on it) — so we
+// pass process.argv through exactly as Theia would have, keeping its own
+// second-instance handler working once it registers its listener.
 function acquireSingleInstanceLock() {
-    const gotLock = app.requestSingleInstanceLock();
+    const gotLock = app.requestSingleInstanceLock(process.argv);
     if (!gotLock) {
         app.quit();
         return false;
     }
 
-    app.on('second-instance', (_event, argv) => {
-        const url = argv.find((a) => a.startsWith(`${PROTOCOL}://`));
+    app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
+        const relaunchArgv = Array.isArray(additionalData) ? additionalData : [];
+        const url = relaunchArgv.find((a) => a.startsWith(`${PROTOCOL}://`));
         if (url) {
             forward(url);
         }
@@ -75,8 +87,13 @@ function acquireSingleInstanceLock() {
 }
 
 function registerDeepLink() {
+    // Append '--open-url' the same way Theia's own Windows registration does
+    // (electron-main-application.js) so a promptconnext:// launch arg is
+    // recognized by that convention rather than mis-parsed as a workspace
+    // path to open, on the off chance Theia's second-instance handler sees
+    // it before this module's own listener above does.
     if (!app.isDefaultProtocolClient(PROTOCOL)) {
-        app.setAsDefaultProtocolClient(PROTOCOL);
+        app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, ['--open-url']);
     }
 
     app.on('open-url', (event, url) => {

@@ -19,6 +19,12 @@ function engineDir() {
         if (fs.existsSync(path.join(bundled, 'src', 'index.ts'))) {
             return bundled;
         }
+        // A packaged app has no repo checkout to fall through to — the dev
+        // path below cannot exist here. Log loudly so a broken bundle isn't
+        // silently indistinguishable from a missing system Node in the logs.
+        console.error(
+            `[promptconnext-desktop-theia] bundled engine missing at ${bundled} — packaging is broken`,
+        );
     }
     return path.resolve(__dirname, '../../../apps/engine');
 }

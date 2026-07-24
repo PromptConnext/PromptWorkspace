@@ -1,6 +1,6 @@
 // Auto-update (ADR 0016 M2 sub-project 3), mirrors apps/desktop's
 // @tauri-apps/plugin-updater + @tauri-apps/plugin-process pairing
-// (apps/desktop/src/update.ts, components/UpdatePrompt.tsx): check a signed
+// (apps/desktop/src/update.ts, components/UpdatePrompt.tsx): check a
 // manifest, let the user pick "update now" vs "skip this version" in the
 // renderer, download + install, relaunch.
 //
@@ -12,16 +12,32 @@
 // own YAML format instead of minisign. No shared manifest with apps/desktop:
 // each shell ships and updates independently while both exist (through M4).
 //
+// KNOWN GAP, accepted per the sub-project 4 unsigned-parity decision (this
+// app ships with mac.identity: null, matching apps/desktop's own current
+// unsigned posture — see .github/workflows/desktop-theia-build.yml): unlike
+// Tauri's updater, which verifies a minisign signature (tauri.conf.json's
+// updater.pubkey) before installing, electron-updater here has no signature
+// to check — only the sha512 checksum electron-builder embeds in its own
+// latest-mac.yml/latest.yml, served by the same origin as the payload. That
+// is a corruption check, not an authenticity one; anyone who can serve or
+// MITM the R2 origin below could hand this app an arbitrary executable.
+// Revisit if/when this app ships signed builds. Separately, on macOS
+// specifically, Squirrel.Mac (which MacUpdater delegates to) validates the
+// downloaded bundle's code signature against the running app's before
+// install — with no identity to match, quitAndInstall() is expected to
+// error on macOS today. Windows NSIS installs are unaffected by that.
+//
 // Unpackaged dev runs have no app-update.yml and no installed-app identity
 // for electron-updater to reason about, so every export here is a no-op
-// under !app.isPackaged — matching update.ts's isTauri() guard.
+// under !app.isPackaged — matching update.ts's isTauri() guard. Configuring
+// the autoUpdater singleton (autoDownload/autoInstallOnAppQuit) is deferred
+// into the isPackaged branch below rather than done at module load, since
+// touching those properties constructs a platform updater (MacUpdater/
+// NsisUpdater) even in dev.
 const { app, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
-autoUpdater.autoDownload = false; // renderer decides, same as Tauri's manual downloadAndInstall
-autoUpdater.autoInstallOnAppQuit = false; // we call quitAndInstall() explicitly instead
-
-const SKIP_KEY_CHANNEL = 'promptconnext-update-progress';
+const PROGRESS_CHANNEL = 'promptconnext-update-progress';
 
 function registerUpdateLifecycle(getWindow) {
     if (!app.isPackaged) {
@@ -37,9 +53,12 @@ function registerUpdateLifecycle(getWindow) {
         return;
     }
 
+    autoUpdater.autoDownload = false; // renderer decides, same as Tauri's manual downloadAndInstall
+    autoUpdater.autoInstallOnAppQuit = false; // we call quitAndInstall() explicitly instead
+
     autoUpdater.on('download-progress', (progress) => {
         const win = getWindow();
-        if (win) win.webContents.send(SKIP_KEY_CHANNEL, progress);
+        if (win && !win.isDestroyed()) win.webContents.send(PROGRESS_CHANNEL, progress);
     });
 
     ipcMain.handle('promptconnext-update-check', async () => {

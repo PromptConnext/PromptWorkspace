@@ -60,8 +60,19 @@ if (gotLock) {
     // __PROMPTCONNEXT_ON_AUTH_CALLBACK__. No consumer subscribes yet (the
     // Planner extension that redeems the code lands in M3); this only
     // proves the relay is live end to end.
+    //
+    // Theia can create more than one BrowserWindow (secondary/detached
+    // widget windows, or an "open folder in new window" main window) — only
+    // the first one is tracked as mainWindow, both for deep-link/update
+    // delivery and so a later window can't silently steal them from the
+    // primary workbench. Reset on close so a relaunch-into-empty-state can
+    // still pick a new primary window.
     app.on('browser-window-created', (_event, win) => {
+        if (mainWindow && !mainWindow.isDestroyed()) return;
         mainWindow = win;
+        win.on('closed', () => {
+            if (mainWindow === win) mainWindow = null;
+        });
         win.webContents.once('did-finish-load', () => {
             onDeepLink((url) => win.webContents.send('promptconnext-auth-callback', url));
         });

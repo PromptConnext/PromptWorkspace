@@ -23,6 +23,12 @@
         "to": "engine"
       }
     ],
+    "protocols": [
+      {
+        "name": "PromptConnext",
+        "schemes": ["promptconnext"]
+      }
+    ],
     "mac": {
       "target": ["zip"],
       "category": "public.app-category.developer-tools",
