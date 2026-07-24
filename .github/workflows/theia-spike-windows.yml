@@ -23,21 +23,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24 # matches the engine's node:sqlite / native-TS floor
-      - name: Install (skip native postinstall builds)
-        run: npm install --ignore-scripts
-      - name: Restore Electron binary
-        run: node node_modules/electron/install.js
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
-      - name: Compile @theia/ffmpeg (checksum addon, no prebuild available)
-        run: npm rebuild @theia/ffmpeg
+      - run: npm install
         env:
           GYP_MSVS_VERSION: "2022"
-      - name: Compile node-pty (terminal backend, no prebuild available)
-        run: npm rebuild node-pty
-        env:
-          GYP_MSVS_VERSION: "2022"
-      - name: Fetch ripgrep binary (postinstall download, no compile)
-        run: node node_modules/@vscode/ripgrep/lib/postinstall.js
       - run: npx theia build --mode development
       - name: Run engine + origin-allowlist + Electron smoke checks
         run: node ci-verify.js
