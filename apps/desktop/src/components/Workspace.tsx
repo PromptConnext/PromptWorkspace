@@ -31,6 +31,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     active: null,
   });
   const [refreshTick, setRefreshTick] = useState(0);
+  const [plannerSignal, setPlannerSignal] = useState(0);
   const [openError, setOpenError] = useState<string | null>(null);
   const [pendingCloudOpen, setPendingCloudOpen] = useState<
     { key: string; cloudId: string; name: string } | null
@@ -181,6 +182,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
         onCreateProject={create}
         reloadSignal={refreshTick}
         onGateRecheck={onGateRecheck}
+        onOpenPlanner={() => setPlannerSignal((t) => t + 1)}
         onWorkspaceContextChange={(ctx) => {
           setWorkspaceCtx(ctx);
           void refresh();
@@ -222,7 +224,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
               projectId={active.id}
               onChange={() => setRefreshTick((t) => t + 1)}
             />
-            <ThreeS key={active.id} project={active} />
+            <ThreeS key={active.id} project={active} focusSignal={plannerSignal} />
           </>
         ) : (
           <p className="muted">Select or create a project to start the 3S flow.</p>

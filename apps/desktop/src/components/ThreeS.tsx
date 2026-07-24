@@ -24,7 +24,13 @@ function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
 }
 
-export default function ThreeS({ project }: { project: Project }) {
+export default function ThreeS({
+  project,
+  focusSignal,
+}: {
+  project: Project;
+  focusSignal: number;
+}) {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -35,6 +41,13 @@ export default function ThreeS({ project }: { project: Project }) {
   const [hasAgent, setHasAgent] = useState(false);
   const [tab, setTab] = useState<"threes" | "graph" | "editor" | "terminal">("threes");
   const [copied, setCopied] = useState<string | null>(null);
+
+  // TopBar's "Planner" button bumps this counter (mirrors the reloadSignal
+  // pattern in Workspace.tsx) — every bump jumps back to the Planner tab,
+  // even if the user had wandered into Editor/Terminal.
+  useEffect(() => {
+    setTab("threes");
+  }, [focusSignal]);
 
   const refresh = useCallback(async () => {
     setGraph(await getGraph(project.id));

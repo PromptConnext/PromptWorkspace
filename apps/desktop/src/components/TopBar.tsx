@@ -43,6 +43,7 @@ export default function TopBar({
   reloadSignal,
   onWorkspaceContextChange,
   onGateRecheck,
+  onOpenPlanner,
 }: {
   tabs: ProjectTab[];
   activeTabKey: string | null;
@@ -52,6 +53,7 @@ export default function TopBar({
   reloadSignal: number;
   onWorkspaceContextChange: (ctx: WorkspaceContext) => void;
   onGateRecheck?: () => void;
+  onOpenPlanner: () => void;
 }) {
   const [connected, setConnected] = useState(false);
   const [workspaces, setWorkspaces] = useState<CloudWorkspace[]>([]);
@@ -381,6 +383,16 @@ export default function TopBar({
           </button>
         )}
       </nav>
+
+      <button
+        type="button"
+        className={"tb-planner" + (activeProject ? "" : " tb-planner-muted")}
+        disabled={!activeProject}
+        title={activeProject ? "Open Planner" : "Select a project first"}
+        onClick={onOpenPlanner}
+      >
+        ✦ Planner
+      </button>
 
       <div className="tb-account">
         {!config?.enabled ? null : !session?.connected ? (
