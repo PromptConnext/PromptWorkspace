@@ -13,6 +13,7 @@ const { app, session } = require('electron');
 const { mintToken } = require('./token');
 const { spawnEngine, killEngine } = require('./engine-lifecycle');
 const { acquireSingleInstanceLock, registerDeepLink, onDeepLink } = require('./deep-link');
+const { registerUpdateLifecycle } = require('./update-lifecycle');
 
 // Must happen before any other initialization: a second launch (including
 // one carrying a promptconnext:// URL on Windows/Linux) should quit
@@ -39,6 +40,7 @@ if (gotLock) {
     registerDeepLink();
 
     let engineChild = null;
+    let mainWindow = null;
 
     app.once('ready', () => {
         engineChild = spawnEngine(token, PORT);
@@ -48,6 +50,8 @@ if (gotLock) {
             filePath: path.join(__dirname, 'preload.js'),
         });
         console.log('[promptconnext-desktop-theia] preload injected:', path.join(__dirname, 'preload.js'));
+
+        registerUpdateLifecycle(() => mainWindow);
     });
 
     // Deep-link URLs (initial 'open-url' on macOS, or one relayed from a
@@ -57,6 +61,7 @@ if (gotLock) {
     // Planner extension that redeems the code lands in M3); this only
     // proves the relay is live end to end.
     app.on('browser-window-created', (_event, win) => {
+        mainWindow = win;
         win.webContents.once('did-finish-load', () => {
             onDeepLink((url) => win.webContents.send('promptconnext-auth-callback', url));
         });

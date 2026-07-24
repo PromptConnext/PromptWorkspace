@@ -18,3 +18,18 @@ contextBridge.exposeInMainWorld('__PROMPTCONNEXT_ON_AUTH_CALLBACK__', (callback)
     ipcRenderer.on('promptconnext-auth-callback', listener);
     return () => ipcRenderer.removeListener('promptconnext-auth-callback', listener);
 });
+
+// ADR 0016 M2 sub-project 3: mirrors apps/desktop/src/update.ts +
+// components/UpdatePrompt.tsx's shape (check -> {version, currentVersion} |
+// null, downloadUpdate with progress, install-and-relaunch) over IPC instead
+// of Tauri's plugin-updater/plugin-process. No consumer yet (M3 territory).
+contextBridge.exposeInMainWorld('__PROMPTCONNEXT_UPDATER__', {
+    check: () => ipcRenderer.invoke('promptconnext-update-check'),
+    downloadUpdate: () => ipcRenderer.invoke('promptconnext-update-download'),
+    quitAndInstall: () => ipcRenderer.invoke('promptconnext-update-install'),
+    onProgress: (callback) => {
+        const listener = (_event, progress) => callback(progress);
+        ipcRenderer.on('promptconnext-update-progress', listener);
+        return () => ipcRenderer.removeListener('promptconnext-update-progress', listener);
+    },
+});

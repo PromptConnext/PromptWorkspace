@@ -4,6 +4,35 @@
   "private": true,
   "description": "ADR 0016 M2: Eclipse Theia Electron desktop shell + PromptConnext engine sidecar, at plumbing parity with apps/desktop (Tauri). Ships alongside apps/desktop until the ADR 0016 M4 cutover; apps/desktop is untouched.",
   "main": "src/electron-entry.js",
+  "build": {
+    "appId": "dev.ideva.promptconnext.theia",
+    "productName": "PromptConnext (Theia)",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "lib/**/*",
+      "src/**/*",
+      "package.json",
+      "!lib/backend/native-webpack-plugin/**/*.d.ts"
+    ],
+    "mac": {
+      "target": ["zip"],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://pub-82ec923425e94db5b0d7eb742a51a54a.r2.dev/installation-theia",
+      "channel": "latest"
+    }
+  },
   "theia": {
     "target": "electron",
     "frontend": {
@@ -43,11 +72,13 @@
     "@theia/monaco": "1.66.0",
     "@theia/monaco-editor-core": "1.96.302",
     "@theia/electron": "1.66.0",
-    "@vscode/ripgrep": "1.15.9"
+    "@vscode/ripgrep": "1.15.9",
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "@theia/cli": "1.66.0",
     "electron": "38.4.0",
+    "electron-builder": "^25.1.8",
     "terser-webpack-plugin": "^5.3.0",
     "css-loader": "^6.2.0",
     "source-map-loader": "^2.0.1",
@@ -65,6 +96,7 @@
   "scripts": {
     "prepare": "theia build --mode development",
     "start": "electron .",
-    "postinstall": "theia check:theia-version"
+    "postinstall": "theia check:theia-version",
+    "package": "theia build && electron-builder --publish never"
   }
 }
