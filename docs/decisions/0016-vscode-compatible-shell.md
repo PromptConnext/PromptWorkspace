@@ -52,6 +52,8 @@ No re-platforming. Promote the 3S flow into a named **Planner** surface reachabl
 
 **M1 delivered 2026-07-24** — see `docs/superpowers/specs/2026-07-24-planner-window-design.md` and `docs/superpowers/plans/2026-07-24-planner-window.md`. Existing 3S loop and affordances (ConnectForm, Task Graph, CloudConnect) reused as-is, no chat UI added.
 
+**M1 delivered 2026-07-24** — see `docs/superpowers/specs/2026-07-24-planner-window-design.md` and `docs/superpowers/plans/2026-07-24-planner-window.md`. Existing 3S loop and affordances (ConnectForm, Task Graph, CloudConnect) reused as-is, no chat UI added.
+
 ### M2 — Theia app skeleton at plumbing parity with Tauri (3–5 weeks)
 Turn the M0 spike into a real, packaged Theia desktop app: engine lifecycle, token injection, keychain, deep-link, and auto-updater all re-homed per "What moves" above; CI matrix (macos-latest arm64 + windows-latest x64), code-signing, and notarization re-established for the Electron bundler. No Planner yet — the goal is a distributable shell whose plumbing matches today's Tauri shell, running a genuine VS Code–grade editor + terminal for developers, with Open VSX wired as the extension registry.
 
