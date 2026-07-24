@@ -23,10 +23,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24 # matches the engine's node:sqlite / native-TS floor
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
       - run: npm install
         env:
-          GYP_MSVS_VERSION: "2022"
+          npm_config_build_from_source: "false"
       - run: npx theia build --mode development
       - name: Run engine + origin-allowlist + Electron smoke checks
         run: node ci-verify.js
