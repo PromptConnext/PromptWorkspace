@@ -19,10 +19,11 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.generation import _DOCUMENT_CONTEXT_BUDGET, _assemble_document_context
 from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.service import FakeGenerationProvider
 from app.main import create_app
-from app.models.schemas import ModelConnection
+from app.models.schemas import Document, ModelConnection
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -203,3 +204,25 @@ def test_over_budget_workspace_is_429(client: TestClient):
 
     res = _generate(client, pid, "constitution", "hi")
     assert res.status_code == 429
+
+
+def test_assemble_document_context_notes_truncation_of_a_single_oversized_document():
+    # Regression: a single document longer than the budget must still surface
+    # a truncation note even though there's no *later* document in the loop
+    # to trigger the "budget already exhausted" branch.
+    oversized_text = "A" * (_DOCUMENT_CONTEXT_BUDGET + 5_000)
+    doc = Document(
+        workspace_id="ws",
+        project_id="p",
+        title="huge-prd.md",
+        mime="text/markdown",
+        storage_ref="ref",
+        created_by="alice",
+        extracted_text=oversized_text,
+    )
+
+    context = _assemble_document_context([doc])
+
+    assert "context budget reached" in context
+    injected_text = context.split("\n", 1)[1].rsplit("\n\n(", 1)[0]
+    assert len(injected_text) == _DOCUMENT_CONTEXT_BUDGET

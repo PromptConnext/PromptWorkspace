@@ -203,15 +203,20 @@ _DOCUMENT_CONTEXT_BUDGET = 40_000
 def _assemble_document_context(documents: list) -> str:
     parts = []
     budget = _DOCUMENT_CONTEXT_BUDGET
+    truncated = False
     for doc in documents:
         if not doc.extracted_text:
             continue
         if budget <= 0:
-            parts.append("(remaining documents omitted — context budget reached)")
+            truncated = True
             break
         text = doc.extracted_text[:budget]
+        if len(text) < len(doc.extracted_text):
+            truncated = True
         budget -= len(text)
         parts.append(f"[document:{doc.title}]\n{text}")
+    if truncated:
+        parts.append("(remaining document content omitted — context budget reached)")
     return "\n\n".join(parts)
 
 
