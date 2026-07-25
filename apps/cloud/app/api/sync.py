@@ -72,6 +72,27 @@ def get_project(
     return require_project(repo, project_id, user)
 
 
+@router.post("/projects/{project_id}/lifecycle/submit-for-review", response_model=Project)
+def submit_for_review(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Project:
+    """Business user signals planning is done (explicit — a Tech Lead
+    shouldn't be pulled in on a project still being iterated). No side
+    effect beyond the status flip; the Tech Lead's own actions drive
+    everything after this (docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md)."""
+    project = require_project(repo, project_id, user)
+    if project.lifecycle_status != "planning":
+        raise HTTPException(status_code=409, detail="not_in_planning")
+
+    graph = repo.get_graph(project_id)
+    if not (graph.requirements and graph.spec_documents and graph.tasks):
+        raise HTTPException(status_code=400, detail="planning_incomplete")
+
+    return repo.update_project_lifecycle_status(project_id, "pending_tech_review")
+
+
 @router.patch("/projects/{project_id}/tasks/{task_id}/assignment", response_model=Task)
 def assign_task(
     project_id: str,
