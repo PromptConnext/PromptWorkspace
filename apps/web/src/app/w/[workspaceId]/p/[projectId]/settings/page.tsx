@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { use } from "react";
-import { ModelSourcePanel } from "@/components/ModelSourcePanel";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
@@ -40,8 +39,6 @@ function ProjectSettingsView({
         <h1 className="mb-8 text-2xl font-semibold tracking-tight text-slate-900">
           Project settings
         </h1>
-
-        <ModelSourcePanel scope="project" id={projectId} isAdmin={isAdmin} />
       </main>
     </>
   );

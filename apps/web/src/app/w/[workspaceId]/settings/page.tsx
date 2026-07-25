@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { use } from "react";
-import { ModelSourcePanel } from "@/components/ModelSourcePanel";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
@@ -33,8 +32,6 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
         <h1 className="mb-8 text-2xl font-semibold tracking-tight text-slate-900">
           Workspace settings
         </h1>
-
-        <ModelSourcePanel scope="workspace" id={workspaceId} isAdmin={isAdmin} />
       </main>
     </>
   );

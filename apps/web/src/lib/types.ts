@@ -154,18 +154,4 @@ export interface InvitationCreateResponse {
   email_sent: boolean;
 }
 
-// Stage routing (M3, plan 0007) — see apps/cloud/app/api/routing.py.
 export type StageKind = "constitution" | "specify" | "plan" | "tasks";
-export type ModelSource = "byo" | "managed";
-export type RoutingOrigin = "project" | "workspace" | "default";
-
-export interface EffectiveStageRouting {
-  stage: StageKind;
-  model_source: ModelSource;
-  model: string | null;
-  origin: RoutingOrigin;
-}
-
-export interface RoutingTable {
-  routing: EffectiveStageRouting[];
-}
