@@ -68,4 +68,23 @@ describe("useStageGeneration", () => {
     expect(result.current.error?.retryable).toBe(true);
     expect(result.current.error?.error).toMatch(/managed tier busy/);
   });
+
+  it("parses a JSON error body from a pre-stream 429 and marks it retryable", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      body: null,
+      json: () => Promise.resolve({ detail: "managed_tier_rate_limited" }),
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useStageGeneration("p1"));
+
+    await act(async () => {
+      await result.current.generate("plan", "plan it");
+    });
+
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.error?.error).toMatch(/managed_tier_rate_limited/);
+    expect(result.current.error?.retryable).toBe(true);
+  });
 });

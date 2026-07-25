@@ -29,8 +29,13 @@ export function useStageGeneration(projectId: string) {
       });
 
       if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        const detail = (body as { detail?: string }).detail;
         setStatus("error");
-        setError({ error: `request failed (${res.status})` });
+        setError({
+          error: detail || `request failed (${res.status})`,
+          ...(res.status === 429 ? { retryable: true } : {}),
+        });
         return;
       }
 
