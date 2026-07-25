@@ -34,7 +34,7 @@ from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.generation.parsing import parse_task_lines
 from app.generation.prompts import StageKind, driver_prompt
-from app.generation.routing import PlanRequiresModelError, select_model
+from app.generation.routing import select_model
 from app.generation.service import GenerationError, HttpGenerationProvider, parse_stage_output
 from app.models.schemas import (
     AcceptanceCriterion,
@@ -69,10 +69,7 @@ async def generate(
     project = require_project(repo, project_id, user)
 
     managed_connection = getattr(request.app.state, "managed_connection", None)
-    try:
-        conn = select_model(repo, project.workspace_id, project_id, stage, managed_connection)
-    except PlanRequiresModelError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    conn = select_model(managed_connection)
     if conn is None:
         raise HTTPException(status_code=400, detail="model_connection_not_configured")
 
