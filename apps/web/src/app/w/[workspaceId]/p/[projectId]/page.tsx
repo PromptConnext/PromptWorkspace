@@ -6,17 +6,18 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
+import { Planner } from "@/components/project/Planner";
 import { TaskBoard } from "@/components/project/TaskBoard";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
 import { useCloudGet } from "@/lib/hooks";
 import type { ProjectGraph } from "@/lib/types";
 
-const TABS = ["Graph", "Tasks", "Progress", "Discussion"] as const;
+const TABS = ["Planner", "Graph", "Tasks", "Progress", "Discussion"] as const;
 type Tab = (typeof TABS)[number];
 
 function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
-  const [tab, setTab] = useState<Tab>("Graph");
+  const [tab, setTab] = useState<Tab>("Planner");
   const {
     data: graph,
     error,
@@ -62,6 +63,9 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
         {error && <p className="text-sm text-red-600">{error}</p>}
         {graph && (
           <>
+            {tab === "Planner" && (
+              <Planner project={graph.project} projectId={projectId} onChange={refetch} />
+            )}
             {tab === "Graph" && <GraphBrowser graph={graph} />}
             {tab === "Tasks" && (
               <TaskBoard graph={graph} workspaceId={workspaceId} projectId={projectId} onChange={refetch} />
