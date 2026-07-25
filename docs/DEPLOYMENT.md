@@ -87,6 +87,8 @@ Production values:
 
 Railway injects `PORT` automatically; the Dockerfile already honors it.
 
+The cloud Planner UI (the web app's stage-generation tab, `apps/cloud/app/api/generation.py`) has no BYO-model fallback: `select_model()` (`apps/cloud/app/generation/routing.py`) returns whatever `build_managed_connection()` (`apps/cloud/app/generation/managed.py`) produces from `MANAGED_MODEL_ENABLED` and `MANAGED_MODEL_API_KEY`, and returns nothing at all if either is unset. `apps/cloud/.env.example` ships `MANAGED_MODEL_ENABLED=false` by default, so a deployment that only follows the table above will have a Planner tab that fails closed on every request. Treat `MANAGED_MODEL_ENABLED=true` plus a valid `MANAGED_MODEL_API_KEY` as required, not optional, before telling users the Planner is available — set both explicitly in Railway's Variables alongside the settings above.
+
 ### 2.5 Scaling constraints — important
 
 Presence, rate-limit, metrics, the RAG embed queue, and the RAG daily token

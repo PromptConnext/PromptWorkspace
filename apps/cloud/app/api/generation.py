@@ -4,10 +4,13 @@ for business users with no desktop app to run the engine's own `runStage()`
 budget stack as the RAG assistant (app/api/assistant.py) — a parallel,
 self-contained generation path, not a relay to a running local engine.
 
-Model selection (`select_model`) prefers the workspace's BYO connection,
-falling back to the platform-operated managed Typhoon connection (M2) when
-the workspace has none configured. The stage routing table (which stages
-default to managed vs BYO, per-workspace/project overrides) is M3.
+Model selection (`select_model`, `app/generation/routing.py`) is
+unconditionally the platform-operated managed Typhoon connection (M2) —
+there is no BYO fallback and no per-stage routing table in the Planner as
+of the cloud Planner UI feature (docs/superpowers/specs/2026-07-25-cloud-
+planner-ui-design.md); business users never connect their own key here.
+Developers who want their own model plan through the desktop app instead
+(apps/engine's own `runStage()`), which this change leaves untouched.
 
 Persistence mirrors what the engine's own stage routes already do
 (apps/engine/src/routes/projects.ts): `specify` creates a Requirement,

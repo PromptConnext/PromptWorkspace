@@ -36,12 +36,10 @@ from app.models.schemas import (
     Requirement,
     Role,
     SpecDocument,
-    StageModelRouting,
     Task,
     TaskLink,
     Workspace,
     WorkspaceMember,
-    new_id,
     utcnow,
 )
 
@@ -338,34 +336,6 @@ class Repository(abc.ABC):
         completion_tokens: int,
     ) -> GenerationRun: ...
 
-    # -- Stage routing (M3) --------------------------------------------------- #
-    @abc.abstractmethod
-    def get_stage_routing_override(
-        self, workspace_id: str, project_id: str | None, stage: str
-    ) -> StageModelRouting | None:
-        """`project_id=None` looks up the workspace-wide default row."""
-
-    @abc.abstractmethod
-    def list_stage_routing_overrides(
-        self, workspace_id: str, project_id: str | None
-    ) -> list[StageModelRouting]:
-        """All override rows at exactly this level (`project_id=None` for
-        the workspace-wide set, a project id for that project's own)."""
-
-    @abc.abstractmethod
-    def upsert_stage_routing(
-        self,
-        workspace_id: str,
-        project_id: str | None,
-        stage: str,
-        model_source: str,
-        model: str | None,
-    ) -> StageModelRouting:
-        """Replace-wholesale for this (workspace, project, stage) triple —
-        no unique DB constraint to conflict on (see migrations/0015), so
-        each implementation deletes any existing row first."""
-
-
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
 
@@ -394,8 +364,6 @@ class InMemoryRepository(Repository):
         self._documents: dict[str, dict[str, Document]] = {}
         # generation_run_id -> GenerationRun (M1)
         self._generation_runs: dict[str, GenerationRun] = {}
-        # (workspace_id, project_id_or_None, stage) -> StageModelRouting (M3)
-        self._stage_routing: dict[tuple[str, str | None, str], StageModelRouting] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -936,45 +904,6 @@ class InMemoryRepository(Repository):
         run.prompt_tokens = prompt_tokens
         run.completion_tokens = completion_tokens
         return run
-
-    # -- Stage routing (M3) ---------------------------------------------------- #
-    def get_stage_routing_override(
-        self, workspace_id: str, project_id: str | None, stage: str
-    ) -> StageModelRouting | None:
-        row = self._stage_routing.get((workspace_id, project_id, stage))
-        return copy.deepcopy(row) if row else None
-
-    def list_stage_routing_overrides(
-        self, workspace_id: str, project_id: str | None
-    ) -> list[StageModelRouting]:
-        return [
-            copy.deepcopy(row)
-            for (ws, pid, _stage), row in self._stage_routing.items()
-            if ws == workspace_id and pid == project_id
-        ]
-
-    def upsert_stage_routing(
-        self,
-        workspace_id: str,
-        project_id: str | None,
-        stage: str,
-        model_source: str,
-        model: str | None,
-    ) -> StageModelRouting:
-        key = (workspace_id, project_id, stage)
-        existing = self._stage_routing.get(key)
-        row = StageModelRouting(
-            id=existing.id if existing else new_id(),
-            workspace_id=workspace_id,
-            project_id=project_id,
-            stage=stage,
-            model_source=model_source,
-            model=model,
-            created_at=existing.created_at if existing else utcnow(),
-            updated_at=utcnow(),
-        )
-        self._stage_routing[key] = row
-        return row
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

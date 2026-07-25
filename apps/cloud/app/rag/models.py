@@ -1,11 +1,13 @@
 """Model-source resolution for the RAG assistant (plan 0008 M1).
 
-Mirrors `app/generation/routing.py`'s BYO-then-managed fallback, but the
-assistant needs a *pair* — a chat connection and a (possibly different)
-embedding connection — since the managed tier's Typhoon chat model has no
-embeddings endpoint of its own (plan 0007 M2) and needs a separate platform
-embedding model (`Settings.managed_embed_*`, `app/generation/managed.py`)
-instead.
+The RAG assistant keeps its own BYO-then-managed fallback here — unlike the
+Planner's `app/generation/routing.py`, which the cloud Planner UI feature
+(docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md) made
+unconditionally managed-only. The assistant also needs a *pair* — a chat
+connection and a (possibly different) embedding connection — since the
+managed tier's Typhoon chat model has no embeddings endpoint of its own
+(plan 0007 M2) and needs a separate platform embedding model
+(`Settings.managed_embed_*`, `app/generation/managed.py`) instead.
 """
 
 from __future__ import annotations
