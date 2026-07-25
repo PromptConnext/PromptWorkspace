@@ -47,7 +47,6 @@ from app.models.schemas import (
     Task,
 )
 from app.rag.budget import estimate_tokens
-from app.rag.embedder import HttpEmbeddingProvider
 
 logger = logging.getLogger("promptconnext.generation")
 router = APIRouter(tags=["generation"])
@@ -95,22 +94,17 @@ async def generate(
 
     secret_store = request.app.state.secret_store
     api_key = secret_store.decrypt(conn.secret_ref)
-    embedder = getattr(request.app.state, "embedding_provider", None) or HttpEmbeddingProvider()
     provider = getattr(request.app.state, "generation_provider", None) or HttpGenerationProvider()
 
     context = ""
-    if stage in ("specify", "plan") and conn.embed_model:
-        # The M0 payoff: ground on the project's uploaded documents (and
-        # every other embedded node type) via the same membership-scoped
-        # retrieval assistant.chat uses. Skipped, not errored, when the
-        # resolved connection can't embed (the managed tier is chat-only in
-        # this pilot) — same "skip when ungrounded" shape the embed queue
-        # uses for a missing BYO connection.
-        [query_embedding] = await embedder.embed(
-            [body.user_input], conn.embed_model, api_key, conn.base_url
-        )
-        hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
-        context = _assemble_retrieval_context(repo, project_id, hits)
+    if stage in ("specify", "plan"):
+        # Full-text injection, not embedding-retrieval (docs/superpowers/
+        # specs/2026-07-25-cloud-planner-ui-design.md): a project realistically
+        # has one or two PRD documents, so giving the model everything beats
+        # top-8 semantic chunks for something plan-critical — and it works
+        # with the managed (chat-only, no embed_model) connection, unlike the
+        # retrieval path it replaces.
+        context = _assemble_document_context(repo.list_documents(project_id))
     elif stage == "tasks":
         # tasks grounds on the approved plan, not raw uploads.
         context = f"[spec_documents:{spec.id}]\n{spec.content}"
@@ -198,15 +192,26 @@ async def generate(
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
-def _assemble_retrieval_context(repo: Repository, project_id: str, hits: list) -> str:
+# Total characters of document text injected into a single specify/plan
+# prompt. Mirrors the budget-capping shape of apps/engine's repoSnapshot()
+# (apps/engine/src/routes/projects.ts) — same problem (bound an LLM prompt
+# by a fixed character budget across N files), same "truncate the tail, note
+# it was truncated" approach.
+_DOCUMENT_CONTEXT_BUDGET = 40_000
+
+
+def _assemble_document_context(documents: list) -> str:
     parts = []
-    for h in hits:
-        label = f"{h.node_type}:{h.node_id}"
-        if h.node_type == "documents":
-            doc = repo.get_document(project_id, h.node_id)
-            if doc is not None:
-                label = f"document:{doc.title}"
-        parts.append(f"[{label}#{h.chunk_index}]\n{h.content}")
+    budget = _DOCUMENT_CONTEXT_BUDGET
+    for doc in documents:
+        if not doc.extracted_text:
+            continue
+        if budget <= 0:
+            parts.append("(remaining documents omitted — context budget reached)")
+            break
+        text = doc.extracted_text[:budget]
+        budget -= len(text)
+        parts.append(f"[document:{doc.title}]\n{text}")
     return "\n\n".join(parts)
 
 

@@ -1,8 +1,10 @@
-"""Stage generation endpoints (M1, plan 0007) — router-ready, still BYO.
+"""Stage generation endpoints (M1, plan 0007) — cloud-side Spec Kit path,
+managed Typhoon only (BYO removed, docs/superpowers/specs/2026-07-25-cloud-
+planner-ui-design.md).
 
 Exit criteria under test: each stage streams a parsed artifact; `specify`
-visibly reflects a PRD uploaded in M0 (a fact only present in the uploaded
-document appears in the generated spec, via the M0 retrieval payoff);
+visibly reflects a PRD uploaded in M0 via full-text injection (a fact only
+present in the uploaded document appears in the generated spec);
 `specify`/`plan`/`tasks` persist into the project graph (Requirement /
 SpecDocument / Task, the last with `{text: str}[]` acceptance criteria —
 CLAUDE.md's shape is unchanged); `plan`/`tasks` 409 without their
@@ -13,13 +15,14 @@ is recorded in generation_runs.
 from __future__ import annotations
 
 import json
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.service import FakeGenerationProvider
 from app.main import create_app
+from app.models.schemas import ModelConnection
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -32,6 +35,21 @@ PLAN_INPUT = "Plan out the technical implementation for the payments rollout in 
 TASKS_INPUT = "Break the approved implementation plan into small, independently shippable tasks."
 
 
+def _managed_connection(daily_token_budget: int = 200_000) -> ModelConnection:
+    return ModelConnection(
+        workspace_id=MANAGED_WORKSPACE_MARKER,
+        provider="typhoon",
+        base_url="https://api.opentyphoon.ai/v1",
+        model="typhoon-v2.5-30b-a3b-instruct",
+        embed_model="",
+        embed_dim=0,
+        secret_ref="unused-in-these-tests",
+        daily_token_budget=daily_token_budget,
+        created_by="platform",
+        source="managed",
+    )
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = create_app()
@@ -39,16 +57,9 @@ def client() -> TestClient:
         c.app.state.embedding_provider = FakeEmbeddingProvider()
         c.app.state.chat_provider = FakeChatProvider()
         c.app.state.generation_provider = FakeGenerationProvider()
+        c.app.state.managed_connection = _managed_connection()
+        c.app.state.secret_store.decrypt = lambda _ref: "platform-key"
         yield c
-
-
-def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.02) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _bootstrap(client: TestClient, daily_token_budget: int = 200_000) -> tuple[str, str]:
@@ -56,19 +67,7 @@ def _bootstrap(client: TestClient, daily_token_budget: int = 200_000) -> tuple[s
     project = client.post(
         "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
     ).json()
-    conn = client.post(
-        f"/workspaces/{ws['id']}/model-connection",
-        json={
-            "provider": "openai",
-            "base_url": "https://api.example.com/v1",
-            "model": "gpt-x",
-            "embed_model": "embed-x",
-            "api_key": "sk-test",
-            "daily_token_budget": daily_token_budget,
-        },
-        headers=ALICE,
-    )
-    assert conn.status_code == 200, conn.text
+    client.app.state.managed_connection = _managed_connection(daily_token_budget)
     return ws["id"], project["id"]
 
 
@@ -112,7 +111,7 @@ def test_constitution_streams_artifact_and_records_run(client: TestClient):
     )
 
 
-def test_specify_grounds_on_uploaded_document_and_creates_requirement(client: TestClient):
+def test_specify_grounds_on_uploaded_document_via_full_text_injection(client: TestClient):
     ws_id, pid = _bootstrap(client)
 
     upload = client.post(
@@ -127,15 +126,10 @@ def test_specify_grounds_on_uploaded_document_and_creates_requirement(client: Te
         headers=ALICE,
     )
     assert upload.status_code == 201, upload.text
-    assert _wait_until(
-        lambda: len(
-            client.app.state.repository.vector_search(
-                ws_id, pid, [0.0] * FakeEmbeddingProvider.dim, top_k=100
-            )
-        )
-        > 0
-    )
+    assert upload.json()["status"] == "extracted"
 
+    # No embedding wait needed — full-text injection reads the document
+    # directly, not via the async embed-on-ingest queue.
     res = _generate(client, pid, "specify", SPECIFY_INPUT)
     assert res.status_code == 200, res.text
     events = _sse_events(res.text)
