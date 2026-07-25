@@ -1,6 +1,6 @@
 # Cloud Planner UI — business-user PRD-to-plan flow (apps/web + apps/cloud)
 
-**Date:** 2026-07-25 · **Scope:** `apps/web` (new UI), `apps/cloud` (three targeted backend changes) · Sub-project A of a four-part pre-launch initiative (B: Tech Lead review + AGENTS.md, C: GitHub repo creation from cloud, D: desktop clone-detection handoff — each its own spec).
+**Date:** 2026-07-25 · **Scope:** `apps/web` (new UI), `apps/cloud` (backend changes) · Sub-project A of a four-part pre-launch initiative (B: Tech Lead review + constitution + AGENTS.md, C: GitHub repo creation from cloud, D: desktop clone-detection handoff — each its own spec). This doc also defines the **shared project-lifecycle contract** all four sub-projects depend on (see "Project Lifecycle" below) — that section is foundational and should land before any of A/B/C/D starts, even though each sub-project only *implements* its own slice of the state machine.
 
 Not to be confused with `2026-07-24-planner-window-design.md`, which relabels the existing 3S stepper inside `apps/desktop`. This doc is the cloud/web side: a business user with no desktop app, generating specs/plans/tasks entirely in the browser.
 
@@ -15,7 +15,7 @@ Investigation found this is far less green-field than it looked: `apps/cloud/app
 - **No BYO model in the cloud Planner.** Business users never connect their own key. Every stage (including `plan`, which ADR 0013 currently gates to BYO-only over quality concerns) runs on managed Typhoon. Developers who want their own model still plan through the desktop app. This removes `PlanRequiresModelError` and the workspace BYO override path *from the Planner only* — the RAG Assistant's separate `resolve_assistant_models` path (`app/rag/models.py`) is untouched, since it's a different feature that happens to share the workspace `model-connection` endpoint.
 - **PRD grounding uses full-text injection, not RAG chunk-retrieval.** The managed Typhoon connection is chat-only (`embed_model=""` by design, see `app/generation/managed.py`), so `generate()`'s existing `if conn.embed_model` retrieval branch silently never fires for it — meaning an uploaded PRD's content would never reach the model as built today. Fix: for the Planner, skip embedding-based retrieval and inject the project's uploaded document(s) full extracted text directly into the `specify`/`plan` prompt context. A project realistically has one or two PRD documents; full-text beats top-8 semantic chunks for something plan-critical, and this removes an infra dependency (managed embeddings) rather than adding one.
 - **No approval gate in this sub-project.** Cloud has no endpoint that ever sets `approved_by` — the field exists on `SpecDocument` but nothing writes it. Business-user output stays "draft." Real review/approval is the Tech Lead's job (sub-project B). Keeps this scoped; matches the step ordering in the original request (generate, then review).
-- **Constitution stays unpersisted for now.** `generate()`'s `constitution` stage streams back to the caller and records a `generation_runs` row but has no graph entity to land on ("isn't itself persisted to the graph in this milestone" — existing comment, still true). This may need to change for sub-project B's "defines project rules" step; noted as a known limitation, not fixed here.
+- **Constitution must persist — this reverses an earlier assumption.** `generate()`'s `constitution` stage currently streams back to the caller and records a `generation_runs` row but has no graph entity to land on ("isn't itself persisted to the graph in this milestone" — existing comment). Since the Tech Lead's review step (sub-project B) explicitly needs to review/edit the constitution before it's usable as a real project rule set, it needs a durable home. See "Project Lifecycle" below — persistence lands in sub-project B, but the schema decision is made now so A doesn't build anything that conflicts with it.
 
 ## Backend changes (apps/cloud)
 
@@ -42,10 +42,52 @@ Web-native equivalent of `apps/desktop/src/components/ThreeS.tsx`'s stepper, bui
 - **Error handling**: render the existing `429 managed_tier_rate_limited` / `429 daily_token_budget_exceeded` / `event: error` (empty-or-unparseable output) responses as retry-friendly inline banners, not crashes — all three cases are already clean, structured responses from the endpoint today.
 
 ### Out of scope for this sub-project
-Approval UI, `AGENTS.md` generation, GitHub repo creation, technical-plan refinement — all sub-project B/C. Desktop-side detection of cloud-created projects — sub-project D.
+Approval UI, constitution/`AGENTS.md` persistence and review, GitHub repo creation, technical-plan refinement — all sub-project B/C. Desktop-side detection of cloud-created projects — sub-project D. (Sub-project A does, however, write the initial `lifecycle_status` on project creation and implement the "Send to Tech Lead" transition — see below — since those are cheap, additive, and otherwise block B from starting cleanly. "Send to Tech Lead" is rejected with a 400 if the project has no requirement, spec document, and task yet — i.e. all three generation stages must have run at least once, though none need to be "approved" since A has no approval concept.)
+
+## Project Lifecycle & Cloud↔Desktop Coordination
+
+This is the answer to "how does the desktop app know planning is done, a repo exists, and a project is ready for a developer to start." It's a shared contract, not a UI — each sub-project implements the slice it owns, but the state names, storage location, and sync mechanism are fixed here so they don't drift apart.
+
+### States
+
+A project moves through one linear, non-branching sequence (no going back — regeneration/iteration happens *within* a state, e.g. a business user can keep regenerating specs while still in `planning`, a Tech Lead can keep editing the constitution while in `tech_review`):
+
+```
+planning → pending_tech_review → tech_review → repo_created
+```
+
+| State | Meaning | Set by | Owning sub-project |
+|---|---|---|---|
+| `planning` | Default on project creation. Business user is uploading PRDs / generating / regenerating draft specs, plan, tasks. | `POST /projects` (default value) | A |
+| `pending_tech_review` | Business user has explicitly signalled they're done. | Business user clicks "Send to Tech Lead" | A |
+| `tech_review` | Tech Lead is actively reviewing: approving spec/plan, editing the constitution, generating/reviewing `AGENTS.md`. | Automatic — the moment a Tech Lead-role user opens the review view for a `pending_tech_review` project (see "Transition rule" below) | B |
+| `repo_created` | GitHub repo exists; `repo_url`/`repo_default_branch` are set. Terminal state for this lifecycle — task-level progress after this point is tracked by the existing task-graph sync, not this status field. | Tech Lead clicks "Create Repository" (explicit, gated — see below) | C |
+
+### Transition rule
+
+**Transitions with an external or irreversible side effect require an explicit user action. Purely internal bookkeeping transitions happen automatically as a side effect of the relevant actor's first action in that phase.** Concretely: `planning → pending_tech_review` and `pending_tech_review → tech_review` are just "whose turn is it" bookkeeping — no external effect, so they're either a lightweight explicit click (submit-for-review, cheap and gives the business user a clear "I'm done" moment) or automatic on first Tech Lead interaction. `tech_review → repo_created` creates a real GitHub repository — always an explicit, gated button click (confirmed in brainstorming), disabled until preconditions are met: spec + plan approved, constitution non-empty, `AGENTS.md` generated and reviewed.
+
+### Storage
+
+- **`apps/cloud`**: new columns on `pz_projects` — `lifecycle_status text not null default 'planning'`, `repo_url text`, `repo_default_branch text`. New tables for the two Tech-Lead-owned artifacts that need their own review state (not a good fit for the existing `pz_spec_documents`/`pz_requirements` shape, which are Spec-Kit-stage-specific): `pz_project_constitution` (`project_id`, `content`, `updated_by`, `updated_at`, `reviewed_by` nullable) and `pz_agents_md` (`project_id`, `content`, `generated_at`, `reviewed_by` nullable, `reviewed_at` nullable). Both are one-row-per-project (upsert on edit), not versioned history — sub-project B's call if that turns out to be insufficient.
+- **`apps/engine`**: no new local table needed for the status itself — it rides the existing roster cache (the local mirror of cloud workspace/project metadata, ADR 0015) rather than engine's own `projects` table, since a project in `planning`/`pending_tech_review`/`tech_review` has no local project yet by definition (that's what `createLocalProjectShell` currently always creates from scratch — see below). Add `lifecycle_status`, `repo_url`, `repo_default_branch` to whatever roster-project row shape `loadRosterProjects()` (`apps/engine/src/cloudClient.ts`) already caches.
+
+### Sync mechanism — reuse what exists, no new channel
+
+The roster is already refreshed on sign-in, window focus, and explicit refresh (existing mechanism, ADR 0015 — ridden by both `apps/desktop` and now this feature, no polling loop or webhook needed for v1). Cloud's roster-serving endpoint (`GET /workspaces/{id}/projects`, `apps/cloud/app/api/workspaces.py:112`) just needs the three new columns added to its response shape. Desktop already renders roster projects with no local counterpart as `cloud:<id>` tabs (`apps/desktop/src/components/Workspace.tsx:76-101`) — sub-project D's job is to read `lifecycle_status`/`repo_url` off that same roster row and change what clicking the tab offers:
+
+- `planning` / `pending_tech_review` / `tech_review`: informational only — "In planning" / "Awaiting tech review" / "In tech review" badge, no open action (there's nothing to clone yet, and the desktop's job isn't to let a developer watch business/tech-lead iteration).
+- `repo_created`: the real payoff — desktop offers "Clone repository" instead of today's `POST /engine/cloud/projects/:cloudProjectId/open` behavior, which unconditionally does `git init` into an empty folder (`createLocalProjectShell`, `apps/engine/src/routes/projects.ts`). This needs a new code path (`git clone <repo_url>` instead of `git init`) — full implementation is sub-project D; this doc only fixes the contract (which field, what it means) D builds against.
+
+### Answering the three original questions directly
+
+- **Has the planning phase been completed?** `lifecycle_status != 'planning'` (i.e. business user has sent it to tech review or beyond).
+- **Has a Git repository been created?** `repo_url is not null` (equivalently `lifecycle_status == 'repo_created'` — kept as two checks because `repo_url` is what desktop actually needs functionally, `lifecycle_status` is what it needs for the badge).
+- **Is the project ready for developers to start implementation?** Same as above — `repo_created` is defined as "ready," by design (nothing else gates it once the repo exists).
 
 ## Testing
 
 - `apps/cloud`: extend/adjust `test_routing.py` and `test_managed_tier.py` per the backend changes above; add a test for the full-text document injection path in `generation.py` (e.g. upload a doc, call `generate("specify", ...)`, assert the document's content appears in what's sent to the model).
 - `apps/web`: new component tests for the Planner tab following the existing web test setup (vitest, per project memory of prior WP5 work) — cover upload → generate → stream-render → regenerate-with-feedback happy path, plus the three error-banner cases.
 - Manual: `pnpm cloud` + `pnpm web`, create a workspace/project as a business user with no BYO key configured anywhere, upload a real PDF PRD, walk through all four stages, confirm generated spec content actually reflects the PRD (proves the full-text-injection fix works, not just that generation runs).
+- Lifecycle (this sub-project's slice only): a new project defaults to `lifecycle_status = 'planning'`; "Send to Tech Lead" flips it to `pending_tech_review` and is rejected (400) if no requirement/spec/task exists yet. Full B/C/D transitions are tested in their own specs, but A's tests should assert the roster payload actually carries the new columns end-to-end (cloud response → engine's cached roster row), since that's the seam the other three sub-projects build on.
