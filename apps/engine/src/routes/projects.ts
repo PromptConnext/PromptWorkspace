@@ -77,6 +77,19 @@ projects.get("/engine/projects", (c) => {
   return c.json({ projects: projectsOut });
 });
 
+// Thrown by createLocalProjectShell when the resolved path is already used by
+// another project (deterministic name→slug→path collision, or an explicit
+// duplicate path). Typed so callers can branch on it instead of matching the
+// raw SQLite message.
+export class ProjectCollisionError extends Error {
+  path: string;
+  constructor(path: string) {
+    super(`a project already exists at ${path}`);
+    this.name = "ProjectCollisionError";
+    this.path = path;
+  }
+}
+
 // Project bootstrap (gap G3): pick/create a folder, engine git-inits it.
 // The business persona never touches Git directly. Exported so the cloud
 // roster's bootstrap-pull (routes/cloud.ts) can materialize a local project
@@ -85,13 +98,23 @@ export function createLocalProjectShell(name: string, path?: string): ProjectRow
   const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
   const resolvedPath = path ?? join(homedir(), "PromptConnext-Projects", slug);
 
+  const dup = db.prepare("SELECT id FROM projects WHERE path = ?").get(resolvedPath);
+  if (dup) throw new ProjectCollisionError(resolvedPath);
+
   mkdirSync(resolvedPath, { recursive: true });
   if (!existsSync(join(resolvedPath, ".git"))) {
     execFileSync("git", ["init", "-b", "main"], { cwd: resolvedPath, stdio: "pipe" });
   }
 
   const id = randomUUID();
-  db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, resolvedPath);
+  try {
+    db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, resolvedPath);
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test((err as Error).message)) {
+      throw new ProjectCollisionError(resolvedPath);
+    }
+    throw err;
+  }
   const insertStage = db.prepare(
     "INSERT INTO stage_states (project_id, stage, status) VALUES (?, ?, 'not_started')",
   );
@@ -120,7 +143,15 @@ projects.post("/engine/projects", async (c) => {
     return c.json({ error: "an active workspace is required to create a project" }, 400);
   }
 
-  const project = createLocalProjectShell(name, body.path);
+  let project: ProjectRow;
+  try {
+    project = createLocalProjectShell(name, body.path);
+  } catch (err) {
+    if (err instanceof ProjectCollisionError) {
+      return c.json({ error: "A project with that name already exists — choose a different name." }, 409);
+    }
+    throw err;
+  }
 
   // Bind the project to the workspace immediately, even offline: the link is
   // written now (cloud project pending), and the sync loop mints the cloud

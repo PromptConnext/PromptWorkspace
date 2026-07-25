@@ -3,6 +3,13 @@
 // Two adapters cover the launch surface: any OpenAI-compatible base URL
 // (OpenAI, OpenRouter, Z.AI, vLLM, ...) and local Ollama (the zero-cost path).
 import { readSecret } from "../keychain.ts";
+import { AgentError } from "../agent/errors.ts";
+
+// A 31-task breakdown finished in under 3 minutes against a local Ollama
+// model; three other runs against small local models never converged at all
+// (rambling, no stop token). 5 minutes bounds the worst case with headroom
+// over the one observed good run, instead of hanging the UI forever.
+const CHAT_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type ModelConnection = {
   id: string;
@@ -37,15 +44,28 @@ async function chatOpenAICompat(
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
 
-  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: conn.model,
-      messages,
-      ...(maxTokens ? { max_tokens: maxTokens } : {}),
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: conn.model,
+        messages,
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new AgentError("timeout", `model call timed out after ${CHAT_TIMEOUT_MS / 60000} minutes`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${conn.provider} returned ${res.status}: ${body.slice(0, 300)}`);
@@ -64,11 +84,24 @@ async function chatOllama(
   conn: ModelConnection,
   messages: ChatMessage[],
 ): Promise<ChatResult> {
-  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: conn.model, messages, stream: false }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: conn.model, messages, stream: false }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new AgentError("timeout", `model call timed out after ${CHAT_TIMEOUT_MS / 60000} minutes`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`ollama returned ${res.status}: ${body.slice(0, 300)}`);
@@ -114,33 +147,45 @@ async function streamOpenAICompat(
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
 
-  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model: conn.model, messages, stream: true }),
-  });
-  if (!res.ok || !res.body) {
-    const body = await res.text();
-    throw new Error(`${conn.provider} returned ${res.status}: ${body.slice(0, 300)}`);
-  }
-  let content = "";
-  for await (const line of sseLines(res.body)) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (data === "[DONE]") break;
-    try {
-      const delta = (JSON.parse(data) as { choices?: { delta?: { content?: string } }[] })
-        .choices?.[0]?.delta?.content;
-      if (delta) {
-        content += delta;
-        onDelta(delta);
-      }
-    } catch {
-      // partial or keep-alive frame — skip
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: conn.model, messages, stream: true }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      const body = await res.text();
+      throw new Error(`${conn.provider} returned ${res.status}: ${body.slice(0, 300)}`);
     }
+    let content = "";
+    for await (const line of sseLines(res.body)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") break;
+      try {
+        const delta = (JSON.parse(data) as { choices?: { delta?: { content?: string } }[] })
+          .choices?.[0]?.delta?.content;
+        if (delta) {
+          content += delta;
+          onDelta(delta);
+        }
+      } catch {
+        // partial or keep-alive frame — skip
+      }
+    }
+    if (!content) throw new Error(`${conn.provider} streamed no content`);
+    return { content };
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new AgentError("timeout", `model call timed out after ${CHAT_TIMEOUT_MS / 60000} minutes`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!content) throw new Error(`${conn.provider} streamed no content`);
-  return { content };
 }
 
 async function streamOllama(
@@ -148,32 +193,44 @@ async function streamOllama(
   messages: ChatMessage[],
   onDelta: (text: string) => void,
 ): Promise<ChatResult> {
-  const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: conn.model, messages, stream: true }),
-  });
-  if (!res.ok || !res.body) {
-    const body = await res.text();
-    throw new Error(`ollama returned ${res.status}: ${body.slice(0, 300)}`);
-  }
-  let content = "";
-  for await (const line of sseLines(res.body)) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
-      const delta = obj.message?.content;
-      if (delta) {
-        content += delta;
-        onDelta(delta);
-      }
-      if (obj.done) break;
-    } catch {
-      // partial NDJSON frame — skip
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${conn.endpoint.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: conn.model, messages, stream: true }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      const body = await res.text();
+      throw new Error(`ollama returned ${res.status}: ${body.slice(0, 300)}`);
     }
+    let content = "";
+    for await (const line of sseLines(res.body)) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
+        const delta = obj.message?.content;
+        if (delta) {
+          content += delta;
+          onDelta(delta);
+        }
+        if (obj.done) break;
+      } catch {
+        // partial NDJSON frame — skip
+      }
+    }
+    if (!content) throw new Error("ollama streamed no content");
+    return { content };
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new AgentError("timeout", `model call timed out after ${CHAT_TIMEOUT_MS / 60000} minutes`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!content) throw new Error("ollama streamed no content");
-  return { content };
 }
 
 export async function chatStream(

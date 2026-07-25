@@ -31,7 +31,7 @@ import {
   pushProjectSnapshot,
   writeCloudLink,
 } from "../sync/loop.ts";
-import { createLocalProjectShell } from "./projects.ts";
+import { createLocalProjectShell, ProjectCollisionError } from "./projects.ts";
 
 export const cloud = new Hono();
 
@@ -236,11 +236,10 @@ cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
   try {
     local = createLocalProjectShell(rosterProject.name, path?.trim() || undefined);
   } catch (err) {
-    const message = (err as Error).message;
-    if (/UNIQUE constraint failed/i.test(message)) {
+    if (err instanceof ProjectCollisionError) {
       return c.json({ error: "That folder is already used by another project." }, 409);
     }
-    return c.json({ error: message }, 500);
+    return c.json({ error: (err as Error).message }, 500);
   }
 
   writeCloudLink(local.id, { workspace_id: rosterProject.workspace_id, project_id: cloudProjectId });

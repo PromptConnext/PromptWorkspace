@@ -140,7 +140,13 @@ export const createProject = (name: string, path?: string) =>
 // Structured agent error kinds (engine `AgentError`, plan §7e) — lets the UI
 // give kind-specific guidance (e.g. point at the AgentPicker for "no-agent",
 // offer a Retry button for "network") instead of one generic error paragraph.
-export type EngineErrorKind = "no-agent" | "agent-crash" | "no-changes" | "bad-output" | "network";
+export type EngineErrorKind =
+  | "no-agent"
+  | "agent-crash"
+  | "no-changes"
+  | "bad-output"
+  | "network"
+  | "timeout";
 
 // A plain Error with an optional `.kind` attached, so existing `catch (err)`
 // call sites keep working with `(err as Error).message` while call sites that

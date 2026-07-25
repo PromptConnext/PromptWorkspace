@@ -425,6 +425,18 @@ export default function ThreeS({
                   Retry
                 </button>
               )}
+              {error.kind === "timeout" && (
+                <>
+                  <p>
+                    The model took too long to respond (over 5 minutes) and the request was
+                    cancelled. Small/local models can ramble without stopping — try again, or
+                    switch models in the Skill stage.
+                  </p>
+                  <button type="button" onClick={retryLastAction} disabled={busy !== null}>
+                    Retry
+                  </button>
+                </>
+              )}
             </div>
           )}
         </>
