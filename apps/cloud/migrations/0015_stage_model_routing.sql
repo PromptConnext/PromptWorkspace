@@ -1,7 +1,8 @@
 -- PromptConnext Cloud — Milestone 3 (plan 0007): stage routing table.
 --
 -- Overrides the hard-coded default (constitution/specify/tasks -> managed,
--- plan -> byo — see app/generation/routing.py::DEFAULT_STAGE_ROUTING) per
+-- plan -> byo — see app/generation/routing.py::DEFAULT_STAGE_ROUTING,
+-- removed 2026-07-25, see ADR 0013's update note) per
 -- workspace (project_id null) or per project (project_id set). Resolution
 -- order is project -> workspace -> default; app/generation/routing.py owns
 -- that logic, this table only stores the overrides that exist.

@@ -23,7 +23,7 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 | `apps/web` | Next.js 16 App Router, React 19, TypeScript | Team-member web UI; read/collaborate against `apps/cloud` |
 | `apps/corp` | Next.js 16 App Router, React 19, `next-intl` (EN/TH), Tailwind v4 | Public **marketing website** + the **desktop-app download page**; static/SEO-first, no backend |
 
-`apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; `pnpm-workspace.yaml` pins each package's `@types/react` edge explicitly — don't remove those `packageExtensions`. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
+`apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; root `package.json`'s `pnpm.packageExtensions` pins each package's `@types/react` edge explicitly (not `pnpm-workspace.yaml` — pnpm 9.x only reads `packageExtensions` from `package.json`) — don't remove those. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
 
 ## Development commands
 
@@ -41,7 +41,7 @@ pnpm corp        # apps/corp (marketing + download) on http://localhost:3002
 
 Browser-only UI iteration (no Rust compile): run `pnpm engine` in one terminal and `pnpm --dir apps/desktop dev` (Vite on `:1420`) in another.
 
-**Engine** (`apps/engine`) — Node ≥ 24 is a hard requirement (`node:sqlite`, native TS). No build, no test suite today.
+**Engine** (`apps/engine`) — Node ≥ 24 is a hard requirement (`node:sqlite`, native TS). No build step; test suite: `node --test test/*.test.ts`.
 
 **Cloud** (`apps/cloud`):
 
@@ -50,11 +50,11 @@ cd apps/cloud
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8080     # in-memory backend, stub auth — no Supabase needed
-pytest                                         # the only app with a test suite
+pytest                                         # cloud's test suite
 ruff check .                                   # lint (line-length 100)
 ```
 
-**Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck).
+**Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck) / `vitest run` (test suite).
 
 **Corp** (`apps/corp`): `pnpm --dir apps/corp dev` (port 3002) / `build` / `typecheck` / `lint`. Copy `.env.example` → `.env.local` and set `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (leave the last empty to render the download page's "coming soon" state).
 
@@ -75,15 +75,16 @@ Hono server bound to `127.0.0.1:47131` (`index.ts`). Routes are mounted flat: `m
 
 ### Cloud (`apps/cloud/app`)
 
-FastAPI entrypoint `main.py` (`uvicorn app.main:app --port 8080`). Routers in `api/`: `workspaces`, `sync`, `discussions`, `presence`, `assistant`, `integrations`, `github`, `health`. A `memory` data backend (stub auth via `X-User-Id`) needs no Supabase; `DATA_BACKEND=supabase` + `AUTH_MODE=supabase` enables real Postgres + JWT.
+FastAPI entrypoint `main.py` (`uvicorn app.main:app --port 8080`). Routers in `api/`: `workspaces`, `sync`, `discussions`, `presence`, `assistant`, `integrations`, `github`, `health`, `documents`, `generation`, `desktop_auth`. A `memory` data backend (stub auth via `X-User-Id`) needs no Supabase; `DATA_BACKEND=supabase` + `AUTH_MODE=supabase` enables real Postgres + JWT.
 
-- **Task-graph sync** (`sync.py`, ADR 0010) — the cloud graph is a **projection** of the local SQLite schema. `PUT /sync/projects/{id}/graph` pushes a delta; `GET …?since=<cursor>` pulls. **Credentials never sync; source code never syncs** (that's Git). Push/pull is manual (Git-like); conflict policy is last-write-wins by `updated_at`.
-- **RAG assistant** (`rag/`, `api/assistant.py`, ADR 0011) — grounded Q&A over synced artifacts, membership-scoped **before** similarity search. Uses a **workspace-connected BYO model** (`POST /workspaces/{id}/model-connection`); keys live in the server secret store (`secrets.py`), never in a Supabase row. Token budgets in `rag/budget.py`.
+- **Task-graph sync** (`sync.py`, ADR 0010) — the cloud graph is a **projection** of the local SQLite schema. `PUT /sync/projects/{id}/graph` pushes a delta; `GET …?since=<cursor>` pulls. **Credentials never sync; source code never syncs** (that's Git). Push/pull is manual (Git-like); conflict policy is last-write-wins by `updated_at`. `sync.py` also owns the **project lifecycle state machine** (`planning → pending_tech_review → tech_review → repo_created`, `pz_projects.lifecycle_status`): `POST /projects/{id}/lifecycle/submit-for-review` is the only transition currently wired, gating on a non-empty requirement/spec/task graph.
+- **Stage generation** (`generation/`, `api/generation.py`, ADR 0013) — the cloud Planner's own Spec Kit stage runner for business users with no desktop app, SSE-streamed via `POST /projects/{id}/generate/{stage}`. Independent of the engine's `runStage()` below. `routing.py::select_model()` is **unconditionally the managed Typhoon connection** — no BYO model, no per-stage routing table; it returns `None` (and the endpoint 400s) unless `MANAGED_MODEL_ENABLED=true` and `MANAGED_MODEL_API_KEY` are set.
+- **RAG assistant** (`rag/`, `api/assistant.py`, ADR 0011) — grounded Q&A over synced artifacts, membership-scoped **before** similarity search. Uses a **workspace-connected BYO model** (`POST /workspaces/{id}/model-connection`), falling back to the managed tier (chat + a separate managed embedding model, since Typhoon itself has no embeddings endpoint) when none is configured; keys live in the server secret store (`secrets.py`), never in a Supabase row. Token budgets in `rag/budget.py`.
 - **Presence** (`ws/manager.py`) — ephemeral who's-viewing roster over WebSocket. **In-memory, single-instance only**; no graph data flows over WS. Horizontal scale needs a shared backplane (Redis) first — flagged, not built.
 
 ### Web (`apps/web/src`)
 
-Next.js App Router, **read/collaborate-first**. `lib/api.ts` (`apiFetch` → `CLOUD_API_URL`) hits `apps/cloud`; there are **no Next.js API routes**. Routes: `/login`, `/invite/[token]`, `/w/[workspaceId]`, `/w/[workspaceId]/p/[projectId]` (tabs: Graph / Tasks / Progress / Discussion). The only WebSocket is a **client-side** connection to `apps/cloud`'s presence endpoint (`lib/presence.ts` → `CLOUD_WS_URL`) — the web app hosts no socket server.
+Next.js App Router. `lib/api.ts` (`apiFetch` → `CLOUD_API_URL`) hits `apps/cloud`; there are **no Next.js API routes**. Routes: `/`, `/login`, `/register`, `/forgot-password`, `/reset-password`, `/invite/[token]`, `/w/[workspaceId]`, `/w/[workspaceId]/members`, `/w/[workspaceId]/settings`, `/w/[workspaceId]/p/[projectId]` (tabs: **Planner** (default) / Graph / Tasks / Progress / Discussion), `/w/[workspaceId]/p/[projectId]/settings`. Beyond read/collaborate, the Planner tab authors directly — PRD upload, stage generation (`components/project/Planner.tsx`, `useStageGeneration.ts`), and new-project creation (`POST /projects`). The only WebSocket is a **client-side** connection to `apps/cloud`'s presence endpoint (`lib/presence.ts` → `CLOUD_WS_URL`) — the web app hosts no socket server.
 
 ### Corp / marketing (`apps/corp/src`)
 
@@ -91,7 +92,7 @@ Next.js App Router, **static/SEO-first, backend-free**. Bilingual (EN/TH) via `n
 
 ## Spec Kit workflow
 
-`runStage()` fills Spec Kit document templates from the BYO model. The constitution (`.specify/memory/constitution.md`) steers specify → plan → tasks. Task `acceptance_criteria` is stored and sent to the frontend as `{text: string}[]`, **not** plain strings — don't change the shape. Implementation is external-agent-orchestrated (ADR 0009), with a one-shot `runImplementation` fallback for users with no agent CLI (ADR 0005).
+`runStage()` fills Spec Kit document templates from the BYO model. The constitution (`.specify/memory/constitution.md`) steers specify → plan → tasks. Task `acceptance_criteria` is stored and sent to the frontend as `{text: string}[]`, **not** plain strings — don't change the shape. Implementation is external-agent-orchestrated (ADR 0009), with a one-shot `runImplementation` fallback for users with no agent CLI (ADR 0005). The cloud runs a second, independent stage generator for the web Planner (`apps/cloud/app/generation/`, see Cloud above) — managed Typhoon only, no BYO; don't look for per-stage routing plumbing there.
 
 ## Security posture
 
@@ -99,9 +100,9 @@ The engine binds loopback but any web page can still reach it, so (ADR 0008): an
 
 ## Key environment variables
 
-**Engine** (`apps/engine/src/config.ts`): `PROMPTCONNEXT_ENGINE_PORT` (default 47131) · `CLOUD_API_URL` (default hosted Railway; `""` disables sync; `http://localhost:8080` targets a local cloud) · `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth) · `PROMPTCONNEXT_AGENT_CMD` (custom agent CLI; task text in `$TASK_PROMPT`) · `PROMPTCONNEXT_AGENT_ALLOW_BASH=1` (let agents run shell).
+**Engine** (`apps/engine/src/config.ts`): `PROMPTCONNEXT_ENGINE_PORT` (default 47131) · `CLOUD_API_URL` (default hosted Railway; `""` disables sync; `http://localhost:8080` targets a local cloud) · `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth) · `PROMPTCONNEXT_AGENT_CMD` (custom agent CLI; task text in `$TASK_PROMPT`) · `PROMPTCONNEXT_AGENT_ALLOW_BASH=1` (let agents run shell) · `CLOUD_WEB_URL` (ADR 0014 browser-login target; hosted default — see that ADR's phishing-risk note before pointing this at a new domain).
 
-**Cloud** (`apps/cloud`): `DATA_BACKEND` (`memory` | `supabase`) · `AUTH_MODE` (`stub` | `supabase`) · `SUPABASE_URL` / `SUPABASE_KEY` / `SUPABASE_JWT_SECRET` · `CORS_ORIGINS` (includes `localhost:3000` by default).
+**Cloud** (`apps/cloud`): `DATA_BACKEND` (`memory` | `supabase`) · `AUTH_MODE` (`stub` | `supabase`) · `SUPABASE_URL` / `SUPABASE_KEY` / `SUPABASE_JWT_SECRET` · `CORS_ORIGINS` (default includes `localhost:3000` and `localhost:1420`) · `MANAGED_MODEL_ENABLED` + `MANAGED_MODEL_API_KEY` (Typhoon; **required, not optional** — the Planner tab's `/generate/{stage}` fails closed on every request without both, see Deployment) · `RAG_KEY_ENCRYPTION_KEY` (Fernet key; required before any workspace configures a RAG model connection).
 
 **Web** (`apps/web`): `NEXT_PUBLIC_CLOUD_API_URL`, `NEXT_PUBLIC_CLOUD_WS_URL`, `NEXT_PUBLIC_AUTH_MODE` (`stub` fails *closed* to supabase), `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
@@ -122,9 +123,9 @@ Four deployable pieces (`docs/DEPLOYMENT.md`):
 
 Read the relevant ADR before changing its area — they carry the "why," including retired approaches not to restore.
 
-0001 Tauri shell + Node sidecar · 0002 minimal agent loop over templates · 0003 SQLite graph, zero cloud in the skeleton · 0004 Skill stage owns task generation · 0005 implementation kickoff (single-shot fallback) · 0006 Anthropic-compat façade · 0007 Cursor-like workspace (integrated terminal + Git) · 0008 localhost origin allowlist + bearer · 0009 orchestrate external agents (no own runtime) · 0010 task-graph sync model · 0011 cloud as product pillar (web workspace + RAG) · 0012 web-app authoring via paired local compute node · 0013 managed Thai-LLM tier (Typhoon); the per-stage routing table it originally proposed was dropped for the cloud Planner, which is unconditionally managed-only (see the ADR's 2026-07-25 update) · 0014 desktop signs in through the hosted web auth pages (browser handoff, no native form).
+0001 Tauri shell + Node sidecar · 0002 minimal agent loop over templates · 0003 SQLite graph, zero cloud in the skeleton · 0004 Skill stage owns task generation · 0005 implementation kickoff (single-shot fallback) · 0006 Anthropic-compat façade · 0007 Cursor-like workspace (integrated terminal + Git) · 0008 localhost origin allowlist + bearer · 0009 orchestrate external agents (no own runtime) · 0010 task-graph sync model · 0011 cloud as product pillar (web workspace + RAG) · 0012 web-app authoring via paired local compute node · 0013 managed Thai-LLM tier (Typhoon); the per-stage routing table it originally proposed was dropped for the cloud Planner, which is unconditionally managed-only (see the ADR's 2026-07-25 update) · 0014 desktop signs in through the hosted web auth pages (browser handoff, no native form) · 0015 desktop requires a cloud identity + workspace membership (cloud-projected roster) · 0016 VS Code–compatible shell via Eclipse Theia, not a fork.
 
-0012–0013 are **Proposed** (not yet built): they add the model source that would let business users author — not just browse — in the web app.
+0012 is **Proposed** (not yet built): it would add a paired local compute node so business users could author, not just browse, in the web app. 0013 Part A (the managed Typhoon tier itself) **shipped** as the cloud Planner's only model source; Part B's per-stage routing table was dropped (see the ADR's update note above) rather than built.
 
 ## Conventions
 

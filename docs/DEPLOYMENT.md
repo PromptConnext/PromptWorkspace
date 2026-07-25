@@ -150,6 +150,23 @@ No changes to `apps/cloud` are required beyond that CORS entry: `apps/web`
 only calls the sync/graph/workspace/invitation endpoints the desktop client
 already uses.
 
+### 2.9 Corp app (`apps/corp`) → Vercel
+
+`apps/corp` is the public marketing site + desktop-app download page — static/SEO-first, no backend of its own, so it deploys as a normal Vercel project like `apps/web`, on a separate project/domain.
+
+1. Import `apps/corp` as the project root in Vercel (monorepo → set "Root Directory" to `apps/corp`).
+2. Environment variables (Vercel → project → Settings → Environment Variables), mirroring `apps/corp/.env.example`:
+
+   | Variable | Value |
+   |---|---|
+   | `NEXT_PUBLIC_SITE_URL` | `https://<corp-domain>` (canonical/OG/sitemap base, no trailing slash) |
+   | `NEXT_PUBLIC_APP_URL` | `https://<web-app-domain>` (cloud sign-in/signup target) |
+   | `NEXT_PUBLIC_APP_VERSION` | must equal `apps/desktop/src-tauri/tauri.conf.json`'s version — baked into the Windows installer filename |
+   | `NEXT_PUBLIC_DOWNLOAD_BASE_URL` | the R2 `installation/` prefix's public URL (§4); leave empty to render `/download`'s "coming soon" state |
+   | `CONTACT_WEBHOOK_URL` | optional; `/api/contact` logs server-side only if unset |
+
+3. No `apps/cloud` CORS entry needed — `apps/corp` never calls the engine or the cloud API.
+
 ---
 
 ## 3. Desktop app → build installers
