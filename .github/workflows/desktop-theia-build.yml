@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, windows-latest] # arm64 macOS + x64 Windows
+        platform: [macos-latest, windows-2022] # arm64 macOS + x64 Windows; windows-latest ships VS "18", unrecognized by node-gyp's version table (same fix as theia-spike-windows.yml)
     runs-on: ${{ matrix.platform }}
     defaults:
       run:
@@ -38,6 +38,9 @@ jobs:
       - name: Install workspace deps
         working-directory: .
         run: pnpm install --frozen-lockfile
+        env:
+          GYP_MSVS_VERSION: "2022" # native module (ffmpeg/drivelist/native-keymap/node-pty) build on Windows
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # @vscode/ripgrep's postinstall download hits api.github.com; unauthenticated requests get 403 rate-limited on shared runner IPs
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/theia-v')
         shell: bash
