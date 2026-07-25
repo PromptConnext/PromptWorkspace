@@ -125,14 +125,24 @@ async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; project
   // apps/cloud returns bare arrays (response_model=list[...]). Keep metadata
   // only — id/name/workspace_id — never anything secret (ADR 0010 §5).
   const rawWorkspaces = await cloudFetch<{ id: string; name: string }[]>("/workspaces");
-  const rawProjects = await cloudFetch<{ id: string; name: string; workspace_id: string }[]>(
-    "/projects",
-  );
+  const rawProjects = await cloudFetch<
+    {
+      id: string;
+      name: string;
+      workspace_id: string;
+      lifecycle_status: string;
+      repo_url: string | null;
+      repo_default_branch: string | null;
+    }[]
+  >("/projects");
   const workspaces: RosterWorkspace[] = rawWorkspaces.map((w) => ({ id: w.id, name: w.name }));
   const projects: RosterProject[] = rawProjects.map((p) => ({
     id: p.id,
     name: p.name,
     workspace_id: p.workspace_id,
+    lifecycle_status: p.lifecycle_status,
+    repo_url: p.repo_url,
+    repo_default_branch: p.repo_default_branch,
   }));
   storeRoster(workspaces, projects);
   // Members cache (ADR 0016 M4): small addition to the same roster refresh —

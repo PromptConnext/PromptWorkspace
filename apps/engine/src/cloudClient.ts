@@ -75,7 +75,18 @@ export function clearCloudSession(): void {
 // engine never treats it as a source of truth, only a last-known snapshot.
 
 export type RosterWorkspace = { id: string; name: string };
-export type RosterProject = { id: string; name: string; workspace_id: string };
+export type RosterProject = {
+  id: string;
+  name: string;
+  workspace_id: string;
+  // Cloud Planner lifecycle (docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md):
+  // planning -> pending_tech_review -> tech_review -> repo_created. Desktop
+  // reads these to decide whether a roster project with no local counterpart
+  // yet is "clone this repo" (repo_url set) vs. still being planned.
+  lifecycle_status: string;
+  repo_url: string | null;
+  repo_default_branch: string | null;
+};
 
 export function storeRoster(workspaces: RosterWorkspace[], projects: RosterProject[]): void {
   setAppState(ROSTER_WORKSPACES_KEY, JSON.stringify(workspaces));
