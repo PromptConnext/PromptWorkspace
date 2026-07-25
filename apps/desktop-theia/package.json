@@ -104,9 +104,6 @@
     "worker-loader": "^3.0.8",
     "reflect-metadata": "^0.2.2"
   },
-  "overrides": {
-    "@vscode/ripgrep": "1.15.9"
-  },
   "scripts": {
     "prepare": "theia build --mode development",
     "start": "electron .",

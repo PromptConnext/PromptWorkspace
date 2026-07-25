@@ -11,6 +11,12 @@
     "corp": "pnpm --dir apps/corp dev"
   },
   "pnpm": {
+    "overrides": {
+      "@vscode/ripgrep": "1.15.9",
+      "drivelist": "file:apps/desktop-theia/stubs/drivelist",
+      "keytar": "file:apps/desktop-theia/stubs/keytar",
+      "native-keymap": "file:apps/desktop-theia/stubs/native-keymap"
+    },
     "packageExtensions": {
       "@monaco-editor/react": {
         "dependencies": {
