@@ -8,12 +8,21 @@ import { getAppState, setAppState } from "../db.ts";
 
 export const agents = new Hono();
 
+// Per-adapter-id install docs, surfaced for CLIs the user hasn't installed yet
+// so the "not installed" chip can link somewhere useful (WP6).
+const INSTALL_URLS: Record<string, string> = {
+  "claude-code": "https://docs.claude.com/en/docs/claude-code/overview",
+  gemini: "https://github.com/google-gemini/gemini-cli",
+  codex: "https://github.com/openai/codex",
+};
+
 agents.get("/engine/agents", (c) => {
   const list = AGENTS.map((a) => ({
     id: a.id,
     label: a.label,
     installed: a.detect(),
     bringsOwnModel: a.bringsOwnModel,
+    installUrl: INSTALL_URLS[a.id],
   }));
   return c.json({ agents: list });
 });

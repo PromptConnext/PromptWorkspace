@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getProjectAgent, listAgents, setProjectAgent, type AgentInfo } from "../api";
 
 // Choose which external coding agent runs implementation (ADR 0009). PromptConnext
@@ -68,7 +69,28 @@ export default function AgentPicker({ projectId }: { projectId: string }) {
       )}
       {absent.length > 0 && (
         <p className="muted">
-          Not installed: {absent.map((a) => a.label).join(", ")} — install its CLI to use it here.
+          Not installed:{" "}
+          {absent.map((a, i) => (
+            <span key={a.id}>
+              {i > 0 && ", "}
+              {a.installUrl ? (
+                <a
+                  href={a.installUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    openUrl(a.installUrl!);
+                  }}
+                >
+                  {a.label}
+                </a>
+              ) : (
+                a.label
+              )}
+            </span>
+          ))}{" "}
+          — install its CLI to use it here.
         </p>
       )}
     </div>

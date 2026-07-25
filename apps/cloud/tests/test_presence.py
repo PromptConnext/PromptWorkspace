@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.ws.manager import ConnectionManager
@@ -71,6 +74,69 @@ def test_heartbeat_updates_cursor_hint(client):
         roster = a.receive_json()
         me = next(u for u in roster["users"] if u["user_id"] == "alice")
         assert me["cursor_hint"] == "task:t1"
+
+
+def test_es256_jwks_token_accepted(monkeypatch):
+    """A JWKS-verified ES256 bearer token authenticates the presence socket,
+    matching the REST auth path (`app.dependencies._verify_jwt`). Before the
+    unification, `_identify()` only accepted HS256 tokens signed with
+    `SUPABASE_JWT_SECRET`; this proves the JWKS/ES256 branch is now reachable
+    from presence too. `SUPABASE_JWT_SECRET` is deliberately left unset so
+    the HS256 fallback can't be what authenticates the socket.
+    """
+    monkeypatch.setenv("AUTH_MODE", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+
+    from app import dependencies
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        # Mint a real ES256 token with a fresh EC (P-256) keypair.
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+        token = jwt.encode(
+            {"sub": "alice", "email": "alice@x.com", "aud": "authenticated"},
+            private_key,
+            algorithm="ES256",
+            headers={"kid": "test-key"},
+        )
+
+        # Stub out the JWKS fetch so the test stays hermetic (no real network
+        # call to SUPABASE_URL/auth/v1/.well-known/jwks.json) while still
+        # exercising the real `_verify_jwt` JWKS-first code path.
+        class _FakeSigningKey:
+            key = public_key
+
+        class _FakeJwksClient:
+            def get_signing_key_from_jwt(self, _token):
+                return _FakeSigningKey()
+
+        monkeypatch.setattr(
+            dependencies, "_jwks_client", lambda _url: _FakeJwksClient()
+        )
+
+        from app.main import create_app
+
+        app = create_app()
+        with TestClient(app) as c:
+            auth_headers = {"Authorization": f"Bearer {token}"}
+            ws = c.post("/workspaces", json={"name": "W"}, headers=auth_headers).json()
+            pid = c.post(
+                "/projects",
+                json={"name": "P", "workspace_id": ws["id"]},
+                headers=auth_headers,
+            ).json()["id"]
+
+            with c.websocket_connect(
+                f"/ws/projects/{pid}/presence?token={token}"
+            ) as sock:
+                roster = sock.receive_json()
+                assert roster["type"] == "presence"
+                assert {u["user_id"] for u in roster["users"]} == {"alice"}
+    finally:
+        get_settings.cache_clear()
 
 
 # --------------------------------------------------------------------------- #

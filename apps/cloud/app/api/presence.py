@@ -2,7 +2,9 @@
 
 `WS /ws/projects/{id}/presence` — authenticates the caller (JWT in supabase
 mode, `?user_id=` in stub mode), verifies workspace membership, joins a
-per-project room, and fans out the roster on every join/leave/heartbeat.
+per-project room, and fans out the roster on every join/leave/heartbeat. JWT
+verification reuses `app.dependencies._verify_jwt` — the same JWKS/ES256
+first, HS256-fallback logic as the REST auth path.
 
 Clients send periodic heartbeats `{"cursor_hint": "..."}`; the server updates
 last-seen and rebroadcasts. No graph data flows here.
@@ -16,7 +18,7 @@ import jwt
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from app.dependencies import User
+from app.dependencies import User, _verify_jwt
 
 router = APIRouter(tags=["presence"])
 
@@ -33,12 +35,7 @@ def _identify(websocket: WebSocket, settings) -> User | None:
     if not token:
         return None
     try:
-        claims = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        claims = _verify_jwt(token, settings)
     except jwt.PyJWTError:
         return None
     sub = claims.get("sub")

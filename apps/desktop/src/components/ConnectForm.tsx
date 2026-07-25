@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { connectModel, getRecommendations, type Recommendation } from "../api";
 
 const CUSTOM: Recommendation = {
@@ -117,7 +118,19 @@ export default function ConnectForm({
 
       {needsKey && picked.getKeyUrl && (
         <p className="muted">
-          Get a key at: <span className="url">{picked.getKeyUrl}</span>
+          Get a key at:{" "}
+          <a
+            className="url"
+            href={picked.getKeyUrl}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              openUrl(picked.getKeyUrl!);
+            }}
+          >
+            {picked.getKeyUrl}
+          </a>
         </p>
       )}
 

@@ -114,7 +114,7 @@ def push_graph(
     repo: Repository = Depends(get_repository),
 ) -> GraphUpsertResponse:
     project = require_project(repo, project_id, user)
-    counts = repo.upsert_graph(project_id, payload, source=payload.source)
+    counts, conflicts = repo.upsert_graph(project_id, payload, source=payload.source)
     cursor, _ = repo.changes_head(project_id)
     total = sum(counts.values())
     metrics = getattr(request.app.state, "metrics", None)
@@ -142,7 +142,7 @@ def push_graph(
                 request.app,
                 EmbedJob(project.workspace_id, project_id, node_type, item.id),
             )
-    return GraphUpsertResponse(upserted=counts, cursor=cursor)
+    return GraphUpsertResponse(upserted=counts, cursor=cursor, conflicts=conflicts)
 
 
 @router.get("/sync/projects/{project_id}/changes", response_model=ChangesHead)

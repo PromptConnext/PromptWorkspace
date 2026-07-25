@@ -63,6 +63,8 @@ def _schema_version() -> str:
 def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
     settings.require_auth()
+    for warning in settings.require_production_safety():
+        logger.warning(warning)
     if settings.data_backend == "supabase":
         from app.db.supabase_repository import SupabaseRepository
 
@@ -92,7 +94,10 @@ async def _tombstone_gc_loop(app: FastAPI, settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level)
+    logging.basicConfig(
+        level=settings.log_level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
     app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)

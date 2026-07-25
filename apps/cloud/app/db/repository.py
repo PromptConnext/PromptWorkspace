@@ -135,7 +135,7 @@ class Repository(abc.ABC):
     @abc.abstractmethod
     def upsert_graph(
         self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
-    ) -> dict[str, int]: ...
+    ) -> tuple[dict[str, int], dict[str, list[str]]]: ...
 
     @abc.abstractmethod
     def get_graph(
@@ -538,9 +538,10 @@ class InMemoryRepository(Repository):
     # -- graph ------------------------------------------------------------ #
     def upsert_graph(
         self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
-    ) -> dict[str, int]:
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
         store = self._graph[project_id]
         counts: dict[str, int] = {}
+        conflicts: dict[str, list[str]] = {}
         now = utcnow()  # server owns the cursor timestamp
         for etype, model in ENTITY_TYPES.items():
             items = getattr(payload, etype)
@@ -550,15 +551,17 @@ class InMemoryRepository(Repository):
             for item in items:
                 stored = store[etype].get(item.id)
                 stored_dict = stored.model_dump(mode="json") if stored else None
-                merged = merge_entity(
+                merged, dropped = merge_entity(
                     stored_dict, _incoming_dump(item), authority, source, now
                 )
                 store[etype][item.id] = model(**merged)
+                if dropped:
+                    conflicts[item.id] = dropped
             counts[etype] = len(items)
         # touch the project so its updated_at advances too
         if counts and (project := self._projects.get(project_id)):
             project.updated_at = now
-        return counts
+        return counts, conflicts
 
     def get_graph(
         self,

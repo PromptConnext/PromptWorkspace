@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { engineHealth, getOnboardingState, type OnboardingState } from "./api";
 import { membershipGateEnabled, resolveGate, type CloudGate } from "./cloudGate";
@@ -22,6 +23,11 @@ export default function App() {
     membershipGateEnabled ? null : { kind: "disabled" },
   );
   const [update, setUpdate] = useState<Update | null>(null);
+  // Crash-retry UI (WP7c): recent engine stdout/stderr lines shown alongside
+  // the "unreachable" error, plus a Retry action that respawns the sidecar
+  // in place instead of requiring a full app relaunch.
+  const [engineLog, setEngineLog] = useState<string[]>([]);
+  const [retrying, setRetrying] = useState(false);
 
   const refresh = useCallback(async () => {
     const up = await engineHealth();
@@ -55,6 +61,27 @@ export default function App() {
     refresh();
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
+  }, [refresh]);
+
+  // Once the engine is confirmed down, pull its recent log tail so the error
+  // screen can show *why* — best-effort, and a no-op outside Tauri.
+  useEffect(() => {
+    if (engineUp !== false) return;
+    invoke<string[]>("engine_log_tail")
+      .then(setEngineLog)
+      .catch(() => {});
+  }, [engineUp]);
+
+  const handleRetry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await invoke("restart_engine");
+    } catch {
+      // Surfaced via the still-failing health poll below.
+    } finally {
+      await refresh();
+      setRetrying(false);
+    }
   }, [refresh]);
 
   useEffect(() => {
@@ -94,6 +121,15 @@ export default function App() {
           Local engine unreachable — it normally starts with the app. Check the logs
           and relaunch.
         </p>
+        <button onClick={handleRetry} disabled={retrying}>
+          {retrying ? "Retrying…" : "Retry"}
+        </button>
+        {engineLog.length > 0 && (
+          <details>
+            <summary>Recent engine log</summary>
+            <pre>{engineLog.join("\n")}</pre>
+          </details>
+        )}
       </main>
     );
   }

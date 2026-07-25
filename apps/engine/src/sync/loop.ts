@@ -275,6 +275,10 @@ export type SyncResult = {
   at: string;
   ok: boolean;
   upserted?: Record<string, number>;
+  // Entity id -> field names the cloud's ownership/LWW gate silently dropped
+  // on this push (WP2). Populated straight from the cloud response so a
+  // teammate's overwritten edits surface instead of vanishing unnoticed.
+  conflicts?: Record<string, string[]>;
   error?: string;
 };
 
@@ -322,11 +326,19 @@ export async function pushProjectSnapshot(localProjectId: string): Promise<SyncR
   }
   try {
     const snapshot = assembleSnapshot(localProjectId, link.project_id);
-    const res = await cloudFetch<{ upserted: Record<string, number> }>(
-      `/sync/projects/${link.project_id}/graph`,
-      { method: "PUT", body: JSON.stringify(snapshot) },
-    );
-    const result: SyncResult = { at: new Date().toISOString(), ok: true, upserted: res.upserted };
+    const res = await cloudFetch<{
+      upserted: Record<string, number>;
+      conflicts?: Record<string, string[]>;
+    }>(`/sync/projects/${link.project_id}/graph`, {
+      method: "PUT",
+      body: JSON.stringify(snapshot),
+    });
+    const result: SyncResult = {
+      at: new Date().toISOString(),
+      ok: true,
+      upserted: res.upserted,
+      conflicts: res.conflicts,
+    };
     recordResult(localProjectId, result);
     return result;
   } catch (err) {

@@ -154,13 +154,35 @@ def test_embed_model_mismatch_requires_reindex(client: TestClient):
     assert "reindex" in res.json()["detail"]
 
 
-def test_managed_daily_budget_enforced(client: TestClient):
+def test_managed_daily_budget_enforced_with_no_facts_fallback(client: TestClient):
+    """A pure-content question (no lineage markers, so no graph-walk facts to
+    fall back on) still hard-429s when the budget is exhausted — there's
+    genuinely nothing to serve."""
     _ws_id, pid = _bootstrap_keyless_workspace(client)
     client.app.state.managed_connection = _managed_chat_connection(daily_token_budget=0)
 
     res = client.post(
         f"/projects/{pid}/assistant/chat",
-        json={"question": "What's the status?"},
+        json={"question": "Explain the payments architecture"},
         headers=ALICE,
     )
     assert res.status_code == 429
+
+
+def test_budget_exhausted_lineage_question_soft_degrades_to_facts_only(client: TestClient):
+    """A status/lineage question is answered from the zero-cost graph walk
+    even with the budget exhausted — no hard 429, no LLM stream call."""
+    _ws_id, pid = _bootstrap_keyless_workspace(client)
+    client.app.state.managed_connection = _managed_chat_connection(daily_token_budget=0)
+
+    res = client.post(
+        f"/projects/{pid}/assistant/chat",
+        json={"question": "What's the status of this project?"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert "event: facts" in res.text
+    assert "budget reached" in res.text.lower()
+    # FakeChatProvider.stream_chat always emits "Based on the context: ..." —
+    # its absence proves stream_chat was never called (no LLM token spend).
+    assert "Based on the context" not in res.text

@@ -8,10 +8,13 @@ import {
   runTaskImplementation,
   runTasks,
   listAgents,
+  type Connection,
+  type EngineError,
   type Graph,
   type Project,
 } from "../api";
 import ConnectForm from "./ConnectForm";
+import ConnectedModels from "./ConnectedModels";
 import GraphView from "./GraphView";
 import TerminalPane from "./TerminalPane";
 import EditorPane from "./EditorPane";
@@ -24,6 +27,8 @@ function stageOf(graph: Graph | null, name: string) {
   return graph?.stages.find((s) => s.stage === name);
 }
 
+type ThreeSError = { message: string; kind?: string };
+
 export default function ThreeS({
   project,
   focusSignal,
@@ -34,10 +39,16 @@ export default function ThreeS({
   const [graph, setGraph] = useState<Graph | null>(null);
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ThreeSError | null>(null);
+  // The last-attempted act() call, kept so the "network" error guidance can
+  // offer a Retry button that re-invokes exactly what failed.
+  const [lastAction, setLastAction] = useState<{ label: string; fn: () => Promise<unknown>; streams: boolean } | null>(
+    null,
+  );
   const [output, setOutput] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const [hasCodeModel, setHasCodeModel] = useState(true);
+  const [connections, setConnections] = useState<Connection[]>([]);
   const [hasAgent, setHasAgent] = useState(false);
   const [tab, setTab] = useState<"threes" | "graph" | "editor" | "terminal">("threes");
   const [copied, setCopied] = useState<string | null>(null);
@@ -53,6 +64,7 @@ export default function ThreeS({
     setGraph(await getGraph(project.id));
     const models = await listModels();
     setHasCodeModel(models.connections.some((c) => c.role === "code" && c.healthy));
+    setConnections(models.connections);
     const a = await listAgents().catch(() => ({ agents: [] }));
     setHasAgent(a.agents.some((x) => x.installed));
   }, [project.id]);
@@ -62,7 +74,9 @@ export default function ThreeS({
   const canImplement = hasCodeModel || hasAgent;
 
   useEffect(() => {
-    refresh().catch((err) => setError((err as Error).message));
+    refresh().catch((err) =>
+      setError({ message: (err as Error).message, kind: (err as EngineError).kind }),
+    );
   }, [refresh]);
 
   const scope = stageOf(graph, "scope");
@@ -77,6 +91,7 @@ export default function ThreeS({
   const act = async (label: string, fn: () => Promise<unknown>, streams = false) => {
     setBusy(label);
     setError(null);
+    setLastAction({ label, fn, streams });
     if (streams) setOutput("");
     try {
       const res = await fn();
@@ -84,10 +99,14 @@ export default function ThreeS({
       if (content) setOutput(content);
       await refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setError({ message: (err as Error).message, kind: (err as EngineError).kind });
     } finally {
       setBusy(null);
     }
+  };
+
+  const retryLastAction = () => {
+    if (lastAction) void act(lastAction.label, lastAction.fn, lastAction.streams);
   };
 
   const appendOutput = (delta: string) => setOutput((prev) => (prev ?? "") + delta);
@@ -313,6 +332,7 @@ export default function ThreeS({
             <div className="stage-panel">
               <h3>Skill — equip the project to build itself</h3>
               <AgentPicker projectId={project.id} />
+              <ConnectedModels connections={connections} onChanged={() => refresh()} />
               <div className="row">
                 <button
                   type="button"
@@ -391,7 +411,22 @@ export default function ThreeS({
               <SpecDoc content={output} streaming={busy !== null} />
             </div>
           )}
-          {error && <p className="error">{error}</p>}
+          {error && (
+            <div className="error">
+              <p>{error.message}</p>
+              {error.kind === "no-agent" && (
+                <p>
+                  No coding agent is available. Install an agent CLI or connect a coding model in
+                  the Skill stage above, then try again.
+                </p>
+              )}
+              {error.kind === "network" && (
+                <button type="button" onClick={retryLastAction} disabled={busy !== null}>
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
     </section>

@@ -147,8 +147,6 @@ async def chat(
     conn = models.chat
 
     budget = request.app.state.token_budget
-    if budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0:
-        raise HTTPException(status_code=429, detail="daily_token_budget_exceeded")
 
     secret_store = request.app.state.secret_store
     chat_api_key = secret_store.decrypt(conn.secret_ref)
@@ -161,8 +159,9 @@ async def chat(
     facts_citation = None
     if classification in ("lineage", "mixed"):
         # Exact graph walk — same bootstrap pull reindex_project uses, no
-        # embeddings involved. Membership was already gated by
-        # require_project() above, so this new code path inherits that guard.
+        # embeddings involved, so it always runs regardless of budget state.
+        # Membership was already gated by require_project() above, so this
+        # new code path inherits that guard.
         graph = repo.get_graph(project_id)
         target = resolve_target(graph, body.question)
         facts = compute_facts(graph, target)
@@ -171,9 +170,17 @@ async def chat(
                 node_type=facts.node_type, node_id=facts.node_id, chunk_index=0, source="graph"
             )
 
+    # Budget check moves here (after the zero-cost graph walk, before any
+    # further token spend): a lineage/mixed question that already has facts
+    # can still be served — just without the LLM narration — while a
+    # content-only question with nothing to fall back on still hard-429s.
+    budget_exhausted = budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0
+    if budget_exhausted and facts is None:
+        raise HTTPException(status_code=429, detail="daily_token_budget_exceeded")
+
     hits: list = []
     code_hits: list[CodeChunkHit] = []
-    if classification in ("content", "mixed") and models.embed is not None:
+    if not budget_exhausted and classification in ("content", "mixed") and models.embed is not None:
         embed_conn = models.embed
         existing_embed_model = repo.get_project_embed_model(project.workspace_id, project_id)
         if existing_embed_model and existing_embed_model != embed_conn.embed_model:
@@ -203,16 +210,33 @@ async def chat(
         if facts is not None:
             yield f"event: facts\ndata: {facts.model_dump_json()}\n\n"
 
-        answer_parts: list[str] = []
-        async for delta in chat_provider.stream_chat(
-            context, body.question, conn.model, chat_api_key, conn.base_url
-        ):
-            answer_parts.append(delta)
-            yield f"data: {json.dumps({'delta': delta})}\n\n"
-        answer = "".join(answer_parts)
-        budget.record(
-            project.workspace_id, estimate_tokens(context) + estimate_tokens(answer)
-        )
+        if budget_exhausted:
+            # facts must be non-None here (otherwise the 429 above already
+            # fired) — degrade to lineage-only rather than spending more
+            # tokens on embed+vector-search or the LLM call.
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "delta": (
+                            "Daily assistant budget reached — showing lineage facts "
+                            "only. Ask again tomorrow or connect more model budget."
+                        )
+                    }
+                )
+                + "\n\n"
+            )
+        else:
+            answer_parts: list[str] = []
+            async for delta in chat_provider.stream_chat(
+                context, body.question, conn.model, chat_api_key, conn.base_url
+            ):
+                answer_parts.append(delta)
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+            answer = "".join(answer_parts)
+            budget.record(
+                project.workspace_id, estimate_tokens(context) + estimate_tokens(answer)
+            )
 
         citations = [
             Citation(

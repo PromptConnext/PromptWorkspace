@@ -291,8 +291,9 @@ class SupabaseRepository(Repository):
     # -- graph ------------------------------------------------------------ #
     def upsert_graph(
         self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
-    ) -> dict[str, int]:
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
         counts: dict[str, int] = {}
+        conflicts: dict[str, list[str]] = {}
         now = utcnow()
         for etype in ENTITY_TYPES:
             items = getattr(payload, etype)
@@ -303,16 +304,18 @@ class SupabaseRepository(Repository):
             for item in items:
                 stored = self._fetch_row(etype, item.id)
                 incoming = _incoming_dump(item)
-                merged = merge_entity(stored, incoming, authority, source, now)
+                merged, dropped = merge_entity(stored, incoming, authority, source, now)
                 merged["project_id"] = project_id
                 rows.append(merged)
+                if dropped:
+                    conflicts[item.id] = dropped
             self._client.table(_TABLE[etype]).upsert(rows, returning="minimal").execute()
             counts[etype] = len(rows)
         if counts:
             self._client.table(_PROJECTS).update({"updated_at": now.isoformat()}).eq(
                 "id", project_id
             ).execute()
-        return counts
+        return counts, conflicts
 
     def _fetch_row(self, etype: str, entity_id: str) -> dict | None:
         res = self._client.table(_TABLE[etype]).select("*").eq("id", entity_id).limit(1).execute()

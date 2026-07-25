@@ -68,8 +68,11 @@ def merge_entity(
     authority: dict[str, str],
     source: str,
     now: datetime,
-) -> dict:
-    """Merge `incoming` into `stored` field-by-field, returning the new row.
+) -> tuple[dict, list[str]]:
+    """Merge `incoming` into `stored` field-by-field, returning the new row and
+    the list of incoming field names that were silently dropped (rejected by
+    the ownership gate or stale under LWW), so callers can surface this data
+    loss instead of swallowing it.
 
     * `authority` maps field name -> domain ("pz" | "pmo" | "shared"). Fields
       absent from the map default to "pz".
@@ -82,15 +85,17 @@ def merge_entity(
     now_iso = now.isoformat()
 
     # First write for this id: accept it wholesale, recording field versions for
-    # every data field the writer is allowed to own.
+    # every data field the writer is allowed to own. Nothing is dropped here —
+    # there's no prior value to conflict with.
     if not stored:
         merged = dict(incoming)
         merged["updated_at"] = now_iso
         merged["field_versions"] = _stamp_all(incoming, authority, source, now_iso)
-        return merged
+        return merged, []
 
     merged = dict(stored)
     versions: dict = dict(stored.get("field_versions") or {})
+    dropped: list[str] = []
 
     for field, value in incoming.items():
         if field in _RESERVED:
@@ -100,13 +105,15 @@ def merge_entity(
         # Ownership gate: a pz writer can't touch pmo fields and vice-versa.
         # "shared" is writable by either side.
         if domain != "shared" and domain != source:
+            dropped.append(field)
             continue
 
         # LWW within the allowed domain, using the per-field version clock.
         prior = versions.get(field) or {}
         prior_dt = _as_dt(prior.get("updated_at"))
         if prior_dt is not None and prior_dt >= now:
-            continue  # stored field is at least as new; keep it
+            dropped.append(field)  # stored field is at least as new; keep it
+            continue
 
         merged[field] = value
         versions[field] = {"updated_at": now_iso, "source": source}
@@ -118,7 +125,7 @@ def merge_entity(
 
     merged["field_versions"] = versions
     merged["updated_at"] = now_iso
-    return merged
+    return merged, dropped
 
 
 def _stamp_all(incoming: dict, authority: dict[str, str], source: str, now_iso: str) -> dict:

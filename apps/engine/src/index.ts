@@ -3,6 +3,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { ENGINE_PORT } from "./config.ts";
+import { log } from "./logger.ts";
 import { anthropicCompat } from "./gateway/anthropic-compat.ts";
 import { models, connectionForRoleStrict } from "./routes/models.ts";
 import { onboarding } from "./routes/onboarding.ts";
@@ -63,7 +64,7 @@ startCloudSyncLoop();
 const server = serve(
   { fetch: app.fetch, port: ENGINE_PORT, hostname: "127.0.0.1" },
   (info) => {
-    console.log(`[engine] listening on http://127.0.0.1:${info.port}`);
+    log.info("[engine] listening", { port: info.port });
   },
 );
 // Agent task runs stream SSE for minutes. Node's default http requestTimeout
@@ -80,7 +81,7 @@ const parentPid = Number(process.env.PROMPTCONNEXT_PARENT_PID ?? 0);
 if (parentPid > 0) {
   setInterval(() => {
     if (process.ppid !== parentPid) {
-      console.log("[engine] parent gone, shutting down");
+      log.info("[engine] parent gone, shutting down");
       process.exit(0);
     }
   }, 2000).unref();

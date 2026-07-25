@@ -204,6 +204,48 @@ def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
 
 
 # --------------------------------------------------------------------------- #
+# WP2 — sync conflict visibility (silent data loss fix)
+# --------------------------------------------------------------------------- #
+def test_losing_push_surfaces_conflicts_in_response(client):
+    project = _create_project(client)
+    pid = project["id"]
+    headers = {"X-User-Id": "alice"}
+
+    # Push A: pz sets status.
+    res_a = client.put(
+        f"/sync/projects/{pid}/graph",
+        json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "in_progress"}]},
+        headers=headers,
+    )
+    assert res_a.status_code == 200, res_a.text
+    assert res_a.json()["conflicts"] == {}  # first write for t1, nothing dropped
+
+    # Push B: a pmo writer races on the SAME field ("status" is pz-owned) —
+    # this write is rejected by the ownership gate, not just LWW-staleness,
+    # but either way it must surface as a conflict rather than vanish silently.
+    res_b = client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "source": "pmo",
+            "tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "verified"}],
+        },
+        headers=headers,
+    )
+    assert res_b.status_code == 200, res_b.text
+    body_b = res_b.json()
+    # The pmo push's full model dump also carries other pz-owned fields at
+    # their default values (e.g. spec_id, acceptance_criteria), which the
+    # ownership gate drops too — assert on the field under test rather than
+    # the exact set, so this stays robust to the Task schema's field list.
+    assert "t1" in body_b["conflicts"]
+    assert "status" in body_b["conflicts"]["t1"]
+
+    # The losing write really did lose (data loss is real, just now visible).
+    task = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()["tasks"][0]
+    assert task["status"] == "in_progress"
+
+
+# --------------------------------------------------------------------------- #
 # Milestone 1 — tombstone soft-delete
 # --------------------------------------------------------------------------- #
 def test_delete_propagates_via_incremental_pull(client):

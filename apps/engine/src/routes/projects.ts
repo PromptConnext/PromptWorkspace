@@ -10,6 +10,7 @@ import { connectionForRole, connectionForRoleStrict } from "./models.ts";
 import { parseTaskLines, runImplementation, runStage } from "../agent/loop.ts";
 import { runAgentTask } from "../agent/agent-runner.ts";
 import { resolveAdapter } from "../agent/adapters/index.ts";
+import { AgentError } from "../agent/errors.ts";
 import { loadActiveWorkspace, loadCloudSession } from "../cloudClient.ts";
 import { ensureCloudProject, writeCloudLink } from "../sync/loop.ts";
 
@@ -34,6 +35,15 @@ function setStage(projectId: string, stage: string, status: string): void {
   db.prepare(
     "UPDATE stage_states SET status = ? WHERE project_id = ? AND stage = ?",
   ).run(status, projectId, stage);
+}
+
+// SSE `error` event payload: JSON so the desktop can pull out `kind` (7e) for
+// kind-specific UI guidance, alongside the existing plain error message.
+function sseErrorPayload(err: unknown): string {
+  return JSON.stringify({
+    error: (err as Error).message,
+    kind: err instanceof AgentError ? err.kind : undefined,
+  });
 }
 
 projects.get("/engine/projects", (c) => {
@@ -223,7 +233,7 @@ projects.post("/engine/projects/:id/constitution", async (c) => {
         (err as Error).message,
         runId,
       );
-      await stream.writeSSE({ event: "error", data: (err as Error).message });
+      await stream.writeSSE({ event: "error", data: sseErrorPayload(err) });
     }
   });
 });
@@ -283,7 +293,7 @@ projects.post("/engine/projects/:id/scope", async (c) => {
         runId,
       );
       setStage(project.id, "scope", "failed");
-      await stream.writeSSE({ event: "error", data: (err as Error).message });
+      await stream.writeSSE({ event: "error", data: sseErrorPayload(err) });
     }
   });
 });
@@ -347,7 +357,7 @@ projects.post("/engine/projects/:id/spec", async (c) => {
         runId,
       );
       setStage(project.id, "spec", "failed");
-      await stream.writeSSE({ event: "error", data: (err as Error).message });
+      await stream.writeSSE({ event: "error", data: sseErrorPayload(err) });
     }
   });
 });
@@ -417,7 +427,7 @@ projects.post("/engine/projects/:id/tasks", async (c) => {
         runId,
       );
       setStage(project.id, "skill", "failed");
-      await stream.writeSSE({ event: "error", data: (err as Error).message });
+      await stream.writeSSE({ event: "error", data: sseErrorPayload(err) });
     }
   });
 });
@@ -566,7 +576,7 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
         (err as Error).message,
         runId,
       );
-      await stream.writeSSE({ event: "error", data: (err as Error).message });
+      await stream.writeSSE({ event: "error", data: sseErrorPayload(err) });
     }
   });
 });

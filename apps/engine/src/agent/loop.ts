@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { chatStream, type ChatMessage, type ModelConnection } from "../gateway/index.ts";
+import { AgentError } from "./errors.ts";
 
 const templatesDir = join(import.meta.dirname, "templates");
 
@@ -131,7 +132,8 @@ export async function runStage(
     if (doc) files = [{ path: outPathFor(kind), content: doc }];
   }
   if (files.length === 0) {
-    throw new Error(
+    throw new AgentError(
+      "bad-output",
       "model output contained neither file blocks nor a recognizable markdown document",
     );
   }
@@ -211,7 +213,7 @@ export async function runImplementation(
   const result = await chatStream(conn, messages, onDelta);
   const files = parseFiles(stripThinking(result.content));
   if (files.length === 0) {
-    throw new Error("model output contained no file blocks — nothing to apply");
+    throw new AgentError("bad-output", "model output contained no file blocks — nothing to apply");
   }
   writeFiles(projectPath, files);
   const commitSha = commitAll(projectPath, `promptconnext: ${taskLabel}`);

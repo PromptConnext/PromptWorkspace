@@ -30,6 +30,11 @@ main.center {
   white-space: pre-wrap;
 }
 
+.warning {
+  color: #b45309;
+  white-space: pre-wrap;
+}
+
 .muted {
   color: var(--muted);
 }

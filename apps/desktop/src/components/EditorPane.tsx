@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { getStatus, readFile, writeFile, type FileNode } from "../api";
 import FileTree from "./FileTree";
 
@@ -93,7 +94,15 @@ export default function EditorPane({ projectId }: { projectId: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [save]);
 
-  const close = (path: string) => {
+  const close = async (path: string) => {
+    const tab = tabs.find((t) => t.path === path);
+    if (tab?.dirty) {
+      const confirmed = await ask(`You have unsaved changes in ${path}. Discard them?`, {
+        title: "Unsaved changes",
+        kind: "warning",
+      });
+      if (!confirmed) return;
+    }
     setTabs((prev) => prev.filter((t) => t.path !== path));
     if (active === path) {
       const rest = tabs.filter((t) => t.path !== path);
@@ -124,7 +133,7 @@ export default function EditorPane({ projectId }: { projectId: string }) {
                 {t.path.split("/").pop()}
                 {t.dirty ? " •" : ""}
               </button>
-              <button type="button" className="close" onClick={() => close(t.path)}>
+              <button type="button" className="close" onClick={() => void close(t.path)}>
                 ×
               </button>
             </div>

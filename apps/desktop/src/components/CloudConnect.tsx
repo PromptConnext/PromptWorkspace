@@ -93,6 +93,21 @@ export default function CloudConnect({
               : `Last sync failed: ${syncStatus.error}`}
           </p>
         )}
+        {syncStatus?.conflicts && Object.keys(syncStatus.conflicts).length > 0 && (
+          <details className="warning">
+            <summary>
+              {Object.values(syncStatus.conflicts).reduce((n, fields) => n + fields.length, 0)}{" "}
+              of your edits were overwritten by newer changes from a teammate
+            </summary>
+            <ul>
+              {Object.entries(syncStatus.conflicts).map(([entityId, fields]) => (
+                <li key={entityId}>
+                  {entityId}: {fields.join(", ")}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         <button type="button" disabled={busy} onClick={() => run(() => triggerCloudSync(projectId))}>
           {busy ? "Syncing…" : "Sync now"}
         </button>

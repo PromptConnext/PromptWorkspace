@@ -157,6 +157,38 @@ class Settings(BaseSettings):
                 'print(Fernet.generate_key().decode())"`).'
             )
 
+    def require_production_safety(self) -> list[str]:
+        """Hard-refuse boot-time misconfigurations that are safe in dev but
+        dangerous in production.
+
+        Stub auth (X-User-Id header, no verification) is a full auth bypass —
+        raise and refuse to start. A CORS allowlist still pointed at the
+        localhost dev defaults is not itself an auth bypass, so it only
+        warns (returned, not logged here — the caller owns logging).
+        """
+        if self.app_env == "production" and self.auth_mode == "stub":
+            raise RuntimeError(
+                "APP_ENV=production requires AUTH_MODE=supabase. AUTH_MODE=stub "
+                "trusts an unverified X-User-Id header and lets any caller act "
+                "as any user — this is a full authentication bypass and must "
+                "never run in production."
+            )
+
+        warnings: list[str] = []
+        default_cors = {
+            o.strip()
+            for o in "http://localhost:3000,http://localhost:1420".split(",")
+            if o.strip()
+        }
+        if self.app_env == "production" and set(self.cors_origin_list) <= default_cors:
+            warnings.append(
+                "APP_ENV=production but CORS_ORIGINS is still the localhost dev "
+                "default ({}); set CORS_ORIGINS to your production origin(s).".format(
+                    ", ".join(sorted(default_cors))
+                )
+            )
+        return warnings
+
 
 @lru_cache
 def get_settings() -> Settings:

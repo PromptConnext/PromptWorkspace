@@ -135,3 +135,24 @@ models.post("/engine/models/connect", async (c) => {
   setAppState("model_onboarding_state", "satisfied");
   return c.json({ id, verified: true });
 });
+
+// Explicit disconnect (plan §7f). We clear verified_at/credential_ref rather
+// than deleting the row, same reasoning as the supersede-on-reconnect path
+// above: agent_runs.model_connection_id references these rows (FK enforced),
+// and clearing keeps run history resolvable while dropping the dangling
+// secret.
+models.delete("/engine/models/:id", (c) => {
+  const id = c.req.param("id");
+  const row = db
+    .prepare("SELECT credential_ref FROM model_connections WHERE id = ?")
+    .get(id) as { credential_ref: string | null } | undefined;
+  if (!row) return c.json({ error: "connection not found" }, 404);
+
+  if (row.credential_ref) deleteSecret(row.credential_ref);
+
+  db.prepare(
+    "UPDATE model_connections SET verified_at = NULL, credential_ref = NULL WHERE id = ?",
+  ).run(id);
+
+  return c.json({ ok: true });
+});

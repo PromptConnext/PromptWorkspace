@@ -392,6 +392,10 @@ class GraphUpsertRequest(BaseModel):
 class GraphUpsertResponse(BaseModel):
     upserted: dict[str, int]
     cursor: datetime | None = None
+    # Entity id -> field names silently dropped by the merge (ownership-gate
+    # rejection or stale LWW). Additive/optional so existing clients that
+    # ignore it keep working; the desktop UI surfaces it as a warning banner.
+    conflicts: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ChangesHead(BaseModel):

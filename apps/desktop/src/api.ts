@@ -109,6 +109,11 @@ export const getRecommendations = () =>
 
 export const listModels = () => request<{ connections: Connection[] }>("/engine/models");
 
+// Explicit disconnect (plan §7f) — clears the connection's health/credential
+// state on the engine so it drops out of role resolution and the keychain.
+export const deleteModelConnection = (id: string) =>
+  request<{ ok: boolean }>(`/engine/models/${id}`, { method: "DELETE" });
+
 export const getLocalLlmEnv = () =>
   request<{ model: string; env: Record<string, string> }>("/engine/local-llm-env");
 
@@ -132,8 +137,23 @@ export const createProject = (name: string, path?: string) =>
     body: JSON.stringify({ name, ...(path ? { path } : {}) }),
   });
 
+// Structured agent error kinds (engine `AgentError`, plan §7e) — lets the UI
+// give kind-specific guidance (e.g. point at the AgentPicker for "no-agent",
+// offer a Retry button for "network") instead of one generic error paragraph.
+export type EngineErrorKind = "no-agent" | "agent-crash" | "no-changes" | "bad-output" | "network";
+
+// A plain Error with an optional `.kind` attached, so existing `catch (err)`
+// call sites keep working with `(err as Error).message` while call sites that
+// care can read `(err as EngineError).kind`.
+export type EngineError = Error & { kind?: EngineErrorKind };
+
+function engineError(message: string, kind?: EngineErrorKind): EngineError {
+  return Object.assign(new Error(message), { kind });
+}
+
 // Stage runs stream over SSE: `delta` events carry raw model tokens, then one
-// `done` (JSON payload) or `error` event ends the stream.
+// `done` (JSON payload) or `error` event ends the stream. The `error` event's
+// data is JSON (`{ error, kind? }`) so the client can surface the failure kind.
 async function requestSSE<T>(
   path: string,
   body: unknown,
@@ -146,7 +166,7 @@ async function requestSSE<T>(
   });
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}));
-    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    throw engineError((data as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -177,7 +197,21 @@ async function requestSSE<T>(
       buf = buf.slice(idx + 2);
     }
   }
-  if (error) throw new Error(error);
+  if (error) {
+    // The `error` event's data is JSON (`{ error, kind? }`); fall back to
+    // treating the raw payload as the message for a non-JSON error string.
+    const rawError: string = error;
+    let message: string = rawError;
+    let kind: EngineErrorKind | undefined;
+    try {
+      const parsed = JSON.parse(rawError) as { error?: string; kind?: EngineErrorKind };
+      message = parsed.error ?? rawError;
+      kind = parsed.kind;
+    } catch {
+      // not JSON — use the raw payload as the message
+    }
+    throw engineError(message, kind);
+  }
   if (done === null) throw new Error("stream ended without a result");
   return done;
 }
@@ -265,6 +299,7 @@ export type AgentInfo = {
   label: string;
   installed: boolean;
   bringsOwnModel: boolean;
+  installUrl?: string;
 };
 
 export const listAgents = () => request<{ agents: AgentInfo[] }>("/engine/agents");
@@ -339,6 +374,10 @@ export type CloudSyncResult = {
   at: string | null;
   ok: boolean | null;
   upserted?: Record<string, number>;
+  // Entity id -> field names the cloud's ownership/LWW merge gate silently
+  // dropped on this push (WP2 — sync conflict visibility). Non-empty means a
+  // teammate's edit was overwritten and the UI should warn about it.
+  conflicts?: Record<string, string[]>;
   error?: string;
 };
 

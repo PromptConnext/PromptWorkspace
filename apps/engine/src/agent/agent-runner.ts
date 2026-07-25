@@ -11,6 +11,7 @@ import { ENGINE_PORT } from "../config.ts";
 import { dataDir } from "../db.ts";
 import { commitFiles } from "./loop.ts";
 import { resolveAdapter, detectInstalledAgents } from "./adapters/index.ts";
+import { AgentError } from "./errors.ts";
 
 const AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -44,7 +45,7 @@ export async function runAgentTask(
   preferredAgentId?: string | null,
 ): Promise<{ files: string[]; commitSha: string; agent: string }> {
   const adapter = resolveAdapter(preferredAgentId);
-  if (!adapter) throw new Error("no agent CLI available");
+  if (!adapter) throw new AgentError("no-agent", "no agent CLI available");
 
   const plan = adapter.buildSpawn({
     prompt,
@@ -89,11 +90,17 @@ export async function runAgentTask(
   });
 
   if (exitCode !== 0) {
-    throw new Error(`${adapter.label} exited with code ${exitCode}: ${stderr.slice(-400)}`);
+    throw new AgentError(
+      "agent-crash",
+      `${adapter.label} exited with code ${exitCode}: ${stderr.slice(-400)}`,
+    );
   }
   const files = changedFiles(projectPath);
   if (files.length === 0) {
-    throw new Error(`${adapter.label} completed but made no changes to the repository`);
+    throw new AgentError(
+      "no-changes",
+      `${adapter.label} completed but made no changes to the repository`,
+    );
   }
   const commitSha = commitFiles(projectPath, files, `promptconnext: ${taskLabel}`);
   return { files, commitSha, agent: adapter.id };
