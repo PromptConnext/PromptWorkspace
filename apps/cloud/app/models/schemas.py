@@ -329,6 +329,14 @@ class Project(BaseModel):
             "skill": StageStatus.locked,
         }
     )
+    # Cloud Planner lifecycle (docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md):
+    # planning -> pending_tech_review -> tech_review -> repo_created. Linear,
+    # no going back — iteration happens within a state.
+    lifecycle_status: Literal["planning", "pending_tech_review", "tech_review", "repo_created"] = (
+        "planning"
+    )
+    repo_url: str | None = None
+    repo_default_branch: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
