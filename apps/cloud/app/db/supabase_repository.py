@@ -246,6 +246,14 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Project(**rows[0]) if rows else None
 
+    def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
+        patch = {"lifecycle_status": status, "updated_at": utcnow().isoformat()}
+        self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError("project_not_found")
+        return project
+
     def list_projects(self, user_id: str) -> list[Project]:
         mem = self._client.table(_MEMBERS).select("workspace_id").eq("user_id", user_id).execute()
         ids = [m["workspace_id"] for m in (mem.data or [])]

@@ -125,6 +125,9 @@ class Repository(abc.ABC):
     def list_projects_by_workspace(self, workspace_id: str) -> list[Project]: ...
 
     @abc.abstractmethod
+    def update_project_lifecycle_status(self, project_id: str, status: str) -> Project: ...
+
+    @abc.abstractmethod
     def list_invitations(
         self, workspace_id: str, status: InvitationStatus | None = None
     ) -> list[Invitation]: ...
@@ -501,6 +504,12 @@ class InMemoryRepository(Repository):
 
     def get_project(self, project_id: str) -> Project | None:
         return self._projects.get(project_id)
+
+    def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
+        project = self._projects[project_id]
+        updated = project.model_copy(update={"lifecycle_status": status, "updated_at": utcnow()})
+        self._projects[project_id] = updated
+        return updated
 
     def list_projects(self, user_id: str) -> list[Project]:
         member_ws = {

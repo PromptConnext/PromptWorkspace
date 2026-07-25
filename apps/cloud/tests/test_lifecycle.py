@@ -28,3 +28,18 @@ def test_new_project_defaults_to_planning():
         assert project["lifecycle_status"] == "planning"
         assert project["repo_url"] is None
         assert project["repo_default_branch"] is None
+
+
+def test_update_project_lifecycle_status_persists():
+    with _client() as client:
+        ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+        project = client.post(
+            "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+        ).json()
+
+        repo = client.app.state.repository
+        updated = repo.update_project_lifecycle_status(project["id"], "pending_tech_review")
+        assert updated.lifecycle_status == "pending_tech_review"
+
+        refetched = repo.get_project(project["id"])
+        assert refetched.lifecycle_status == "pending_tech_review"
