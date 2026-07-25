@@ -15,7 +15,8 @@
       "@vscode/ripgrep": "1.15.9",
       "drivelist": "file:apps/desktop-theia/stubs/drivelist",
       "keytar": "file:apps/desktop-theia/stubs/keytar",
-      "native-keymap": "file:apps/desktop-theia/stubs/native-keymap"
+      "native-keymap": "file:apps/desktop-theia/stubs/native-keymap",
+      "@wdio/native-utils": "2.5.0"
     },
     "packageExtensions": {
       "@monaco-editor/react": {

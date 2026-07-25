@@ -124,7 +124,7 @@ fn restart_engine(state: State<EngineProcess>) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let token = mint_token();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Registration order matters: tauri-plugin-single-instance must be
         // added first so its second-instance callback can forward the
         // OS-provided deep-link argv into the deep-link plugin's state
@@ -143,7 +143,12 @@ pub fn run() {
         // check/skip/remind UX and calls downloadAndInstall() + relaunch().
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![engine_log_tail, restart_engine])
         .setup(move |app| {
             let dir = engine_dir(app.handle());
