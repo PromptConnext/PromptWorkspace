@@ -35,6 +35,9 @@ export interface Project {
   owner_id: string;
   onboarding_state: string;
   stage_state: Record<string, string>;
+  lifecycle_status: "planning" | "pending_tech_review" | "tech_review" | "repo_created";
+  repo_url: string | null;
+  repo_default_branch: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -155,3 +158,29 @@ export interface InvitationCreateResponse {
 }
 
 export type StageKind = "constitution" | "specify" | "plan" | "tasks";
+
+export interface DocumentOut {
+  id: string;
+  project_id: string;
+  title: string;
+  mime: string;
+  source_kind: string;
+  extract_method: string | null;
+  status: "pending" | "extracted" | "failed";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GenerateDoneEvent {
+  stage: StageKind;
+  title: string;
+  content: string;
+  requirement_id?: string;
+  spec_document_id?: string;
+  task_count?: number;
+}
+
+export interface GenerateErrorEvent {
+  error: string;
+  retryable?: boolean;
+}
