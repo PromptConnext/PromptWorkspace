@@ -1,11 +1,12 @@
 // apps/web/src/components/project/Planner.tsx
 "use client";
 
-import { useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { apiFetch, getStageDocument, updateStageDocument } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { DocumentUpload } from "./DocumentUpload";
 import { useStageGeneration } from "./useStageGeneration";
+import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import type { DocumentOut, Project, StageKind } from "@/lib/types";
 
 const STAGE_ORDER: { stage: StageKind; label: string; buttonLabel: string }[] = [
@@ -29,8 +30,47 @@ function StageSection({
   label: string;
   buttonLabel: string;
 }) {
+  const { authHeaders } = useAuth();
   const [input, setInput] = useState("");
   const { status, streamedText, result, error, generate } = useStageGeneration(projectId);
+
+  const [docContent, setDocContent] = useState("");
+  const [docSaving, setDocSaving] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getStageDocument(projectId, stage, authHeaders())
+      .then((doc) => {
+        if (!cancelled) setDocContent(doc.content);
+      })
+      .catch(() => {
+        // 404-as-empty is handled server-side (returns content: ""); any
+        // other failure just leaves the editor empty rather than blocking render.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, stage]);
+
+  useEffect(() => {
+    if (status === "done" && result) {
+      setDocContent(result.content);
+    }
+  }, [status, result]);
+
+  async function saveDoc() {
+    setDocSaving(true);
+    setDocError(null);
+    try {
+      await updateStageDocument(projectId, stage, docContent, authHeaders());
+    } catch (err) {
+      setDocError((err as Error).message);
+    } finally {
+      setDocSaving(false);
+    }
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -51,7 +91,7 @@ function StageSection({
         {status === "generating" ? "Generating…" : buttonLabel}
       </button>
 
-      {(status === "generating" || status === "done") && streamedText && (
+      {status === "generating" && streamedText && (
         <pre className="mt-3 whitespace-pre-wrap rounded bg-slate-50 p-3 text-xs text-slate-700">
           {streamedText}
         </pre>
@@ -76,6 +116,18 @@ function StageSection({
             ? `${result.task_count} tasks created`
             : "Saved as a draft"}
         </p>
+      )}
+
+      {docContent && (
+        <div className="mt-3">
+          <MarkdownEditor
+            value={docContent}
+            onChange={setDocContent}
+            onSave={saveDoc}
+            saving={docSaving}
+            error={docError}
+          />
+        </div>
       )}
     </div>
   );

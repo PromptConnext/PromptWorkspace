@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Planner } from "./Planner";
 import type { Project } from "@/lib/types";
@@ -26,7 +26,16 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 describe("Planner", () => {
   beforeEach(() => {
     localStorage.clear();
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "specify", content: "", updated_at: null }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -51,5 +60,30 @@ describe("Planner", () => {
     );
     expect(screen.getByText(/sent to tech lead/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+  });
+
+  it("hydrates the MarkdownEditor from the persisted stage document on mount", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/specify")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "specify", content: "# Existing spec", updated_at: "2026-07-26T00:00:00Z" }),
+        });
+      }
+      if (href.includes("/stage-documents/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "plan", content: "", updated_at: null }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("# Existing spec")).toBeInTheDocument();
+    });
   });
 });
