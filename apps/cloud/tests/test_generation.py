@@ -144,6 +144,19 @@ def test_specify_grounds_on_uploaded_document_via_full_text_injection(client: Te
     assert requirement.description == SPECIFY_INPUT
 
 
+def test_successful_generate_autosaves_stage_document(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+    assert res.status_code == 200, res.text
+    events = _sse_events(res.text)
+    generated_content = events["done"]["content"]
+
+    doc_res = client.get(f"/projects/{pid}/stage-documents/specify", headers=ALICE)
+    assert doc_res.status_code == 200, doc_res.text
+    assert doc_res.json()["content"] == generated_content
+
+
 def test_plan_requires_a_requirement_first(client: TestClient):
     _ws_id, pid = _bootstrap(client)
 

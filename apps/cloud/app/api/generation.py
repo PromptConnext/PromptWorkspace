@@ -50,6 +50,7 @@ from app.models.schemas import (
     Task,
 )
 from app.rag.budget import estimate_tokens
+from app.rag.queue import EmbedJob, enqueue
 
 logger = logging.getLogger("promptconnext.generation")
 router = APIRouter(tags=["generation"])
@@ -183,6 +184,14 @@ async def generate(
             )
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
+
+        stage_doc = repo.upsert_stage_document(
+            project_id, project.workspace_id, stage, result.content, user.id
+        )
+        enqueue(
+            request.app,
+            EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
+        )
 
         repo.update_generation_run(
             run.id,
