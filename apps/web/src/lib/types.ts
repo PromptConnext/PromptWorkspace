@@ -184,3 +184,9 @@ export interface GenerateErrorEvent {
   error: string;
   retryable?: boolean;
 }
+
+export interface StageDocumentOut {
+  stage: StageKind;
+  content: string;
+  updated_at: string | null;
+}

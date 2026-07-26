@@ -2,7 +2,7 @@
 // apps/engine/src/cloudClient.ts on the browser side.
 
 import { CLOUD_API_URL } from "./config";
-import type { Task, WorkspaceMember } from "./types";
+import type { StageDocumentOut, StageKind, Task, WorkspaceMember } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -45,5 +45,25 @@ export function assignTask(
   return apiFetch<Task>(`/projects/${projectId}/tasks/${taskId}/assignment`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ assigned_user_id: assignedUserId }),
+  });
+}
+
+export function getStageDocument(
+  projectId: string,
+  stage: StageKind,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDocumentOut>(`/projects/${projectId}/stage-documents/${stage}`, authHeaders);
+}
+
+export function updateStageDocument(
+  projectId: string,
+  stage: StageKind,
+  content: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDocumentOut>(`/projects/${projectId}/stage-documents/${stage}`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ content }),
   });
 }
