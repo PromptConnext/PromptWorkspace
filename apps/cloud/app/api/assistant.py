@@ -115,16 +115,26 @@ def reindex_project(
     graph = repo.get_graph(project_id)  # bootstrap pull: live rows only
     enqueued = 0
     for node_type in RAG_NODE_TYPES:
-        if node_type in ("pull_requests", "documents"):
-            # Neither is a GraphEntity in ProjectGraph — PullRequest rows have
-            # GitHub as their source of truth (M11); Document rows are
-            # written once by the upload endpoint (M0), which enqueues its
-            # own embed job immediately. Both index the moment they arrive,
-            # so no backfill scenario exists for them the way there is for
-            # requirements/specs/tasks that pre-date RAG.
+        if node_type in ("pull_requests", "documents", "stage_documents"):
+            # None of these are GraphEntity members of ProjectGraph.
+            # PullRequest rows have GitHub as their source of truth (M11);
+            # Document rows are written once by the upload endpoint (M0),
+            # which enqueues its own embed job immediately — both index the
+            # moment they arrive, so no backfill scenario exists for them the
+            # way there is for requirements/specs/tasks that pre-date RAG.
+            # stage_documents is a separate per-stage store, not a graph
+            # entity (Task 1) — swept explicitly below instead.
             continue
         for item in getattr(graph, node_type):
             enqueue(request.app, EmbedJob(project.workspace_id, project_id, node_type, item.id))
+            enqueued += 1
+    for stage in ("constitution", "specify", "plan", "tasks"):
+        stage_doc = repo.get_stage_document(project_id, stage)
+        if stage_doc is not None:
+            enqueue(
+                request.app,
+                EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
+            )
             enqueued += 1
     return {"enqueued": enqueued}
 

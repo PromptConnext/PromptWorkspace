@@ -36,6 +36,7 @@ from app.models.schemas import (
     PullRequest,
     Requirement,
     SpecDocument,
+    StageDocument,
     Task,
 )
 
@@ -46,6 +47,7 @@ RAG_NODE_TYPES = (
     "pull_requests",
     "discussions",
     "documents",
+    "stage_documents",
 )
 
 
@@ -63,4 +65,6 @@ def node_text(node_type: str, node: GraphEntity | PullRequest | Document) -> str
         return node.body.strip()
     if node_type == "documents" and isinstance(node, Document):
         return (node.extracted_text or "").strip()
+    if node_type == "stage_documents" and isinstance(node, StageDocument):
+        return node.content.strip()
     return ""
