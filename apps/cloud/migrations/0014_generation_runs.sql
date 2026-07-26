@@ -24,4 +24,12 @@ drop policy if exists pz_generation_runs_read on pz_generation_runs;
 create policy pz_generation_runs_read on pz_generation_runs
   for select using (pz_is_member(workspace_id));
 
+drop policy if exists pz_generation_runs_write on pz_generation_runs;
+create policy pz_generation_runs_write on pz_generation_runs
+  for insert with check (pz_is_member(workspace_id));
+
+drop policy if exists pz_generation_runs_update on pz_generation_runs;
+create policy pz_generation_runs_update on pz_generation_runs
+  for update using (pz_is_member(workspace_id)) with check (pz_is_member(workspace_id));
+
 grant select, insert, update, delete on pz_generation_runs to authenticated;

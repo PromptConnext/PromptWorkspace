@@ -11,6 +11,8 @@ import re
 _FILE_BLOCK_RE = re.compile(r"```file:([^\n]+)\n(.*?)```", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->\n?", re.DOTALL)
+_SPECKIT_MARKER_LINE_RE = re.compile(r"^.*__SPECKIT_COMMAND_[A-Z]+__.*\n?", re.MULTILINE)
 
 
 def parse_files(raw: str) -> list[dict[str, str]]:
@@ -43,6 +45,19 @@ def extract_document(raw: str) -> str | None:
     if h1 >= 0 and not text.startswith("# "):
         text = text[h1 + 1 :]
     return text if text.startswith("# ") and len(text) > 80 else None
+
+
+def strip_template_scaffolding(doc: str) -> str:
+    """Models sometimes echo the driver template's authoring guidance back
+    into the generated document instead of treating it as instructions:
+    HTML comments (`<!-- ACTION REQUIRED: ... -->`) and lines carrying a
+    `__SPECKIT_COMMAND_*__` marker (e.g. the template's own "Note: this
+    file is filled in by ..." line). Strip both deterministically rather
+    than relying solely on prompt compliance from weaker models."""
+    text = _HTML_COMMENT_RE.sub("", doc)
+    text = _SPECKIT_MARKER_LINE_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def parse_task_lines(doc: str) -> list[dict[str, object]]:

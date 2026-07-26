@@ -50,6 +50,12 @@ def driver_prompt(kind: StageKind) -> str:
         "Fill in the following template completely, based on the user's input. Replace every "
         "placeholder. Do not leave template markers like [FEATURE NAME] or $ARGUMENTS in the "
         "output. Mark genuine unknowns with [NEEDS CLARIFICATION: question].",
+        "The template's HTML comments (<!-- ... -->) are authoring guidance for you, not "
+        "content — omit them entirely from the output. Never copy instructional text (e.g. "
+        "'IMPORTANT', 'MUST replace these', 'DO NOT keep') into the generated document. Any "
+        "line containing a __SPECKIT_COMMAND_*__ marker (including the 'Note: This template is "
+        "filled in by...' line) is template metadata, not part of the document — delete the "
+        "entire line, don't just leave the marker unresolved.",
     ]
     if kind == "tasks":
         lines.append(
