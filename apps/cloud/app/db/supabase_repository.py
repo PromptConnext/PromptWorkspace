@@ -447,6 +447,17 @@ class SupabaseRepository(Repository):
             return PullRequest(**rows[0]) if rows else None
         if node_type == "documents":
             return self.get_document(project_id, node_id)
+        if node_type == "stage_documents":
+            res = (
+                self._client.table(_STAGE_DOCUMENTS)
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("id", node_id)
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            return StageDocument(**rows[0]) if rows else None
         model = ENTITY_TYPES[node_type]
         res = (
             self._client.table(_TABLE[node_type])

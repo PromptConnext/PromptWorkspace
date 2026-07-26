@@ -681,6 +681,10 @@ class StageDocument(BaseModel):
     content: str = ""
     created_by: str
     updated_at: datetime = Field(default_factory=utcnow)
+    # Always None in v1 — no delete endpoint yet — present so the embed
+    # worker's duck-typed tombstone check (`node.deleted_at`), shared with
+    # every other node_type, works unmodified for this one too.
+    deleted_at: datetime | None = None
 
 
 # --------------------------------------------------------------------------- #

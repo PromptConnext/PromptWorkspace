@@ -657,6 +657,11 @@ class InMemoryRepository(Repository):
         if node_type == "documents":
             doc = self._documents.get(project_id, {}).get(node_id)
             return copy.deepcopy(doc) if doc else None
+        if node_type == "stage_documents":
+            for doc in self._stage_documents.get(project_id, {}).values():
+                if doc.id == node_id:
+                    return copy.deepcopy(doc)
+            return None
         store = self._graph.get(project_id)
         if not store:
             return None
