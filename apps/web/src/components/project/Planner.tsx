@@ -35,6 +35,7 @@ function StageSection({
   const { status, streamedText, result, error, generate } = useStageGeneration(projectId);
 
   const [docContent, setDocContent] = useState("");
+  const [docLoaded, setDocLoaded] = useState(false);
   const [docSaving, setDocSaving] = useState(false);
   const [docError, setDocError] = useState<string | null>(null);
 
@@ -42,11 +43,15 @@ function StageSection({
     let cancelled = false;
     getStageDocument(projectId, stage, authHeaders())
       .then((doc) => {
-        if (!cancelled) setDocContent(doc.content);
+        if (!cancelled) {
+          setDocContent(doc.content);
+          setDocLoaded(true);
+        }
       })
       .catch(() => {
         // 404-as-empty is handled server-side (returns content: ""); any
         // other failure just leaves the editor empty rather than blocking render.
+        if (!cancelled) setDocLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -118,7 +123,7 @@ function StageSection({
         </p>
       )}
 
-      {docContent && (
+      {docLoaded && (
         <div className="mt-3">
           <MarkdownEditor
             value={docContent}
