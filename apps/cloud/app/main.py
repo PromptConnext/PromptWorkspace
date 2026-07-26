@@ -25,6 +25,7 @@ from app.api import (
     health,
     integrations,
     presence,
+    stage_documents,
     sync,
     workspaces,
 )
@@ -202,6 +203,7 @@ def create_app() -> FastAPI:
     app.include_router(discussions.router)
     app.include_router(documents.router)
     app.include_router(generation.router)
+    app.include_router(stage_documents.router)
     app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])
