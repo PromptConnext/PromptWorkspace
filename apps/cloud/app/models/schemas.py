@@ -673,6 +673,16 @@ class DocumentOut(BaseModel):
     updated_at: datetime
 
 
+class StageDocument(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    project_id: str
+    stage: Literal["constitution", "specify", "plan", "tasks"]
+    content: str = ""
+    created_by: str
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 # --------------------------------------------------------------------------- #
 # Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
 # `generation_runs` is an audit/cost-accounting record, not itself part of

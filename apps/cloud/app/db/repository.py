@@ -36,10 +36,12 @@ from app.models.schemas import (
     Requirement,
     Role,
     SpecDocument,
+    StageDocument,
     Task,
     TaskLink,
     Workspace,
     WorkspaceMember,
+    new_id,
     utcnow,
 )
 
@@ -336,6 +338,14 @@ class Repository(abc.ABC):
         completion_tokens: int,
     ) -> GenerationRun: ...
 
+    @abc.abstractmethod
+    def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None: ...
+
+    @abc.abstractmethod
+    def upsert_stage_document(
+        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+    ) -> StageDocument: ...
+
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
 
@@ -364,6 +374,8 @@ class InMemoryRepository(Repository):
         self._documents: dict[str, dict[str, Document]] = {}
         # generation_run_id -> GenerationRun (M1)
         self._generation_runs: dict[str, GenerationRun] = {}
+        # project_id -> stage -> StageDocument (Planner editable-markdown)
+        self._stage_documents: dict[str, dict[str, StageDocument]] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -904,6 +916,27 @@ class InMemoryRepository(Repository):
         run.prompt_tokens = prompt_tokens
         run.completion_tokens = completion_tokens
         return run
+
+    def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None:
+        doc = self._stage_documents.get(project_id, {}).get(stage)
+        return copy.deepcopy(doc) if doc else None
+
+    def upsert_stage_document(
+        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+    ) -> StageDocument:
+        store = self._stage_documents.setdefault(project_id, {})
+        existing = store.get(stage)
+        doc = StageDocument(
+            id=existing.id if existing else new_id(),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            stage=stage,
+            content=content,
+            created_by=existing.created_by if existing else user_id,
+            updated_at=utcnow(),
+        )
+        store[stage] = doc
+        return copy.deepcopy(doc)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
