@@ -179,7 +179,14 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
                   className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50"
                 >
                   <ProjectIcon />
-                  <span className="font-medium text-slate-900">{p.name}</span>
+                  <span className="flex-1 font-medium text-slate-900">{p.name}</span>
+                  <span className="text-sm text-slate-500">
+                    {new Date(p.created_at).toLocaleDateString(undefined, {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
                 </Link>
               </li>
             ))}
