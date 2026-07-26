@@ -38,10 +38,12 @@ from app.models.schemas import (
     Requirement,
     Role,
     SpecDocument,
+    StageDocument,
     Task,
     TaskLink,
     Workspace,
     WorkspaceMember,
+    new_id,
     utcnow,
 )
 
@@ -66,6 +68,7 @@ _CODE_CHUNKS = "pz_code_chunks"
 _CODE_MATCH_RPC = "pz_code_match_chunks"
 _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
+_STAGE_DOCUMENTS = "pz_stage_documents"
 
 
 class SupabaseRepository(Repository):
@@ -785,6 +788,35 @@ class SupabaseRepository(Repository):
         if not rows:
             raise KeyError("generation_run_not_found")
         return GenerationRun(**rows[0])
+
+    def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None:
+        res = (
+            self._client.table(_STAGE_DOCUMENTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("stage", stage)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return StageDocument(**rows[0]) if rows else None
+
+    def upsert_stage_document(
+        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+    ) -> StageDocument:
+        existing = self.get_stage_document(project_id, stage)
+        doc = StageDocument(
+            id=existing.id if existing else new_id(),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            stage=stage,
+            content=content,
+            created_by=existing.created_by if existing else user_id,
+        )
+        self._client.table(_STAGE_DOCUMENTS).upsert(
+            _dump(doc), on_conflict="project_id,stage"
+        ).execute()
+        return doc
 
 
 def _dump(model) -> dict:
