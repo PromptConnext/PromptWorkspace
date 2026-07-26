@@ -185,13 +185,24 @@ async def generate(
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        stage_doc = repo.upsert_stage_document(
-            project_id, project.workspace_id, stage, result.content, user.id
-        )
-        enqueue(
-            request.app,
-            EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
-        )
+        try:
+            stage_doc = repo.upsert_stage_document(
+                project_id, project.workspace_id, stage, result.content, user.id
+            )
+            enqueue(
+                request.app,
+                EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
+            )
+        except Exception:
+            # The graph entities above already committed successfully; the
+            # stage-document auto-save is a side-store convenience and must
+            # not retroactively fail a generation that already succeeded
+            # from the user's perspective.
+            logger.exception(
+                "auto-save of stage document failed for project=%s stage=%s",
+                project_id,
+                stage,
+            )
 
         repo.update_generation_run(
             run.id,
