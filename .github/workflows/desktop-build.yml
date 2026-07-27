@@ -28,7 +28,14 @@ jobs:
       - uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: apps/desktop/src-tauri
-      - run: pnpm install --frozen-lockfile
+      # --filter scopes install to @promptconnext/desktop + @promptconnext/engine
+      # (stage:engine's `pnpm --filter @promptconnext/engine deploy`, run later via
+      # beforeBuildCommand, needs engine's own deps present). This skips sibling
+      # workspace packages — e.g. apps/desktop-theia's node-pty/@theia/ffmpeg native
+      # builds and @vscode/ripgrep download, which this build doesn't need and which
+      # fail on these runners: no VS Build Tools on windows-latest, GitHub API
+      # rate-limiting on macos-latest.
+      - run: pnpm install --frozen-lockfile --filter @promptconnext/desktop... --filter @promptconnext/engine...
       - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         id: tauri
         with:
