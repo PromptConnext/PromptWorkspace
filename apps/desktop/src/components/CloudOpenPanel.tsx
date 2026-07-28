@@ -50,8 +50,8 @@ export default function CloudOpenPanel({
       </div>
       {mode === "clone" ? (
         <p className="muted">
-          Clone <code>{repoUrl}</code> to… — this project&apos;s repository was created and seeded by
-          PromptConnext Cloud. Choose a folder for the clone, or use the default location.
+          This project&apos;s repository was created and seeded by PromptConnext Cloud. Choose a
+          folder to clone <code>{repoUrl}</code> into, or use the default location.
         </p>
       ) : (
         <p className="muted">
