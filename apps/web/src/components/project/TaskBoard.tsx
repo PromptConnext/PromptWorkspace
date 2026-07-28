@@ -14,6 +14,26 @@ const AUTHORITY_STYLE: Record<string, string> = {
   shared: "bg-slate-100 text-slate-600",
 };
 
+/**
+ * Field ownership (ADR 0010) is worth surfacing — it explains why a value
+ * can't be edited here — but "· pmo" is internal vocabulary. Carry the
+ * meaning in colour plus a hover title instead of printing the domain name
+ * at a business stakeholder.
+ */
+const AUTHORITY_HINT: Record<string, string> = {
+  pz: "Managed in PromptConnext",
+  pmo: "Managed by the connected project tracker (Jira / ClickUp)",
+  shared: "Editable in PromptConnext and the connected tracker",
+};
+
+function authorityHint(field: string): string {
+  return AUTHORITY_HINT[authorityOf("tasks", field)];
+}
+
+function authorityClass(field: string): string {
+  return `rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", field)]}`;
+}
+
 function AssigneeControl({
   task,
   members,
@@ -40,8 +60,8 @@ function AssigneeControl({
   if (!canEdit) {
     const label = members.find((m) => m.user_id === task.assigned_user_id)?.email ?? task.assigned_user_id;
     return (
-      <span className={`rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", "assigned_user_id")]}`}>
-        @{label} · pz
+      <span className={authorityClass("assigned_user_id")} title={authorityHint("assigned_user_id")}>
+        @{label}
       </span>
     );
   }
@@ -97,28 +117,21 @@ function TaskCard({
 }) {
   return (
     <div className="rounded border border-slate-200 bg-white p-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${AUTHORITY_STYLE[authorityOf("tasks", "title")]}`}
-        >
-          title · shared
-        </span>
-      </div>
-      <p className="mt-1 font-medium">{task.title}</p>
+      <p className="font-medium">{task.title}</p>
       <div className="mt-2 flex flex-wrap items-center gap-1">
         {task.feature_tag && (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", "feature_tag")]}`}>
-            {task.feature_tag} · pmo
+          <span className={authorityClass("feature_tag")} title={authorityHint("feature_tag")}>
+            {task.feature_tag}
           </span>
         )}
         {task.assignee && (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", "assignee")]}`}>
-            @{task.assignee} · pmo
+          <span className={authorityClass("assignee")} title={authorityHint("assignee")}>
+            @{task.assignee}
           </span>
         )}
         {task.sprint && (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", "sprint")]}`}>
-            {task.sprint} · pmo
+          <span className={authorityClass("sprint")} title={authorityHint("sprint")}>
+            {task.sprint}
           </span>
         )}
         <AssigneeControl
