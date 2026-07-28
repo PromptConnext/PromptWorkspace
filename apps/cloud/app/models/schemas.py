@@ -582,6 +582,19 @@ class GithubInstallRequest(BaseModel):
     repo: str  # "owner/name"
     default_branch: str = "main"
     project_id: str
+    # Org/user the App is installed on. Repo creation (create-repository,
+    # app/api/sync.py) needs this separately from `repo`, since `repo` may
+    # not exist yet at install time; null falls back to `repo.split("/")[0]`.
+    owner: str | None = None
+
+
+class CreateRepositoryRequest(BaseModel):
+    """Body for POST /projects/{id}/lifecycle/create-repository. `name` lets
+    the Tech Lead override the auto-derived slug; omitted, the endpoint
+    slugifies the project name."""
+
+    name: str | None = None
+    private: bool = True
 
 
 class PullRequest(BaseModel):

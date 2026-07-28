@@ -27,7 +27,32 @@ export type WorkspaceContext = {
 // for a roster project (resolved to a local project on select) or
 // `local:<localProjectId>` for a purely-local / pending-sync one. Workspace
 // owns the roster-driven tab list (ADR 0015 G3); TopBar just renders it.
-export type ProjectTab = { key: string; name: string };
+// `lifecycle_status`/`repo_url` are carried along only for cloud tabs that
+// have no local counterpart yet, so TopBar can render a muted badge for the
+// three pre-repo states instead of a project name alone (plan: cloud creates
+// the repo at tech-review exit).
+export type ProjectTab = {
+  key: string;
+  name: string;
+  lifecycle_status?: string;
+  repo_url?: string | null;
+};
+
+// Muted, human-readable label for a cloud tab not yet at repo_created.
+// Undefined (no badge) once the repo exists — a project tab reads as a plain
+// name from then on, matching a local project's tab.
+function lifecycleBadge(status?: string): string | null {
+  switch (status) {
+    case "planning":
+      return "In planning";
+    case "pending_tech_review":
+      return "Awaiting review";
+    case "tech_review":
+      return "In tech review";
+    default:
+      return null;
+  }
+}
 
 // Global navigation shell (replaces the old sidebar project list): one bar
 // always visible above the 3S flow, so switching workspace/project or seeing
@@ -333,16 +358,20 @@ export default function TopBar({
       </div>
 
       <nav className="tb-projects">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={"tb-tab" + (t.key === activeTabKey ? " active" : "")}
-            onClick={() => onSelectTab(t.key)}
-          >
-            {t.name}
-          </button>
-        ))}
+        {tabs.map((t) => {
+          const badge = lifecycleBadge(t.lifecycle_status);
+          return (
+            <button
+              key={t.key}
+              type="button"
+              className={"tb-tab" + (t.key === activeTabKey ? " active" : "")}
+              onClick={() => onSelectTab(t.key)}
+            >
+              {t.name}
+              {badge && <span className="tb-tab-badge muted">{badge}</span>}
+            </button>
+          );
+        })}
         {cloudProjectLink && (
           <button
             type="button"

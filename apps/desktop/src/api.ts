@@ -440,7 +440,19 @@ export const createDiscussion = (
 // These wrap G2's already-shipped engine routes — no new endpoints.
 
 export type RosterWorkspace = { id: string; name: string };
-export type RosterProject = { id: string; name: string; workspace_id: string };
+// Cloud Planner lifecycle (plan: cloud creates the repo at tech-review exit):
+// planning -> pending_tech_review -> tech_review -> repo_created. Matches what
+// the engine's roster cache carries (apps/engine/src/cloudClient.ts:77-89) so
+// the desktop can gate opening a project on repo_created and decide clone vs.
+// init from repo_url's presence, instead of always git-initing an empty folder.
+export type RosterProject = {
+  id: string;
+  name: string;
+  workspace_id: string;
+  lifecycle_status: string;
+  repo_url: string | null;
+  repo_default_branch: string | null;
+};
 
 export type CloudRoster = {
   workspaces: RosterWorkspace[];

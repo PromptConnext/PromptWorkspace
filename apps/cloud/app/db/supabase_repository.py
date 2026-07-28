@@ -255,6 +255,20 @@ class SupabaseRepository(Repository):
             raise KeyError("project_not_found")
         return project
 
+    def update_project_repo(
+        self, project_id: str, repo_url: str, default_branch: str
+    ) -> Project:
+        patch = {
+            "repo_url": repo_url,
+            "repo_default_branch": default_branch,
+            "updated_at": utcnow().isoformat(),
+        }
+        self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError("project_not_found")
+        return project
+
     def list_projects(self, user_id: str) -> list[Project]:
         mem = self._client.table(_MEMBERS).select("workspace_id").eq("user_id", user_id).execute()
         ids = [m["workspace_id"] for m in (mem.data or [])]

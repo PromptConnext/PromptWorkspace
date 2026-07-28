@@ -2,12 +2,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiFetch, getStageDocument, updateStageDocument } from "@/lib/api";
+import { apiFetch, getStageDocument, startTechReview, updateStageDocument } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { DocumentUpload } from "./DocumentUpload";
 import { useStageGeneration } from "./useStageGeneration";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
+import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import type { DocumentOut, Project, StageKind } from "@/lib/types";
+
+// Derived view: repo_seed.py's table of paths written at repo creation.
+// The create-repository endpoint returns only the Project, not a file list,
+// so this mirrors the cloud's fixed seed set for display purposes.
+const SEEDED_FILES = [
+  "AGENTS.md",
+  "README.md",
+  "docs/scope.md",
+  "docs/architecture.md",
+  "docs/tasks.md",
+  "docs/conventions.md",
+];
 
 const STAGE_ORDER: { stage: StageKind; label: string; buttonLabel: string }[] = [
   { stage: "specify", label: "Specify", buttonLabel: "Generate specification" },
@@ -24,11 +37,13 @@ function StageSection({
   stage,
   label,
   buttonLabel,
+  readOnly = false,
 }: {
   projectId: string;
   stage: StageKind;
   label: string;
   buttonLabel: string;
+  readOnly?: boolean;
 }) {
   const { authHeaders } = useAuth();
   const [input, setInput] = useState("");
@@ -80,47 +95,51 @@ function StageSection({
   return (
     <div className="rounded-lg border border-slate-200 p-4">
       <h3 className="mb-2 text-sm font-medium text-slate-900">{label}</h3>
-      <textarea
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        rows={3}
-        className="mb-2 w-full rounded border border-slate-300 p-2 text-sm"
-        placeholder="Describe the goal in plain business terms…"
-      />
-      <button
-        type="button"
-        disabled={status === "generating" || !input.trim()}
-        onClick={() => generate(stage, input)}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-60"
-      >
-        {status === "generating" ? "Generating…" : buttonLabel}
-      </button>
+      {!readOnly && (
+        <>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            rows={3}
+            className="mb-2 w-full rounded border border-slate-300 p-2 text-sm"
+            placeholder="Describe the goal in plain business terms…"
+          />
+          <button
+            type="button"
+            disabled={status === "generating" || !input.trim()}
+            onClick={() => generate(stage, input)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-60"
+          >
+            {status === "generating" ? "Generating…" : buttonLabel}
+          </button>
 
-      {status === "generating" && streamedText && (
-        <pre className="mt-3 whitespace-pre-wrap rounded bg-slate-50 p-3 text-xs text-slate-700">
-          {streamedText}
-        </pre>
-      )}
-      {status === "error" && error && (
-        <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">
-          <p>{error.error}</p>
-          {error.retryable && (
-            <button
-              type="button"
-              onClick={() => generate(stage, input)}
-              className="mt-2 rounded border border-red-300 bg-white px-2 py-1 text-xs"
-            >
-              Retry
-            </button>
+          {status === "generating" && streamedText && (
+            <pre className="mt-3 whitespace-pre-wrap rounded bg-slate-50 p-3 text-xs text-slate-700">
+              {streamedText}
+            </pre>
           )}
-        </div>
-      )}
-      {status === "done" && result && (
-        <p className="mt-2 text-xs text-slate-500">
-          {result.task_count !== undefined
-            ? `${result.task_count} tasks created`
-            : "Saved as a draft"}
-        </p>
+          {status === "error" && error && (
+            <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">
+              <p>{error.error}</p>
+              {error.retryable && (
+                <button
+                  type="button"
+                  onClick={() => generate(stage, input)}
+                  className="mt-2 rounded border border-red-300 bg-white px-2 py-1 text-xs"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+          {status === "done" && result && (
+            <p className="mt-2 text-xs text-slate-500">
+              {result.task_count !== undefined
+                ? `${result.task_count} tasks created`
+                : "Saved as a draft"}
+            </p>
+          )}
+        </>
       )}
 
       {docLoaded && (
@@ -131,6 +150,7 @@ function StageSection({
             onSave={saveDoc}
             saving={docSaving}
             error={docError}
+            readOnly={readOnly}
           />
         </div>
       )}
@@ -151,14 +171,8 @@ export function Planner({
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-
-  if (project.lifecycle_status !== "planning") {
-    return (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
-        This project has been sent to Tech Lead review — planning is read-only from here.
-      </div>
-    );
-  }
+  const [startingReview, setStartingReview] = useState(false);
+  const [startReviewError, setStartReviewError] = useState<string | null>(null);
 
   async function submitForReview() {
     setSubmitting(true);
@@ -173,6 +187,112 @@ export function Planner({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleStartTechReview() {
+    setStartingReview(true);
+    setStartReviewError(null);
+    try {
+      await startTechReview(projectId, authHeaders());
+      onChange();
+    } catch (err) {
+      setStartReviewError((err as Error).message);
+    } finally {
+      setStartingReview(false);
+    }
+  }
+
+  if (project.lifecycle_status === "pending_tech_review") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          This project has been sent to Tech Lead review — planning is read-only from here.
+        </div>
+
+        {STAGE_ORDER.map(({ stage, label, buttonLabel }) => (
+          <StageSection
+            key={stage}
+            projectId={projectId}
+            stage={stage}
+            label={label}
+            buttonLabel={buttonLabel}
+            readOnly
+          />
+        ))}
+
+        <div className="border-t border-slate-200 pt-4">
+          <button
+            type="button"
+            disabled={startingReview}
+            onClick={handleStartTechReview}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-60"
+          >
+            {startingReview ? "Starting…" : "Start tech review"}
+          </button>
+          {startReviewError && <p className="mt-2 text-sm text-red-600">{startReviewError}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  if (project.lifecycle_status === "tech_review") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          In tech review — stage documents are editable again. Create the repository below once
+          the constitution is ready.
+        </div>
+
+        {STAGE_ORDER.map(({ stage, label, buttonLabel }) => (
+          <StageSection key={stage} projectId={projectId} stage={stage} label={label} buttonLabel={buttonLabel} />
+        ))}
+
+        <CreateRepositoryPanel projectId={projectId} projectName={project.name} onCreated={onChange} />
+      </div>
+    );
+  }
+
+  if (project.lifecycle_status === "repo_created") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+          <p className="font-medium">Repository created</p>
+          {project.repo_url && (
+            <p className="mt-1">
+              <a
+                href={project.repo_url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-emerald-700"
+              >
+                {project.repo_url}
+              </a>
+            </p>
+          )}
+          {project.repo_default_branch && (
+            <p className="mt-1 text-emerald-800">Default branch: {project.repo_default_branch}</p>
+          )}
+          <p className="mt-2 text-emerald-800">Seeded files:</p>
+          <ul className="ml-4 list-disc text-emerald-800">
+            {SEEDED_FILES.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+          <p className="mt-2">Developers can now clone this repo in the PromptZone desktop app.</p>
+        </div>
+
+        {STAGE_ORDER.map(({ stage, label, buttonLabel }) => (
+          <StageSection
+            key={stage}
+            projectId={projectId}
+            stage={stage}
+            label={label}
+            buttonLabel={buttonLabel}
+            readOnly
+          />
+        ))}
+      </div>
+    );
   }
 
   return (

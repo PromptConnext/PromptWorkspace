@@ -405,6 +405,12 @@ button.link {
   border-style: dashed;
 }
 
+.tb-tab-badge {
+  margin-left: 6px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
 .tb-tab-new {
   color: var(--muted);
   border-style: dashed;

@@ -50,7 +50,7 @@ describe("Planner", () => {
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
   });
 
-  it("shows a read-only notice instead of the stepper once past planning", () => {
+  it("shows read-only docs and a Start tech review button when pending_tech_review", () => {
     render(
       <Planner
         project={makeProject({ lifecycle_status: "pending_tech_review" })}
@@ -59,6 +59,37 @@ describe("Planner", () => {
       />,
     );
     expect(screen.getByText(/sent to tech lead/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start tech review/i })).toBeInTheDocument();
+  });
+
+  it("shows editable stage docs and the create-repository panel when tech_review", () => {
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create repository/i })).toBeInTheDocument();
+  });
+
+  it("shows the success card and read-only docs when repo_created", () => {
+    render(
+      <Planner
+        project={makeProject({
+          lifecycle_status: "repo_created",
+          repo_url: "https://github.com/acme/widget",
+          repo_default_branch: "main",
+        })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/repository created/i)).toBeInTheDocument();
+    expect(screen.getByText("https://github.com/acme/widget")).toBeInTheDocument();
+    expect(screen.getByText(/clone this repo in the promptzone desktop app/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
   });
 

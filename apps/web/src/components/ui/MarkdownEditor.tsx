@@ -12,12 +12,14 @@ export function MarkdownEditor({
   onSave,
   saving = false,
   error = null,
+  readOnly = false,
 }: {
   value: string;
   onChange: (next: string) => void;
   onSave: () => Promise<void>;
   saving?: boolean;
   error?: string | null;
+  readOnly?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("raw");
 
@@ -44,14 +46,16 @@ export function MarkdownEditor({
             Preview
           </button>
         </div>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => onSave()}
-          className="rounded border border-slate-300 bg-white px-3 py-1 text-xs hover:border-slate-400 disabled:opacity-60"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onSave()}
+            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs hover:border-slate-400 disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -63,6 +67,7 @@ export function MarkdownEditor({
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
+            readOnly={readOnly}
             rows={12}
             className="w-full rounded border border-slate-300 p-2 font-mono text-xs text-slate-800"
           />

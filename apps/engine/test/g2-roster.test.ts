@@ -20,6 +20,19 @@ const PAGE = 2;
 
 type Row = { etype: string; entity: Record<string, unknown>; updated_at: string; id: string };
 
+// Shape of GET /projects used by the fake cloud below — mirrors what
+// apps/engine/src/routes/cloud.ts's refreshRoster() expects (lifecycle_status
+// gates opening a project, phase 6). Tests here default to "repo_created"
+// with no repo_url so the existing init (not clone) path is exercised.
+type RosterProjectFixture = {
+  id: string;
+  name: string;
+  workspace_id: string;
+  lifecycle_status: string;
+  repo_url: string | null;
+  repo_default_branch: string | null;
+};
+
 const cloud = {
   failCreate: false, // toggled to simulate "offline" for POST /projects
   workspaces: [
@@ -27,8 +40,15 @@ const cloud = {
     { id: "ws-2", name: "Beta" },
   ] as { id: string; name: string }[],
   projects: [
-    { id: "cp-remote", name: "Remote Project", workspace_id: "ws-1" },
-  ] as { id: string; name: string; workspace_id: string }[],
+    {
+      id: "cp-remote",
+      name: "Remote Project",
+      workspace_id: "ws-1",
+      lifecycle_status: "repo_created",
+      repo_url: null,
+      repo_default_branch: null,
+    },
+  ] as RosterProjectFixture[],
   graphs: new Map<string, Row[]>(),
   pushed: [] as { projectId: string; body: unknown }[],
   createdProjects: [] as { id: string; name: string; workspace_id: string }[],
@@ -103,7 +123,12 @@ const server = http.createServer(async (req, res) => {
     const body = (await readBody(req)) as { name: string; workspace_id: string };
     const created = { id: `cp-${cloud.createdProjects.length + 1}`, name: body.name, workspace_id: body.workspace_id };
     cloud.createdProjects.push(created);
-    cloud.projects.push(created);
+    cloud.projects.push({
+      ...created,
+      lifecycle_status: "repo_created",
+      repo_url: null,
+      repo_default_branch: null,
+    });
     return send(201, created);
   }
   if (graphMatch && req.method === "GET") return send(200, pageGraph(graphMatch[1], url));
@@ -237,7 +262,14 @@ test("G4: GET /engine/projects surfaces cloud_project_id for a linked project", 
 });
 
 test("opening a cloud project with an explicit path uses it instead of the default location", async () => {
-  cloud.projects.push({ id: "cp-custom-path", name: "Custom Path Project", workspace_id: "ws-1" });
+  cloud.projects.push({
+    id: "cp-custom-path",
+    name: "Custom Path Project",
+    workspace_id: "ws-1",
+    lifecycle_status: "repo_created",
+    repo_url: null,
+    repo_default_branch: null,
+  });
   await req("/engine/cloud/roster/refresh", { method: "POST" });
 
   const chosen = join(dataDir, "chosen-folder");
@@ -256,7 +288,14 @@ test("opening a cloud project with an explicit path uses it instead of the defau
 
 test("opening a cloud project at a path already used by another project returns 409", async () => {
   const taken = join(dataDir, "chosen-folder"); // claimed by the previous test
-  cloud.projects.push({ id: "cp-collide", name: "Collide Project", workspace_id: "ws-1" });
+  cloud.projects.push({
+    id: "cp-collide",
+    name: "Collide Project",
+    workspace_id: "ws-1",
+    lifecycle_status: "repo_created",
+    repo_url: null,
+    repo_default_branch: null,
+  });
   await req("/engine/cloud/roster/refresh", { method: "POST" });
 
   const res = await req("/engine/cloud/projects/cp-collide/open", {

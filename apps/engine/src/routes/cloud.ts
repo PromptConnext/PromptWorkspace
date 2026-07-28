@@ -31,7 +31,12 @@ import {
   pushProjectSnapshot,
   writeCloudLink,
 } from "../sync/loop.ts";
-import { createLocalProjectShell, ProjectCollisionError } from "./projects.ts";
+import {
+  cloneLocalProjectShell,
+  createLocalProjectShell,
+  CloneFailedError,
+  ProjectCollisionError,
+} from "./projects.ts";
 
 export const cloud = new Hono();
 
@@ -237,17 +242,42 @@ cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
   const rosterProject = loadRosterProjects().find((p) => p.id === cloudProjectId);
   if (!rosterProject) return c.json({ error: "project not in roster (refresh first)" }, 404);
 
+  // Repo handoff gate (plan: cloud creates the repo at tech-review exit): a
+  // project isn't clonable/init-able until the cloud has finished planning it
+  // and, at repo_created, seeded the repo with AI context. Surfacing the
+  // lifecycle status lets the desktop show an informational panel instead of
+  // an open action for the three pre-repo states.
+  if (rosterProject.lifecycle_status !== "repo_created") {
+    return c.json(
+      { error: "project_not_ready", lifecycle_status: rosterProject.lifecycle_status },
+      409,
+    );
+  }
+
   // The desktop offers a folder picker on first open (plan: docs/superpowers/
   // plans/2026-07-19-desktop-local-project-path.md); omitted, this falls back
-  // to createLocalProjectShell's own default root, same as before.
+  // to createLocalProjectShell's/cloneLocalProjectShell's own default root,
+  // same as before.
   const { path } = await c.req.json<{ path?: string }>().catch(() => ({}) as { path?: string });
 
   let local: ReturnType<typeof createLocalProjectShell>;
   try {
-    local = createLocalProjectShell(rosterProject.name, path?.trim() || undefined);
+    local = rosterProject.repo_url
+      ? cloneLocalProjectShell(rosterProject.name, rosterProject.repo_url, path?.trim() || undefined)
+      : createLocalProjectShell(rosterProject.name, path?.trim() || undefined);
   } catch (err) {
     if (err instanceof ProjectCollisionError) {
       return c.json({ error: "That folder is already used by another project." }, 409);
+    }
+    if (err instanceof CloneFailedError) {
+      return c.json(
+        {
+          error:
+            "Couldn't clone — this repo is private and Git has no saved credentials on this machine. Run `gh auth login` or add an SSH key, then try again.",
+          stderr: err.stderr,
+        },
+        502,
+      );
     }
     return c.json({ error: (err as Error).message }, 500);
   }

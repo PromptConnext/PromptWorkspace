@@ -10,7 +10,7 @@ import {
 } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
-import CloudOpenPanel from "./CloudOpenPanel";
+import CloudOpenPanel, { ProjectNotReadyPanel } from "./CloudOpenPanel";
 import ImportLocalProjects from "./ImportLocalProjects";
 import TopBar, { type ProjectTab, type WorkspaceContext } from "./TopBar";
 import { membershipGateEnabled } from "../cloudGate";
@@ -34,7 +34,14 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
   const [plannerSignal, setPlannerSignal] = useState(0);
   const [openError, setOpenError] = useState<string | null>(null);
   const [pendingCloudOpen, setPendingCloudOpen] = useState<
-    { key: string; cloudId: string; name: string } | null
+    { key: string; cloudId: string; name: string; repoUrl: string | null } | null
+  >(null);
+  // A cloud tab with no local counterpart that hasn't reached repo_created:
+  // there's nothing to open yet, so this renders an informational panel
+  // instead of the folder-picker (plan: cloud creates the repo at
+  // tech-review exit).
+  const [notReadyProject, setNotReadyProject] = useState<
+    { name: string; lifecycleStatus: string } | null
   >(null);
   const [openBusy, setOpenBusy] = useState(false);
 
@@ -79,7 +86,15 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     }
     if (!activeWorkspaceId) return [];
     const rosterForWs = roster.projects.filter((p) => p.workspace_id === activeWorkspaceId);
-    const rosterTabs = rosterForWs.map((p) => ({ key: `cloud:${p.id}`, name: p.name }));
+    // lifecycle_status/repo_url ride along so TopBar can render a muted badge
+    // for the three pre-repo states, and selectTab can decide clone vs. init
+    // vs. "not ready yet" without a second roster lookup.
+    const rosterTabs = rosterForWs.map((p) => ({
+      key: `cloud:${p.id}`,
+      name: p.name,
+      lifecycle_status: p.lifecycle_status,
+      repo_url: p.repo_url,
+    }));
     // Include locally-created projects bound to this workspace that haven't hit
     // the roster yet (offline / pending-sync), so a just-created project never
     // vanishes before its first successful sync. G4 removes G3's name-based
@@ -107,6 +122,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
   // local.
   const selectTab = async (key: string) => {
     setOpenError(null);
+    setNotReadyProject(null);
     if (key.startsWith("local:")) {
       const id = key.slice("local:".length);
       const p = projects.find((x) => x.id === id) ?? null;
@@ -126,7 +142,21 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     const rosterProject = roster.projects.find((p) => p.id === cloudId);
     setActive(null);
     setActiveKey(key);
-    setPendingCloudOpen({ key, cloudId, name: rosterProject?.name ?? "this project" });
+    // Not yet repo_created and no local copy on this machine: there's nothing
+    // to open or clone, so show an informational panel instead of the
+    // folder-picker — never set pendingCloudOpen for this state (plan: cloud
+    // creates the repo at tech-review exit).
+    if (rosterProject && rosterProject.lifecycle_status !== "repo_created") {
+      setPendingCloudOpen(null);
+      setNotReadyProject({ name: rosterProject.name, lifecycleStatus: rosterProject.lifecycle_status });
+      return;
+    }
+    setPendingCloudOpen({
+      key,
+      cloudId,
+      name: rosterProject?.name ?? "this project",
+      repoUrl: rosterProject?.repo_url ?? null,
+    });
   };
 
   // Shared by the already-opened fast path above and both CloudOpenPanel
@@ -143,6 +173,9 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
       setActiveKey(key);
       setPendingCloudOpen(null);
     } catch (err) {
+      // The engine's 409 (project_not_ready / folder collision) and 502
+      // (clone failure, with an actionable "run `gh auth login`…" message)
+      // bodies are already human-readable — surface them verbatim.
       setOpenError((err as Error).message);
     } finally {
       setOpenBusy(false);
@@ -155,6 +188,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     // it stays a plain local project. Either way, refresh both views and open it.
     const project = await createProject(name);
     setPendingCloudOpen(null);
+    setNotReadyProject(null);
     await refresh();
     await refreshRoster();
     setActive(project);
@@ -201,9 +235,16 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
           />
         )}
         {openError && <p className="error">{openError}</p>}
-        {pendingCloudOpen ? (
+        {notReadyProject ? (
+          <ProjectNotReadyPanel
+            projectName={notReadyProject.name}
+            lifecycleStatus={notReadyProject.lifecycleStatus}
+          />
+        ) : pendingCloudOpen ? (
           <CloudOpenPanel
             projectName={pendingCloudOpen.name}
+            mode={pendingCloudOpen.repoUrl ? "clone" : "init"}
+            repoUrl={pendingCloudOpen.repoUrl}
             busy={openBusy}
             onChooseFolder={(path) =>
               finishCloudOpen(pendingCloudOpen.cloudId, pendingCloudOpen.key, path)

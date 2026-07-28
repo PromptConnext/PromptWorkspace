@@ -2,7 +2,7 @@
 // apps/engine/src/cloudClient.ts on the browser side.
 
 import { CLOUD_API_URL } from "./config";
-import type { StageDocumentOut, StageKind, Task, WorkspaceMember } from "./types";
+import type { Project, StageDocumentOut, StageKind, Task, WorkspaceMember } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -65,5 +65,25 @@ export function updateStageDocument(
   return apiFetch<StageDocumentOut>(`/projects/${projectId}/stage-documents/${stage}`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ content }),
+  });
+}
+
+// Idempotent — the design doc calls this "automatic on first Tech Lead
+// interaction", so the client may fire it repeatedly (server no-ops if
+// already tech_review).
+export function startTechReview(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<Project>(`/projects/${projectId}/lifecycle/start-tech-review`, authHeaders, {
+    method: "POST",
+  });
+}
+
+export function createRepository(
+  projectId: string,
+  body: { name?: string; private?: boolean },
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Project>(`/projects/${projectId}/lifecycle/create-repository`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }

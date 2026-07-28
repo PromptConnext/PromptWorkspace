@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, existsSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -90,6 +90,50 @@ export class ProjectCollisionError extends Error {
   }
 }
 
+// Thrown by cloneLocalProjectShell when `git clone` fails (bad url, no
+// credentials, network down, etc). Carries stderr so callers/HTTP routes can
+// surface an actionable message instead of a raw Error. The partial target
+// directory (if git created one) is left in place for inspection — no cleanup.
+export class CloneFailedError extends Error {
+  stderr: string;
+  constructor(stderr: string) {
+    super(`git clone failed: ${stderr.trim() || "(no stderr captured)"}`);
+    this.name = "CloneFailedError";
+    this.stderr = stderr;
+  }
+}
+
+// Shared tail of project bootstrap: db insert + stage_states + git
+// integration row. Used by both createLocalProjectShell (git init) and
+// cloneLocalProjectShell (git clone) once the working tree already exists on
+// disk. `gitConfig` is stored verbatim as the integration row's config
+// (empty/omitted for a plain init, {remote, default_branch} for a clone).
+function registerLocalProject(
+  name: string,
+  resolvedPath: string,
+  gitConfig?: { remote: string; default_branch: string },
+): ProjectRow {
+  const id = randomUUID();
+  try {
+    db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, resolvedPath);
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test((err as Error).message)) {
+      throw new ProjectCollisionError(resolvedPath);
+    }
+    throw err;
+  }
+  const insertStage = db.prepare(
+    "INSERT INTO stage_states (project_id, stage, status) VALUES (?, ?, 'not_started')",
+  );
+  for (const stage of ["scope", "spec", "skill"]) insertStage.run(id, stage);
+
+  db.prepare(
+    "INSERT INTO integrations (id, project_id, kind, required, config) VALUES (?, ?, 'git', 1, ?)",
+  ).run(randomUUID(), id, gitConfig ? JSON.stringify(gitConfig) : null);
+
+  return { id, name, path: resolvedPath };
+}
+
 // Project bootstrap (gap G3): pick/create a folder, engine git-inits it.
 // The business persona never touches Git directly. Exported so the cloud
 // roster's bootstrap-pull (routes/cloud.ts) can materialize a local project
@@ -106,25 +150,88 @@ export function createLocalProjectShell(name: string, path?: string): ProjectRow
     execFileSync("git", ["init", "-b", "main"], { cwd: resolvedPath, stdio: "pipe" });
   }
 
-  const id = randomUUID();
-  try {
-    db.prepare("INSERT INTO projects (id, name, path) VALUES (?, ?, ?)").run(id, name, resolvedPath);
-  } catch (err) {
-    if (/UNIQUE constraint failed/i.test((err as Error).message)) {
-      throw new ProjectCollisionError(resolvedPath);
-    }
-    throw err;
+  return registerLocalProject(name, resolvedPath);
+}
+
+// Directory exists and has at least one entry (dotfiles included) — used to
+// reject cloning into a non-empty folder rather than letting `git clone`
+// produce its own (less actionable) error.
+function isNonEmptyDir(path: string): boolean {
+  if (!existsSync(path)) return false;
+  return readdirSync(path).length > 0;
+}
+
+// repoUrl arrives from the cloud roster — a separate trust boundary from the
+// engine (a compromised/malicious cloud project could set an arbitrary
+// string). Two concrete exploits this closes: (1) `ext::sh -c <cmd>` — git's
+// `ext` transport runs an arbitrary shell command, direct RCE; (2) a value
+// starting with `-` gets parsed by git as a flag (e.g. `--upload-pack=<cmd>`).
+// Allowlist only the two transports PromptConnext actually needs: `https://`
+// and the `git@<host>:<path>` SSH shorthand (not restricted to github.com —
+// GitHub Enterprise hosts are legitimate). Everything else, including
+// `file://` and `ext::`, is rejected before git is ever invoked.
+const HTTPS_REPO_URL_RE = /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d+)?\/\S+$/;
+const SSH_SHORTHAND_REPO_URL_RE =
+  /^[A-Za-z0-9_.-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?:\S+$/;
+
+export function assertCloneableRepoUrl(repoUrl: string): void {
+  if (typeof repoUrl !== "string" || repoUrl.length === 0 || repoUrl.startsWith("-")) {
+    throw new CloneFailedError(`unsupported repository URL: ${JSON.stringify(repoUrl)}`);
   }
-  const insertStage = db.prepare(
-    "INSERT INTO stage_states (project_id, stage, status) VALUES (?, ?, 'not_started')",
-  );
-  for (const stage of ["scope", "spec", "skill"]) insertStage.run(id, stage);
+  if (HTTPS_REPO_URL_RE.test(repoUrl) || SSH_SHORTHAND_REPO_URL_RE.test(repoUrl)) return;
+  throw new CloneFailedError(`unsupported repository URL: ${repoUrl}`);
+}
 
-  db.prepare(
-    "INSERT INTO integrations (id, project_id, kind, required) VALUES (?, ?, 'git', 1)",
-  ).run(randomUUID(), id);
+// Clone path for the tech-review-exit repo handoff (plan 0016/phase 6): the
+// cloud has already created the GitHub repo and seeded it with AI context, so
+// the engine clones instead of git-initing an empty folder. Same slug/path
+// resolution and collision semantics as createLocalProjectShell, plus a
+// non-empty-directory check since a clone target must be empty (or absent).
+export function cloneLocalProjectShell(name: string, repoUrl: string, path?: string): ProjectRow {
+  assertCloneableRepoUrl(repoUrl);
 
-  return { id, name, path: resolvedPath };
+  const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
+  const resolvedPath = path ?? join(homedir(), "PromptConnext-Projects", slug);
+
+  const dup = db.prepare("SELECT id FROM projects WHERE path = ?").get(resolvedPath);
+  if (dup) throw new ProjectCollisionError(resolvedPath);
+  if (isNonEmptyDir(resolvedPath)) throw new ProjectCollisionError(resolvedPath);
+
+  try {
+    // GIT_TERMINAL_PROMPT=0 is mandatory: without it, a private repo with no
+    // saved credentials hangs the HTTP handler forever waiting on a tty that
+    // does not exist. GIT_ASKPASS="" disables any configured askpass helper
+    // for the same reason. `-c protocol.ext.allow=never` is belt-and-braces
+    // against the `ext::` transport even if URL validation is ever bypassed;
+    // `--` terminates option parsing so a validated-but-still-dash-prefixed
+    // value can never be read as a flag.
+    execFileSync(
+      "git",
+      ["-c", "protocol.ext.allow=never", "clone", "--", repoUrl, resolvedPath],
+      {
+        stdio: "pipe",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+      },
+    );
+  } catch (err) {
+    const stderr =
+      (err as { stderr?: Buffer | string })?.stderr?.toString() ?? (err as Error).message;
+    throw new CloneFailedError(stderr);
+  }
+
+  let defaultBranch = "main";
+  try {
+    defaultBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: resolvedPath,
+      stdio: "pipe",
+    })
+      .toString()
+      .trim();
+  } catch {
+    // best-effort; keep the "main" fallback
+  }
+
+  return registerLocalProject(name, resolvedPath, { remote: repoUrl, default_branch: defaultBranch });
 }
 
 projects.post("/engine/projects", async (c) => {
