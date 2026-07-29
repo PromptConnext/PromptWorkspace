@@ -117,4 +117,49 @@ describe("Planner", () => {
       expect(screen.getByDisplayValue("# Existing spec")).toBeInTheDocument();
     });
   });
+
+  it("shows when a persisted stage document was last saved", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/specify")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            stage: "specify",
+            content: "# Existing spec",
+            updated_at: "2026-07-26T00:00:00Z",
+          }),
+        });
+      }
+      if (href.includes("/stage-documents/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "plan", content: "", updated_at: null }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    // Only the stage that has a saved document gets the line — an empty
+    // stage would otherwise claim a save that never happened.
+    await waitFor(() => {
+      expect(screen.getAllByText(/last saved/i)).toHaveLength(1);
+    });
+  });
+
+  it("warns that the existing document couldn't be loaded instead of showing an empty editor", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/")) return Promise.reject(new Error("network down"));
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/couldn't load the saved document/i).length).toBeGreaterThan(0);
+    });
+  });
 });

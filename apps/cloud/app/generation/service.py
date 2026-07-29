@@ -7,7 +7,7 @@ and parses the artifact out — the cloud-side equivalent of the engine's
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -23,19 +23,35 @@ from app.rag.chat import stream_openai_chat
 
 class GenerationProvider(Protocol):
     def stream(
-        self, system_prompt: str, user_content: str, model: str, api_key: str, base_url: str
+        self,
+        system_prompt: str,
+        user_content: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        max_tokens: int | None = None,
+        on_finish: Callable[[str | None], None] | None = None,
     ) -> AsyncIterator[str]: ...
 
 
 class HttpGenerationProvider:
     async def stream(
-        self, system_prompt: str, user_content: str, model: str, api_key: str, base_url: str
+        self,
+        system_prompt: str,
+        user_content: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        max_tokens: int | None = None,
+        on_finish: Callable[[str | None], None] | None = None,
     ) -> AsyncIterator[str]:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
-        async for delta in stream_openai_chat(messages, model, api_key, base_url):
+        async for delta in stream_openai_chat(
+            messages, model, api_key, base_url, max_tokens=max_tokens, on_finish=on_finish
+        ):
             yield delta
 
 
@@ -49,11 +65,19 @@ class FakeGenerationProvider:
     real `- [ ] T001 Description` checklist instead of echoing the prompt,
     so parse_task_lines() has something to parse."""
 
-    def __init__(self, title: str = "Generated Title") -> None:
+    def __init__(self, title: str = "Generated Title", finish_reason: str | None = "stop") -> None:
         self._title = title
+        self._finish_reason = finish_reason
 
     async def stream(
-        self, system_prompt: str, user_content: str, model: str, api_key: str, base_url: str
+        self,
+        system_prompt: str,
+        user_content: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        max_tokens: int | None = None,
+        on_finish: Callable[[str | None], None] | None = None,
     ) -> AsyncIterator[str]:
         if "task-breakdown" in system_prompt:
             doc = (
@@ -65,6 +89,8 @@ class FakeGenerationProvider:
             doc = f"# {self._title}\n\n{user_content}"
         for word in doc.split(" "):
             yield word + " "
+        if on_finish is not None:
+            on_finish(self._finish_reason)
 
 
 class GenerationError(ValueError):

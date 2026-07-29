@@ -69,6 +69,28 @@ describe("useStageGeneration", () => {
     expect(result.current.error?.error).toMatch(/managed tier busy/);
   });
 
+  it("carries the truncation and save flags through from the done event", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody([
+        'data: {"delta":"# Spec"}',
+        "event: done",
+        'data: {"stage":"specify","title":"T","content":"# Spec","truncated":true,"saved":true,"updated_at":"2026-07-29T10:00:00Z"}',
+      ]),
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useStageGeneration("p1"));
+
+    await act(async () => {
+      await result.current.generate("specify", "do the thing");
+    });
+
+    await waitFor(() => expect(result.current.status).toBe("done"));
+    expect(result.current.result?.truncated).toBe(true);
+    expect(result.current.result?.saved).toBe(true);
+    expect(result.current.result?.updated_at).toBe("2026-07-29T10:00:00Z");
+  });
+
   it("parses a JSON error body from a pre-stream 429 and marks it retryable", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,

@@ -126,11 +126,24 @@ async def generate(
         )
     )
 
+    max_tokens = request.app.state.settings.managed_model_max_tokens
+
     async def stream():
         parts: list[str] = []
+        # Written by the provider's on_finish callback once the stream ends —
+        # a single-slot list because a nested function can't rebind a name in
+        # the enclosing async generator's scope without `nonlocal`, and the
+        # callback is defined here to stay next to what reads it.
+        finish: list[str | None] = [None]
         try:
             async for delta in provider.stream(
-                system_prompt, user_content, conn.model, api_key, conn.base_url
+                system_prompt,
+                user_content,
+                conn.model,
+                api_key,
+                conn.base_url,
+                max_tokens=max_tokens,
+                on_finish=lambda reason: finish.__setitem__(0, reason),
             ):
                 parts.append(delta)
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
@@ -148,6 +161,7 @@ async def generate(
             yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
             return
         raw = "".join(parts)
+        truncated = finish[0] == "length"
 
         prompt_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_content)
         completion_tokens = estimate_tokens(raw)
@@ -165,7 +179,45 @@ async def generate(
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        payload: dict = {"stage": stage, "title": result.title, "content": result.content}
+        payload: dict = {
+            "stage": stage,
+            "title": result.title,
+            "content": result.content,
+            # The document is real and persisted either way; `truncated` tells
+            # the Planner to say so instead of presenting a half-written spec
+            # as finished work.
+            "truncated": truncated,
+        }
+
+        # Save the raw markdown FIRST, before the graph-entity persistence
+        # below. Both orders keep a successful run intact, but only this one
+        # keeps the generated text when graph persistence rejects it — most
+        # visibly the `tasks` stage, where an unparseable (or truncated)
+        # checklist raises GenerationError. Saved first, the user reopens the
+        # project and finds their document waiting in the editor; saved last,
+        # they came back to an empty stage and a lost generation.
+        saved = False
+        try:
+            stage_doc = repo.upsert_stage_document(
+                project_id, project.workspace_id, stage, result.content, user.id
+            )
+            saved = True
+            payload["updated_at"] = stage_doc.updated_at.isoformat()
+            enqueue(
+                request.app,
+                EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
+            )
+        except Exception:
+            # A side-store failure must not fail a generation that otherwise
+            # succeeded, but the client is told (`saved: false`) so it can warn
+            # that this text won't survive a reload rather than implying it will.
+            logger.exception(
+                "auto-save of stage document failed for project=%s stage=%s",
+                project_id,
+                stage,
+            )
+        payload["saved"] = saved
+
         try:
             if stage == "specify":
                 payload["requirement_id"] = _persist_requirement(repo, project_id, result, body)
@@ -182,34 +234,29 @@ async def generate(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
-            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+            error_payload = {"error": str(exc), "draft_saved": saved, "truncated": truncated}
+            if truncated:
+                error_payload["error"] = (
+                    f"{exc} — the model stopped at its output limit, so the document is "
+                    "incomplete. The partial draft was kept; try generating again."
+                )
+            yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
             return
-
-        try:
-            stage_doc = repo.upsert_stage_document(
-                project_id, project.workspace_id, stage, result.content, user.id
-            )
-            enqueue(
-                request.app,
-                EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
-            )
-        except Exception:
-            # The graph entities above already committed successfully; the
-            # stage-document auto-save is a side-store convenience and must
-            # not retroactively fail a generation that already succeeded
-            # from the user's perspective.
-            logger.exception(
-                "auto-save of stage document failed for project=%s stage=%s",
-                project_id,
-                stage,
-            )
 
         repo.update_generation_run(
             run.id,
-            status="succeeded",
+            status="truncated" if truncated else "succeeded",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        if truncated:
+            logger.warning(
+                "generation hit the completion cap: project=%s stage=%s model=%s max_tokens=%s",
+                project_id,
+                stage,
+                conn.model,
+                max_tokens,
+            )
         yield f"event: done\ndata: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

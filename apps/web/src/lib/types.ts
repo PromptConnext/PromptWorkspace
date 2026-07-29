@@ -178,11 +178,21 @@ export interface GenerateDoneEvent {
   requirement_id?: string;
   spec_document_id?: string;
   task_count?: number;
+  // The model stopped at its output limit — the document is real but cut off.
+  truncated?: boolean;
+  // Whether the raw markdown was written to the stage-document side store,
+  // i.e. whether it will still be there on the next visit to the project.
+  saved?: boolean;
+  updated_at?: string;
 }
 
 export interface GenerateErrorEvent {
   error: string;
   retryable?: boolean;
+  // Set on a post-generation failure (unparseable document): the model's
+  // output was kept as a draft even though nothing landed in the graph.
+  draft_saved?: boolean;
+  truncated?: boolean;
 }
 
 export interface StageDocumentOut {

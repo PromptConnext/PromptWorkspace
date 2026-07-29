@@ -100,12 +100,24 @@ class Settings(BaseSettings):
     managed_model_base_url: str = "https://api.opentyphoon.ai/v1"
     managed_model_name: str = "typhoon-v2.5-30b-a3b-instruct"
     managed_model_api_key: str = ""
+    # Explicit completion cap. Left unset, an OpenAI-compatible provider
+    # applies its own default — for opentyphoon.ai that default is small
+    # enough to cut a Spec Kit document off mid-section, which is exactly
+    # what the Planner's specify stage produces. A stage document is a whole
+    # filled-in template, so budget for one: the engine's own gateway
+    # (apps/engine/src/gateway/index.ts) has always sent max_tokens, and this
+    # is the cloud Planner reaching parity.
+    managed_model_max_tokens: int = 8_000
     # Conservative shared-key protection (ADR 0013 flags the free tier as
-    # 5 req/s / 200 req/min, shared across every workspace using it): a low
+    # 5 req/s / 200 req/min, shared across every workspace using it): a
     # per-workspace daily cap so one workspace can't exhaust the platform's
     # shared budget, on top of the existing per-workspace DailyTokenBudget
-    # check every generation stage already goes through.
-    managed_daily_token_budget: int = 20_000
+    # check every generation stage already goes through. Sized against a real
+    # stage run rather than a round number: specify injects up to
+    # _DOCUMENT_CONTEXT_BUDGET (40k chars ≈ 10k tokens) of PRD plus an 8k
+    # completion, so the old 20k ceiling allowed roughly one generation per
+    # workspace per day and then 429'd the rest of the 3S flow.
+    managed_daily_token_budget: int = 200_000
 
     # Managed embeddings for the assistant (plan 0008 M1): Typhoon is
     # generation-only, so a keyless (no BYO) workspace needs a separate

@@ -51,20 +51,43 @@ class RecordingGenerationProvider:
     """Records the api_key it was called with; returns a real document so
     the parser succeeds."""
 
-    def __init__(self) -> None:
+    def __init__(self, finish_reason: str | None = "stop") -> None:
         self.received_api_key: str | None = None
+        self.received_max_tokens: int | None = None
+        self._finish_reason = finish_reason
 
-    async def stream(self, system_prompt, user_content, model, api_key, base_url):
+    async def stream(
+        self,
+        system_prompt,
+        user_content,
+        model,
+        api_key,
+        base_url,
+        max_tokens=None,
+        on_finish=None,
+    ):
         self.received_api_key = api_key
+        self.received_max_tokens = max_tokens
         doc = f"# Managed Constitution\n\n{user_content}"
         for word in doc.split(" "):
             yield word + " "
+        if on_finish is not None:
+            on_finish(self._finish_reason)
 
 
 class RateLimitedGenerationProvider:
     """Simulates the free Typhoon API throttling this request upstream."""
 
-    async def stream(self, system_prompt, user_content, model, api_key, base_url):
+    async def stream(
+        self,
+        system_prompt,
+        user_content,
+        model,
+        api_key,
+        base_url,
+        max_tokens=None,
+        on_finish=None,
+    ):
         request = httpx.Request("POST", f"{base_url}/chat/completions")
         response = httpx.Response(429, request=request)
         if True:  # keeps this function a generator; the raise below always fires

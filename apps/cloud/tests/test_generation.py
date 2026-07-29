@@ -239,3 +239,119 @@ def test_assemble_document_context_notes_truncation_of_a_single_oversized_docume
     assert "context budget reached" in context
     injected_text = context.split("\n", 1)[1].rsplit("\n\n(", 1)[0]
     assert len(injected_text) == _DOCUMENT_CONTEXT_BUDGET
+
+
+class _RecordingProvider:
+    """Captures the request-shaping arguments the endpoint passes down, so
+    the max_tokens cap can be asserted at the boundary the real HTTP provider
+    would use it at."""
+
+    def __init__(self, finish_reason: str | None = "stop", body: str | None = None) -> None:
+        self.max_tokens: int | None = None
+        self._finish_reason = finish_reason
+        self._body = body
+
+    async def stream(
+        self,
+        system_prompt,
+        user_content,
+        model,
+        api_key,
+        base_url,
+        max_tokens=None,
+        on_finish=None,
+    ):
+        self.max_tokens = max_tokens
+        # extract_document() ignores anything under 80 chars, so the default
+        # body is deliberately longer than a token stub.
+        yield self._body if self._body is not None else (
+            "# Generated Title\n\n## Overview\n\nA generated stage document long enough for the "
+            "parser's minimum-length check to accept it as a real document.\n"
+        )
+        if on_finish is not None:
+            on_finish(self._finish_reason)
+
+
+def test_generation_sends_an_explicit_max_tokens_cap(client: TestClient):
+    # Without this, the provider's own (small) default applies and long stage
+    # documents come back cut off mid-section.
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+    _ws_id, pid = _bootstrap(client)
+
+    res = _generate(client, pid, "constitution", CONSTITUTION_INPUT)
+
+    assert res.status_code == 200, res.text
+    assert provider.max_tokens == client.app.state.settings.managed_model_max_tokens
+    assert provider.max_tokens > 0
+
+
+def test_truncated_completion_is_flagged_not_silently_succeeded(client: TestClient):
+    client.app.state.generation_provider = _RecordingProvider(finish_reason="length")
+    ws_id, pid = _bootstrap(client)
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+
+    assert res.status_code == 200, res.text
+    events = _sse_events(res.text)
+    assert events["done"]["truncated"] is True
+    assert events["done"]["saved"] is True
+
+    repo = client.app.state.repository
+    runs = list(repo._generation_runs.values())  # test-only reach into InMemoryRepository internals
+    assert [r.status for r in runs if r.stage == "specify"] == ["truncated"]
+
+
+def test_complete_completion_is_not_flagged_as_truncated(client: TestClient):
+    client.app.state.generation_provider = _RecordingProvider(finish_reason="stop")
+    _ws_id, pid = _bootstrap(client)
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+
+    events = _sse_events(res.text)
+    assert events["done"]["truncated"] is False
+    repo = client.app.state.repository
+    assert [r.status for r in repo._generation_runs.values() if r.stage == "specify"] == [
+        "succeeded"
+    ]
+
+
+def test_unparseable_tasks_output_still_keeps_the_draft(client: TestClient):
+    # The stage document is saved before graph persistence, so output the
+    # graph rejects (here: a tasks document with no `- [ ] T###` checklist,
+    # the shape a truncated generation produces) is still there when the user
+    # reopens the project.
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+    client.app.state.generation_provider = _RecordingProvider(
+        finish_reason="length",
+        body=(
+            "# Tasks\n\n## Phase 1\n\nProse with no checklist lines at all, long enough to pass "
+            "the parser's minimum-length check and reach the task-parsing step.\n"
+        ),
+    )
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT)
+
+    assert res.status_code == 200, res.text
+    events = _sse_events(res.text)
+    assert events["error"]["draft_saved"] is True
+    assert events["error"]["truncated"] is True
+
+    doc_res = client.get(f"/projects/{pid}/stage-documents/tasks", headers=ALICE)
+    assert doc_res.status_code == 200, doc_res.text
+    assert "Prose with no checklist lines" in doc_res.json()["content"]
+
+
+def test_stage_documents_survive_for_a_later_visit(client: TestClient):
+    # The Planner refetches every stage on mount; this is the server side of
+    # "reopen the project and your generated plans are still there".
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+
+    for stage in ("specify", "plan"):
+        doc = client.get(f"/projects/{pid}/stage-documents/{stage}", headers=ALICE).json()
+        assert doc["content"].startswith("# ")
+        assert doc["updated_at"] is not None

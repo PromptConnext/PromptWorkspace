@@ -53,20 +53,30 @@ function StageSection({
   const [docLoaded, setDocLoaded] = useState(false);
   const [docSaving, setDocSaving] = useState(false);
   const [docError, setDocError] = useState<string | null>(null);
+  const [docUpdatedAt, setDocUpdatedAt] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
+  // Every previously generated or hand-edited stage document is fetched on
+  // mount, so reopening the project shows the work as it was left rather than
+  // an empty editor. The generation endpoint auto-saves here before it touches
+  // the graph, so this covers partial and rejected generations too.
   useEffect(() => {
     let cancelled = false;
     getStageDocument(projectId, stage, authHeaders())
       .then((doc) => {
-        if (!cancelled) {
-          setDocContent(doc.content);
-          setDocLoaded(true);
-        }
+        if (cancelled) return;
+        setDocContent(doc.content);
+        setDocUpdatedAt(doc.updated_at);
+        setDocLoaded(true);
       })
       .catch(() => {
-        // 404-as-empty is handled server-side (returns content: ""); any
-        // other failure just leaves the editor empty rather than blocking render.
-        if (!cancelled) setDocLoaded(true);
+        // A missing document is not an error server-side (it returns
+        // content: ""), so reaching this branch means the fetch itself
+        // failed. Render the editor anyway, but say the existing content
+        // couldn't be loaded — an empty box would read as "nothing saved".
+        if (cancelled) return;
+        setLoadFailed(true);
+        setDocLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -77,14 +87,35 @@ function StageSection({
   useEffect(() => {
     if (status === "done" && result) {
       setDocContent(result.content);
+      setDocUpdatedAt(result.updated_at ?? null);
     }
   }, [status, result]);
+
+  // A failed generation that still saved a draft (unparseable or truncated
+  // output) leaves text on the server the stream never handed us — pull it in
+  // so the editor shows what was kept instead of the pre-generation content.
+  useEffect(() => {
+    if (status !== "error" || !error?.draft_saved) return;
+    let cancelled = false;
+    getStageDocument(projectId, stage, authHeaders())
+      .then((doc) => {
+        if (cancelled) return;
+        setDocContent(doc.content);
+        setDocUpdatedAt(doc.updated_at);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, error, projectId, stage]);
 
   async function saveDoc() {
     setDocSaving(true);
     setDocError(null);
     try {
-      await updateStageDocument(projectId, stage, docContent, authHeaders());
+      const doc = await updateStageDocument(projectId, stage, docContent, authHeaders());
+      setDocUpdatedAt(doc.updated_at);
     } catch (err) {
       setDocError((err as Error).message);
     } finally {
@@ -132,11 +163,28 @@ function StageSection({
               )}
             </div>
           )}
+          {status === "done" && result?.truncated && (
+            <div className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">This document is incomplete</p>
+              <p className="mt-1">
+                The model reached its output limit before finishing. The partial document below
+                was saved — generate again, or fill in the rest by hand.
+              </p>
+              <button
+                type="button"
+                onClick={() => generate(stage, input)}
+                className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-xs"
+              >
+                Generate again
+              </button>
+            </div>
+          )}
           {status === "done" && result && (
             <p className="mt-2 text-xs text-slate-500">
               {result.task_count !== undefined
                 ? `${result.task_count} tasks created`
                 : "Saved as a draft"}
+              {result.saved === false && " — couldn't be saved; copy this text before leaving"}
             </p>
           )}
         </>
@@ -144,6 +192,12 @@ function StageSection({
 
       {docLoaded && (
         <div className="mt-3">
+          {loadFailed && (
+            <p className="mb-2 text-xs text-amber-700">
+              Couldn&apos;t load the saved document — reload before editing, or you may overwrite
+              it.
+            </p>
+          )}
           <MarkdownEditor
             value={docContent}
             onChange={setDocContent}
@@ -152,6 +206,11 @@ function StageSection({
             error={docError}
             readOnly={readOnly}
           />
+          {docUpdatedAt && (
+            <p className="mt-1 text-xs text-slate-500">
+              Last saved {new Date(docUpdatedAt).toLocaleString()}
+            </p>
+          )}
         </div>
       )}
     </div>

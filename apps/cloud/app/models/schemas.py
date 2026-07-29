@@ -94,6 +94,12 @@ class GenerationRunStatus(str, Enum):
     running = "running"
     succeeded = "succeeded"
     failed = "failed"
+    # The model hit its completion cap (`finish_reason == "length"`) before
+    # finishing the document. The partial output is still parsed, persisted
+    # and shown — it's usable, just incomplete — so this is deliberately not
+    # `failed`; the distinction is what lets the Planner warn the user and
+    # what makes silent truncation visible in generation_runs.
+    truncated = "truncated"
 
 
 # --------------------------------------------------------------------------- #
