@@ -33,6 +33,7 @@ from app.models.schemas import (
     PullRequest,
     RagChunk,
     RagChunkHit,
+    RepoWebhook,
     Requirement,
     Role,
     SpecDocument,
@@ -75,11 +76,17 @@ class Repository(abc.ABC):
     ) -> Workspace: ...
 
     @abc.abstractmethod
-    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
-        """Resolve an inbound GitHub webhook (no caller identity, just a
-        `repository.full_name`) to the workspace whose install config names
-        this repo (M11). v1 keeps this a one-repo-per-workspace mapping —
-        see app/api/github.py."""
+    def upsert_repo_webhook(self, webhook: RepoWebhook) -> RepoWebhook:
+        """Bind a repository to the project whose repo it is, together with
+        that repo's own signing secret. Keyed by `repo_full_name`."""
+
+    @abc.abstractmethod
+    def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
+        """Resolve an inbound GitHub delivery (no caller identity, just a
+        `repository.full_name`) to the project it belongs to. Replaces the
+        old workspace-config scan: the binding is written by the cloud when
+        it creates the repo, so it cannot be claimed by a workspace that
+        merely typed the repo's name (see issue #3)."""
 
     @abc.abstractmethod
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None: ...
@@ -141,6 +148,17 @@ class Repository(abc.ABC):
     def list_invitations(
         self, workspace_id: str, status: InvitationStatus | None = None
     ) -> list[Invitation]: ...
+
+    @abc.abstractmethod
+    def list_invitations_for_email(
+        self, email: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]:
+        """Invitations addressed to `email`, across every workspace.
+
+        The invitee is not a member yet, so this is deliberately *not*
+        workspace-scoped — it is the only lookup that lets an invited user find
+        the workspace they were invited to. Matched case-insensitively, since
+        the inviter types the address by hand."""
 
     @abc.abstractmethod
     def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation: ...
@@ -370,6 +388,7 @@ class InMemoryRepository(Repository):
         self._members: dict[str, dict[str, WorkspaceMember]] = {}
         # token -> Invitation
         self._invitations: dict[str, Invitation] = {}
+        self._repo_webhooks: dict[str, RepoWebhook] = {}
         # (provider, external_key) -> TaskLink
         self._task_links: dict[tuple[str, str], TaskLink] = {}
         # workspace_id -> ModelConnection (M9)
@@ -430,11 +449,12 @@ class InMemoryRepository(Repository):
         ws.updated_at = utcnow()
         return ws
 
-    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
-        for ws in self._workspaces.values():
-            if (ws.integration_config or {}).get("github", {}).get("repo") == repo:
-                return ws
-        return None
+    def upsert_repo_webhook(self, webhook: RepoWebhook) -> RepoWebhook:
+        self._repo_webhooks[webhook.repo_full_name] = webhook
+        return webhook
+
+    def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
+        return self._repo_webhooks.get(repo_full_name)
 
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None:
         member = self._members.get(workspace_id, {}).get(user_id)
@@ -528,6 +548,15 @@ class InMemoryRepository(Repository):
         self, workspace_id: str, status: InvitationStatus | None = None
     ) -> list[Invitation]:
         out = [i for i in self._invitations.values() if i.workspace_id == workspace_id]
+        if status is not None:
+            out = [i for i in out if i.status == status]
+        return out
+
+    def list_invitations_for_email(
+        self, email: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]:
+        target = email.strip().lower()
+        out = [i for i in self._invitations.values() if i.email.strip().lower() == target]
         if status is not None:
             out = [i for i in out if i.status == status]
         return out

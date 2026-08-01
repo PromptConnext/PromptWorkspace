@@ -281,6 +281,20 @@ class InvitationCreateResponse(BaseModel):
     email_sent: bool
 
 
+class PendingInvitation(BaseModel):
+    """An invitation addressed to the *caller*, for the "you've been invited"
+    surface on the web gate. Carries the workspace name so the UI can name the
+    workspace without a second membership-gated fetch (the invitee is not yet a
+    member, so `GET /workspaces/{id}` would 403)."""
+
+    token: str
+    workspace_id: str
+    workspace_name: str
+    role: Role
+    invited_by: str
+    expires_at: datetime
+
+
 # --------------------------------------------------------------------------- #
 # External-tracker links (M5)
 # --------------------------------------------------------------------------- #
@@ -443,6 +457,27 @@ class ProjectGraph(BaseModel):
     has_more: bool = False
 
 
+class RepoWebhook(BaseModel):
+    """One repository's inbound webhook binding.
+
+    Its own row rather than a column on `Project` for two reasons. The
+    signing secret is ciphertext that must never reach a client, and `Project`
+    is serialized directly by several routes (`response_model=Project`) — a
+    field here cannot leak by accident. And `repo_full_name` as the primary
+    key makes the repo → project mapping unique *by construction*, which the
+    old `find_workspace_by_github_repo` scan (first match wins) did not
+    guarantee.
+
+    Never returned by an API route.
+    """
+
+    repo_full_name: str
+    project_id: str
+    workspace_id: str
+    secret_ref: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 # --------------------------------------------------------------------------- #
 # RAG assistant v1 (M9)
 # --------------------------------------------------------------------------- #
@@ -577,17 +612,34 @@ class LineageFacts(BaseModel):
 # Git-host integration (M11) — PRs indexed as text, code indexed as
 # embeddings + refs only (ADR 0011: no source code at rest).
 # --------------------------------------------------------------------------- #
-class GithubInstallRequest(BaseModel):
-    """Admin-supplied, after completing the GitHub App install flow on
-    GitHub's own site (external, one-time — same posture as generating a
-    Jira API token today; no OAuth redirect handling lives in this repo).
-    v1 is one-repo-per-workspace: `project_id` says which project this repo's
-    PRs/code index into."""
+class GithubConnectRequest(BaseModel):
+    """Admin-supplied GitHub credential for the whole workspace.
 
-    installation_id: str
-    repo: str  # "owner/name"
-    default_branch: str = "main"
-    project_id: str
+    `owner` is the org (or personal account) new project repositories are
+    created under; `token` is a fine-grained PAT with Contents + Administration
+    write on that owner. Deliberately no `repo` field — a workspace holds many
+    projects and the cloud *creates* each project's repo at tech-review exit
+    (ADR 0017), so naming one repo here was both wrong-scoped and the hook
+    that let a workspace claim another's deliveries (issue #3).
+
+    The token is verified against GitHub before anything is written, then
+    encrypted to a `secret_ref`; the plaintext is never persisted or echoed.
+    """
+
+    owner: str
+    token: str
+
+
+class GithubConnectionOut(BaseModel):
+    """Non-secret view of a workspace's GitHub connection, safe to render in
+    settings. Carries no token and no `secret_ref`."""
+
+    connected: bool
+    owner: str | None = None
+    owner_type: str | None = None
+    account_login: str | None = None
+    token_expires_at: datetime | None = None
+    connected_at: datetime | None = None
     # Org/user the App is installed on. Repo creation (create-repository,
     # app/api/sync.py) needs this separately from `repo`, since `repo` may
     # not exist yet at install time; null falls back to `repo.split("/")[0]`.

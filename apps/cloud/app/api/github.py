@@ -1,7 +1,9 @@
-"""Git-host integration API (M11): install + inbound webhooks.
+"""Git-host integration API (M11): connection management + inbound webhooks.
 
-  POST /workspaces/{id}/integrations/github/install   admin — non-secret config
-  POST /api/webhooks/github                           public, signature-verified
+  GET    /workspaces/{id}/integrations/github   admin — non-secret status
+  PUT    /workspaces/{id}/integrations/github   admin — connect (verify + store PAT)
+  DELETE /workspaces/{id}/integrations/github   admin — disconnect
+  POST   /api/webhooks/github                   public, signature-verified
 
 Doesn't reuse app/api/integrations.py's tracker_webhook — that endpoint's
 contract (adapter.handle_webhook -> pmo-only InboundUpdate) is shaped around
@@ -19,18 +21,23 @@ from app.api._guards import require_admin
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.integrations.github import (
+    GithubAuthError,
+    GithubWriteError,
     extract_task_refs,
     parse_pull_request_event,
     parse_push_event,
     verify_signature,
 )
+from app.integrations.github_auth import github_config
 from app.models.schemas import (
     Artifact,
     ArtifactKind,
-    GithubInstallRequest,
+    GithubConnectionOut,
+    GithubConnectRequest,
     GraphUpsertRequest,
     PullRequest,
     Workspace,
+    utcnow,
 )
 from app.rag.queue import EmbedJob, enqueue
 
@@ -38,59 +45,148 @@ logger = logging.getLogger("promptconnext.github")
 router = APIRouter(tags=["github"])
 
 
-@router.post("/workspaces/{workspace_id}/integrations/github/install", response_model=Workspace)
-def install_github(
+def _connection_out(workspace: Workspace | None) -> GithubConnectionOut:
+    config = github_config(workspace)
+    if config is None:
+        return GithubConnectionOut(connected=False)
+    return GithubConnectionOut(
+        connected=True,
+        owner=config.get("owner"),
+        owner_type=config.get("owner_type"),
+        account_login=config.get("account_login"),
+        token_expires_at=config.get("token_expires_at"),
+        connected_at=config.get("connected_at"),
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/integrations/github", response_model=GithubConnectionOut
+)
+def get_github_connection(
     workspace_id: str,
-    body: GithubInstallRequest,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> Workspace:
+) -> GithubConnectionOut:
     require_admin(repo, workspace_id, user)
-    project = repo.get_project(body.project_id)
-    if project is None or project.workspace_id != workspace_id:
-        raise HTTPException(status_code=422, detail="project_not_in_workspace")
+    return _connection_out(repo.get_workspace(workspace_id))
+
+
+@router.put(
+    "/workspaces/{workspace_id}/integrations/github", response_model=GithubConnectionOut
+)
+async def connect_github(
+    workspace_id: str,
+    body: GithubConnectRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> GithubConnectionOut:
+    """Verify the PAT against GitHub, then store it encrypted.
+
+    Verification is not a nicety: a token that cannot reach `owner` produces a
+    workspace that looks connected in settings and fails at tech-review exit,
+    hours later, in front of a Tech Lead who cannot tell why. Failing here
+    costs one round-trip and reports the actual problem.
+    """
+    require_admin(repo, workspace_id, user)
+    owner = body.owner.strip()
+    token = body.token.strip()
+    if not owner or not token:
+        raise HTTPException(status_code=422, detail="owner_and_token_required")
+
+    try:
+        identity = await request.app.state.github_client.verify_token(token, owner)
+    except GithubAuthError:
+        raise HTTPException(status_code=400, detail="github_token_rejected") from None
+    except GithubWriteError as exc:
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+
+    if not identity.can_access_owner:
+        raise HTTPException(status_code=400, detail="github_owner_not_accessible")
 
     ws = repo.get_workspace(workspace_id)
     merged = dict(ws.integration_config) if ws else {}
     merged["github"] = {
-        "installation_id": body.installation_id,
-        "repo": body.repo,
-        "default_branch": body.default_branch,
-        "project_id": body.project_id,
+        "auth_kind": "pat",
+        "owner": owner,
+        "owner_type": identity.owner_type,
+        "account_login": identity.login,
+        "token_expires_at": identity.expires_at,
+        "secret_ref": request.app.state.secret_store.encrypt(token),
+        "connected_at": utcnow().isoformat(),
+        "connected_by": user.id,
     }
-    return repo.update_workspace(workspace_id, integration_config=merged)
+    return _connection_out(repo.update_workspace(workspace_id, integration_config=merged))
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/integrations/github", response_model=GithubConnectionOut
+)
+def disconnect_github(
+    workspace_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> GithubConnectionOut:
+    """Drop the stored credential. Existing repos and their webhooks are left
+    alone — they belong to the customer's GitHub account, not to us; only our
+    ability to call on their behalf goes away."""
+    require_admin(repo, workspace_id, user)
+    ws = repo.get_workspace(workspace_id)
+    merged = dict(ws.integration_config) if ws else {}
+    merged.pop("github", None)
+    return _connection_out(repo.update_workspace(workspace_id, integration_config=merged))
 
 
 @router.post("/api/webhooks/github")
 async def github_webhook(request: Request, repo: Repository = Depends(get_repository)) -> dict:
     raw = await request.body()
-    settings = request.app.state.settings
-    signature = request.headers.get("x-hub-signature-256")
-    if not verify_signature(raw, signature, settings.github_webhook_secret):
-        raise HTTPException(status_code=401, detail="invalid_signature")
 
     event_type = request.headers.get("x-github-event", "")
-    if event_type == "ping":
-        return {"received": True}
-
     payload = await request.json()
     repo_full_name = (payload.get("repository") or {}).get("full_name")
     if not repo_full_name:
+        # A ping with no repository (org-level hook) or a malformed body.
+        # Nothing to route and nothing to verify against; ack and move on.
         return {"received": True, "matched": False}
 
-    workspace = repo.find_workspace_by_github_repo(repo_full_name)
-    if workspace is None:
-        # Not an error — a repo the App can see but no workspace has
-        # installed/configured yet. Ack so GitHub doesn't retry forever.
+    # Routing comes BEFORE signature verification, because under per-repo
+    # secrets the repository *is* what selects the key. That inverts the old
+    # order but weakens nothing: an unknown repo is rejected without ever
+    # touching the payload, and a known one is still verified below.
+    binding = repo.get_repo_webhook(repo_full_name)
+    if binding is None:
+        # A repo we hold no secret for — not necessarily hostile (a hook left
+        # over from a disconnected workspace). Ack so GitHub stops retrying.
         return {"received": True, "matched": False}
 
-    github_config = workspace.integration_config["github"]
-    project_id = github_config["project_id"]
+    try:
+        secret = request.app.state.secret_store.decrypt(binding.secret_ref)
+    except Exception:  # noqa: BLE001 - unusable secret must not 500 a public route
+        logger.warning("webhook secret for %s could not be decrypted", repo_full_name)
+        raise HTTPException(status_code=401, detail="invalid_signature") from None
+
+    signature = request.headers.get("x-hub-signature-256")
+    if not verify_signature(raw, signature, secret):
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    if event_type == "ping":
+        return {"received": True}
+
+    project = repo.get_project(binding.project_id)
+    if project is None:
+        return {"received": True, "matched": False}
 
     if event_type == "pull_request":
-        _handle_pull_request(request.app, repo, workspace.id, project_id, payload)
+        _handle_pull_request(request.app, repo, binding.workspace_id, binding.project_id, payload)
     elif event_type == "push":
-        _handle_push(request.app, repo, workspace.id, project_id, github_config, payload)
+        _handle_push(
+            request.app,
+            repo,
+            binding.workspace_id,
+            binding.project_id,
+            {"repo": repo_full_name, "default_branch": project.repo_default_branch or "main"},
+            payload,
+        )
 
     return {"received": True, "matched": True}
 

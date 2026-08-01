@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { use } from "react";
-import { GithubInstallForm } from "@/components/GithubInstallForm";
+import { GithubConnectionForm } from "@/components/GithubConnectionForm";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
@@ -11,7 +11,7 @@ import type { Workspace, WorkspaceMember } from "@/lib/types";
 
 function SettingsView({ workspaceId }: { workspaceId: string }) {
   const { user } = useAuth();
-  const { data: workspace, refetch: refetchWorkspace } = useCloudGet<Workspace>(
+  const { data: workspace } = useCloudGet<Workspace>(
     `/workspaces/${workspaceId}`,
   );
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
@@ -37,7 +37,7 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
         </h1>
 
         {isAdmin && (
-          <GithubInstallForm workspaceId={workspaceId} onInstalled={refetchWorkspace} />
+          <GithubConnectionForm workspaceId={workspaceId} />
         )}
       </main>
     </>

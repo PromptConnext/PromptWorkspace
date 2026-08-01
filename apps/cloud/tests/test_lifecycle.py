@@ -24,8 +24,6 @@ def _client() -> TestClient:
 def _wire_github(client: TestClient) -> FakeGithubClient:
     fake = FakeGithubClient()
     client.app.state.github_client = fake
-    client.app.state.settings.github_app_id = "app-1"
-    client.app.state.settings.github_app_private_key = "unused-by-fake-client"
     return fake
 
 
@@ -40,7 +38,14 @@ def _project_in_tech_review(client: TestClient, *, configure_github: bool = True
     if configure_github:
         repo.update_workspace(
             ws["id"],
-            integration_config={"github": {"installation_id": "inst-1", "owner": "acme"}},
+            integration_config={
+                "github": {
+                    "auth_kind": "pat",
+                    "owner": "acme",
+                    "owner_type": "Organization",
+                    "secret_ref": client.app.state.secret_store.encrypt("github_pat_test"),
+                }
+            },
         )
     return ws, pid
 

@@ -44,6 +44,7 @@ from fastapi.responses import StreamingResponse
 from app.api._guards import require_admin, require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.integrations.github_auth import resolve_token
 from app.models.schemas import (
     ChatRequest,
     Citation,
@@ -275,15 +276,12 @@ async def _fetch_code_context(
     if not code_hits:
         return [], []
     workspace = repo.get_workspace(project.workspace_id)
-    github_config = (workspace.integration_config or {}).get("github") if workspace else None
-    settings = app.state.settings
-    if not github_config or not (settings.github_app_id and settings.github_app_private_key):
+    resolved = resolve_token(app, workspace)
+    if resolved is None:
         return [], []
+    token, _ = resolved
 
     github_client = app.state.github_client
-    token = await github_client.mint_installation_token(
-        settings.github_app_id, settings.github_app_private_key, github_config["installation_id"]
-    )
 
     snippets: list[str] = []
     citations: list[Citation] = []

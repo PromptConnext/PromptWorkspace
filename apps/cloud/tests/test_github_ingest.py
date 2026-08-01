@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
+from app.models.schemas import RepoWebhook
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -30,10 +31,35 @@ def client() -> TestClient:
         c.app.state.embedding_provider = FakeEmbeddingProvider()
         c.app.state.chat_provider = FakeChatProvider()
         c.app.state.github_client = FakeGithubClient()
-        c.app.state.settings.github_webhook_secret = WEBHOOK_SECRET
-        c.app.state.settings.github_app_id = "app-1"
-        c.app.state.settings.github_app_private_key = "unused-by-fake-client"
         yield c
+
+
+def _connect_github(client: TestClient, workspace_id: str, owner: str = "acme") -> None:
+    """Workspace-level credential (a fine-grained PAT), verified by the fake
+    client rather than GitHub."""
+    res = client.put(
+        f"/workspaces/{workspace_id}/integrations/github",
+        json={"owner": owner, "token": "github_pat_test"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+
+def _bind_repo(
+    client: TestClient, workspace_id: str, project_id: str, secret: str = WEBHOOK_SECRET
+) -> None:
+    """Stand in for what `POST /projects/{id}/lifecycle/create-repository`
+    writes when it registers the repo's webhook — these tests exercise
+    ingestion, not repo creation."""
+    repository = client.app.state.repository
+    repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            secret_ref=client.app.state.secret_store.encrypt(secret),
+        )
+    )
 
 
 def _sign(body: bytes, secret: str = WEBHOOK_SECRET) -> str:
@@ -102,29 +128,60 @@ def workspace_project_task(client: TestClient) -> tuple[str, str, str]:
     )
     assert push.status_code == 200, push.text
 
-    install = client.post(
-        f"/workspaces/{ws['id']}/integrations/github/install",
-        json={
-            "installation_id": "inst-1",
-            "repo": REPO,
-            "default_branch": "main",
-            "project_id": project["id"],
-        },
-        headers=ALICE,
+    _connect_github(client, ws["id"])
+    _bind_repo(client, ws["id"], project["id"])
+    # The push handler reads the branch off the project, not workspace config.
+    client.app.state.repository.update_project_repo(
+        project["id"], f"https://github.com/{REPO}", "main"
     )
-    assert install.status_code == 200, install.text
     return ws["id"], project["id"], "t1"
 
 
-def test_webhook_rejects_invalid_signature(client: TestClient):
-    res = _post_webhook(client, "ping", {"zen": "hi"}, secret="wrong-secret")
+def test_webhook_rejects_invalid_signature(client: TestClient, workspace_project_task):
+    res = _post_webhook(
+        client, "ping", {"zen": "hi", "repository": {"full_name": REPO}}, secret="wrong-secret"
+    )
     assert res.status_code == 401
 
 
-def test_webhook_ping_is_acked_without_processing(client: TestClient):
-    res = _post_webhook(client, "ping", {"zen": "hi"})
+def test_webhook_ping_is_acked_without_processing(client: TestClient, workspace_project_task):
+    res = _post_webhook(client, "ping", {"zen": "hi", "repository": {"full_name": REPO}})
     assert res.status_code == 200
     assert res.json() == {"received": True}
+
+
+def test_webhook_for_unknown_repo_is_acked_not_processed(client: TestClient):
+    # No binding exists, so there is no secret to verify against. Ack rather
+    # than 401 so GitHub stops retrying a hook we no longer own.
+    res = _post_webhook(client, "push", {"repository": {"full_name": "stranger/repo"}})
+    assert res.status_code == 200
+    assert res.json() == {"received": True, "matched": False}
+
+
+def test_webhook_secret_is_per_repo_not_shared(client: TestClient, workspace_project_task):
+    # A second project's repo gets its own secret; the first repo's secret
+    # must not validate a delivery for the second.
+    ws_id, project_id, _ = workspace_project_task
+    other = "acme/other"
+    client.app.state.repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=other,
+            project_id=project_id,
+            workspace_id=ws_id,
+            secret_ref=client.app.state.secret_store.encrypt("whsec_other"),
+        )
+    )
+    body = json.dumps({"zen": "hi", "repository": {"full_name": other}}).encode()
+    res = client.post(
+        "/api/webhooks/github",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-github-event": "ping",
+            "x-hub-signature-256": _sign(body, WEBHOOK_SECRET),
+        },
+    )
+    assert res.status_code == 401
 
 
 def test_pull_request_links_task_via_tref_and_creates_artifact(

@@ -7,13 +7,25 @@ sprint). GitHub's events (PR opened/merged, push) drive indexing, not field
 updates, so this module and app/api/github.py stand on their own rather than
 distorting the Jira/ClickUp registry to fit.
 
-One GitHub App is shared across all workspaces (Settings.github_app_id /
-github_app_private_key / github_webhook_secret — server env, never in
-Postgres, same rule as jira_api_token). No installation access token is ever
-persisted: mint_installation_token() produces a short-lived one (GitHub
-caps these at ~1h) from the App's private key, used once per request and
-discarded. This is a stricter posture than Jira's static API token — GitHub
-gives us the option, so we take it.
+Auth is a **per-workspace fine-grained Personal Access Token**, supplied by a
+workspace admin and held as ciphertext (`secret_ref`) in the workspace's
+integration config — the same secret-store treatment as workspace-BYO model
+keys (app/secrets.py, ADR 0011). This replaces the platform-wide GitHub App
+the module originally shipped with; see ADR 0017's amendment for why.
+
+Two consequences worth keeping in mind:
+
+- The token *is* the workspace's own credential, so there is no installation
+  id to forge — the cross-tenant hazard of the App design (issue #3) cannot
+  arise. A workspace can only ever reach what its own token can reach.
+- The token is long-lived and belongs to a person. `verify_token()` records
+  its expiry so the settings UI can warn before it lapses, and every call
+  path degrades to "not configured" rather than erroring when it is gone.
+
+Webhooks are likewise per-repository: `create_repo_webhook()` registers one
+at repo-creation time with a freshly generated secret, stored (encrypted)
+alongside the project. There is no shared platform signing secret, so a
+delivery can only be attributed to the project whose secret validates it.
 """
 
 from __future__ import annotations
@@ -22,12 +34,11 @@ import base64
 import hashlib
 import hmac
 import re
-import time
+import secrets
 from dataclasses import dataclass, field
 from typing import Protocol
 
 import httpx
-import jwt
 
 GITHUB_API = "https://api.github.com"
 
@@ -53,12 +64,25 @@ def verify_signature(body: bytes, signature: str | None, secret: str) -> bool:
     return hmac.compare_digest(expected, signature[len(prefix) :])
 
 
-def app_jwt(app_id: str, private_key: str) -> str:
-    """Short-lived App-level JWT (RS256), used only to mint an installation
-    access token — never used for any other API call."""
-    now = int(time.time())
-    payload = {"iat": now - 60, "exp": now + 540, "iss": app_id}
-    return jwt.encode(payload, private_key, algorithm="RS256")
+def new_webhook_secret() -> str:
+    """Signing secret for one repository's webhook. Generated per repo at
+    creation time — there is no platform-wide secret to share, so a delivery
+    that validates against a project's secret provably belongs to it."""
+    return secrets.token_hex(32)
+
+
+@dataclass(frozen=True)
+class TokenIdentity:
+    """What a supplied PAT turns out to be, established by verify_token()
+    before anything is persisted."""
+
+    login: str
+    expires_at: str | None  # ISO-8601, or None for a token with no expiry
+    can_access_owner: bool
+    # "Organization" or "User" — decides whether a new repo is created via
+    # POST /orgs/{owner}/repos or POST /user/repos. A solo workspace pointing
+    # at a personal account is a normal case, not an edge one.
+    owner_type: str = "Organization"
 
 
 @dataclass(frozen=True)
@@ -131,6 +155,30 @@ class GithubWriteError(RuntimeError):
     ignorant of the HTTP client this module happens to use."""
 
 
+class GithubAuthError(GithubWriteError):
+    """The supplied PAT was rejected (401/403). Distinguished from a generic
+    write failure so the settings endpoint can answer 400 "bad token" rather
+    than 502 "GitHub is unwell"."""
+
+
+def _normalize_expiry(raw: str | None) -> str | None:
+    """GitHub sends the expiry header as `2026-11-01 00:00:00 UTC`. Store it
+    as ISO-8601 so the web app can parse it with `new Date(...)`; anything
+    unrecognized is dropped rather than persisted in a shape nobody can read.
+    """
+    if not raw:
+        return None
+    from datetime import datetime, timezone
+
+    for fmt in ("%Y-%m-%d %H:%M:%S %Z", "%Y-%m-%d %H:%M:%S UTC", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            parsed = datetime.strptime(raw.strip(), fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=timezone.utc).isoformat()
+    return None
+
+
 class RepoAlreadyExistsError(GithubWriteError):
     """`create_org_repo` got a 422 "name already exists" — the caller
     decides whether to adopt the existing repo (retry after a partial
@@ -138,9 +186,11 @@ class RepoAlreadyExistsError(GithubWriteError):
 
 
 class GithubClient(Protocol):
-    async def mint_installation_token(
-        self, app_id: str, private_key: str, installation_id: str
-    ) -> str: ...
+    async def verify_token(self, token: str, owner: str) -> TokenIdentity: ...
+
+    async def create_repo_webhook(
+        self, token: str, repo: str, callback_url: str, secret: str
+    ) -> None: ...
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str: ...
 
@@ -163,20 +213,71 @@ class GithubClient(Protocol):
 
 
 class HttpGithubClient:
-    async def mint_installation_token(
-        self, app_id: str, private_key: str, installation_id: str
-    ) -> str:
-        token = app_jwt(app_id, private_key)
+    async def verify_token(self, token: str, owner: str) -> TokenIdentity:
+        """Prove the token works and can reach `owner`, before it is stored.
+
+        GitHub reports a PAT's expiry only as a response *header*
+        (`github-authentication-token-expiration`); there is no endpoint for
+        it, and classic tokens without an expiry simply omit it.
+        """
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            me = await client.get(f"{GITHUB_API}/user", headers=headers)
+            if me.status_code in (401, 403):
+                raise GithubAuthError("token_rejected")
+            if me.is_error:
+                raise GithubWriteError(f"verify_token failed: {me.status_code} {me.text}")
+            login = me.json().get("login") or ""
+            expires_at = me.headers.get("github-authentication-token-expiration")
+
+            owner_type = "Organization"
+            can_access_owner = False
+            if owner.lower() == login.lower():
+                owner_type, can_access_owner = "User", True
+            else:
+                org = await client.get(f"{GITHUB_API}/orgs/{owner}", headers=headers)
+                can_access_owner = org.status_code == 200
+
+        return TokenIdentity(
+            login=login,
+            expires_at=_normalize_expiry(expires_at),
+            can_access_owner=can_access_owner,
+            owner_type=owner_type,
+        )
+
+    async def create_repo_webhook(
+        self, token: str, repo: str, callback_url: str, secret: str
+    ) -> None:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
-                f"{GITHUB_API}/app/installations/{installation_id}/access_tokens",
+                f"{GITHUB_API}/repos/{repo}/hooks",
+                json={
+                    "name": "web",
+                    "active": True,
+                    "events": ["push", "pull_request"],
+                    "config": {
+                        "url": callback_url,
+                        "content_type": "json",
+                        "secret": secret,
+                        "insecure_ssl": "0",
+                    },
+                },
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",
                 },
             )
-            resp.raise_for_status()
-            return resp.json()["token"]
+            # 422 means a hook with this config already exists — a retry after
+            # a partial failure, not an error worth failing repo creation over.
+            if resp.status_code == 422:
+                return
+            if resp.is_error:
+                raise GithubWriteError(
+                    f"create_repo_webhook failed for {repo}: {resp.status_code} {resp.text}"
+                )
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -193,14 +294,29 @@ class HttpGithubClient:
             return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
 
     async def create_org_repo(
-        self, token: str, org: str, name: str, description: str, private: bool
+        self,
+        token: str,
+        org: str,
+        name: str,
+        description: str,
+        private: bool,
+        owner_type: str = "Organization",
     ) -> dict:
         """`auto_init: true` is required — the contents API (used by
         `put_file_content`) cannot write into a zero-commit repo without
-        blob/tree plumbing, so GitHub must create the initial commit."""
+        blob/tree plumbing, so GitHub must create the initial commit.
+
+        A personal-account owner takes `POST /user/repos` instead; the org
+        endpoint 404s for a user login.
+        """
+        url = (
+            f"{GITHUB_API}/user/repos"
+            if owner_type == "User"
+            else f"{GITHUB_API}/orgs/{org}/repos"
+        )
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
-                f"{GITHUB_API}/orgs/{org}/repos",
+                url,
                 json={
                     "name": name,
                     "description": description,
@@ -283,27 +399,50 @@ class FakeGithubClient:
 
     def __init__(self) -> None:
         self.files: dict[tuple[str, str, str], str] = {}
-        self.minted_tokens = 0
         self.created_repos: list[dict] = []
         self.written_files: dict[tuple[str, str], str] = {}
+        self.webhooks: list[dict] = []
+        self.verified_tokens: list[tuple[str, str]] = []
+        self.fetched_files: list[tuple[str, str, str]] = []
         # Set-in-test knobs for exercising failure paths without a real API.
         self.fail_on_write_path: str | None = None
         self.existing_repos: dict[str, dict] = {}
+        self.reject_token = False
+        self.token_owner_unreachable = False
+        self.token_expires_at: str | None = None
+        self.token_login = "fake-user"
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
 
-    async def mint_installation_token(
-        self, app_id: str, private_key: str, installation_id: str
-    ) -> str:
-        self.minted_tokens += 1
-        return f"fake-installation-token-{installation_id}"
+    async def verify_token(self, token: str, owner: str) -> TokenIdentity:
+        self.verified_tokens.append((token, owner))
+        if self.reject_token:
+            raise GithubAuthError("token_rejected")
+        return TokenIdentity(
+            login=self.token_login,
+            expires_at=self.token_expires_at,
+            can_access_owner=not self.token_owner_unreachable,
+            owner_type="User" if owner == self.token_login else "Organization",
+        )
+
+    async def create_repo_webhook(
+        self, token: str, repo: str, callback_url: str, secret: str
+    ) -> None:
+        self.webhooks.append({"repo": repo, "url": callback_url, "secret": secret})
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
+        self.fetched_files.append((repo, path, sha))
         return self.files.get((repo, path, sha), f"fake content for {repo}/{path}@{sha}")
 
     async def create_org_repo(
-        self, token: str, org: str, name: str, description: str, private: bool
+        self,
+        token: str,
+        org: str,
+        name: str,
+        description: str,
+        private: bool,
+        owner_type: str = "Organization",
     ) -> dict:
         full_name = f"{org}/{name}"
         if full_name in self.existing_repos:

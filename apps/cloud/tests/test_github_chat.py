@@ -28,8 +28,6 @@ def client() -> TestClient:
         c.app.state.embedding_provider = FakeEmbeddingProvider()
         c.app.state.chat_provider = FakeChatProvider()
         c.app.state.github_client = FakeGithubClient()
-        c.app.state.settings.github_app_id = "app-1"
-        c.app.state.settings.github_app_private_key = "unused-by-fake-client"
         yield c
 
 
@@ -73,16 +71,12 @@ def project_with_code(client: TestClient) -> tuple[str, str]:
     )
     assert conn.status_code == 200, conn.text
 
-    client.post(
-        f"/workspaces/{ws['id']}/integrations/github/install",
-        json={
-            "installation_id": "inst-1",
-            "repo": REPO,
-            "default_branch": "main",
-            "project_id": project["id"],
-        },
+    connected = client.put(
+        f"/workspaces/{ws['id']}/integrations/github",
+        json={"owner": REPO.split("/")[0], "token": "github_pat_test"},
         headers=ALICE,
     )
+    assert connected.status_code == 200, connected.text
 
     repo = client.app.state.repository
     repo.upsert_code_chunks(

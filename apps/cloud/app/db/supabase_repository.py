@@ -35,6 +35,7 @@ from app.models.schemas import (
     ProjectGraph,
     PullRequest,
     RagChunkHit,
+    RepoWebhook,
     Requirement,
     Role,
     SpecDocument,
@@ -69,6 +70,7 @@ _CODE_MATCH_RPC = "pz_code_match_chunks"
 _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
 _STAGE_DOCUMENTS = "pz_stage_documents"
+_REPO_WEBHOOKS = "pz_repo_webhooks"
 
 
 class SupabaseRepository(Repository):
@@ -155,16 +157,22 @@ class SupabaseRepository(Repository):
             raise KeyError(workspace_id)
         return ws
 
-    def find_workspace_by_github_repo(self, repo: str) -> Workspace | None:
+    def upsert_repo_webhook(self, webhook: RepoWebhook) -> RepoWebhook:
+        self._client.table(_REPO_WEBHOOKS).upsert(
+            _dump(webhook), on_conflict="repo_full_name", returning="minimal"
+        ).execute()
+        return webhook
+
+    def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
         res = (
-            self._client.table(_WORKSPACES)
+            self._client.table(_REPO_WEBHOOKS)
             .select("*")
-            .filter("integration_config->github->>repo", "eq", repo)
+            .eq("repo_full_name", repo_full_name)
             .limit(1)
             .execute()
         )
         rows = res.data or []
-        return Workspace(**rows[0]) if rows else None
+        return RepoWebhook(**rows[0]) if rows else None
 
     def get_membership(self, workspace_id: str, user_id: str) -> Role | None:
         res = (
@@ -289,6 +297,20 @@ class SupabaseRepository(Repository):
             query = query.eq("status", status.value)
         res = query.execute()
         return [Invitation(**row) for row in (res.data or [])]
+
+    def list_invitations_for_email(
+        self, email: str, status: InvitationStatus | None = None
+    ) -> list[Invitation]:
+        target = email.strip().lower()
+        # `ilike` treats % and _ as wildcards, so an address containing them
+        # would over-match; the Python re-filter below makes the comparison
+        # exact regardless.
+        query = self._client.table(_INVITATIONS).select("*").ilike("email", target)
+        if status is not None:
+            query = query.eq("status", status.value)
+        res = query.execute()
+        rows = [Invitation(**row) for row in (res.data or [])]
+        return [i for i in rows if i.email.strip().lower() == target]
 
     def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation:
         res = (

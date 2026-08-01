@@ -90,15 +90,16 @@ class Settings(BaseSettings):
     # rejected at the model-connection endpoint when data_backend=supabase.
     rag_key_encryption_key: str = ""
 
-    # Git-host integration (M11): one GitHub App shared across all workspaces
-    # — same shape as the Jira/ClickUp env-level credentials above. Never
-    # stored in Supabase; per-workspace config (installation_id, repo,
-    # default_branch) is non-secret and lives on the workspace row instead.
-    # No installation access token is ever persisted — app/integrations/
-    # github.py mints one on demand from the private key and discards it.
-    github_app_id: str = ""
-    github_app_private_key: str = ""
-    github_webhook_secret: str = ""
+    # Git-host integration (M11). There is deliberately NO platform-level
+    # GitHub credential here: each workspace supplies its own fine-grained
+    # PAT, encrypted to a secret_ref by app/secrets.py and held on the
+    # workspace row (ADR 0017 amendment). The only server-level value the
+    # integration needs is where GitHub should send webhooks back to — this
+    # service's own public origin. Empty disables webhook registration:
+    # repo creation and seeding still work, PR/push indexing just never
+    # starts, which is the correct behavior for a local dev run GitHub
+    # cannot reach anyway.
+    public_api_url: str = ""
 
     # Managed Thai-LLM tier (M2, plan 0007 / ADR 0013 Part B pilot): the free
     # opentyphoon.ai API as a platform-operated model source for workspaces

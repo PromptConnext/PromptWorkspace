@@ -23,7 +23,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.integrations.github import GithubWriteError, RepoAlreadyExistsError
+from app.integrations.github import (
+    GithubWriteError,
+    RepoAlreadyExistsError,
+    new_webhook_secret,
+)
+from app.integrations.github_auth import resolve_token
 from app.integrations.repo_seed import build_seed_files
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -34,6 +39,7 @@ from app.models.schemas import (
     Project,
     ProjectCreate,
     ProjectGraph,
+    RepoWebhook,
     Role,
     Task,
     TaskAssignmentUpdate,
@@ -152,16 +158,12 @@ async def create_repository(
         raise HTTPException(status_code=409, detail="not_in_tech_review")
 
     workspace = repo.get_workspace(project.workspace_id)
-    github_config = (workspace.integration_config or {}).get("github") if workspace else None
-    if not github_config:
+    resolved = resolve_token(request.app, workspace)
+    if resolved is None:
         raise HTTPException(status_code=400, detail="github_not_configured")
-
-    installation_id = github_config.get("installation_id")
-    owner = github_config.get("owner") or (github_config.get("repo") or "").split("/")[0] or None
-    settings = request.app.state.settings
-    if not installation_id or not owner or not (
-        settings.github_app_id and settings.github_app_private_key
-    ):
+    token, github_config = resolved
+    owner = github_config.get("owner")
+    if not owner:
         raise HTTPException(status_code=400, detail="github_not_configured")
 
     # Step 2: assemble seed files before any external mutation. Cheap and
@@ -175,16 +177,18 @@ async def create_repository(
     seed_files = build_seed_files(project, stage_docs)
 
     github_client = request.app.state.github_client
-    token = await github_client.mint_installation_token(
-        settings.github_app_id, settings.github_app_private_key, installation_id
-    )
 
     name = body.name or _slugify(project.name)
     description = f"PromptZone-managed repository for project {project.id}"
 
     try:
         created = await github_client.create_org_repo(
-            token, owner, name, description, body.private
+            token,
+            owner,
+            name,
+            description,
+            body.private,
+            github_config.get("owner_type", "Organization"),
         )
     except RepoAlreadyExistsError:
         # Retry path after a mid-flight failure: adopt the repo we (likely)
@@ -213,6 +217,34 @@ async def create_repository(
         # Do NOT advance the lifecycle — a partially seeded repo must leave
         # repo_url unset so a retry re-enters at repo creation and adopts.
         raise HTTPException(status_code=502, detail="github_seed_failed") from exc
+
+    # Register this repo's webhook with its own freshly generated secret, so
+    # PR/push indexing starts working without any further setup. Best-effort
+    # on purpose: a failure here costs indexing, not the repo — and failing
+    # the whole transition would strand a repo that is already created and
+    # fully seeded. Skipped entirely when PUBLIC_API_URL is unset (local dev,
+    # where GitHub cannot reach this service anyway).
+    public_api_url = request.app.state.settings.public_api_url
+    if public_api_url:
+        secret = new_webhook_secret()
+        try:
+            await github_client.create_repo_webhook(
+                token,
+                full_name,
+                f"{public_api_url.rstrip('/')}/api/webhooks/github",
+                secret,
+            )
+        except GithubWriteError:
+            logger.warning("webhook registration failed for %s; indexing will not start", full_name)
+        else:
+            repo.upsert_repo_webhook(
+                RepoWebhook(
+                    repo_full_name=full_name,
+                    project_id=project_id,
+                    workspace_id=project.workspace_id,
+                    secret_ref=request.app.state.secret_store.encrypt(secret),
+                )
+            )
 
     # Step 6: repo-write first, lifecycle flip last — see docstring.
     repo.update_project_repo(project_id, created["html_url"], default_branch)

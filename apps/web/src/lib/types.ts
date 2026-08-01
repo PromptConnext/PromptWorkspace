@@ -151,6 +151,29 @@ export interface Invitation {
   created_at: string;
 }
 
+// An invitation addressed to the signed-in user (GET /invitations/pending).
+// Carries the workspace name because the invitee is not a member yet and so
+// cannot read the workspace row directly.
+export interface PendingInvitation {
+  token: string;
+  workspace_id: string;
+  workspace_name: string;
+  role: Role;
+  invited_by: string;
+  expires_at: string;
+}
+
+// Non-secret view of a workspace's GitHub credential
+// (GET/PUT /workspaces/{id}/integrations/github). Never carries the token.
+export interface GithubConnection {
+  connected: boolean;
+  owner: string | null;
+  owner_type: string | null;
+  account_login: string | null;
+  token_expires_at: string | null;
+  connected_at: string | null;
+}
+
 export interface InvitationCreateResponse {
   invitation: Invitation;
   accept_url: string;

@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
+from app.models.schemas import RepoWebhook
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -41,9 +42,6 @@ def client() -> TestClient:
         c.app.state.embedding_provider = FakeEmbeddingProvider()
         c.app.state.chat_provider = FakeChatProvider()
         c.app.state.github_client = FakeGithubClient()
-        c.app.state.settings.github_webhook_secret = WEBHOOK_SECRET
-        c.app.state.settings.github_app_id = "app-1"
-        c.app.state.settings.github_app_private_key = "unused-by-fake-client"
         yield c
 
 
@@ -101,16 +99,26 @@ def test_no_source_code_plaintext_anywhere_in_storage_after_index_and_chat(clien
     )
     assert conn.status_code == 200, conn.text
 
-    client.post(
-        f"/workspaces/{ws['id']}/integrations/github/install",
-        json={
-            "installation_id": "inst-1",
-            "repo": REPO,
-            "default_branch": "main",
-            "project_id": project["id"],
-        },
+    connected = client.put(
+        f"/workspaces/{ws['id']}/integrations/github",
+        json={"owner": REPO.split("/")[0], "token": "github_pat_test"},
         headers=ALICE,
     )
+    assert connected.status_code == 200, connected.text
+
+    # Bind the repo to this project with its own webhook secret — what
+    # create-repository does for real. Without it the delivery below is
+    # unroutable and silently acked.
+    repository = client.app.state.repository
+    repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=project["id"],
+            workspace_id=ws["id"],
+            secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
+        )
+    )
+    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", "main")
 
     fake_github = client.app.state.github_client
     fake_github.set_file(REPO, "src/auth.ts", "sha-head", FILE_CONTENT)
@@ -151,7 +159,7 @@ def test_no_source_code_plaintext_anywhere_in_storage_after_index_and_chat(clien
 
     # Sanity: prove the fetch genuinely happened (else this test would pass
     # vacuously — nothing fetched, nothing to leak).
-    assert fake_github.minted_tokens > 0
+    assert fake_github.fetched_files, "no file was ever fetched — test would pass vacuously"
     assert SECRET_MARKER in FILE_CONTENT  # the fixture itself is meaningful
 
     # 3. The actual assertion: deep-scan every string reachable from the

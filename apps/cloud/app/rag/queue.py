@@ -25,6 +25,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.integrations.github_auth import resolve_token
 from app.rag.chunker import chunk_text
 from app.rag.code_chunker import chunk_code
 from app.rag.source import node_text
@@ -150,21 +151,14 @@ async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
         logger.info("skip code embed: no model connection workspace=%s", job.workspace_id)
         return
 
-    settings = app.state.settings
-    if not (settings.github_app_id and settings.github_app_private_key):
-        logger.warning("skip code embed: github app not configured")
-        return
-
     workspace = repo.get_workspace(job.workspace_id)
-    github_config = (workspace.integration_config or {}).get("github") if workspace else None
-    if not github_config:
-        logger.info("skip code embed: github not installed for workspace=%s", job.workspace_id)
+    resolved = resolve_token(app, workspace)
+    if resolved is None:
+        logger.info("skip code embed: github not connected for workspace=%s", job.workspace_id)
         return
+    token, _ = resolved
 
     github_client = app.state.github_client
-    token = await github_client.mint_installation_token(
-        settings.github_app_id, settings.github_app_private_key, github_config["installation_id"]
-    )
     content = await github_client.fetch_file_content(token, job.repo, job.path, job.sha)
     chunks = chunk_code(content)
     if not chunks:
