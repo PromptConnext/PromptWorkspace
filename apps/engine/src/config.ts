@@ -25,8 +25,13 @@ export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
 // this origin can phish users. The default below is a `*.vercel.app` subdomain,
 // which is only owned while the Vercel project exists — if it is ever deleted or
 // renamed, the name becomes reclaimable by anyone (dangling-subdomain takeover).
-// Acceptable for dev/staging; BEFORE distributing a desktop installer, set this
-// default (or the shipped build's CLOUD_WEB_URL) to a custom domain the org owns
-// at the DNS level (e.g. app.promptconnext.com), not a shared-platform subdomain.
+// The 2026-07-25 pre-launch readiness review called moving to an org-owned
+// custom domain a hard blocker for public distribution. On 2026-08-01 the
+// owner accepted the risk for launch instead (ADR 0014, "Accepted risk"), so
+// this ships on the vercel.app subdomain. The mitigation is unchanged and
+// still outstanding: point this default (or the shipped build's CLOUD_WEB_URL)
+// at a domain the org owns at the DNS level, e.g. app.promptconnext.com. Until
+// then, do not delete or rename the Vercel project — that is what makes the
+// name reclaimable.
 export const CLOUD_WEB_URL =
   process.env.CLOUD_WEB_URL || "https://prompt-zone-web-app.vercel.app";
