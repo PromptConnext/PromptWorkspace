@@ -9,8 +9,8 @@ import { TopBar } from "@/components/TopBar";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
-import { useWorkspace } from "@/lib/workspace";
-import type { Project, Workspace, WorkspaceMember } from "@/lib/types";
+import { useWorkspace, useWorkspaceName } from "@/lib/workspace";
+import type { Project, WorkspaceMember } from "@/lib/types";
 
 const AVATAR_STACK_LIMIT = 4;
 
@@ -54,7 +54,7 @@ function ProjectIcon() {
 function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const { memberships, loading: wsLoading, error: wsError, setActiveWorkspace } = useWorkspace();
-  const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
+  const workspaceName = useWorkspaceName(workspaceId);
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
   const { data: projects, error, loading } = useCloudGet<Project[]>(
     `/workspaces/${workspaceId}/projects`,
@@ -100,11 +100,11 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
 
   return (
     <>
-      <TopBar crumbs={[{ label: workspace?.name ?? workspaceId }]} />
+      <TopBar crumbs={[{ label: workspaceName }]} />
       <main className="mx-auto max-w-3xl px-4 py-10">
         <div className="mb-8 flex items-start justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-            {workspace?.name ?? "Workspace"}
+            {workspaceName}
           </h1>
           <div className="flex items-center gap-2">
             {creating ? (

@@ -9,15 +9,9 @@ vi.mock("@/lib/auth", () => ({
 
 const originalFetch = global.fetch;
 
-function mockFetch(constitutionContent: string, createResponse?: { ok: boolean; status?: number; detail?: string }) {
+function mockFetch(createResponse?: { ok: boolean; status?: number; detail?: string }) {
   global.fetch = vi.fn((url: RequestInfo | URL) => {
     const href = url.toString();
-    if (href.includes("/stage-documents/constitution")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ stage: "constitution", content: constitutionContent, updated_at: null }),
-      });
-    }
     if (href.includes("/lifecycle/create-repository")) {
       const status = createResponse?.status ?? (createResponse?.ok === false ? 400 : 200);
       return Promise.resolve({
@@ -44,9 +38,16 @@ describe("CreateRepositoryPanel", () => {
   });
 
   it("creates the repository on the happy path", async () => {
-    mockFetch("# Constitution\nRules here.", { ok: true });
+    mockFetch({ ok: true });
     const onCreated = vi.fn();
-    render(<CreateRepositoryPanel projectId="p1" projectName="Widget App" onCreated={onCreated} />);
+    render(
+      <CreateRepositoryPanel
+        projectId="p1"
+        projectName="Widget App"
+        onCreated={onCreated}
+        constitutionReady
+      />,
+    );
 
     const button = await screen.findByRole("button", { name: /create repository/i });
     await waitFor(() => expect(button).not.toBeDisabled());
@@ -57,8 +58,15 @@ describe("CreateRepositoryPanel", () => {
   });
 
   it("disables the create button with a hint when the constitution doc is empty", async () => {
-    mockFetch("");
-    render(<CreateRepositoryPanel projectId="p1" projectName="Widget App" onCreated={vi.fn()} />);
+    mockFetch();
+    render(
+      <CreateRepositoryPanel
+        projectId="p1"
+        projectName="Widget App"
+        onCreated={vi.fn()}
+        constitutionReady={false}
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /create repository/i })).toBeDisabled();
@@ -67,8 +75,16 @@ describe("CreateRepositoryPanel", () => {
   });
 
   it("renders a human sentence for github_not_configured", async () => {
-    mockFetch("# Constitution\nRules here.", { ok: false, status: 400, detail: "github_not_configured" });
-    render(<CreateRepositoryPanel projectId="p1" projectName="Widget App" onCreated={vi.fn()} />);
+    mockFetch({ ok: false, status: 400, detail: "github_not_configured" });
+    render(
+      <CreateRepositoryPanel
+        projectId="p1"
+        projectName="Widget App"
+        onCreated={vi.fn()}
+        constitutionReady
+        workspaceId="ws1"
+      />,
+    );
 
     const button = await screen.findByRole("button", { name: /create repository/i });
     await waitFor(() => expect(button).not.toBeDisabled());
@@ -76,9 +92,17 @@ describe("CreateRepositoryPanel", () => {
     fireEvent.click(button);
 
     expect(
-      await screen.findByText(
-        /a github app installation must be configured for this workspace first \(workspace admin\)/i,
-      ),
+      await screen.findByText(/no github connection for this workspace yet/i),
     ).toBeInTheDocument();
+    // The fix lives on another page, so the message has to carry what to put
+    // there: the scopes, and that GitHub validates the token on save.
+    expect(screen.getByText(/fine-grained personal access token/i)).toBeInTheDocument();
+    expect(screen.getByText("Administration")).toBeInTheDocument();
+    expect(screen.getByText("Webhooks")).toBeInTheDocument();
+    expect(screen.getByText(/verified against github before it is stored/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /workspace settings/i })).toHaveAttribute(
+      "href",
+      "/w/ws1/settings",
+    );
   });
 });

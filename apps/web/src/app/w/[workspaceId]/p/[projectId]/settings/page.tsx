@@ -6,6 +6,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
+import { useWorkspaceName } from "@/lib/workspace";
 import type { ProjectGraph, WorkspaceMember } from "@/lib/types";
 
 function ProjectSettingsView({
@@ -16,6 +17,7 @@ function ProjectSettingsView({
   projectId: string;
 }) {
   const { user } = useAuth();
+  const workspaceName = useWorkspaceName(workspaceId);
   const { data: graph } = useCloudGet<ProjectGraph>(`/sync/projects/${projectId}/graph`);
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
   const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
@@ -24,8 +26,8 @@ function ProjectSettingsView({
     <>
       <TopBar
         crumbs={[
-          { label: workspaceId, href: `/w/${workspaceId}` },
-          { label: graph?.project.name ?? projectId, href: `/w/${workspaceId}/p/${projectId}` },
+          { label: workspaceName, href: `/w/${workspaceId}` },
+          { label: graph?.project.name ?? "Project", href: `/w/${workspaceId}/p/${projectId}` },
           { label: "Settings" },
         ]}
       />

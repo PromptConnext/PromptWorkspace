@@ -28,6 +28,14 @@ export interface WorkspaceMember {
   created_at: string;
 }
 
+// Selected compliance/policy templates (plus free-text) shaping the project's
+// generated documents. `selected` holds built-in template IDs (order
+// preserved); "Custom" is not an ID — it lives in `custom_text`.
+export interface PolicyScope {
+  selected: string[];
+  custom_text: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -38,6 +46,7 @@ export interface Project {
   lifecycle_status: "planning" | "pending_tech_review" | "tech_review" | "repo_created";
   repo_url: string | null;
   repo_default_branch: string | null;
+  policy_scope?: PolicyScope | null;
   created_at: string;
   updated_at: string;
 }
@@ -174,6 +183,25 @@ export interface GithubConnection {
   connected_at: string | null;
 }
 
+// Assistant model status (apps/cloud/app/api/assistant.py). `configured` is
+// about this workspace's own connection; the two `*_source` fields are what
+// the assistant would actually resolve, which is what the UI reports — with
+// no managed tier on the deployment, "none" means the assistant is mute.
+export interface ModelConnectionStatus {
+  configured: boolean;
+  connection: {
+    provider: string;
+    base_url: string;
+    model: string;
+    embed_model: string;
+    embed_dim: number;
+    daily_token_budget: number;
+    updated_at: string;
+  } | null;
+  chat_source: "byo" | "managed" | "none";
+  embed_source: "byo" | "managed" | "none";
+}
+
 export interface InvitationCreateResponse {
   invitation: Invitation;
   accept_url: string;
@@ -229,4 +257,15 @@ export interface StageDocumentOut {
   stage: StageKind;
   content: string;
   updated_at: string | null;
+}
+
+// A built-in (or, later, workspace-defined) compliance template offered by
+// the Policy Scope picker (GET /policy-templates). `body` is the full
+// template text, included so the picker can offer a preview with no second
+// endpoint.
+export interface PolicyTemplateOut {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
 }

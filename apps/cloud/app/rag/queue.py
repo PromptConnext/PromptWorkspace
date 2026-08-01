@@ -98,7 +98,9 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         # for a business workspace on the managed tier.
         conn = getattr(app.state, "managed_embed_connection", None)
     if conn is None:
-        logger.info("skip embed: no model connection workspace=%s", job.workspace_id)
+        # Steady-state condition, not an event: it repeats once per node on
+        # every push for a workspace that has no connection configured.
+        logger.debug("skip embed: no model connection workspace=%s", job.workspace_id)
         return
 
     node = repo.get_node(job.project_id, job.node_type, job.node_id)

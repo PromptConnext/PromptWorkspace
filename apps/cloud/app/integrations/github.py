@@ -152,7 +152,17 @@ def parse_push_event(payload: dict, default_branch: str) -> PushEvent | None:
 class GithubWriteError(RuntimeError):
     """A GitHub write call (repo create / file commit) failed. `sync.py`
     catches this instead of importing httpx directly, keeping the API layer
-    ignorant of the HTTP client this module happens to use."""
+    ignorant of the HTTP client this module happens to use.
+
+    Carries `status_code` when the failure came from a response, because the
+    remedy differs sharply by status — a 403/404 on a repo we just created is
+    a token-scope problem the admin must fix, while a 5xx is "try again".
+    `None` for failures with no response behind them.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GithubAuthError(GithubWriteError):
@@ -212,6 +222,24 @@ class GithubClient(Protocol):
     ) -> str: ...
 
 
+async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> httpx.Response:
+    """One GitHub request, with transport failures (DNS, connect refused,
+    read timeout) converted to `GithubWriteError`.
+
+    Without this a slow GitHub turns into an httpx exception escaping the
+    router as an opaque 500 — indistinguishable to the user from a bug, and
+    unhandled by callers that carefully branch on `status_code`. A transport
+    failure carries no status, so it lands on the "transient, try again"
+    side of every one of those branches, which is exactly right.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            return await client.request(method, url, headers=headers, **kwargs)
+    except httpx.HTTPError as exc:
+        raise GithubWriteError(f"{what} failed: could not reach GitHub ({exc!r})") from exc
+
+
 class HttpGithubClient:
     async def verify_token(self, token: str, owner: str) -> TokenIdentity:
         """Prove the token works and can reach `owner`, before it is stored.
@@ -220,26 +248,23 @@ class HttpGithubClient:
         (`github-authentication-token-expiration`); there is no endpoint for
         it, and classic tokens without an expiry simply omit it.
         """
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        }
-        async with httpx.AsyncClient(timeout=15) as client:
-            me = await client.get(f"{GITHUB_API}/user", headers=headers)
-            if me.status_code in (401, 403):
-                raise GithubAuthError("token_rejected")
-            if me.is_error:
-                raise GithubWriteError(f"verify_token failed: {me.status_code} {me.text}")
-            login = me.json().get("login") or ""
-            expires_at = me.headers.get("github-authentication-token-expiration")
+        me = await _send("GET", f"{GITHUB_API}/user", token=token, what="verify_token")
+        if me.status_code in (401, 403):
+            raise GithubAuthError("token_rejected")
+        if me.is_error:
+            raise GithubWriteError(f"verify_token failed: {me.status_code} {me.text}")
+        login = me.json().get("login") or ""
+        expires_at = me.headers.get("github-authentication-token-expiration")
 
-            owner_type = "Organization"
-            can_access_owner = False
-            if owner.lower() == login.lower():
-                owner_type, can_access_owner = "User", True
-            else:
-                org = await client.get(f"{GITHUB_API}/orgs/{owner}", headers=headers)
-                can_access_owner = org.status_code == 200
+        owner_type = "Organization"
+        can_access_owner = False
+        if owner.lower() == login.lower():
+            owner_type, can_access_owner = "User", True
+        else:
+            org = await _send(
+                "GET", f"{GITHUB_API}/orgs/{owner}", token=token, what="verify_token owner"
+            )
+            can_access_owner = org.status_code == 200
 
         return TokenIdentity(
             login=login,
@@ -251,47 +276,48 @@ class HttpGithubClient:
     async def create_repo_webhook(
         self, token: str, repo: str, callback_url: str, secret: str
     ) -> None:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{GITHUB_API}/repos/{repo}/hooks",
-                json={
-                    "name": "web",
-                    "active": True,
-                    "events": ["push", "pull_request"],
-                    "config": {
-                        "url": callback_url,
-                        "content_type": "json",
-                        "secret": secret,
-                        "insecure_ssl": "0",
-                    },
+        resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/hooks",
+            token=token,
+            what=f"create_repo_webhook for {repo}",
+            json={
+                "name": "web",
+                "active": True,
+                "events": ["push", "pull_request"],
+                "config": {
+                    "url": callback_url,
+                    "content_type": "json",
+                    "secret": secret,
+                    "insecure_ssl": "0",
                 },
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
+            },
+        )
+        # 422 means a hook with this config already exists — a retry after
+        # a partial failure, not an error worth failing repo creation over.
+        if resp.status_code == 422:
+            return
+        if resp.is_error:
+            raise GithubWriteError(
+                f"create_repo_webhook failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
             )
-            # 422 means a hook with this config already exists — a retry after
-            # a partial failure, not an error worth failing repo creation over.
-            if resp.status_code == 422:
-                return
-            if resp.is_error:
-                raise GithubWriteError(
-                    f"create_repo_webhook failed for {repo}: {resp.status_code} {resp.text}"
-                )
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{GITHUB_API}/repos/{repo}/contents/{path}",
-                params={"ref": sha},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/contents/{path}",
+            token=token,
+            what=f"fetch_file_content for {repo}/{path}",
+            params={"ref": sha},
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"fetch_file_content failed for {repo}/{path}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        data = resp.json()
+        return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
 
     async def create_org_repo(
         self,
@@ -314,49 +340,54 @@ class HttpGithubClient:
             if owner_type == "User"
             else f"{GITHUB_API}/orgs/{org}/repos"
         )
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                url,
-                json={
-                    "name": name,
-                    "description": description,
-                    "private": private,
-                    "auto_init": True,
-                },
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
+        resp = await _send(
+            "POST",
+            url,
+            token=token,
+            what=f"create_org_repo {org}/{name}",
+            json={
+                "name": name,
+                "description": description,
+                "private": private,
+                "auto_init": True,
+            },
+        )
+        if resp.status_code == 422:
+            raise RepoAlreadyExistsError(f"repo {org}/{name} already exists")
+        if resp.is_error:
+            raise GithubWriteError(
+                f"create_org_repo failed: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
             )
-            if resp.status_code == 422:
-                raise RepoAlreadyExistsError(f"repo {org}/{name} already exists")
-            if resp.is_error:
-                raise GithubWriteError(f"create_org_repo failed: {resp.status_code} {resp.text}")
-            data = resp.json()
-            return {
-                "full_name": data["full_name"],
-                "html_url": data["html_url"],
-                "default_branch": data.get("default_branch", "main"),
-            }
+        data = resp.json()
+        return {
+            "full_name": data["full_name"],
+            "html_url": data["html_url"],
+            "default_branch": data.get("default_branch", "main"),
+        }
 
     async def get_repo(self, token: str, repo: str) -> dict | None:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{GITHUB_API}/repos/{repo}",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
+        """None means "no such repo" — every other failure raises, so the
+        adopt-on-retry path in api/sync.py can tell "the name is taken by
+        someone else" apart from "the token can't see the repo it just made"
+        (a fine-grained PAT scoped to selected repositories does exactly that,
+        and answers 403 rather than 404)."""
+        resp = await _send(
+            "GET", f"{GITHUB_API}/repos/{repo}", token=token, what=f"get_repo {repo}"
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.is_error:
+            raise GithubWriteError(
+                f"get_repo failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
             )
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            data = resp.json()
-            return {
-                "full_name": data["full_name"],
-                "html_url": data["html_url"],
-                "default_branch": data.get("default_branch", "main"),
-            }
+        data = resp.json()
+        return {
+            "full_name": data["full_name"],
+            "html_url": data["html_url"],
+            "default_branch": data.get("default_branch", "main"),
+        }
 
     async def put_file_content(
         self,
@@ -368,28 +399,56 @@ class HttpGithubClient:
         branch: str,
         sha: str | None = None,
     ) -> str:
+        """Upsert, not create. GitHub's contents API rejects a PUT over an
+        existing path with 422 unless the caller supplies that blob's `sha`,
+        so an unsupplied sha is resolved here first. This is load-bearing at
+        repo creation: repos are made with `auto_init=true`, which means
+        GitHub has *already* written README.md before the first seed file
+        lands — writing it blind 422s, and a 422 is neither a token-scope
+        error nor transient, so the caller's retry would loop forever."""
         body: dict = {
             "message": message,
             "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
             "branch": branch,
         }
+        if sha is None:
+            sha = await self._get_file_sha(token, repo, path, branch)
         if sha is not None:
             body["sha"] = sha
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.put(
-                f"{GITHUB_API}/repos/{repo}/contents/{path}",
-                json=body,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
+        resp = await _send(
+            "PUT",
+            f"{GITHUB_API}/repos/{repo}/contents/{path}",
+            token=token,
+            what=f"put_file_content for {repo}/{path}",
+            json=body,
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"put_file_content failed for {repo}/{path}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
             )
-            if resp.is_error:
-                raise GithubWriteError(
-                    f"put_file_content failed for {repo}/{path}: {resp.status_code} {resp.text}"
-                )
-            data = resp.json()
-            return data["content"]["sha"]
+        data = resp.json()
+        return data["content"]["sha"]
+
+    async def _get_file_sha(self, token: str, repo: str, path: str, branch: str) -> str | None:
+        """Blob sha of `path` on `branch`, or None when it doesn't exist.
+        A permission failure also returns None — the PUT that follows is the
+        authoritative attempt and reports the real error, rather than this
+        lookup masking it with a different one. An unreachable GitHub still
+        raises, since retrying the same call in the PUT would just fail
+        again, one timeout later."""
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/contents/{path}",
+            token=token,
+            what=f"lookup sha for {repo}/{path}",
+            params={"ref": branch},
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        # A directory comes back as a list; only a file has a sha to reuse.
+        return data.get("sha") if isinstance(data, dict) else None
 
 
 class FakeGithubClient:
@@ -406,7 +465,13 @@ class FakeGithubClient:
         self.fetched_files: list[tuple[str, str, str]] = []
         # Set-in-test knobs for exercising failure paths without a real API.
         self.fail_on_write_path: str | None = None
+        # Status the simulated write failure reports. Defaults to 500 ("GitHub
+        # is unwell"); set 403/404 to exercise the token-scope path.
+        self.write_failure_status: int | None = 500
         self.existing_repos: dict[str, dict] = {}
+        # Status `get_repo` fails with, for the adopt-on-retry path. None =
+        # answer normally (the repo, or None when unknown).
+        self.get_repo_failure_status: int | None = None
         self.reject_token = False
         self.token_owner_unreachable = False
         self.token_expires_at: str | None = None
@@ -457,6 +522,11 @@ class FakeGithubClient:
         return record
 
     async def get_repo(self, token: str, repo: str) -> dict | None:
+        if self.get_repo_failure_status is not None:
+            raise GithubWriteError(
+                f"fake get_repo failure for {repo}",
+                status_code=self.get_repo_failure_status,
+            )
         return self.existing_repos.get(repo)
 
     async def put_file_content(
@@ -470,7 +540,10 @@ class FakeGithubClient:
         sha: str | None = None,
     ) -> str:
         if self.fail_on_write_path is not None and path == self.fail_on_write_path:
-            raise GithubWriteError(f"fake write failure for {repo}/{path}")
+            raise GithubWriteError(
+                f"fake write failure for {repo}/{path}",
+                status_code=self.write_failure_status,
+            )
         self.written_files[(repo, path)] = content
         # Also lands in `files` (keyed by a synthetic sha) so a follow-up
         # fetch_file_content sees the just-written content.

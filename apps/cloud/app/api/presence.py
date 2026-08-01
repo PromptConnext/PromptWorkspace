@@ -16,7 +16,7 @@ import time
 
 import jwt
 from fastapi import APIRouter, WebSocket
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from app.dependencies import User, _verify_jwt
 
@@ -64,7 +64,15 @@ async def presence(websocket: WebSocket, project_id: str) -> None:
 
     await manager.broadcast_roster(project_id)
     try:
-        while True:
+        # The state check is not decoration. `broadcast_roster` fans out to
+        # every socket in the room *including this one*, and swallows the
+        # failure when a send hits a socket the client already dropped —
+        # correct for the other members, but starlette marks this socket
+        # DISCONNECTED on the way out. Reading from it then raises a bare
+        # RuntimeError ("Need to call accept first"), which is not
+        # WebSocketDisconnect and so escaped as an ASGI-level traceback on
+        # what is only ever a client hanging up mid-broadcast.
+        while websocket.application_state == WebSocketState.CONNECTED:
             data = await websocket.receive_json()
             manager.touch(
                 project_id, websocket, data.get("cursor_hint"), time.monotonic()

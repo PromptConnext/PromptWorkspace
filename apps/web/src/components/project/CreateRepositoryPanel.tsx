@@ -1,8 +1,9 @@
 // apps/web/src/components/project/CreateRepositoryPanel.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { createRepository, getStageDocument } from "@/lib/api";
+import { type ReactNode, useState } from "react";
+import Link from "next/link";
+import { createRepository } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 // Mirrors apps/engine/src/routes/projects.ts's slug derivation so the
@@ -15,17 +16,54 @@ function slugify(name: string): string {
 // sentences a business/tech-lead user can act on.
 const DETAIL_MESSAGES: Record<string, string> = {
   not_in_tech_review: "This project isn't in tech review — refresh the page and try again.",
-  github_not_configured:
-    "A GitHub App installation must be configured for this workspace first (workspace admin).",
   github_repo_create_failed: "GitHub couldn't create the repository. Try again in a moment.",
   github_seed_failed:
     "The repository was created but seeding the AI context files failed. Try again — it will pick up where it left off.",
   repo_name_taken: "That repository name is already taken — choose a different name.",
-  github_installation_scope:
-    'The GitHub App installation can\'t see the repository it just created. A workspace admin needs to change the installation to "All repositories".',
+  github_repo_not_in_token_scope:
+    "The repository was created, but the workspace's GitHub token can't write to it — a token scoped to " +
+    '"Only select repositories" never covers a repo created after it was issued. A workspace admin ' +
+    'needs to set the token\'s repository access to "All repositories" (or add this new repo to the ' +
+    "list) and reissue it, then try again — this will adopt the existing repo, not create a second one.",
 };
 
-function describeError(message: string): string {
+/** `github_not_configured` is the one failure whose fix is a whole other form,
+ *  so it gets the token requirements inline rather than a sentence pointing at
+ *  a page that then explains them again. */
+function NotConfiguredMessage({ workspaceId }: { workspaceId?: string }) {
+  return (
+    <>
+      <p>No GitHub connection for this workspace yet.</p>
+      <p className="mt-1 font-normal text-slate-600">
+        A workspace admin needs to connect one under{" "}
+        {workspaceId ? (
+          <Link href={`/w/${workspaceId}/settings`} className="underline hover:text-slate-900">
+            Workspace settings → GitHub connection
+          </Link>
+        ) : (
+          <span className="font-medium">Workspace settings → GitHub connection</span>
+        )}
+        : the organisation or account plus a{" "}
+        <a
+          href="https://github.com/settings/personal-access-tokens"
+          target="_blank"
+          rel="noreferrer"
+          className="underline hover:text-slate-900"
+        >
+          fine-grained personal access token
+        </a>{" "}
+        (<code>github_pat_…</code>) with <strong>Contents</strong>, <strong>Administration</strong>{" "}
+        and <strong>Webhooks</strong> write access. The token is verified against GitHub before it
+        is stored, so a bad one fails on that form rather than here.
+      </p>
+    </>
+  );
+}
+
+function describeError(message: string, workspaceId?: string): ReactNode {
+  if (message === "github_not_configured") {
+    return <NotConfiguredMessage workspaceId={workspaceId} />;
+  }
   return DETAIL_MESSAGES[message] ?? message;
 }
 
@@ -33,32 +71,27 @@ export function CreateRepositoryPanel({
   projectId,
   projectName,
   onCreated,
+  constitutionReady,
+  workspaceId,
 }: {
   projectId: string;
   projectName: string;
   onCreated: () => void;
+  /** Only used to link the "connect GitHub" fix straight to the settings page.
+   *  Optional so the panel still renders standalone in tests. */
+  workspaceId?: string;
+  /** Whether the constitution document exists — the cloud refuses to seed a
+   *  repository without one. Owned by the Planner, which is where the rules
+   *  are written: this panel used to read the document itself, on mount, and
+   *  so kept claiming it was missing after it had just been saved a few
+   *  centimetres above. `undefined` means not loaded yet. */
+  constitutionReady?: boolean;
 }) {
   const { authHeaders } = useAuth();
   const [name, setName] = useState(() => slugify(projectName));
   const [isPrivate, setIsPrivate] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [constitutionEmpty, setConstitutionEmpty] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    getStageDocument(projectId, "constitution", authHeaders())
-      .then((doc) => {
-        if (!cancelled) setConstitutionEmpty(doc.content.trim().length === 0);
-      })
-      .catch(() => {
-        if (!cancelled) setConstitutionEmpty(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  const [error, setError] = useState<ReactNode | null>(null);
 
   async function handleCreate() {
     setCreating(true);
@@ -71,13 +104,13 @@ export function CreateRepositoryPanel({
       );
       onCreated();
     } catch (err) {
-      setError(describeError((err as Error).message));
+      setError(describeError((err as Error).message, workspaceId));
     } finally {
       setCreating(false);
     }
   }
 
-  const disabled = creating || constitutionEmpty !== false;
+  const disabled = creating || constitutionReady !== true;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -102,7 +135,7 @@ export function CreateRepositoryPanel({
         Private repository
       </label>
 
-      {constitutionEmpty === true && (
+      {constitutionReady === false && (
         <p className="mb-2 text-xs text-amber-700">
           Fill in <strong>Project rules</strong> above first — that document seeds AGENTS.md in
           the new repo.
@@ -117,7 +150,7 @@ export function CreateRepositoryPanel({
       >
         {creating ? "Creating…" : "Create repository"}
       </button>
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
     </div>
   );
 }

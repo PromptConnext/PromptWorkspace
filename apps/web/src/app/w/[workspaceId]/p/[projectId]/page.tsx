@@ -11,14 +11,15 @@ import { TaskBoard } from "@/components/project/TaskBoard";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
 import { useCloudGet } from "@/lib/hooks";
-import type { ProjectGraph, Workspace } from "@/lib/types";
+import { useWorkspaceName } from "@/lib/workspace";
+import type { ProjectGraph } from "@/lib/types";
 
 const TABS = ["Planner", "Graph", "Tasks", "Progress", "Discussion"] as const;
 type Tab = (typeof TABS)[number];
 
 function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
   const [tab, setTab] = useState<Tab>("Planner");
-  const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
+  const workspaceName = useWorkspaceName(workspaceId);
   const {
     data: graph,
     error,
@@ -30,8 +31,8 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
     <>
       <TopBar
         crumbs={[
-          { label: workspace?.name ?? workspaceId, href: `/w/${workspaceId}` },
-          { label: graph?.project.name ?? projectId },
+          { label: workspaceName, href: `/w/${workspaceId}` },
+          { label: graph?.project.name ?? "Project" },
         ]}
       />
       <main className="mx-auto max-w-5xl px-4 py-8">

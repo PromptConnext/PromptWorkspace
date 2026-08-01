@@ -1,0 +1,15 @@
+-- 0021 — finish 0020's posture on pz_repo_webhooks: `anon` too, not just
+-- `authenticated`.
+--
+-- 0020 revoked the table from `authenticated` and left `anon` alone, which
+-- 0006's `alter default privileges` had already granted select/insert/update/
+-- delete. Nothing leaks today — the table has RLS enabled and no policy, so
+-- every non-bypassing role is denied per row regardless of its grants — but a
+-- table whose whole point is holding webhook signing secrets should not be one
+-- accidental permissive policy away from being world-readable. The grant and
+-- the intent should agree.
+--
+-- Writers are unaffected: the only writer is app/api/sync.py's repo-creation
+-- step and the only reader is the inbound webhook route, both of which run on
+-- the service key (service_role bypasses RLS and keeps its grants).
+revoke all on pz_repo_webhooks from anon;

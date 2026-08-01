@@ -1,6 +1,7 @@
 """RAG assistant API: workspace model connection + project chat.
 
 Endpoints:
+  GET  /workspaces/{id}/model-connection   admin — non-secret status
   POST /workspaces/{id}/model-connection   admin — configure workspace-BYO model
   POST /projects/{id}/assistant/chat       member — SSE-streamed, cited answer
   POST /projects/{id}/assistant/reindex    admin — backfill existing graph nodes
@@ -52,6 +53,7 @@ from app.models.schemas import (
     LineageFacts,
     ModelConnectionCreate,
     ModelConnectionOut,
+    ModelConnectionStatusOut,
 )
 from app.rag.budget import estimate_tokens
 from app.rag.chat import HttpChatProvider
@@ -64,6 +66,47 @@ from app.rag.source import RAG_NODE_TYPES
 
 logger = logging.getLogger("promptconnext.assistant")
 router = APIRouter(tags=["assistant"])
+
+
+@router.get(
+    "/workspaces/{workspace_id}/model-connection", response_model=ModelConnectionStatusOut
+)
+def get_model_connection(
+    workspace_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> ModelConnectionStatusOut:
+    """Non-secret view of the workspace's assistant model, for the settings UI.
+
+    Reports the *resolved* sources rather than only whether a BYO row exists,
+    so the UI can tell "no connection, but the managed tier covers it" apart
+    from "no connection and nothing else either" — the second means the
+    assistant cannot answer at all, which is worth saying out loud.
+    """
+    require_admin(repo, workspace_id, user)
+    conn = repo.get_model_connection(workspace_id)
+    models = resolve_assistant_models(
+        repo,
+        workspace_id,
+        getattr(request.app.state, "managed_connection", None),
+        getattr(request.app.state, "managed_embed_connection", None),
+    )
+    if models is None:
+        chat_source, embed_source = "none", "none"
+    else:
+        chat_source = models.chat.source
+        embed_source = models.embed.source if models.embed is not None else "none"
+    return ModelConnectionStatusOut(
+        configured=conn is not None,
+        connection=(
+            ModelConnectionOut(**conn.model_dump(exclude={"secret_ref"}))
+            if conn is not None
+            else None
+        ),
+        chat_source=chat_source,
+        embed_source=embed_source,
+    )
 
 
 @router.post("/workspaces/{workspace_id}/model-connection", response_model=ModelConnectionOut)

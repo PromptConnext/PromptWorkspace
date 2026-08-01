@@ -109,7 +109,9 @@ export function GithubConnectionForm({ workspaceId }: { workspaceId: string }) {
           fine-grained personal access token
         </a>{" "}
         with <strong>Contents</strong>, <strong>Administration</strong> and{" "}
-        <strong>Webhooks</strong> write access for the organisation below.
+        <strong>Webhooks</strong> write access for the organisation below. Set its repository access
+        to <strong>All repositories</strong> — each project gets a repository created after the
+        token is issued, and a token scoped to selected repositories cannot write to those.
       </p>
 
       {connected && (

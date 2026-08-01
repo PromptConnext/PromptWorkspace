@@ -139,6 +139,64 @@ def test_es256_jwks_token_accepted(monkeypatch):
         get_settings.cache_clear()
 
 
+@pytest.mark.anyio
+async def test_client_hangup_during_broadcast_is_not_an_asgi_error():
+    """A client that drops while the roster is being fanned out.
+
+    `broadcast_roster` sends to every socket in the room including this one;
+    starlette turns the failed send into `WebSocketDisconnect` *and* marks the
+    socket DISCONNECTED, and the fan-out swallows the exception so the other
+    members still get their update. The handler must notice, not go on to
+    `receive_json()` — which raises a bare RuntimeError that is not
+    WebSocketDisconnect and surfaced as an ASGI traceback in the logs.
+    """
+    from starlette.websockets import WebSocketState
+
+    from app.api.presence import presence
+    from app.main import create_app
+
+    app = create_app()
+    with TestClient(app) as c:
+        ws = c.post("/workspaces", json={"name": "W"}, headers={"X-User-Id": "alice"}).json()
+        pid = c.post(
+            "/projects",
+            json={"name": "P", "workspace_id": ws["id"]},
+            headers={"X-User-Id": "alice"},
+        ).json()["id"]
+
+    class _HangingUpSocket:
+        """Mimics starlette's own behaviour when the peer is already gone:
+        the send raises WebSocketDisconnect and leaves the socket
+        DISCONNECTED (starlette.websockets.WebSocket.send, OSError branch)."""
+
+        def __init__(self, scope_app):
+            self.app = scope_app
+            self.query_params = {"user_id": "alice"}
+            self.application_state = WebSocketState.CONNECTING
+            self.receive_calls = 0
+
+        async def accept(self):
+            self.application_state = WebSocketState.CONNECTED
+
+        async def send_json(self, message):
+            self.application_state = WebSocketState.DISCONNECTED
+            raise WebSocketDisconnect(code=1006)
+
+        async def receive_json(self):
+            self.receive_calls += 1
+            raise RuntimeError('WebSocket is not connected. Need to call "accept" first.')
+
+        async def close(self, code=1000):
+            self.application_state = WebSocketState.DISCONNECTED
+
+    socket = _HangingUpSocket(app)
+    await presence(socket, pid)  # must not raise
+
+    assert socket.receive_calls == 0
+    # And the room is left clean for the members still connected.
+    assert app.state.presence.roster(pid) == []
+
+
 # --------------------------------------------------------------------------- #
 # Idle prune (unit — deterministic, no timers)
 # --------------------------------------------------------------------------- #

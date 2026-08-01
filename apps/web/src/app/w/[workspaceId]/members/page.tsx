@@ -11,11 +11,12 @@ import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { displayName } from "@/lib/identity";
-import type { Workspace, WorkspaceMember } from "@/lib/types";
+import { useWorkspaceName } from "@/lib/workspace";
+import type { WorkspaceMember } from "@/lib/types";
 
 function MembersView({ workspaceId }: { workspaceId: string }) {
   const { user } = useAuth();
-  const { data: workspace } = useCloudGet<Workspace>(`/workspaces/${workspaceId}`);
+  const workspaceName = useWorkspaceName(workspaceId);
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
   const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
   const refetchInvitesRef = useRef<() => void>(() => {});
@@ -24,7 +25,7 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
     <>
       <TopBar
         crumbs={[
-          { label: workspace?.name ?? workspaceId, href: `/w/${workspaceId}` },
+          { label: workspaceName, href: `/w/${workspaceId}` },
           { label: "Members" },
         ]}
       />
@@ -33,7 +34,7 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
           href={`/w/${workspaceId}`}
           className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900"
         >
-          ← {workspace?.name ?? "Workspace"}
+          ← {workspaceName}
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Members</h1>
         <p className="mt-1 mb-8 text-sm text-slate-500">

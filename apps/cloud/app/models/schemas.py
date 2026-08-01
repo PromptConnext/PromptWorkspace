@@ -327,6 +327,32 @@ class JiraIntegrationConfig(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Policy Scope — predefined compliance templates for project planning
+# --------------------------------------------------------------------------- #
+# A project's declared regulatory/compliance frame, injected server-side into
+# every generated stage (constitution/specify/plan/tasks) and seeded into the
+# repo at tech-review exit. `selected` holds built-in template IDs (bare
+# slugs, e.g. "thai-pdpa") in user-chosen order; `custom_text` is free-form
+# and stands on its own, not tied to any ID. See app/policies/registry.py.
+#
+# Future org-owned custom templates (deferred, designed-for) will use
+# namespaced `ws:<uuid>` IDs — slugs never contain ":" — so only ID
+# resolution changes when that lands, not this shape.
+class PolicyScope(BaseModel):
+    selected: list[str] = Field(default_factory=list)
+    custom_text: str = ""
+
+
+class PolicyScopeUpdate(BaseModel):
+    """PATCH /projects/{id}/policy-scope request body. Same two fields as
+    `PolicyScope`, kept as its own model so the storage shape can gain
+    server-only fields later without changing the API contract."""
+
+    selected: list[str] = Field(default_factory=list)
+    custom_text: str = ""
+
+
+# --------------------------------------------------------------------------- #
 # Project
 # --------------------------------------------------------------------------- #
 class ProjectCreate(BaseModel):
@@ -357,6 +383,9 @@ class Project(BaseModel):
     )
     repo_url: str | None = None
     repo_default_branch: str | None = None
+    # Nullable: `None` = never selected (backward compatible with every
+    # project created before this feature). See PolicyScope above.
+    policy_scope: PolicyScope | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -529,6 +558,23 @@ class ModelConnectionOut(BaseModel):
     daily_token_budget: int
     created_at: datetime
     updated_at: datetime
+
+
+class ModelConnectionStatusOut(BaseModel):
+    """What the workspace settings UI needs to render the assistant's model
+    state: whether this workspace has its own connection, plus which source
+    the assistant would actually resolve right now.
+
+    `chat_source`/`embed_source` are computed from resolve_assistant_models,
+    not guessed from `configured` — a deployment with the managed tier enabled
+    still answers questions with no BYO connection at all, and one without it
+    answers none. "none" for either is what the UI warns on.
+    """
+
+    configured: bool
+    connection: ModelConnectionOut | None = None
+    chat_source: Literal["byo", "managed", "none"]
+    embed_source: Literal["byo", "managed", "none"]
 
 
 class RagChunk(BaseModel):

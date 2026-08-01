@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.db.repository import Repository
+from app.dependencies import get_repository
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
 
@@ -239,6 +241,25 @@ def test_create_repository_seed_failure_is_502_and_leaves_lifecycle_untouched():
         assert project.repo_url is None
 
 
+def test_create_repository_seed_403_reports_token_scope_not_a_transient_failure():
+    """A 403/404 writing into the repo GitHub just created means the token
+    cannot see it — a fine-grained PAT scoped to selected repositories. That
+    is a 400 the admin must act on, not a 502 inviting an endless retry."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        fake.fail_on_write_path = "AGENTS.md"
+        fake.write_failure_status = 403
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert res.status_code == 400
+        assert res.json()["detail"] == "github_repo_not_in_token_scope"
+
+        project = client.app.state.repository.get_project(pid)
+        assert project.lifecycle_status == "tech_review"
+        assert project.repo_url is None
+
+
 def test_create_repository_retry_adopts_existing_repo_without_duplicate_create():
     with _client() as client:
         fake = _wire_github(client)
@@ -259,6 +280,120 @@ def test_create_repository_retry_adopts_existing_repo_without_duplicate_create()
         # No duplicate create — create_org_repo raised RepoAlreadyExistsError
         # and the retry path adopted via get_repo instead.
         assert fake.created_repos == []
+
+
+def test_create_repository_retry_reports_token_scope_when_the_repo_is_unreadable():
+    """The adopt path's other outcome: the name is taken by a repo the token
+    cannot read (403). That used to escape as an unhandled httpx error — an
+    opaque 500 — instead of the actionable 400 the seeding step already
+    returns for the same underlying cause."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        fake.existing_repos["acme/rocket-ship"] = {
+            "full_name": "acme/rocket-ship",
+            "html_url": "https://github.com/acme/rocket-ship",
+            "default_branch": "main",
+        }
+        fake.get_repo_failure_status = 403
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert res.status_code == 400
+        assert res.json()["detail"] == "github_repo_not_in_token_scope"
+
+        project = client.app.state.repository.get_project(pid)
+        assert project.lifecycle_status == "tech_review"
+        assert project.repo_url is None
+
+
+def test_create_repository_retry_is_502_when_github_is_unwell():
+    """A 5xx from the same lookup is transient — 502, so the panel keeps
+    inviting a retry rather than sending the admin to fix their token."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        fake.existing_repos["acme/rocket-ship"] = {
+            "full_name": "acme/rocket-ship",
+            "html_url": "https://github.com/acme/rocket-ship",
+            "default_branch": "main",
+        }
+        fake.get_repo_failure_status = 500
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert res.status_code == 502
+        assert res.json()["detail"] == "github_repo_create_failed"
+
+
+class _CallerScopedRepository:
+    """Stands in for what an authenticated request actually gets: a Supabase
+    client carrying the caller's JWT, i.e. the `authenticated` role. Migration
+    0020 revokes pz_repo_webhooks from that role, so this write is the one
+    operation such a client can never perform."""
+
+    def __init__(self, inner: Repository) -> None:
+        self._inner = inner
+        self.blocked = 0
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def upsert_repo_webhook(self, webhook):
+        self.blocked += 1
+        raise RuntimeError("permission denied for table pz_repo_webhooks")
+
+
+def test_create_repository_writes_the_webhook_binding_with_the_service_key():
+    """The binding must be written through app.state.repository (service key),
+    not the caller-scoped repository — which is revoked on that table and
+    answers `permission denied`, previously a bare 500 *after* the repo had
+    already been created and seeded."""
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        ws, pid = _project_in_tech_review(client)
+
+        service_repo = client.app.state.repository
+        scoped = _CallerScopedRepository(service_repo)
+        client.app.dependency_overrides[get_repository] = lambda: scoped
+        try:
+            res = client.post(
+                f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_repository, None)
+
+        assert res.status_code == 200, res.text
+        assert res.json()["lifecycle_status"] == "repo_created"
+        assert scoped.blocked == 0, "the binding went through the caller-scoped repository"
+
+        binding = service_repo.get_repo_webhook("acme/rocket-ship")
+        assert binding is not None
+        assert binding.project_id == pid
+        # Ciphertext only — the generated secret is never stored in the clear.
+        registered_secret = fake.webhooks[0]["secret"]
+        assert binding.secret_ref != registered_secret
+        assert client.app.state.secret_store.decrypt(binding.secret_ref) == registered_secret
+
+
+def test_create_repository_survives_a_failed_webhook_binding_write():
+    """Bookkeeping is best-effort by design: a repo that exists and is fully
+    seeded must not be stranded in tech_review because a follow-up row could
+    not be written. The cost is indexing, and it is logged."""
+    with _client() as client:
+        _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        ws, pid = _project_in_tech_review(client)
+
+        def _explode(_webhook):
+            raise RuntimeError("permission denied for table pz_repo_webhooks")
+
+        client.app.state.repository.upsert_repo_webhook = _explode
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+
+        assert res.status_code == 200, res.text
+        assert res.json()["lifecycle_status"] == "repo_created"
+        assert res.json()["repo_url"] == "https://github.com/acme/rocket-ship"
 
 
 def test_create_repository_forbidden_for_non_member():

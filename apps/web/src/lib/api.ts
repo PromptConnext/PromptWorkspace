@@ -4,6 +4,8 @@
 import { CLOUD_API_URL } from "./config";
 import type {
   DocumentOut,
+  PolicyScope,
+  PolicyTemplateOut,
   PrefillOut,
   Project,
   StageDocumentOut,
@@ -124,6 +126,26 @@ export function updateStageDocument(
 export function startTechReview(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<Project>(`/projects/${projectId}/lifecycle/start-tech-review`, authHeaders, {
     method: "POST",
+  });
+}
+
+// Built-in (and, later, workspace) compliance templates offered by the Policy
+// Scope picker. Includes each template's full body — six small files, so a
+// preview needs no second round trip.
+export function listPolicyTemplates(authHeaders: Record<string, string>) {
+  return apiFetch<PolicyTemplateOut[]>("/policy-templates", authHeaders);
+}
+
+// Full-replace PATCH: `scope` is the project's entire policy scope going
+// forward, not a delta.
+export function updatePolicyScope(
+  projectId: string,
+  scope: PolicyScope,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Project>(`/projects/${projectId}/policy-scope`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify(scope),
   });
 }
 

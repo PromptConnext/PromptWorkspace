@@ -200,7 +200,19 @@ async def create_repository(
     except RepoAlreadyExistsError:
         # Retry path after a mid-flight failure: adopt the repo we (likely)
         # created on a previous attempt rather than failing outright.
-        existing = await github_client.get_repo(token, f"{owner}/{name}")
+        try:
+            existing = await github_client.get_repo(token, f"{owner}/{name}")
+        except GithubWriteError as exc:
+            # The name is taken by something this token cannot read. With a
+            # fine-grained PAT scoped to "Only select repositories" that is
+            # the *expected* answer for a repo created outside the grant, so
+            # it gets the same actionable error the seeding step raises.
+            logger.warning("adopting %s/%s failed: %s", owner, name, exc)
+            if getattr(exc, "status_code", None) in (401, 403):
+                raise HTTPException(
+                    status_code=400, detail="github_repo_not_in_token_scope"
+                ) from exc
+            raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
         if existing is None:
             raise HTTPException(status_code=409, detail="repo_name_taken") from None
         created = existing
@@ -223,6 +235,17 @@ async def create_repository(
     except GithubWriteError as exc:
         # Do NOT advance the lifecycle — a partially seeded repo must leave
         # repo_url unset so a retry re-enters at repo creation and adopts.
+        #
+        # Log the underlying GitHub response: the client puts status + body in
+        # the exception message, and without this the operator sees only the
+        # opaque `github_seed_failed` the browser shows.
+        logger.warning("seeding %s failed: %s", full_name, exc)
+        # A 403/404 writing into a repo GitHub just told us it created is not
+        # a transient fault — it means the token cannot see that repo. With a
+        # fine-grained PAT scoped to "Only select repositories", every new
+        # repo lands outside the grant, so "try again" would loop forever.
+        if getattr(exc, "status_code", None) in (403, 404):
+            raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
         raise HTTPException(status_code=502, detail="github_seed_failed") from exc
 
     # Register this repo's webhook with its own freshly generated secret, so
@@ -244,14 +267,31 @@ async def create_repository(
         except GithubWriteError:
             logger.warning("webhook registration failed for %s; indexing will not start", full_name)
         else:
-            repo.upsert_repo_webhook(
-                RepoWebhook(
-                    repo_full_name=full_name,
-                    project_id=project_id,
-                    workspace_id=project.workspace_id,
-                    secret_ref=request.app.state.secret_store.encrypt(secret),
+            # The *unscoped* repository, not the caller-scoped `repo`:
+            # migration 0020 revokes pz_repo_webhooks from `authenticated` on
+            # purpose (a webhook signing secret must never be reachable from a
+            # browser session), and app/dependencies.py::get_repository hands
+            # every authenticated route a JWT-scoped client running as exactly
+            # that role. Only the service key may write this binding.
+            service_repo = request.app.state.repository
+            try:
+                service_repo.upsert_repo_webhook(
+                    RepoWebhook(
+                        repo_full_name=full_name,
+                        project_id=project_id,
+                        workspace_id=project.workspace_id,
+                        secret_ref=request.app.state.secret_store.encrypt(secret),
+                    )
                 )
-            )
+            except Exception:  # noqa: BLE001 - bookkeeping must not strand the repo
+                # Same best-effort reasoning as the registration call above,
+                # and the same cost: without the stored secret no delivery for
+                # this repo can be verified, so indexing stays dark until the
+                # binding is written. The repo itself is created and seeded.
+                logger.exception(
+                    "storing the webhook binding for %s failed; indexing will not start",
+                    full_name,
+                )
 
     # Step 6: repo-write first, lifecycle flip last — see docstring.
     repo.update_project_repo(project_id, created["html_url"], default_branch)
