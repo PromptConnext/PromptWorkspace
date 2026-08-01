@@ -18,6 +18,23 @@ os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_KEY", None)
 os.environ.pop("SUPABASE_JWT_SECRET", None)
 
+# Same reasoning for the managed tier: a developer who exported the Typhoon
+# settings in their shell (or sourced .env.local into it) would otherwise give
+# every app instance a managed connection, and tests that assert the
+# no-model-configured failure path (400 model_connection_not_configured) would
+# instead see a working managed fallback. Tests that need the managed tier set
+# it up explicitly rather than inheriting it from the ambient environment.
+os.environ.pop("MANAGED_MODEL_ENABLED", None)
+os.environ.pop("MANAGED_MODEL_API_KEY", None)
+os.environ.pop("MANAGED_MODEL_BASE_URL", None)
+os.environ.pop("MANAGED_MODEL_NAME", None)
+os.environ.pop("MANAGED_MODEL_MAX_TOKENS", None)
+os.environ.pop("MANAGED_DAILY_TOKEN_BUDGET", None)
+os.environ.pop("MANAGED_EMBED_BASE_URL", None)
+os.environ.pop("MANAGED_EMBED_MODEL", None)
+os.environ.pop("MANAGED_EMBED_DIM", None)
+os.environ.pop("MANAGED_EMBED_API_KEY", None)
+
 import pytest
 from fastapi.testclient import TestClient
 
