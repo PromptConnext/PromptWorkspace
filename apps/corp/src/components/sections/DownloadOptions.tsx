@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -22,22 +22,26 @@ const platforms: { os: OS; label: string; note: string; file: string }[] = [
   { os: "windows", label: "Windows", note: "Windows 10/11 · x64", file: "PromptConnext_x64-setup.exe" },
 ];
 
+// The visitor's OS is external state this component reads, not state it owns —
+// so it is read through useSyncExternalStore rather than set from an effect.
+// The server has no navigator and must render something stable, so it renders
+// the macOS default and the client corrects it during hydration. `subscribe`
+// is a no-op: nobody changes operating system mid-visit.
+const subscribeToOS = () => () => {};
+
 function detectOS(): OS {
-  if (typeof navigator === "undefined") return "mac";
   const p = navigator.platform.toLowerCase();
   const ua = navigator.userAgent.toLowerCase();
   if (p.includes("win") || ua.includes("windows")) return "windows";
   return "mac";
 }
 
+const serverOS = (): OS => "mac";
+
 export function DownloadOptions() {
   const t = useTranslations("download");
-  const [os, setOs] = useState<OS>("mac");
+  const os = useSyncExternalStore(subscribeToOS, detectOS, serverOS);
   const { version, baseUrl, available } = siteConfig.download;
-
-  useEffect(() => {
-    setOs(detectOS());
-  }, []);
 
   // Pre-release: no download host configured yet.
   if (!available) {
