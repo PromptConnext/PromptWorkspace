@@ -13,8 +13,9 @@ connection skips embedding rather than erroring the caller (app/rag/queue.py).
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi import File as FastAPIFile
 
 from app.api._guards import require_project
@@ -23,6 +24,7 @@ from app.dependencies import User, get_current_user, get_repository
 from app.documents.extract import ALLOWED_MIMES, UnsupportedMimeError, extract_text
 from app.documents.ocr import StubOcrProvider
 from app.documents.sources import UploadSource
+from app.documents.storage import DocumentNotStored
 from app.models.schemas import Document, DocumentOut, DocumentStatus
 from app.rag.queue import EmbedJob, enqueue
 
@@ -102,6 +104,48 @@ async def upload_document(
         EmbedJob(project.workspace_id, project_id, "documents", document.id),
     )
     return DocumentOut(**document.model_dump())
+
+
+@router.get("/projects/{project_id}/documents/{document_id}/content")
+def get_document_content(
+    project_id: str,
+    document_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Response:
+    """Stream the stored file back so the Planner can preview the PRD a member
+    uploaded (PDF in a viewer, Markdown rendered) instead of only its name and
+    extraction status. Serves the raw bytes, not `extracted_text` — reviewing a
+    PRD means seeing the document, layout and all.
+
+    Served `inline` but sandboxed: `mime` is constrained to ALLOWED_MIMES at
+    upload, and `nosniff` + a sandbox CSP keep a hostile upload from executing
+    as same-origin content on the API domain.
+    """
+    require_project(repo, project_id, user)
+    document = repo.get_document(project_id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document_not_found")
+
+    document_store = request.app.state.document_store
+    try:
+        content = document_store.load(document.storage_ref)
+    except DocumentNotStored:
+        logger.warning(
+            "document bytes missing document=%s ref=%s", document.id, document.storage_ref
+        )
+        raise HTTPException(status_code=404, detail="document_content_missing") from None
+
+    return Response(
+        content=content,
+        media_type=document.mime,
+        headers={
+            "content-disposition": f'inline; filename="{quote(document.title)}"',
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox",
+        },
+    )
 
 
 @router.get("/projects/{project_id}/documents", response_model=list[DocumentOut])

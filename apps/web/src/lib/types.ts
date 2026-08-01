@@ -218,6 +218,13 @@ export interface GenerateErrorEvent {
   truncated?: boolean;
 }
 
+// A drafted intake form: only the fields the model could answer from the
+// project's source material, plus what it read them out of.
+export interface PrefillOut {
+  fields: Record<string, string>;
+  sources: string[];
+}
+
 export interface StageDocumentOut {
   stage: StageKind;
   content: string;

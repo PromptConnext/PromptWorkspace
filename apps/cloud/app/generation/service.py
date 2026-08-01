@@ -7,6 +7,7 @@ and parses the artifact out — the cloud-side equivalent of the engine's
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -63,7 +64,10 @@ class FakeGenerationProvider:
     (detected from the driver prompt's "task-breakdown" role, since the
     provider doesn't otherwise know which stage it's serving) it emits a
     real `- [ ] T001 Description` checklist instead of echoing the prompt,
-    so parse_task_lines() has something to parse."""
+    so parse_task_lines() has something to parse. Prefill requests (detected
+    the same way, from the intake-form system prompt) get a JSON object keyed
+    by the requested fields, each value quoting the source material so tests
+    can tell a grounded draft from an invented one."""
 
     def __init__(self, title: str = "Generated Title", finish_reason: str | None = "stop") -> None:
         self._title = title
@@ -79,7 +83,9 @@ class FakeGenerationProvider:
         max_tokens: int | None = None,
         on_finish: Callable[[str | None], None] | None = None,
     ) -> AsyncIterator[str]:
-        if "task-breakdown" in system_prompt:
+        if "intake form" in system_prompt:
+            doc = json.dumps(_fake_prefill(user_content))
+        elif "task-breakdown" in system_prompt:
             doc = (
                 f"# {self._title}\n\n"
                 "- [ ] T001 [P] Implement the first task from the plan\n"
@@ -91,6 +97,25 @@ class FakeGenerationProvider:
             yield word + " "
         if on_finish is not None:
             on_finish(self._finish_reason)
+
+
+def _fake_prefill(user_content: str) -> dict[str, str]:
+    """Read the field keys back out of the prompt build_prompt() produced and
+    answer each with a slice of the source material it was given."""
+    keys: list[str] = []
+    source: list[str] = []
+    section = None
+    for line in user_content.split("\n"):
+        if line.startswith("FIELDS:"):
+            section = "fields"
+        elif line.startswith("SOURCE MATERIAL:"):
+            section = "source"
+        elif section == "fields" and line.startswith("- "):
+            keys.append(line[2:].split(":", 1)[0].strip())
+        elif section == "source" and line.strip():
+            source.append(line.strip())
+    excerpt = " ".join(source)[:400]
+    return {key: f"drafted from source: {excerpt}" for key in keys}
 
 
 class GenerationError(ValueError):

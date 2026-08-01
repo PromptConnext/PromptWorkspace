@@ -183,6 +183,73 @@ def test_oversize_upload_is_413(client: TestClient, monkeypatch):
     assert res.status_code == 413
 
 
+def test_document_content_streams_raw_bytes(client: TestClient):
+    """The Planner previews the uploaded PRD itself, so the endpoint must hand
+    back the stored bytes verbatim with the original mime — not extracted text."""
+    _ws_id, pid = _bootstrap(client)
+    raw = b"# Payments PRD\n\nSupport Thai QR payments."
+    doc = client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.md", raw, "text/markdown")},
+        headers=ALICE,
+    ).json()
+
+    res = client.get(f"/projects/{pid}/documents/{doc['id']}/content", headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert res.content == raw
+    assert res.headers["content-type"].startswith("text/markdown")
+    assert res.headers["x-content-type-options"] == "nosniff"
+    assert "inline" in res.headers["content-disposition"]
+
+
+def test_pdf_content_round_trips(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    doc = client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.pdf", BORN_DIGITAL_PDF, "application/pdf")},
+        headers=ALICE,
+    ).json()
+
+    res = client.get(f"/projects/{pid}/documents/{doc['id']}/content", headers=ALICE)
+    assert res.status_code == 200
+    assert res.content == BORN_DIGITAL_PDF
+    assert res.headers["content-type"].startswith("application/pdf")
+
+
+def test_non_member_cannot_read_document_content(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    doc = client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.md", b"secret roadmap", "text/markdown")},
+        headers=ALICE,
+    ).json()
+
+    res = client.get(f"/projects/{pid}/documents/{doc['id']}/content", headers=BOB)
+    assert res.status_code == 403
+
+
+def test_unknown_document_content_is_404(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    res = client.get(f"/projects/{pid}/documents/does-not-exist/content", headers=ALICE)
+    assert res.status_code == 404
+
+
+def test_missing_stored_bytes_is_404(client: TestClient):
+    """The row can outlive the object (memory store restart, object deleted out
+    of band) — that's a 404, not a 500."""
+    _ws_id, pid = _bootstrap(client)
+    doc = client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.md", b"# PRD", "text/markdown")},
+        headers=ALICE,
+    ).json()
+    client.app.state.document_store._files.clear()
+
+    res = client.get(f"/projects/{pid}/documents/{doc['id']}/content", headers=ALICE)
+    assert res.status_code == 404
+    assert res.json()["detail"] == "document_content_missing"
+
+
 def test_cross_workspace_cannot_retrieve_chunks(client: TestClient):
     """RLS-equivalent boundary at the repository layer (memory backend) —
     same pattern as every other RAG/graph cross-tenant test this session."""

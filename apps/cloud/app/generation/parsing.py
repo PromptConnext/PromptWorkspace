@@ -6,6 +6,7 @@ engine-side generation stay behaviorally aligned without sharing runtime.
 
 from __future__ import annotations
 
+import json
 import re
 
 _FILE_BLOCK_RE = re.compile(r"```file:([^\n]+)\n(.*?)```", re.DOTALL)
@@ -58,6 +59,23 @@ def strip_template_scaffolding(doc: str) -> str:
     text = _SPECKIT_MARKER_LINE_RE.sub("", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def extract_json_object(raw: str) -> dict | None:
+    """Pull the first JSON object out of a completion. Models wrap JSON in a
+    ```json fence, prefix it with "Here you go:", or both — asking nicely in
+    the prompt is not a guarantee, so take the outermost braces and parse
+    those. Returns None when there is no object or it doesn't parse."""
+    text = strip_thinking(raw)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def parse_task_lines(doc: str) -> list[dict[str, object]]:

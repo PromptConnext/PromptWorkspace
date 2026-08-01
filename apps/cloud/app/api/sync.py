@@ -98,16 +98,23 @@ def submit_for_review(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
-    """Business user signals planning is done (explicit — a Tech Lead
-    shouldn't be pulled in on a project still being iterated). No side
-    effect beyond the status flip; the Tech Lead's own actions drive
-    everything after this (docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md)."""
+    """Planning is done and the project is a Tech Lead's to pick up.
+
+    Originally an explicit "Send to Tech Lead" button, which needed the whole
+    graph (requirement + spec + tasks) present before it would fire. The
+    Planner now runs this implicitly when a Tech Lead opens the Plan step —
+    the step *they* own — so the gate is the specification only: plan and
+    tasks are what the Tech Lead is about to produce, and requiring them here
+    would mean the transition could never fire at the moment it's needed.
+
+    Still no side effect beyond the status flip
+    (docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md)."""
     project = require_project(repo, project_id, user)
     if project.lifecycle_status != "planning":
         raise HTTPException(status_code=409, detail="not_in_planning")
 
     graph = repo.get_graph(project_id)
-    if not (graph.requirements and graph.spec_documents and graph.tasks):
+    if not graph.requirements:
         raise HTTPException(status_code=400, detail="planning_incomplete")
 
     return repo.update_project_lifecycle_status(project_id, "pending_tech_review")

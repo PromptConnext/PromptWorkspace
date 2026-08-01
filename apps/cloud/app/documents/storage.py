@@ -19,6 +19,16 @@ class DocumentStore(abc.ABC):
     def save(self, workspace_id: str, document_id: str, filename: str, content: bytes) -> str:
         """Persist `content`, return an opaque `storage_ref`."""
 
+    @abc.abstractmethod
+    def load(self, storage_ref: str) -> bytes:
+        """Read back what `save` stored. Raises `DocumentNotStored` if the ref
+        no longer resolves — the row can outlive the object (memory store on
+        restart, a bucket object deleted out of band)."""
+
+
+class DocumentNotStored(Exception):
+    """The `storage_ref` on the row does not resolve to bytes."""
+
 
 class MemoryDocumentStore(DocumentStore):
     """Dev/test store used with `data_backend=memory`, which never persists
@@ -31,6 +41,12 @@ class MemoryDocumentStore(DocumentStore):
         ref = f"memory://{workspace_id}/{document_id}/{filename}"
         self._files[ref] = content
         return ref
+
+    def load(self, storage_ref: str) -> bytes:
+        try:
+            return self._files[storage_ref]
+        except KeyError:
+            raise DocumentNotStored(storage_ref) from None
 
 
 class SupabaseDocumentStore(DocumentStore):
@@ -48,6 +64,12 @@ class SupabaseDocumentStore(DocumentStore):
         path = f"{workspace_id}/{document_id}/{filename}"
         self._client.storage.from_(_BUCKET).upload(path, content)
         return path
+
+    def load(self, storage_ref: str) -> bytes:
+        try:
+            return self._client.storage.from_(_BUCKET).download(storage_ref)
+        except Exception as exc:  # noqa: BLE001 - storage-client errors are untyped
+            raise DocumentNotStored(storage_ref) from exc
 
 
 def build_document_store(data_backend: str, supabase_url: str, supabase_key: str) -> DocumentStore:

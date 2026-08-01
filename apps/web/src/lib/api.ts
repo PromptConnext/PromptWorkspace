@@ -2,7 +2,15 @@
 // apps/engine/src/cloudClient.ts on the browser side.
 
 import { CLOUD_API_URL } from "./config";
-import type { Project, StageDocumentOut, StageKind, Task, WorkspaceMember } from "./types";
+import type {
+  DocumentOut,
+  PrefillOut,
+  Project,
+  StageDocumentOut,
+  StageKind,
+  Task,
+  WorkspaceMember,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -45,6 +53,48 @@ export function assignTask(
   return apiFetch<Task>(`/projects/${projectId}/tasks/${taskId}/assignment`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ assigned_user_id: assignedUserId }),
+  });
+}
+
+// Uploaded source documents (PRDs and the like) live server-side, so the
+// Planner reads them back on mount instead of remembering only what this
+// browser tab happened to upload — otherwise a refresh loses the extracted
+// state and invites the user to re-upload the same file.
+export function listDocuments(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<DocumentOut[]>(`/projects/${projectId}/documents`, authHeaders);
+}
+
+// Direct fetch, not apiFetch: the response is the raw file (PDF bytes or
+// Markdown source), not JSON. Returns a Blob the caller turns into an object
+// URL for the PDF viewer or reads as text for the Markdown renderer.
+export async function fetchDocumentContent(
+  projectId: string,
+  documentId: string,
+  authHeaders: Record<string, string>,
+): Promise<Blob> {
+  const res = await fetch(
+    `${CLOUD_API_URL}/projects/${projectId}/documents/${documentId}/content`,
+    { headers: authHeaders },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (data as { detail?: string }).detail ?? `cloud HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
+// Draft a stage's intake form from the uploaded PRD. The field list travels
+// with the request: stage-forms.ts owns the questions, the cloud only answers
+// them, so adding a field needs no cloud deploy.
+export function prefillStage(
+  projectId: string,
+  stage: StageKind,
+  fields: { key: string; label: string; hint?: string }[],
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<PrefillOut>(`/projects/${projectId}/prefill/${stage}`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ fields }),
   });
 }
 

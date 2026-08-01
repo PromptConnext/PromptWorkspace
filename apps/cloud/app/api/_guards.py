@@ -31,6 +31,20 @@ def require_admin(repo: Repository, workspace_id: str, user: User) -> Workspace:
     return ws
 
 
+# Spec Kit stages only a workspace admin may author. Both belong to the Tech
+# Lead's step in the Planner: `plan` is the technical breakdown, and
+# `constitution` is the standing rules seeded into the repository as AGENTS.md.
+# Writing either (generate, prefill, save) is admin-only. Reading is never
+# gated here: a business user can still open them, they just can't author them.
+ADMIN_ONLY_STAGES = frozenset({"constitution", "plan"})
+
+
+def require_stage_access(repo: Repository, project: Project, stage: str, user: User) -> None:
+    """Authorization for *authoring* a stage, on top of project membership."""
+    if stage in ADMIN_ONLY_STAGES:
+        require_admin(repo, project.workspace_id, user)
+
+
 def require_project(repo: Repository, project_id: str, user: User) -> Project:
     project = repo.get_project(project_id)
     if project is None:

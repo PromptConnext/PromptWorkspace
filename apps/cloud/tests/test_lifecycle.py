@@ -76,7 +76,7 @@ def test_update_project_lifecycle_status_persists():
         assert refetched.lifecycle_status == "pending_tech_review"
 
 
-def test_submit_for_review_requires_full_spec_kit_output():
+def test_submit_for_review_requires_a_specification():
     with _client() as client:
         ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
         project = client.post(
@@ -100,15 +100,14 @@ def test_submit_for_review_transitions_planning_to_pending_tech_review():
 
         # Directly seed a minimal graph — this test is about the lifecycle
         # transition, not generation (see test_generation.py for that).
+        # A requirement alone is the whole gate: the transition now fires when
+        # a Tech Lead opens the Plan step, i.e. *before* the plan and tasks
+        # they are about to write exist.
         repo = client.app.state.repository
-        from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument, Task
+        from app.models.schemas import GraphUpsertRequest, Requirement
 
         requirement = Requirement(project_id=pid, title="R")
         repo.upsert_graph(pid, GraphUpsertRequest(requirements=[requirement]), source="pz")
-        spec = SpecDocument(project_id=pid, requirement_id=requirement.id, content="plan")
-        repo.upsert_graph(pid, GraphUpsertRequest(spec_documents=[spec]), source="pz")
-        task = Task(project_id=pid, spec_id=spec.id, title="T1")
-        repo.upsert_graph(pid, GraphUpsertRequest(tasks=[task]), source="pz")
 
         res = client.post(f"/projects/{pid}/lifecycle/submit-for-review", headers=ALICE)
         assert res.status_code == 200, res.text

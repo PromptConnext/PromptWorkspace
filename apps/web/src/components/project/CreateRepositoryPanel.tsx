@@ -104,7 +104,8 @@ export function CreateRepositoryPanel({
 
       {constitutionEmpty === true && (
         <p className="mb-2 text-xs text-amber-700">
-          Generate the constitution stage document first — it seeds AGENTS.md in the new repo.
+          Fill in <strong>Project rules</strong> above first — that document seeds AGENTS.md in
+          the new repo.
         </p>
       )}
 

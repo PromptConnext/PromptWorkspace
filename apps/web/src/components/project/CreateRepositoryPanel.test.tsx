@@ -63,7 +63,7 @@ describe("CreateRepositoryPanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /create repository/i })).toBeDisabled();
     });
-    expect(screen.getByText(/generate the constitution stage document first/i)).toBeInTheDocument();
+    expect(screen.getByText(/seeds AGENTS\.md in the new repo/i)).toBeInTheDocument();
   });
 
   it("renders a human sentence for github_not_configured", async () => {

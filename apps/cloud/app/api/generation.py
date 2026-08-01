@@ -27,15 +27,20 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from app.api._guards import require_project
+from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.generation.parsing import parse_task_lines
+from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
+from app.generation.prefill import build_prompt as build_prefill_prompt
+from app.generation.prefill import parse_prefill
 from app.generation.prompts import StageKind, driver_prompt
 from app.generation.routing import select_model
 from app.generation.service import GenerationError, HttpGenerationProvider, parse_stage_output
@@ -60,6 +65,25 @@ router = APIRouter(tags=["generation"])
 _MANAGED_LIMITER_KEY = "managed:typhoon"
 
 
+def _resolve_model(request: Request, project):
+    """Model selection plus the two throttles every model-backed endpoint here
+    shares: the managed tier's global rate limit and the workspace's daily
+    token budget."""
+    conn = select_model(getattr(request.app.state, "managed_connection", None))
+    if conn is None:
+        raise HTTPException(status_code=400, detail="model_connection_not_configured")
+
+    if conn.source == "managed":
+        limiter = request.app.state.managed_limiter
+        if not limiter.allow(_MANAGED_LIMITER_KEY, time.monotonic()):
+            raise HTTPException(status_code=429, detail="managed_tier_rate_limited")
+
+    budget = request.app.state.token_budget
+    if budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0:
+        raise HTTPException(status_code=429, detail="daily_token_budget_exceeded")
+    return conn
+
+
 @router.post("/projects/{project_id}/generate/{stage}")
 async def generate(
     project_id: str,
@@ -70,20 +94,9 @@ async def generate(
     repo: Repository = Depends(get_repository),
 ) -> StreamingResponse:
     project = require_project(repo, project_id, user)
-
-    managed_connection = getattr(request.app.state, "managed_connection", None)
-    conn = select_model(managed_connection)
-    if conn is None:
-        raise HTTPException(status_code=400, detail="model_connection_not_configured")
-
-    if conn.source == "managed":
-        managed_limiter = request.app.state.managed_limiter
-        if not managed_limiter.allow(_MANAGED_LIMITER_KEY, time.monotonic()):
-            raise HTTPException(status_code=429, detail="managed_tier_rate_limited")
-
+    require_stage_access(repo, project, stage, user)
+    conn = _resolve_model(request, project)
     budget = request.app.state.token_budget
-    if budget.remaining(project.workspace_id, conn.daily_token_budget) <= 0:
-        raise HTTPException(status_code=429, detail="daily_token_budget_exceeded")
 
     requirement: Requirement | None = None
     spec: SpecDocument | None = None
@@ -260,6 +273,120 @@ async def generate(
         yield f"event: done\ndata: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+class PrefillField(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=200)
+    hint: str = Field(default="", max_length=400)
+
+
+class PrefillRequest(BaseModel):
+    """The Planner's own form definition, sent per request — see
+    app/generation/prefill.py for why the field list isn't duplicated here."""
+
+    fields: list[PrefillField] = Field(min_length=1, max_length=24)
+
+
+class PrefillResponse(BaseModel):
+    fields: dict[str, str]
+    # What the draft was read from, so the Planner can say so rather than
+    # presenting drafted text as if it came from nowhere.
+    sources: list[str]
+
+
+@router.post("/projects/{project_id}/prefill/{stage}", response_model=PrefillResponse)
+async def prefill(
+    project_id: str,
+    stage: Literal["specify", "plan"],
+    body: PrefillRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> PrefillResponse:
+    """Draft a stage's intake form from the uploaded PRD (and, for `plan`, the
+    specification already written). Read-only with respect to the graph and
+    the stage documents: the author reviews and edits the draft, then runs the
+    stage itself as before."""
+    project = require_project(repo, project_id, user)
+    require_stage_access(repo, project, stage, user)
+    conn = _resolve_model(request, project)
+
+    documents = repo.list_documents(project_id)
+    context = _assemble_document_context(documents)
+    sources = [d.title for d in documents if d.extracted_text]
+
+    if stage == "plan":
+        # A PRD rarely names a language or a datastore, but the specification
+        # written from it carries the scope the technical fields hang off.
+        spec_doc = repo.get_stage_document(project_id, "specify")
+        if spec_doc and spec_doc.content.strip():
+            context = f"{context}\n\n[specification]\n{spec_doc.content}".strip()
+            sources.append("the specification")
+
+    if not context.strip():
+        raise HTTPException(status_code=409, detail="no_source_material")
+
+    fields = [f.model_dump() for f in body.fields]
+    user_content = build_prefill_prompt(fields, context)
+
+    secret_store = request.app.state.secret_store
+    api_key = secret_store.decrypt(conn.secret_ref)
+    provider = getattr(request.app.state, "generation_provider", None) or HttpGenerationProvider()
+
+    run = repo.create_generation_run(
+        GenerationRun(
+            workspace_id=project.workspace_id,
+            project_id=project_id,
+            stage=f"prefill:{stage}",
+            model_source=conn.source,
+            model=conn.model,
+        )
+    )
+
+    parts: list[str] = []
+    try:
+        async for delta in provider.stream(
+            PREFILL_SYSTEM_PROMPT,
+            user_content,
+            conn.model,
+            api_key,
+            conn.base_url,
+            max_tokens=request.app.state.settings.managed_model_max_tokens,
+        ):
+            parts.append(delta)
+    except httpx.HTTPStatusError as exc:
+        repo.update_generation_run(run.id, status="failed", prompt_tokens=0, completion_tokens=0)
+        status = exc.response.status_code
+        raise HTTPException(
+            status_code=429 if status == 429 else 502,
+            detail="managed_tier_rate_limited" if status == 429 else "model_provider_error",
+        ) from exc
+
+    raw = "".join(parts)
+    prompt_tokens = estimate_tokens(PREFILL_SYSTEM_PROMPT) + estimate_tokens(user_content)
+    completion_tokens = estimate_tokens(raw)
+    request.app.state.token_budget.record(project.workspace_id, prompt_tokens + completion_tokens)
+
+    drafted = parse_prefill(raw, fields)
+    if drafted is None:
+        repo.update_generation_run(
+            run.id,
+            status="failed",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        # Nothing was written and nothing is half-applied — the form is exactly
+        # as the author left it, so this is safe to simply retry.
+        raise HTTPException(status_code=502, detail="prefill_unparseable")
+
+    repo.update_generation_run(
+        run.id,
+        status="succeeded",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    return PrefillResponse(fields=drafted, sources=sources)
 
 
 # Total characters of document text injected into a single specify/plan
