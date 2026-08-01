@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   composeStageInput,
+  CONSTITUTION_FIELDS,
+  initialAnswers,
   PLAN_FIELDS,
   requiredFieldsFilled,
   SPECIFY_FIELDS,
@@ -33,6 +35,31 @@ describe("composeStageInput", () => {
     expect(out).toContain("## Not provided");
     expect(out).toContain("- Storage");
     expect(out).toContain("[NEEDS CLARIFICATION]");
+  });
+});
+
+describe("initialAnswers", () => {
+  it("opens the constitution form on its default house rules", () => {
+    const answers = initialAnswers(CONSTITUTION_FIELDS, {});
+
+    expect(answers.principles).toContain("Test-first");
+    // Filled by default means generatable on sight — the point of the defaults.
+    expect(requiredFieldsFilled(CONSTITUTION_FIELDS, answers)).toBe(true);
+  });
+
+  it("leaves the product stages empty — their answers are nobody's to guess", () => {
+    expect(initialAnswers(SPECIFY_FIELDS, {})).toEqual({});
+    expect(initialAnswers(PLAN_FIELDS, {})).toEqual({});
+  });
+
+  it("keeps a saved answer, including one deliberately cleared", () => {
+    const answers = initialAnswers(CONSTITUTION_FIELDS, {
+      principles: "Ours only",
+      governance: "",
+    });
+
+    expect(answers.principles).toBe("Ours only");
+    expect(answers.governance).toBe("");
   });
 });
 

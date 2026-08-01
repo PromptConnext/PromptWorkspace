@@ -65,7 +65,12 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
         {graph && (
           <>
             {tab === "Planner" && (
-              <Planner project={graph.project} projectId={projectId} onChange={refetch} />
+              <Planner
+                project={graph.project}
+                projectId={projectId}
+                onChange={refetch}
+                onOpenTasks={() => setTab("Tasks")}
+              />
             )}
             {tab === "Graph" && <GraphBrowser graph={graph} />}
             {tab === "Tasks" && (

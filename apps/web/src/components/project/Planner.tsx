@@ -424,10 +424,14 @@ export function Planner({
   project,
   projectId,
   onChange,
+  onOpenTasks,
 }: {
   project: Project;
   projectId: string;
   onChange: () => void;
+  /** Switches the page to its Tasks tab — the board the generated tasks land
+   *  on. Optional so the Planner still renders standalone in tests. */
+  onOpenTasks?: () => void;
 }) {
   const { authHeaders, user } = useAuth();
   const [active, setActive] = useState<string>("specify");
@@ -560,6 +564,20 @@ export function Planner({
               />
             );
           })}
+          {/* Generation is where the task graph is born; the board is where it
+              is worked. Without this the only route between them is the page's
+              own tab strip, which reads as navigation rather than as the next
+              step. Shown whenever tasks exist, not only in the moment after a
+              generation, so it is still there on the next visit. */}
+          {tab.key === "tasks" && docPresent.tasks && onOpenTasks && (
+            <button
+              type="button"
+              onClick={onOpenTasks}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300"
+            >
+              Open the task board
+            </button>
+          )}
           {/* Creating the repository is a technical act on technical
               artifacts, so it lives with the Tech Lead's own step rather than
               at the bottom of a page a business user also reads. */}

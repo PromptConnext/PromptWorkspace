@@ -24,6 +24,11 @@ export type StageField = {
   options?: string[];
   required?: boolean;
   rows?: number;
+  /** Prefilled answer for a field whose sensible default is the same on every
+   *  project. Only the constitution has these: its answers are engineering
+   *  practice, not project facts, so a starting text is a draft to edit rather
+   *  than a guess about someone's product. */
+  defaultValue?: string;
 };
 
 // The constitution is the only project-level document — it has no graph entity
@@ -32,47 +37,66 @@ export type StageField = {
 // (apps/cloud/app/integrations/repo_seed.py). The fields mirror
 // constitution-template.md's own sections: principles, then two free sections,
 // then governance.
+//
+// Every field arrives filled in. These are house rules a competent team would
+// write anyway, so the Tech Lead's job is to strike what doesn't apply and add
+// what's theirs — quicker, and more likely to be read, than an empty box.
+// Deliberately conservative: nothing here names a stack or a vendor.
 export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "principles",
     label: "Engineering principles",
     hint: "One per line — the rules a reviewer may reject a change over.",
-    placeholder:
-      "Test-first: no implementation before a failing test\nEvery feature ships behind a flag\nSimplicity over cleverness",
     type: "textarea",
-    rows: 4,
+    rows: 6,
     required: true,
+    defaultValue: [
+      "Test-first: a change ships with the tests that prove it",
+      "Small, reversible changes over big-bang releases",
+      "Simplicity over cleverness — the next reader is the audience",
+      "No secrets, credentials, or customer data in the repository",
+      "Every dependency added is a dependency justified",
+    ].join("\n"),
   },
   {
     key: "quality",
     label: "Quality bar",
     hint: "What must be true before code merges.",
-    placeholder: "Unit + integration tests on every change; no lint or type errors; reviewed by one other engineer",
     type: "textarea",
-    rows: 2,
+    rows: 3,
+    defaultValue:
+      "Tests, linting, and type checks pass in CI. At least one other engineer reviews " +
+      "every change. Public behaviour is documented where a user would look for it.",
   },
   {
     key: "standards",
     label: "Technology & security standards",
     hint: "Stack rules, dependency policy, data-handling requirements.",
-    placeholder: "TypeScript everywhere; no new runtime dependency without review; secrets never in the repo",
     type: "textarea",
-    rows: 2,
+    rows: 3,
+    defaultValue:
+      "Stay on the stack chosen in the implementation plan; a new runtime dependency needs " +
+      "review. Secrets live in the environment, never in source. Validate input at the " +
+      "boundary and log no personal data.",
   },
   {
     key: "workflow",
     label: "Development workflow",
     hint: "Branching, review, and release process.",
-    placeholder: "Trunk-based with short-lived branches; squash merge; release from main behind CI",
     type: "textarea",
-    rows: 2,
+    rows: 3,
+    defaultValue:
+      "Short-lived branches off main, opened as a pull request and merged once CI is green. " +
+      "Commits explain why, not just what. Releases come from main.",
   },
   {
     key: "governance",
     label: "Governance",
     hint: "Who may amend these rules, and how.",
-    placeholder: "Amendments need Tech Lead approval and a note in the changelog",
     type: "text",
+    defaultValue:
+      "These rules supersede habit; amending them needs Tech Lead approval and a note in the " +
+      "change history.",
   },
 ];
 
@@ -241,6 +265,20 @@ export const TASKS_INPUT =
   "dependency-aware task list.";
 
 export type StageAnswers = Record<string, string>;
+
+/**
+ * The answers a form opens with: field defaults, overlaid by whatever was
+ * saved for this project. A key present in `saved` wins even when its value is
+ * empty — clearing a prefilled field is an edit, and re-suggesting the default
+ * on the next visit would undo it.
+ */
+export function initialAnswers(fields: StageField[], saved: StageAnswers): StageAnswers {
+  const answers: StageAnswers = {};
+  for (const field of fields) {
+    if (field.defaultValue !== undefined) answers[field.key] = field.defaultValue;
+  }
+  return { ...answers, ...saved };
+}
 
 export function requiredFieldsFilled(fields: StageField[], answers: StageAnswers): boolean {
   return fields.every((f) => !f.required || (answers[f.key] ?? "").trim().length > 0);

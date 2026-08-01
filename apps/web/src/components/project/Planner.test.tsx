@@ -354,11 +354,10 @@ describe("Planner", () => {
     await screen.findByRole("tab", { name: /plan/i });
     openTab(/plan/i);
 
-    expect(screen.getByLabelText(/engineering principles/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /generate rules/i })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/engineering principles/i), {
-      target: { value: "Test first" },
-    });
+    // The rules form opens already filled in — house rules to strike and
+    // extend rather than an empty box to compose.
+    const principles = screen.getByLabelText(/engineering principles/i) as HTMLTextAreaElement;
+    expect(principles.value).toContain("Test-first");
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /generate rules/i })).toBeEnabled();
     });
@@ -414,6 +413,42 @@ describe("Planner", () => {
       .getAllByRole("textbox")
       .filter((el) => el.id.startsWith("tasks-"));
     expect(taskInputs).toHaveLength(0);
+  });
+
+  it("offers a route to the task board once tasks exist, and not before", async () => {
+    const onOpenTasks = vi.fn();
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
+    render(
+      <Planner
+        project={makeProject()}
+        projectId="p1"
+        onChange={vi.fn()}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+
+    openTab(/tasks/i);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate tasks/i })).toBeEnabled();
+    });
+    expect(screen.queryByRole("button", { name: /open the task board/i })).not.toBeInTheDocument();
+
+    // Remount against a project that already has a tasks document — the
+    // presence of one is what the button keys off, not the generation event.
+    cleanup();
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    render(
+      <Planner
+        project={makeProject()}
+        projectId="p1"
+        onChange={vi.fn()}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+
+    openTab(/tasks/i);
+    fireEvent.click(await screen.findByRole("button", { name: /open the task board/i }));
+    expect(onOpenTasks).toHaveBeenCalled();
   });
 
   it("drafts the specify form from the PRD and leaves answers already written alone", async () => {

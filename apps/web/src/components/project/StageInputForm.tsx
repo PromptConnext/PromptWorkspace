@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { prefillStage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
+  initialAnswers,
   stageDraftKey,
   type StageAnswers,
   type StageField,
@@ -59,7 +60,7 @@ export function StageInputForm({
   const [draftNote, setDraftNote] = useState<string | null>(null);
 
   useEffect(() => {
-    onChange(loadDraft(projectId, stage));
+    onChange(initialAnswers(fields, loadDraft(projectId, stage)));
     setHydrated(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, stage]);
