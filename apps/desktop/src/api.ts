@@ -114,6 +114,20 @@ export const listModels = () => request<{ connections: Connection[] }>("/engine/
 export const deleteModelConnection = (id: string) =>
   request<{ ok: boolean }>(`/engine/models/${id}`, { method: "DELETE" });
 
+// Local task-graph backup. The engine's SQLite file is the offline source of
+// truth (ADR 0003) and cloud sync is opt-in (ADR 0010), so an offline user has
+// exactly one copy of their graph until they take a snapshot.
+export type BackupInfo = { path: string; bytes: number; created_at: string };
+
+export const listBackups = () =>
+  request<{ dir: string; db_path: string; backups: BackupInfo[] }>("/engine/backups");
+
+export const createBackup = (path?: string) =>
+  request<BackupInfo>("/engine/backups", {
+    method: "POST",
+    body: JSON.stringify(path ? { path } : {}),
+  });
+
 export const getLocalLlmEnv = () =>
   request<{ model: string; env: Record<string, string> }>("/engine/local-llm-env");
 

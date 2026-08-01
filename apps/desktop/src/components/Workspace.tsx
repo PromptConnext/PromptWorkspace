@@ -10,6 +10,7 @@ import {
 } from "../api";
 import ThreeS from "./ThreeS";
 import CloudConnect from "./CloudConnect";
+import BackupPanel from "./BackupPanel";
 import CloudOpenPanel, { ProjectNotReadyPanel } from "./CloudOpenPanel";
 import ImportLocalProjects from "./ImportLocalProjects";
 import TopBar, { type ProjectTab, type WorkspaceContext } from "./TopBar";
@@ -259,6 +260,9 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
               onChange={() => setRefreshTick((t) => t + 1)}
             />
             <ThreeS key={active.id} project={active} focusSignal={plannerSignal} />
+            {/* Sits under CloudConnect deliberately: cloud sync is opt-in, so
+                the local backup is the answer for everyone who declines it. */}
+            <BackupPanel />
           </>
         ) : (
           <p className="muted">Select or create a project to start the 3S flow.</p>

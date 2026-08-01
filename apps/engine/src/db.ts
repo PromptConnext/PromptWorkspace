@@ -139,7 +139,11 @@ export function dataDir(): string {
   return dir;
 }
 
-export const db = new DatabaseSync(join(dataDir(), "promptconnext.db"));
+export function dbFilePath(): string {
+  return join(dataDir(), "promptconnext.db");
+}
+
+export const db = new DatabaseSync(dbFilePath());
 db.exec("PRAGMA foreign_keys = ON;");
 db.exec(SCHEMA);
 

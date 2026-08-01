@@ -64,11 +64,12 @@ The cloud app is **optional** for desktop work: the engine defaults to the hoste
 
 ### Engine (`apps/engine/src`)
 
-Hono server bound to `127.0.0.1:47131` (`index.ts`). Routes are mounted flat: `models`, `onboarding`, `projects`, `files`, `agents`, `cloud`, plus the Anthropic façade at `/anthropic` and a terminal WebSocket.
+Hono server bound to `127.0.0.1:47131` (`index.ts`). Routes are mounted flat: `models`, `onboarding`, `projects`, `files`, `agents`, `cloud`, `backups`, plus the Anthropic façade at `/anthropic` and a terminal WebSocket.
 
 - **`gateway/`** — the BYO-model gateway. `ModelConnection` is an **OpenAI-compatible** shape (`endpoint` + `/chat/completions`); `anthropic-compat.ts` is the Anthropic Messages façade (ADR 0006) that lets Claude Code speak to the connected BYO model.
 - **`agent/`** — `loop.ts::runStage()` is the thin single-shot planning generator (constitution/specify/plan/tasks). `agent-runner.ts` + `adapters/` orchestrate external coding agents for **implementation**; each adapter (`claude-code`, `gemini`, `codex`, `custom`) is ~30 lines with `detect() / buildSpawn() / parseLine() / bringsOwnModel`. Result capture is **agent-agnostic** — changed files are read from Git and committed; a commit ref marks a task done.
 - **`db.ts`** — local `node:sqlite` task graph, the **offline source of truth** (ADR 0003).
+- **`backup.ts`** — snapshots that database via SQLite's `VACUUM INTO` (consistent under concurrent writes; no WAL side-files to capture separately), surfaced as `GET`/`POST /engine/backups` and the desktop's "Back up now" panel. Cloud sync is opt-in, so this is the only second copy an offline user has. Never overwrites an existing file; restore is a manual file swap back to `dbFilePath()`.
 - **`keychain.ts`** — model credentials live in the OS keychain (macOS `security` CLI; Windows DPAPI via PowerShell), never in SQLite or config.
 - **`security.ts`** — origin allowlist + per-session bearer token (ADR 0008). See Security below.
 - **`cloudClient.ts` / `sync/loop.ts`** — authenticate to `apps/cloud` as the cloud user and push the local graph up on an interval (ADR 0010). Per ADR 0015 they also mirror the **cloud-authoritative roster** (workspaces + project metadata) into a local cache that renders offline (refreshed on sign-in/focus/explicit refresh, scrubbed on logout), and `hydrateProjectGraph()` runs a one-shot **full-graph bootstrap-pull** (keyset-paginated) for a roster project with no local graph. New projects are born into the active `workspace_id`.
