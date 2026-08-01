@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { randomBytes, randomUUID } from "node:crypto";
 import { db } from "../db.ts";
-import { CLOUD_API_URL, CLOUD_WEB_URL } from "../config.ts";
+import { CLOUD_API_URL, CLOUD_WEB_URL, DEEP_LINK_SCHEME } from "../config.ts";
 import {
   cloudFetch,
   cloudMode,
@@ -89,7 +89,11 @@ cloud.post("/engine/cloud/login/browser", (c) => {
   }
   const state = randomBytes(16).toString("hex");
   pendingLoginState = state;
-  const url = `${CLOUD_WEB_URL}/login?desktop=1&state=${state}`;
+  // `scheme` tells the sign-in page which deep link to bounce back to, so the
+  // callback reaches the shell that started this login (ADR 0014 amendment).
+  const url =
+    `${CLOUD_WEB_URL}/login?desktop=1&state=${state}` +
+    `&scheme=${encodeURIComponent(DEEP_LINK_SCHEME)}`;
   return c.json({ url, state });
 });
 

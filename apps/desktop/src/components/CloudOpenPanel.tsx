@@ -79,9 +79,13 @@ export default function CloudOpenPanel({
 export function ProjectNotReadyPanel({
   projectName,
   lifecycleStatus,
+  onCheckAgain,
+  checking,
 }: {
   projectName: string;
   lifecycleStatus: string;
+  onCheckAgain: () => void;
+  checking: boolean;
 }) {
   const explanation =
     lifecycleStatus === "tech_review"
@@ -96,6 +100,14 @@ export function ProjectNotReadyPanel({
         <strong>&quot;{projectName}&quot; isn&apos;t ready to open yet</strong>
       </div>
       <p className="muted">{explanation}</p>
+      {/* The status is read from the locally cached roster, which otherwise
+          only re-pulls on window focus — useless while the user sits here
+          watching this very panel. */}
+      <div className="cloud-open-actions">
+        <button type="button" disabled={checking} onClick={onCheckAgain}>
+          {checking ? "Checking…" : "Check again"}
+        </button>
+      </div>
     </section>
   );
 }

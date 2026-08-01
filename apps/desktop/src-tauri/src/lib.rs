@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+// `Manager` is only needed for the release-only resource_dir() lookup in
+// engine_dir(); a debug build resolves the engine from the repo checkout.
+#[cfg_attr(debug_assertions, allow(unused_imports))]
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -52,10 +55,16 @@ fn mint_token() -> String {
 // Engine resolution (ADR 0001): explicit override, else the copy bundled into
 // the app's resource dir (packaged), else the repo checkout this binary was
 // compiled from (dev / `cargo build`).
+#[cfg_attr(debug_assertions, allow(unused_variables))]
 fn engine_dir<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> PathBuf {
     if let Ok(dir) = std::env::var("PROMPTCONNEXT_ENGINE_DIR") {
         return PathBuf::from(dir);
     }
+    // Release builds only. Under `tauri dev` the resource dir is target/debug/,
+    // where the `.engine-pkg` copy left behind by any earlier `tauri build`
+    // lingers — preferring it there silently ran weeks-old engine code against
+    // a current webview, so a route added since the last package 404s.
+    #[cfg(not(debug_assertions))]
     if let Ok(res) = handle.path().resource_dir() {
         let bundled = res.join("engine");
         if bundled.join("src").join("index.ts").exists() {
@@ -82,6 +91,10 @@ fn spawn_engine(token: &str, dir: &Path, log: &EngineLog) -> std::io::Result<Chi
         .current_dir(dir)
         .env("PROMPTCONNEXT_PARENT_PID", std::process::id().to_string())
         .env("PROMPTCONNEXT_AUTH_TOKEN", token)
+        // Names the scheme this shell registered so the sign-in page bounces
+        // the ADR 0014 callback back here. Must match register() below and
+        // tauri.conf.json's deep-link config.
+        .env("PROMPTCONNEXT_DEEP_LINK_SCHEME", "promptconnext")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -54,6 +54,26 @@ function lifecycleBadge(status?: string): string | null {
   }
 }
 
+// Why the Planner button is unavailable, in the user's terms. A pre-repo cloud
+// project *is* selected — saying "select a project first" there reads as a bug,
+// so name the real blocker and point at the surface that does work today: the
+// cloud Planner authors the plan until tech-review exit creates the repo
+// (ADR 0017), and only then is there a local checkout for this button to open.
+function plannerBlockedReason(status?: string): string {
+  switch (status) {
+    case "planning":
+    case "pending_tech_review":
+    case "tech_review":
+      return "Repository not created yet — plan this project in the cloud Planner";
+    case "repo_created":
+      // Selected, repo exists, but no local checkout on this machine yet — the
+      // folder-picker panel below is the next step, not tab selection.
+      return "Open this project on your machine first";
+    default:
+      return "Select a project first";
+  }
+}
+
 // Global navigation shell (replaces the old sidebar project list): one bar
 // always visible above the 3S flow, so switching workspace/project or seeing
 // who's signed in never requires leaving the current project. Three zones —
@@ -106,6 +126,37 @@ export default function TopBar({
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
+
+  // Tab strip overflow state. More projects than fit is the normal case, so the
+  // strip scrolls — but a plain `overflow-x: auto` leaves a chip sliced in half
+  // at the edge, which reads as a rendering bug rather than "there's more this
+  // way". Edge fades mark the hidden direction, and snap alignment (CSS) keeps
+  // scrolling from ever resting mid-chip.
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const [overflow, setOverflow] = useState({ start: false, end: false });
+
+  const syncOverflow = useCallback(() => {
+    const el = tabStripRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    setOverflow({ start: el.scrollLeft > 1, end: el.scrollLeft < max - 1 });
+  }, []);
+
+  useEffect(() => {
+    syncOverflow();
+    const el = tabStripRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(syncOverflow);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tabs.length, syncOverflow]);
+
+  // Selecting a project elsewhere (roster refresh, deep link) can leave its tab
+  // parked outside the visible window; pull it back in.
+  useEffect(() => {
+    const el = tabStripRef.current?.querySelector<HTMLElement>(".tb-tab.active");
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabKey, tabs.length]);
 
   const resolveWorkspace = async () => {
     const cloudSession = await getCloudSession();
@@ -338,86 +389,112 @@ export default function TopBar({
       <div className="tb-workspace">
         <span className="workspace-dot" aria-hidden="true" />
         <div className="tb-workspace-body">
-          <span className="tb-workspace-name">{workspaceLabel}</span>
-          {connected && workspaces.length > 1 && (
+          {/* The switcher already shows the active workspace's name — printing
+              it again beside the select was the same string twice in a row. */}
+          {connected && workspaces.length > 1 ? (
             <select
               className="tb-workspace-select"
+              title="Switch workspace"
               value={active?.id ?? ""}
               onChange={(e) => e.target.value && selectWorkspace(e.target.value)}
             >
-              {!active && <option value="">Select…</option>}
+              {!active && <option value="">Choose a workspace…</option>}
               {workspaces.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name}
                 </option>
               ))}
             </select>
+          ) : (
+            <span className="tb-workspace-name" title={workspaceLabel}>
+              {workspaceLabel}
+            </span>
           )}
         </div>
         {wsError && <p className="error tb-inline-error">{wsError}</p>}
       </div>
 
-      <nav className="tb-projects">
-        {tabs.map((t) => {
-          const badge = lifecycleBadge(t.lifecycle_status);
-          return (
+      <div className="tb-projects">
+        {/* Only the tab list scrolls. "New project" and the cloud link live
+            outside it so a long project list can never push them off-screen. */}
+        <nav
+          className={
+            "tb-tabs" +
+            (overflow.start ? " tb-tabs-fade-start" : "") +
+            (overflow.end ? " tb-tabs-fade-end" : "")
+          }
+          ref={tabStripRef}
+          onScroll={syncOverflow}
+        >
+          {tabs.map((t) => {
+            const badge = lifecycleBadge(t.lifecycle_status);
+            return (
+              <button
+                key={t.key}
+                type="button"
+                className={"tb-tab" + (t.key === activeTabKey ? " active" : "")}
+                title={badge ? `${t.name} — ${badge}` : t.name}
+                onClick={() => onSelectTab(t.key)}
+              >
+                <span className="tb-tab-name">{t.name}</span>
+                {badge && <span className="tb-tab-badge">{badge}</span>}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="tb-projects-actions">
+          {cloudProjectLink && (
             <button
-              key={t.key}
               type="button"
-              className={"tb-tab" + (t.key === activeTabKey ? " active" : "")}
-              onClick={() => onSelectTab(t.key)}
+              className="tb-cloud-link"
+              title={`Open "${activeProject?.name}" in the cloud`}
+              onClick={openInCloud}
             >
-              {t.name}
-              {badge && <span className="tb-tab-badge muted">{badge}</span>}
+              ↗ Cloud
             </button>
-          );
-        })}
-        {cloudProjectLink && (
-          <button
-            type="button"
-            className="tb-cloud-link"
-            title={`Open "${activeProject?.name}" in the cloud`}
-            onClick={openInCloud}
-          >
-            ↗ Cloud
-          </button>
-        )}
-        {!canCreateProject ? (
-          <span className="tb-tab tb-tab-muted" title="Choose a workspace first">
-            + New project
-          </span>
-        ) : creating ? (
-          <span className="tb-new-form">
-            <input
-              autoFocus
-              value={newName}
-              placeholder="Project name"
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitCreate();
-                if (e.key === "Escape") {
-                  setCreating(false);
-                  setNewName("");
-                }
-              }}
-            />
-            <button type="button" disabled={createBusy || !newName.trim()} onClick={submitCreate}>
-              Add
+          )}
+          {!canCreateProject ? (
+            <span className="tb-tab tb-tab-muted" title="Choose a workspace first">
+              + New project
+            </span>
+          ) : creating ? (
+            <span className="tb-new-form">
+              <input
+                autoFocus
+                value={newName}
+                placeholder="Project name"
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitCreate();
+                  if (e.key === "Escape") {
+                    setCreating(false);
+                    setNewName("");
+                  }
+                }}
+              />
+              <button type="button" disabled={createBusy || !newName.trim()} onClick={submitCreate}>
+                Add
+              </button>
+              {createError && <span className="error tb-inline-error">{createError}</span>}
+            </span>
+          ) : (
+            <button type="button" className="tb-tab tb-tab-new" onClick={() => setCreating(true)}>
+              + New project
             </button>
-            {createError && <span className="error tb-inline-error">{createError}</span>}
-          </span>
-        ) : (
-          <button type="button" className="tb-tab tb-tab-new" onClick={() => setCreating(true)}>
-            + New project
-          </button>
-        )}
-      </nav>
+          )}
+        </div>
+      </div>
 
       <button
         type="button"
         className={"tb-planner" + (activeProject ? "" : " tb-planner-muted")}
         disabled={!activeProject}
-        title={activeProject ? "Open Planner" : "Select a project first"}
+        title={
+          activeProject
+            ? "Open Planner"
+            : plannerBlockedReason(tabs.find((t) => t.key === activeTabKey)?.lifecycle_status)
+        }
         onClick={onOpenPlanner}
       >
         ✦ Planner

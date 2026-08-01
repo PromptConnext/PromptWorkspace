@@ -376,28 +376,103 @@ button.link {
 
 .tb-workspace-select {
   font: inherit;
-  font-size: 0.85em;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.95em;
+  max-width: 220px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: inherit;
 }
 
+.tb-workspace-select:hover {
+  border-color: var(--border);
+}
+
 .tb-projects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Only this strip scrolls. Hide the scrollbar (it used to draw straight across
+   the chips) and snap so a chip never comes to rest half-clipped; the edge
+   fades below stand in for the missing scrollbar as the "more this way" hint. */
+.tb-tabs {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: 1;
-  overflow-x: auto;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  padding: 2px 0;
+}
+
+.tb-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tb-tabs-fade-start {
+  mask-image: linear-gradient(to right, transparent 0, #000 24px);
+}
+
+.tb-tabs-fade-end {
+  mask-image: linear-gradient(to left, transparent 0, #000 24px);
+}
+
+.tb-tabs-fade-start.tb-tabs-fade-end {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
+}
+
+.tb-projects-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .tb-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 260px;
   white-space: nowrap;
   font-size: 0.9em;
   padding: 5px 12px;
   border-radius: 999px;
+  scroll-snap-align: start;
+  scroll-margin-inline: 24px;
+}
+
+.tb-tab:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* The selected project is the one piece of state the strip must make obvious
+   at a glance — a tinted fill reads faster than a border-colour swap alone. */
+.tb-tab.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Long project names truncate instead of stretching the chip past the strip. */
+.tb-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .tb-tab-muted {
@@ -406,9 +481,19 @@ button.link {
 }
 
 .tb-tab-badge {
-  margin-left: 6px;
-  font-size: 0.85em;
+  flex-shrink: 0;
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.tb-tab.active .tb-tab-badge {
+  color: color-mix(in srgb, var(--accent) 75%, var(--muted));
 }
 
 .tb-tab-new {

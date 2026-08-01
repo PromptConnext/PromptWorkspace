@@ -46,6 +46,9 @@ function spawnEngine(token, port) {
             PROMPTCONNEXT_PARENT_PID: String(process.pid),
             PROMPTCONNEXT_AUTH_TOKEN: token,
             PROMPTCONNEXT_ENGINE_PORT: String(port),
+            // Must match deep-link.js's PROTOCOL: the sign-in page builds its
+            // callback URL from this, so a login started here comes back here.
+            PROMPTCONNEXT_DEEP_LINK_SCHEME: 'promptconnext-theia',
             // M0: extend the engine's origin allowlist to this Electron
             // renderer's origin via the existing env-var extension point
             // (src/security.ts) — no engine code change.

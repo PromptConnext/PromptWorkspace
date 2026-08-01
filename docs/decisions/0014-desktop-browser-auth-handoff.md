@@ -29,6 +29,14 @@ Only the opaque code rides the deep link, and it is worthless after one use or a
 - **Stub mode unaffected.** Dev/stub auth keeps its typed `X-User-Id` — this ADR governs the supabase path only.
 - **Reversible.** If OAuth is dropped, the native password form can return; nothing here is one-way.
 
+## Amendment — the callback scheme is chosen by the shell, not hardcoded (2026-08-01)
+
+Step 4 above named a single literal, `promptconnext://auth/callback`. That held only while exactly one desktop shell existed. The Theia shell being built under ADR 0016 is a second one, and an OS resolves a URL scheme to exactly one handler — so on a machine with both, the callback goes wherever the OS decided, not to the app the user actually clicked "Sign in" in. This was observed on a developer machine on 2026-08-01: merely starting the Theia shell unpackaged bound `promptconnext://` to the stock Electron binary under `node_modules` (Electron's `setAsDefaultProtocolClient()` writes the machine-wide default handler under the *running* bundle's id), and sign-in from the Tauri shell stopped completing.
+
+The scheme is therefore part of the handoff rather than a constant. Whoever spawns the engine declares its shell's scheme through `PROMPTCONNEXT_DEEP_LINK_SCHEME` (`promptconnext` for Tauri, `promptconnext-theia` for Theia); `POST /engine/cloud/login/browser` puts it on the login URL as `?scheme=`; and the web page builds the callback from that value, so the session returns to the shell that requested it. The page validates the parameter against a fixed allow-list before use — the concern in "Why a one-time code, not a token in the URL" above applies to the scheme itself, since an unvalidated one would let a crafted URL hand the handoff code to any locally-installed app willing to register for it. An unknown value falls back to the shipping scheme. The `state` check at redeem time is unchanged and still binds the code to the login that started it.
+
+Note the residual property, unchanged by this: on the OS side a scheme is still first-come, so a hostile local app can register `promptconnext://` and receive codes. That is what makes the short TTL and the one-time, `state`-bound redeem load-bearing rather than belt-and-braces.
+
 ## Accepted risk — `CLOUD_WEB_URL` on a shared Vercel subdomain (2026-08-01)
 
 `CLOUD_WEB_URL` defaults to `https://prompt-zone-web-app.vercel.app`, and the desktop opens it for credential entry. A `*.vercel.app` name is only ours while the Vercel project exists: delete or rename that project and the subdomain becomes reclaimable by anyone, who would then be serving the page where our users type their password. The [2026-07-25 pre-launch readiness review](../reports/2026-07-25-pre-launch-readiness-review.md) listed moving to an org-owned domain as a Must Have and a hard blocker before public installer distribution.

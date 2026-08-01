@@ -11,16 +11,20 @@
 // pass to requestSingleInstanceLock below), the same relay lib.rs wires
 // through tauri-plugin-single-instance's second-instance callback.
 //
-// Same caveat as lib.rs's comment on macOS registration: Launch Services
-// only reads CFBundleURLTypes from a bundle's Info.plist, so an unpackaged
-// `electron .` dev run has no OS-level handler for the scheme even after
-// setAsDefaultProtocolClient() — that call is a no-op until this app is
-// actually packaged. Nothing here can fix that in dev; whatever manual
-// "paste the code" fallback the Planner extension needs (M3) is unaffected
-// by this sub-project either way.
+// macOS registration caveat, sharper than lib.rs's comment implies: Launch
+// Services only *discovers* a scheme from a bundle's Info.plist, so an
+// unpackaged `electron .` run never becomes a working handler — but
+// setAsDefaultProtocolClient() is NOT therefore a no-op. It still writes the
+// machine-wide default handler under the running bundle's id, which unpackaged
+// is `com.github.electron`, handing the scheme to a stock Electron that has
+// none of this code.
 const { app } = require('electron');
 
-const PROTOCOL = 'promptconnext';
+// Deliberately not `promptconnext`: that belongs to the shipping Tauri shell
+// until the M4 cutover, and a scheme resolves to exactly one handler (ADR 0014's
+// 2026-08-01 amendment). Must match `build.protocols` in package.json and
+// PROMPTCONNEXT_DEEP_LINK_SCHEME in engine-lifecycle.js.
+const PROTOCOL = 'promptconnext-theia';
 
 // Forward a deep-link URL to the given callback, once one is registered.
 // Buffers at most the most recent URL seen before the callback exists (an

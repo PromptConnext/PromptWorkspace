@@ -41,9 +41,14 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
   // there's nothing to open yet, so this renders an informational panel
   // instead of the folder-picker (plan: cloud creates the repo at
   // tech-review exit).
-  const [notReadyProject, setNotReadyProject] = useState<
-    { name: string; lifecycleStatus: string } | null
-  >(null);
+  //
+  // Only the cloud id is held, never a copy of the project's name/status. The
+  // panel used to store that snapshot from the moment the tab was clicked, so
+  // a project whose repo was created afterwards kept claiming the Tech Lead
+  // was still reviewing it — the roster underneath had been refreshed, the
+  // panel just never looked again. Everything shown is derived from the
+  // current roster below.
+  const [notReadyCloudId, setNotReadyCloudId] = useState<string | null>(null);
   const [openBusy, setOpenBusy] = useState(false);
 
   const refresh = () =>
@@ -73,6 +78,48 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
+
+  // Force a cloud-authoritative pull, then render from the fresh cache. Bound
+  // to the not-ready panel's "Check again": waiting on the Tech Lead is
+  // exactly the moment a user watches for a change, and window focus (the
+  // only other trigger) never fires if the app already has focus.
+  const [checkingReady, setCheckingReady] = useState(false);
+  const checkReadiness = async () => {
+    setCheckingReady(true);
+    try {
+      const r = await refreshCloudRoster();
+      setRoster({ workspaces: r.workspaces, projects: r.projects, syncedAt: r.syncedAt });
+    } catch {
+      // Offline: the engine keeps serving the cache and the panel stays put.
+    } finally {
+      setCheckingReady(false);
+    }
+  };
+
+  // Derived, not stored: a roster refresh from any source (focus, the button
+  // above, a workspace switch) re-evaluates this on the next render.
+  const notReadyProject = useMemo(() => {
+    if (!notReadyCloudId) return null;
+    const p = roster.projects.find((x) => x.id === notReadyCloudId);
+    if (!p || p.lifecycle_status === "repo_created") return null;
+    return { name: p.name, lifecycleStatus: p.lifecycle_status };
+  }, [notReadyCloudId, roster]);
+
+  // ...and once the repo exists, hand straight over to the folder-picker. The
+  // user asked to open this project; reaching repo_created is the answer to
+  // that request, not a reason to make them click the tab a second time.
+  useEffect(() => {
+    if (!notReadyCloudId) return;
+    const p = roster.projects.find((x) => x.id === notReadyCloudId);
+    if (!p || p.lifecycle_status !== "repo_created") return;
+    setNotReadyCloudId(null);
+    setPendingCloudOpen({
+      key: `cloud:${p.id}`,
+      cloudId: p.id,
+      name: p.name,
+      repoUrl: p.repo_url ?? null,
+    });
+  }, [notReadyCloudId, roster]);
 
   const activeWorkspaceId = workspaceCtx.active?.id ?? null;
 
@@ -123,7 +170,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
   // local.
   const selectTab = async (key: string) => {
     setOpenError(null);
-    setNotReadyProject(null);
+    setNotReadyCloudId(null);
     if (key.startsWith("local:")) {
       const id = key.slice("local:".length);
       const p = projects.find((x) => x.id === id) ?? null;
@@ -149,7 +196,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     // creates the repo at tech-review exit).
     if (rosterProject && rosterProject.lifecycle_status !== "repo_created") {
       setPendingCloudOpen(null);
-      setNotReadyProject({ name: rosterProject.name, lifecycleStatus: rosterProject.lifecycle_status });
+      setNotReadyCloudId(rosterProject.id);
       return;
     }
     setPendingCloudOpen({
@@ -189,7 +236,7 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
     // it stays a plain local project. Either way, refresh both views and open it.
     const project = await createProject(name);
     setPendingCloudOpen(null);
-    setNotReadyProject(null);
+    setNotReadyCloudId(null);
     await refresh();
     await refreshRoster();
     setActive(project);
@@ -240,6 +287,8 @@ export default function Workspace({ onGateRecheck }: { onGateRecheck?: () => voi
           <ProjectNotReadyPanel
             projectName={notReadyProject.name}
             lifecycleStatus={notReadyProject.lifecycleStatus}
+            onCheckAgain={() => void checkReadiness()}
+            checking={checkingReady}
           />
         ) : pendingCloudOpen ? (
           <CloudOpenPanel

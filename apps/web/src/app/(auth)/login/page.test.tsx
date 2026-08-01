@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/lib/auth";
-import LoginPage, { safeNext } from "./page";
+import LoginPage, { desktopScheme, safeNext } from "./page";
 
 const replace = vi.fn();
 
@@ -26,6 +26,32 @@ describe("safeNext", () => {
 
   it("falls back to / when null", () => {
     expect(safeNext(null)).toBe("/");
+  });
+});
+
+describe("desktopScheme", () => {
+  it("passes through the shipping Tauri scheme", () => {
+    expect(desktopScheme("promptconnext")).toBe("promptconnext");
+  });
+
+  it("passes through the Theia shell's own scheme", () => {
+    expect(desktopScheme("promptconnext-theia")).toBe("promptconnext-theia");
+  });
+
+  it("falls back to the shipping scheme when absent", () => {
+    expect(desktopScheme(null)).toBe("promptconnext");
+  });
+
+  it("refuses an unknown scheme rather than handing it the auth code", () => {
+    expect(desktopScheme("evilapp")).toBe("promptconnext");
+  });
+
+  it("refuses a scheme that merely prefixes a known one", () => {
+    expect(desktopScheme("promptconnext-evil")).toBe("promptconnext");
+  });
+
+  it("refuses an embedded javascript: URL", () => {
+    expect(desktopScheme("javascript:alert(1)//")).toBe("promptconnext");
   });
 });
 

@@ -35,3 +35,12 @@ export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
 // name reclaimable.
 export const CLOUD_WEB_URL =
   process.env.CLOUD_WEB_URL || "https://prompt-zone-web-app.vercel.app";
+
+// Which URL scheme the host shell registered for the ADR 0014 sign-in callback.
+// The engine is shell-agnostic, so whoever spawns it declares this and the
+// engine forwards it to the web sign-in page (ADR 0014's 2026-08-01 amendment
+// explains why the scheme can't just be a constant). That page allow-lists the
+// value, so a new scheme here needs adding there too. The default keeps a bare
+// `pnpm engine` run pointed at the shipping shell.
+export const DEEP_LINK_SCHEME =
+  process.env.PROMPTCONNEXT_DEEP_LINK_SCHEME || "promptconnext";

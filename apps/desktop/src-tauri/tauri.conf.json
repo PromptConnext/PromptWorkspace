@@ -4,7 +4,7 @@
   "version": "0.2.1",
   "identifier": "dev.ideva.promptconnext",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm prep:engine-resource && pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build && pnpm stage:engine",
     "frontendDist": "../dist"

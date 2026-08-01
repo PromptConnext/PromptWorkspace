@@ -7,7 +7,7 @@
 // to reconcile against). Every other entity stays push-only, unchanged.
 import { randomUUID } from "node:crypto";
 import { db, getAppState, setAppState } from "../db.ts";
-import { cloudFetch } from "../cloudClient.ts";
+import { cloudFetch, CloudHttpError } from "../cloudClient.ts";
 
 export const CLOUD_SYNC_POLL_SECONDS = Number(process.env.CLOUD_SYNC_POLL_SECONDS ?? 20);
 
@@ -36,7 +36,17 @@ const REQUIREMENT_STATUS_TO_CLOUD: Record<string, string> = {
 // project_id is optional: a project created offline into a workspace is linked
 // (workspace_id known) but has no cloud project row yet — it stays pending until
 // ensureCloudProject() mints one on reconnect (ADR 0015 §5, plan 0006 G2).
-export type CloudLinkConfig = { workspace_id: string; project_id?: string | null };
+// broken_at/broken_reason quarantine a link whose cloud project the server says
+// does not exist (404). Without it the loop retries the same doomed push and
+// pull every tick forever, filling both logs with 404s and never telling anyone.
+// Set only on a definitive 404; cleared whenever the link is rewritten (the
+// relink routes build a fresh config), which is the intended manual recovery.
+export type CloudLinkConfig = {
+  workspace_id: string;
+  project_id?: string | null;
+  broken_at?: string | null;
+  broken_reason?: string | null;
+};
 
 export function getCloudLink(projectId: string): CloudLinkConfig | null {
   const row = db
@@ -84,12 +94,30 @@ export async function ensureCloudProject(localProjectId: string): Promise<string
   return created.id;
 }
 
+// Every locally linked project, quarantined ones excluded — the loop must not
+// keep hammering a link the cloud has already said is dead. A manual push (the
+// cloud-sync route) still goes through pushProjectSnapshot directly and will
+// retry, so a user-initiated attempt is never blocked by the quarantine.
+// Stamp a link as quarantined, preserving workspace_id/project_id so the UI can
+// still show what it *was* pointed at and the user can decide where to relink.
+function markLinkBroken(localProjectId: string, reason: string): void {
+  const link = getCloudLink(localProjectId);
+  if (!link) return;
+  writeCloudLink(localProjectId, {
+    ...link,
+    broken_at: new Date().toISOString(),
+    broken_reason: reason,
+  });
+}
+
 function linkedProjectIds(): string[] {
   return (
     db.prepare("SELECT project_id FROM integrations WHERE kind = 'cloud'").all() as {
       project_id: string;
     }[]
-  ).map((r) => r.project_id);
+  )
+    .map((r) => r.project_id)
+    .filter((id) => !getCloudLink(id)?.broken_at);
 }
 
 // Assemble a full snapshot of one local project's graph in apps/cloud's
@@ -333,6 +361,15 @@ export async function pushProjectSnapshot(localProjectId: string): Promise<SyncR
       method: "PUT",
       body: JSON.stringify(snapshot),
     });
+    // A manual push against a quarantined link can succeed (the project came
+    // back, or the user pointed the engine at the right cloud again) — lift the
+    // quarantine so the interval loop resumes on its own.
+    if (link.broken_at) {
+      writeCloudLink(localProjectId, {
+        workspace_id: link.workspace_id,
+        project_id: link.project_id,
+      });
+    }
     const result: SyncResult = {
       at: new Date().toISOString(),
       ok: true,
@@ -342,11 +379,21 @@ export async function pushProjectSnapshot(localProjectId: string): Promise<SyncR
     recordResult(localProjectId, result);
     return result;
   } catch (err) {
-    const result: SyncResult = {
-      at: new Date().toISOString(),
-      ok: false,
-      error: (err as Error).message,
-    };
+    // A 404 means the cloud has no such project — the id in this link is stale
+    // (project deleted cloud-side, or the link was made against a different
+    // CLOUD_API_URL). Nothing retrying can fix, and re-minting one silently
+    // would fork the graph into whichever cloud we happen to be pointed at, so
+    // quarantine the link and let the user relink deliberately. Note a
+    // membership failure is 403, not 404, so this cannot fire on a permissions
+    // blip that might clear on its own.
+    const error =
+      err instanceof CloudHttpError && err.status === 404
+        ? "cloud project no longer exists — relink this project"
+        : (err as Error).message;
+    if (err instanceof CloudHttpError && err.status === 404) {
+      markLinkBroken(localProjectId, error);
+    }
+    const result: SyncResult = { at: new Date().toISOString(), ok: false, error };
     recordResult(localProjectId, result);
     return result;
   }

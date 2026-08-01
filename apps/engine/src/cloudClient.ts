@@ -197,6 +197,17 @@ export class CloudNotLoggedInError extends Error {
   }
 }
 
+// A non-2xx response from the cloud, carrying the status so callers can tell a
+// definitive rejection apart from a transient one. Sync uses this to quarantine
+// a link whose cloud project has gone (404) instead of retrying it forever.
+export class CloudHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 function requestCloud(path: string, init: RequestInit, session: CloudSession): Promise<Response> {
   return fetch(`${CLOUD_API_URL}${path}`, {
     ...init,
@@ -260,7 +271,13 @@ export async function cloudFetch<T>(path: string, init: RequestInit = {}): Promi
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error ?? `cloud HTTP ${res.status}`);
+    // `detail` is FastAPI's HTTPException shape (apps/cloud); `error` is the
+    // engine-style shape some endpoints use. Fall back to the bare status.
+    const body = data as { error?: string; detail?: string };
+    throw new CloudHttpError(
+      res.status,
+      body.error ?? body.detail ?? `cloud HTTP ${res.status}`,
+    );
   }
   return data as T;
 }

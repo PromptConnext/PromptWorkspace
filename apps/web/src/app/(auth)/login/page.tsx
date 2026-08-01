@@ -12,6 +12,21 @@ import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@
 // lib/ so the register page can share it without importing a route module.
 export { safeNext };
 
+// Deep-link schemes a desktop shell may ask us to hand the session back to:
+// `promptconnext` is the shipping Tauri shell, `promptconnext-theia` the
+// in-development Electron one, and the engine names its own via ?scheme= so a
+// login returns to the shell that started it (ADR 0014's 2026-08-01 amendment).
+//
+// The allow-list is a security control, not tidiness: the URL below carries a
+// one-time code that redeems a real session, and the query string is
+// attacker-controllable, so an arbitrary scheme would hand that code to any
+// locally-installed app willing to register for it.
+const DESKTOP_SCHEMES: string[] = ["promptconnext", "promptconnext-theia"];
+
+export function desktopScheme(raw: string | null): string {
+  return raw && DESKTOP_SCHEMES.includes(raw) ? raw : "promptconnext";
+}
+
 function LoginForm() {
   const { user, signInStub, signInSupabase, getSessionTokens } = useAuth();
   const router = useRouter();
@@ -19,6 +34,7 @@ function LoginForm() {
   const next = safeNext(params.get("next"));
   const desktop = params.get("desktop") === "1";
   const desktopState = params.get("state");
+  const scheme = desktopScheme(params.get("scheme"));
 
   const [userId, setUserId] = useState("dev-user");
   const [email, setEmail] = useState("");
@@ -58,7 +74,7 @@ function LoginForm() {
           );
           setHandoffCode(code);
           window.location.href =
-            `promptconnext://auth/callback?code=${encodeURIComponent(code)}` +
+            `${scheme}://auth/callback?code=${encodeURIComponent(code)}` +
             `&state=${encodeURIComponent(desktopState)}`;
         } catch (err) {
           setHandoffError(err instanceof Error ? err.message : "Failed to hand off to the desktop app.");
@@ -67,7 +83,7 @@ function LoginForm() {
       return;
     }
     router.replace(next);
-  }, [user, desktop, desktopState, getSessionTokens, next, router]);
+  }, [user, desktop, desktopState, scheme, getSessionTokens, next, router]);
 
   if (user && desktop && desktopState) {
     return (

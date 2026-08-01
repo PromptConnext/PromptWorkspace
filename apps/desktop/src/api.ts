@@ -87,7 +87,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
-  const data = await res.json();
+  // Not every engine reply is JSON: a routing miss returns Hono's plain
+  // "404 Not Found", and res.json() on that throws a parser error whose WebKit
+  // wording ("The string did not match the expected pattern.") reaches the user
+  // instead of the status that would explain it. Parse defensively.
+  const text = await res.text();
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`HTTP ${res.status} from the engine: ${text.slice(0, 200)}`);
+  }
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
   return data as T;
 }
