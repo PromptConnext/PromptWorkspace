@@ -21,7 +21,7 @@ interface AuthContextValue {
   authHeaders: () => Record<string, string>;
   signInStub: (userId: string) => void;
   signInSupabase: (email: string, password: string) => Promise<void>;
-  signUpSupabase: (email: string, password: string) => Promise<void>;
+  signUpSupabase: (email: string, password: string, next?: string) => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   updatePassword: (newPassword: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -85,8 +85,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
-  const signUpSupabase = useCallback(async (email: string, password: string) => {
-    const { error } = await getSupabase().auth.signUp({ email, password });
+  // `next` is an in-app path (already validated by the caller). Supabase needs
+  // an absolute URL for the confirmation link, so it is resolved against the
+  // live origin here — without it the confirmation lands on the project's Site
+  // URL and an invite the user was mid-way through accepting is lost.
+  const signUpSupabase = useCallback(async (email: string, password: string, next?: string) => {
+    const emailRedirectTo =
+      next && typeof window !== "undefined" ? `${window.location.origin}${next}` : undefined;
+    const { error } = await getSupabase().auth.signUp({
+      email,
+      password,
+      options: emailRedirectTo ? { emailRedirectTo } : undefined,
+    });
     if (error) throw error;
   }, []);
 

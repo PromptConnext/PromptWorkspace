@@ -19,6 +19,7 @@ from app.models.schemas import (
     InvitationCreate,
     InvitationCreateResponse,
     InvitationStatus,
+    PendingInvitation,
     Project,
     Workspace,
     WorkspaceCreate,
@@ -30,6 +31,22 @@ from app.models.schemas import (
 router = APIRouter(tags=["workspaces"])
 
 INVITATION_TTL_DAYS = 14
+
+
+def _pending_invitations_for(repo: Repository, user: User) -> list[Invitation]:
+    """Live (pending, unexpired) invitations addressed to this user's email.
+
+    Empty when the account has no email (stub auth without one) — there is
+    nothing to match an invitation row against.
+    """
+    if not user.email:
+        return []
+    now = utcnow()
+    return [
+        inv
+        for inv in repo.list_invitations_for_email(user.email, status=InvitationStatus.pending)
+        if inv.expires_at > now
+    ]
 
 
 def _personal_workspace_name(user: User) -> str:
@@ -64,7 +81,19 @@ def list_workspaces(
     # no-op once any membership exists (an invited user who already accepted
     # gets none). Reuses the same create path migration 0007 fixed, so the
     # creator's admin row satisfies pz_is_admin without a bootstrap deadlock.
-    if not workspaces and request.app.state.settings.auto_provision_personal_workspace:
+    #
+    # Suppressed while a live invitation addressed to this user is outstanding:
+    # the root layout's workspace provider calls this endpoint on *every* route,
+    # including /invite/{token}, so without the guard a brand-new invitee races
+    # a personal workspace into existence before (or instead of) accepting, and
+    # the gate then auto-enters that junk workspace. Once the invite is accepted
+    # the membership exists and the branch is a no-op anyway; if the invite is
+    # left to expire or be revoked, the next resolve provisions as before.
+    if (
+        not workspaces
+        and request.app.state.settings.auto_provision_personal_workspace
+        and not _pending_invitations_for(repo, user)
+    ):
         repo.create_workspace(
             name=_personal_workspace_name(user),
             created_by=user.id,
@@ -197,6 +226,36 @@ def revoke_workspace_invitation(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(status_code=204)
+
+
+@router.get("/invitations/pending", response_model=list[PendingInvitation])
+def list_my_pending_invitations(
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[PendingInvitation]:
+    """Invitations addressed to the caller that are still live.
+
+    The recovery path when the invite link is lost — a mail client mangles it,
+    or the auth provider bounces the user to the site root instead of
+    /invite/{token}. Scoped by the caller's own email, so it exposes nothing an
+    admin didn't already address to them.
+    """
+    out: list[PendingInvitation] = []
+    for inv in _pending_invitations_for(repo, user):
+        workspace = repo.get_workspace(inv.workspace_id)
+        if workspace is None:
+            continue  # workspace deleted out from under the invite
+        out.append(
+            PendingInvitation(
+                token=inv.token,
+                workspace_id=inv.workspace_id,
+                workspace_name=workspace.name,
+                role=inv.role,
+                invited_by=inv.invited_by,
+                expires_at=inv.expires_at,
+            )
+        )
+    return out
 
 
 @router.post("/invitations/{token}/accept", response_model=WorkspaceMember)

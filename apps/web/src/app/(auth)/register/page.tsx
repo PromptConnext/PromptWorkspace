@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { safeNext } from "@/lib/next-path";
 import {
   AuthCard,
   AuthLink,
@@ -19,6 +20,9 @@ function RegisterForm() {
   const params = useSearchParams();
   const qs = params.toString();
   const loginHref = qs ? `/login?${qs}` : "/login";
+  // Carried through the confirmation email so a signup started from an invite
+  // link comes back to /invite/{token} rather than the site root.
+  const next = safeNext(params.get("next"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,7 +50,7 @@ function RegisterForm() {
     }
     setPending(true);
     try {
-      await signUpSupabase(email, password);
+      await signUpSupabase(email, password, next);
       setDone(true);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "An unknown error occurred";

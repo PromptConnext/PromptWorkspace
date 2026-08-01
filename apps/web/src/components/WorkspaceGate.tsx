@@ -1,26 +1,71 @@
 "use client";
 
 // The `/` gate: resolves which workspace the session should enter.
+// - pending invite -> show it first, so accepting always beats auto-entering
 // - 0 memberships  -> empty state (get invited / create from desktop)
 // - exactly 1      -> auto-enter it
 // - remembered id  -> auto-resume it
 // - many, none set -> picker
 // Once an active workspace resolves, redirect into /w/{id}; the workspace pages
 // own the actual content.
+//
+// The invite check runs *before* any auto-enter because a user who lands here
+// instead of /invite/{token} (mangled link, or an auth provider that bounced
+// them to the site root) would otherwise be swept into some other workspace
+// with no way back to the invitation.
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { TopBar } from "@/components/TopBar";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useCloudGet } from "@/lib/hooks";
 import { useWorkspace } from "@/lib/workspace";
+import type { PendingInvitation, WorkspaceMember } from "@/lib/types";
 
 export function WorkspaceGate() {
   const router = useRouter();
-  const { memberships, activeWorkspace, loading, error, setActiveWorkspace, createWorkspace } =
-    useWorkspace();
+  const { authHeaders } = useAuth();
+  const {
+    memberships,
+    activeWorkspace,
+    loading,
+    error,
+    setActiveWorkspace,
+    createWorkspace,
+    refetch: refetchWorkspaces,
+  } = useWorkspace();
+  const {
+    data: invitations,
+    loading: invitesLoading,
+    refetch: refetchInvites,
+  } = useCloudGet<PendingInvitation[]>("/invitations/pending");
+  const pendingInvites = invitations ?? [];
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [acceptingToken, setAcceptingToken] = useState<string | null>(null);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
+
+  const handleAccept = async (token: string) => {
+    setAcceptingToken(token);
+    setAcceptError(null);
+    try {
+      const member = await apiFetch<WorkspaceMember>(
+        `/invitations/${token}/accept`,
+        authHeaders(),
+        { method: "POST" },
+      );
+      setActiveWorkspace(member.workspace_id);
+      refetchWorkspaces();
+      router.replace(`/w/${member.workspace_id}`);
+    } catch (err) {
+      setAcceptError(err instanceof ApiError ? err.message : "Failed to accept invitation");
+      refetchInvites();
+    } finally {
+      setAcceptingToken(null);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,24 +82,75 @@ export function WorkspaceGate() {
     }
   };
 
+  // An outstanding invitation outranks every auto-resolve below: until it is
+  // accepted or dismissed, this page stays put and shows it.
+  const invitesBlocking = invitesLoading || pendingInvites.length > 0;
+
   // Auto-enter a single membership (no point showing a one-item picker).
   useEffect(() => {
-    if (!loading && !activeWorkspace && memberships.length === 1) {
+    if (!loading && !invitesBlocking && !activeWorkspace && memberships.length === 1) {
       setActiveWorkspace(memberships[0].id);
     }
-  }, [loading, activeWorkspace, memberships, setActiveWorkspace]);
+  }, [loading, invitesBlocking, activeWorkspace, memberships, setActiveWorkspace]);
 
   // Once resolved (remembered or just auto-entered), redirect into the workspace.
   useEffect(() => {
-    if (activeWorkspace) router.replace(`/w/${activeWorkspace.id}`);
-  }, [activeWorkspace, router]);
+    if (activeWorkspace && !invitesBlocking) router.replace(`/w/${activeWorkspace.id}`);
+  }, [activeWorkspace, invitesBlocking, router]);
 
-  if (loading) {
+  if (loading || invitesLoading) {
     return <div className="p-6 text-sm text-slate-500">Loading…</div>;
   }
   if (error) {
     return <div className="p-6 text-sm text-red-600">{error}</div>;
   }
+
+  if (pendingInvites.length > 0) {
+    return (
+      <>
+        <TopBar />
+        <main className="mx-auto max-w-2xl px-4 py-10">
+          <h1 className="mb-2 text-xl font-semibold">You&apos;ve been invited</h1>
+          <p className="mb-6 text-sm text-slate-500">
+            Accept to join the workspace. You can switch between workspaces at any time from the
+            selector in the top bar.
+          </p>
+          {acceptError && <p className="mb-3 text-sm text-red-600">{acceptError}</p>}
+          <ul className="mb-6 flex flex-col gap-2">
+            {pendingInvites.map((inv) => (
+              <li
+                key={inv.token}
+                className="flex items-center gap-3 rounded border border-slate-200 bg-white px-4 py-3"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{inv.workspace_name}</span>
+                  <span className="text-sm text-slate-500">as {inv.role}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleAccept(inv.token)}
+                  disabled={acceptingToken !== null}
+                  className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {acceptingToken === inv.token ? "Accepting…" : "Accept"}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {memberships.length > 0 && (
+            <button
+              type="button"
+              onClick={() => router.push(`/w/${memberships[0].id}`)}
+              className="text-sm text-slate-500 underline hover:text-slate-900"
+            >
+              Skip for now
+            </button>
+          )}
+        </main>
+      </>
+    );
+  }
+
   if (activeWorkspace) {
     // redirect in flight
     return <div className="p-6 text-sm text-slate-500">Opening {activeWorkspace.name}…</div>;

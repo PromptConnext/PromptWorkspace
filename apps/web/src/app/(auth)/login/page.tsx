@@ -5,15 +5,12 @@ import { Suspense, useEffect, useState } from "react";
 import { AUTH_MODE } from "@/lib/config";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import { safeNext } from "@/lib/next-path";
 import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@/components/auth/ui";
 
-// Only same-origin, in-app paths are safe redirect targets. Reject absolute
-// URLs and protocol-relative paths ("//evil.example") — both would send a
-// just-authenticated user off-site.
-export function safeNext(raw: string | null): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
-  return raw;
-}
+// Re-exported for the existing page-level test; the implementation lives in
+// lib/ so the register page can share it without importing a route module.
+export { safeNext };
 
 function LoginForm() {
   const { user, signInStub, signInSupabase, getSessionTokens } = useAuth();

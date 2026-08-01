@@ -3,11 +3,13 @@
 import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { useWorkspace } from "@/lib/workspace";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { WorkspaceMember } from "@/lib/types";
 
 function AcceptInvitation({ token }: { token: string }) {
   const { user, loading: authLoading, authHeaders } = useAuth();
+  const { setActiveWorkspace, refetch: refetchWorkspaces } = useWorkspace();
   const router = useRouter();
   const [status, setStatus] = useState<"pending" | "accepting" | "done" | "error">("pending");
   const [error, setError] = useState<string | null>(null);
@@ -23,18 +25,36 @@ function AcceptInvitation({ token }: { token: string }) {
     apiFetch<WorkspaceMember>(`/invitations/${token}/accept`, authHeaders(), { method: "POST" })
       .then((member) => {
         setStatus("done");
+        // Make the just-joined workspace the remembered one, and refresh the
+        // membership list so the top-bar selector shows it immediately.
+        setActiveWorkspace(member.workspace_id);
+        refetchWorkspaces();
         router.replace(`/w/${member.workspace_id}`);
       })
       .catch((err: ApiError) => {
         setStatus("error");
         setError(err.message);
       });
-  }, [authLoading, user, token, status, authHeaders, router]);
+  }, [
+    authLoading,
+    user,
+    token,
+    status,
+    authHeaders,
+    router,
+    setActiveWorkspace,
+    refetchWorkspaces,
+  ]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center gap-3 px-4 text-center">
       {status === "error" ? (
-        <p className="text-sm text-red-600">{error}</p>
+        <>
+          <p className="text-sm text-red-600">{error}</p>
+          <a href="/" className="text-sm text-slate-500 underline hover:text-slate-900">
+            Go to your workspaces
+          </a>
+        </>
       ) : (
         <p className="text-sm text-slate-500">Accepting invitation…</p>
       )}

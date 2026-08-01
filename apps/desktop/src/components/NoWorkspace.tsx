@@ -5,8 +5,12 @@ import { cloudLogout, createCloudWorkspace, refreshCloudRoster } from "../api";
 // surface stays blocked until the user creates a workspace or accepts an
 // invite. Invite acceptance stays in apps/web for v1 (ADR 0011 read-first
 // posture), so this screen just points there. With G1's personal-workspace
-// auto-provision shipped, this is a rare fallback (e.g. removed from every
-// workspace), not the first-run default.
+// auto-provision shipped, this is a rare fallback, not the first-run default —
+// but it is exactly what an invited-but-not-yet-accepted account now sees,
+// because the cloud suppresses auto-provision while an invitation addressed to
+// that user is outstanding (otherwise the invitee lands in a junk personal
+// workspace and never joins the one they were invited to). The hint below is
+// the correct instruction for that case.
 export default function NoWorkspace({ onChanged }: { onChanged: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);

@@ -7,7 +7,7 @@ import { useWorkspace } from "@/lib/workspace";
 
 export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[] }) {
   const { user, signOut } = useAuth();
-  const { memberships, activeWorkspace, setActiveWorkspace } = useWorkspace();
+  const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace } = useWorkspace();
   const router = useRouter();
 
   return (
@@ -16,13 +16,24 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
         <Link href="/" className="font-semibold text-slate-900">
           PromptConnext
         </Link>
-        {memberships.length > 1 && (
+        {/* Rendered from one membership up, not two: a user with a single
+            workspace still needs to see which one they are in, and the
+            "All workspaces" option is their only route back to the gate —
+            where a pending invitation would be waiting. */}
+        {memberships.length >= 1 && (
           <select
             aria-label="Active workspace"
             className="ml-2 rounded border border-slate-300 px-2 py-1 text-slate-700"
             value={activeWorkspace?.id ?? ""}
             onChange={(e) => {
               const id = e.target.value;
+              if (id === "__all__") {
+                // Drop the remembered selection so the gate shows the picker
+                // (and any pending invitation) instead of resuming this one.
+                clearActiveWorkspace();
+                router.push("/");
+                return;
+              }
               if (!id) return;
               setActiveWorkspace(id);
               router.push(`/w/${id}`);
@@ -34,6 +45,7 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
                 {w.name}
               </option>
             ))}
+            <option value="__all__">All workspaces…</option>
           </select>
         )}
         {crumbs?.map((c) => (

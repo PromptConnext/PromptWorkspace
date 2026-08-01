@@ -207,6 +207,93 @@ def test_invited_user_gets_no_personal_workspace(client):
     assert [w["id"] for w in listed] == [ws["id"]]
 
 
+# --------------------------------------------------------------------------- #
+# Invitation discovery: a user who never reached /invite/{token}
+# --------------------------------------------------------------------------- #
+def _invite(client, workspace_id, email, inviter="alice"):
+    res = client.post(
+        f"/workspaces/{workspace_id}/invitations",
+        json={"email": email},
+        headers={"X-User-Id": inviter},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()["invitation"]
+
+
+def test_pending_invitation_suppresses_personal_workspace(client):
+    # The regression: the web app's root layout lists workspaces on every route,
+    # so an invited user who lands anywhere but /invite/{token} used to have a
+    # personal workspace minted underneath them and got swept into it.
+    ws = _ws(client, user="alice")
+    _invite(client, ws["id"], "bob@promptconnext.local")
+
+    listed = client.get("/workspaces", headers={"X-User-Id": "bob"}).json()
+    assert listed == []
+
+
+def test_pending_invitation_is_discoverable_by_invitee(client):
+    ws = _ws(client, name="Acme", user="alice")
+    inv = _invite(client, ws["id"], "bob@promptconnext.local")
+
+    pending = client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json()
+    assert len(pending) == 1
+    assert pending[0]["token"] == inv["token"]
+    assert pending[0]["workspace_id"] == ws["id"]
+    assert pending[0]["workspace_name"] == "Acme"
+    assert pending[0]["role"] == "member"
+
+
+def test_pending_invitation_matches_email_case_insensitively(client):
+    ws = _ws(client, user="alice")
+    _invite(client, ws["id"], "BoB@PromptConnext.Local")
+
+    pending = client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json()
+    assert len(pending) == 1
+    assert pending[0]["workspace_id"] == ws["id"]
+
+
+def test_pending_invitations_are_scoped_to_the_caller(client):
+    ws = _ws(client, user="alice")
+    _invite(client, ws["id"], "bob@promptconnext.local")
+
+    # Carol was not invited; the endpoint must not leak bob's invitation.
+    pending = client.get("/invitations/pending", headers={"X-User-Id": "carol"}).json()
+    assert pending == []
+
+
+def test_accepted_invitation_no_longer_pending_and_provision_resumes(client):
+    ws = _ws(client, user="alice")
+    inv = _invite(client, ws["id"], "bob@promptconnext.local")
+    accepted = client.post(
+        f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"}
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    assert client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json() == []
+    listed = client.get("/workspaces", headers={"X-User-Id": "bob"}).json()
+    # Membership exists, so the suppression branch is moot — and no junk
+    # personal workspace was created along the way.
+    assert [w["id"] for w in listed] == [ws["id"]]
+
+
+def test_revoked_invitation_stops_suppressing_provision(client):
+    ws = _ws(client, user="alice")
+    inv_res = client.post(
+        f"/workspaces/{ws['id']}/invitations",
+        json={"email": "bob@promptconnext.local"},
+        headers={"X-User-Id": "alice"},
+    ).json()
+    inv_id = inv_res["invitation"]["id"]
+    client.delete(
+        f"/workspaces/{ws['id']}/invitations/{inv_id}", headers={"X-User-Id": "alice"}
+    )
+
+    assert client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json() == []
+    listed = client.get("/workspaces", headers={"X-User-Id": "bob"}).json()
+    assert len(listed) == 1
+    assert listed[0]["created_by"] == "bob"
+
+
 def test_auto_provision_disabled_by_flag(monkeypatch):
     monkeypatch.setenv("AUTO_PROVISION_PERSONAL_WORKSPACE", "false")
     from app.config import get_settings
