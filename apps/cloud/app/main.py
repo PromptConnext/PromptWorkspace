@@ -24,6 +24,7 @@ from app.api import (
     github,
     health,
     integrations,
+    policies,
     presence,
     stage_documents,
     sync,
@@ -98,6 +99,10 @@ async def lifespan(app: FastAPI):
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # The HTTP/2 stack under httpx logs every frame and HPACK header at DEBUG,
+    # which drowns out our own records when LOG_LEVEL=DEBUG. Pin it to WARNING.
+    for noisy in ("hpack", "h2", "httpcore", "httpx"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
     app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)
@@ -204,6 +209,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(generation.router)
     app.include_router(stage_documents.router)
+    app.include_router(policies.router)
     app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])

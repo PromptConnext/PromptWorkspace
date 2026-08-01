@@ -5,7 +5,7 @@ seeded into a project's repo at the tech_review -> repo_created transition.
 from __future__ import annotations
 
 from app.integrations.repo_seed import build_seed_files
-from app.models.schemas import Project
+from app.models.schemas import PolicyScope, Project
 
 
 def _project(**overrides) -> Project:
@@ -36,6 +36,7 @@ def test_full_stage_docs_produce_all_files():
         "docs/architecture.md",
         "docs/tasks.md",
         "docs/conventions.md",
+        ".specify/memory/constitution.md",
     }
 
     by_path = {f.path: f.content for f in files}
@@ -46,6 +47,46 @@ def test_full_stage_docs_produce_all_files():
     assert "T001" in by_path["docs/tasks.md"]
     assert "Use snake_case." in by_path["docs/conventions.md"]
     assert "Other" not in by_path["docs/conventions.md"]
+    assert "Some rules." in by_path[".specify/memory/constitution.md"]
+
+
+def test_no_constitution_doc_means_no_specify_memory_file():
+    project = _project()
+    files = build_seed_files(project, {"specify": "# Scope\n\nBuild a rocket."})
+    paths = {f.path for f in files}
+    assert ".specify/memory/constitution.md" not in paths
+
+
+def test_policy_scope_seeds_docs_policy_scope_file():
+    scope = PolicyScope(selected=["thai-pdpa"], custom_text="Be extra careful.")
+    project = _project(policy_scope=scope)
+    files = build_seed_files(project, {"constitution": "# Constitution\n\nRules."})
+    by_path = {f.path: f.content for f in files}
+    assert "docs/policy-scope.md" in by_path
+    assert "Thai PDPA" in by_path["docs/policy-scope.md"]
+    assert "Be extra careful." in by_path["docs/policy-scope.md"]
+
+
+def test_custom_text_only_policy_scope_still_seeds_the_file():
+    project = _project(policy_scope=PolicyScope(selected=[], custom_text="Only custom guidance."))
+    files = build_seed_files(project, {})
+    by_path = {f.path: f.content for f in files}
+    assert "docs/policy-scope.md" in by_path
+    assert "Only custom guidance." in by_path["docs/policy-scope.md"]
+
+
+def test_no_policy_scope_means_no_policy_scope_file():
+    project = _project()  # policy_scope defaults to None
+    files = build_seed_files(project, {"constitution": "# Constitution\n\nRules."})
+    paths = {f.path for f in files}
+    assert "docs/policy-scope.md" not in paths
+
+
+def test_empty_policy_scope_means_no_policy_scope_file():
+    project = _project(policy_scope=PolicyScope(selected=[], custom_text=""))
+    files = build_seed_files(project, {"constitution": "# Constitution\n\nRules."})
+    paths = {f.path for f in files}
+    assert "docs/policy-scope.md" not in paths
 
 
 def test_empty_stage_docs_still_yield_agents_and_readme_stubs():

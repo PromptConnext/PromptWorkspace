@@ -23,7 +23,7 @@ from app.api.generation import _DOCUMENT_CONTEXT_BUDGET, _assemble_document_cont
 from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.service import FakeGenerationProvider
 from app.main import create_app
-from app.models.schemas import Document, ModelConnection
+from app.models.schemas import Document, ModelConnection, PolicyScope
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -248,6 +248,8 @@ class _RecordingProvider:
 
     def __init__(self, finish_reason: str | None = "stop", body: str | None = None) -> None:
         self.max_tokens: int | None = None
+        self.system_prompt: str | None = None
+        self.user_content: str | None = None
         self._finish_reason = finish_reason
         self._body = body
 
@@ -262,6 +264,8 @@ class _RecordingProvider:
         on_finish=None,
     ):
         self.max_tokens = max_tokens
+        self.system_prompt = system_prompt
+        self.user_content = user_content
         # extract_document() ignores anything under 80 chars, so the default
         # body is deliberately longer than a token stub.
         yield self._body if self._body is not None else (
@@ -355,3 +359,147 @@ def test_stage_documents_survive_for_a_later_visit(client: TestClient):
         doc = client.get(f"/projects/{pid}/stage-documents/{stage}", headers=ALICE).json()
         assert doc["content"].startswith("# ")
         assert doc["updated_at"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# Policy Scope injection (C5, Policy Scope feature)
+# --------------------------------------------------------------------------- #
+def test_constitution_with_scope_contains_template_phrase_and_custom_text(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    repo.update_project_policy_scope(
+        pid, PolicyScope(selected=["gdpr"], custom_text="custom-phrase-xyz")
+    )
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "constitution", CONSTITUTION_INPUT)
+    assert res.status_code == 200, res.text
+
+    assert "CONTEXT:" in provider.user_content
+    assert "[policy_template:gdpr]" in provider.user_content
+    # A phrase unique to the GDPR template body.
+    assert "General Data Protection Regulation" in provider.user_content
+    assert "[custom_policy]" in provider.user_content
+    assert "custom-phrase-xyz" in provider.user_content
+
+
+def test_scope_less_constitution_has_no_context_block(client: TestClient):
+    _ws_id, pid = _bootstrap(client)  # policy_scope defaults to None
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "constitution", CONSTITUTION_INPUT)
+    assert res.status_code == 200, res.text
+    assert "CONTEXT:" not in provider.user_content
+
+
+def test_specify_context_is_summary_then_constitution_then_prds(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    repo.upsert_stage_document(
+        pid, ws_id, "constitution", "# Constitution\n\nBe kind and simple.", "alice"
+    )
+    repo.update_project_policy_scope(pid, PolicyScope(selected=["soc-2"], custom_text=""))
+    client.post(
+        f"/projects/{pid}/documents",
+        files={
+            "file": (
+                "prd.md",
+                b"# PRD\n\nA fact unique to this PRD: ZEBRA-PAY-42.",
+                "text/markdown",
+            )
+        },
+        headers=ALICE,
+    )
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    assert "## Policy Scope" in content
+    assert "[constitution]" in content
+    assert "Be kind and simple." in content
+    assert "ZEBRA-PAY-42" in content
+
+    summary_pos = content.index("## Policy Scope")
+    constitution_pos = content.index("[constitution]")
+    prd_pos = content.index("ZEBRA-PAY-42")
+    assert summary_pos < constitution_pos < prd_pos
+
+
+def test_specify_without_constitution_doc_is_summary_only(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    repo.update_project_policy_scope(pid, PolicyScope(selected=["iso-27001"], custom_text=""))
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    assert "## Policy Scope" in content
+    assert "[constitution]" not in content
+
+
+def test_tasks_context_ordering_spec_then_constitution_then_policy_summary(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+    repo.upsert_stage_document(
+        pid, ws_id, "constitution", "# Constitution\n\nBe kind and simple.", "alice"
+    )
+    repo.update_project_policy_scope(pid, PolicyScope(selected=["thai-pdpa"], custom_text=""))
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    assert "[spec_documents:" in content
+    assert "[constitution]" in content
+    assert "## Policy Scope" in content
+
+    spec_pos = content.index("[spec_documents:")
+    constitution_pos = content.index("[constitution]")
+    summary_pos = content.index("## Policy Scope")
+    assert spec_pos < constitution_pos < summary_pos
+
+
+def test_truncation_markers_and_reduced_prd_budget_for_specify(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+
+    huge_constitution = "C" * 20_000
+    repo.upsert_stage_document(pid, ws_id, "constitution", huge_constitution, "alice")
+    repo.update_project_policy_scope(pid, PolicyScope(selected=["gdpr"], custom_text=""))
+
+    huge_prd = "P" * 50_000
+    client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.md", huge_prd.encode(), "text/markdown")},
+        headers=ALICE,
+    )
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+
+    res = _generate(client, pid, "specify", SPECIFY_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    # The 20k constitution was truncated to a 12k cap.
+    assert "...[truncated]" in content
+    # The PRD assembly ran on a budget smaller than the full 40k because the
+    # policy summary + truncated constitution already consumed part of it.
+    assert "context budget reached" in content

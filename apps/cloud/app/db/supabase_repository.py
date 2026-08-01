@@ -31,6 +31,7 @@ from app.models.schemas import (
     Invitation,
     InvitationStatus,
     ModelConnection,
+    PolicyScope,
     Project,
     ProjectGraph,
     PullRequest,
@@ -269,6 +270,17 @@ class SupabaseRepository(Repository):
         patch = {
             "repo_url": repo_url,
             "repo_default_branch": default_branch,
+            "updated_at": utcnow().isoformat(),
+        }
+        self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError("project_not_found")
+        return project
+
+    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+        patch = {
+            "policy_scope": scope.model_dump(mode="json") if scope is not None else None,
             "updated_at": utcnow().isoformat(),
         }
         self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()

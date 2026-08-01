@@ -1,12 +1,17 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Planner } from "./Planner";
 import type { Project } from "@/lib/types";
 
-vi.mock("@/lib/auth", () => ({
-  useAuth: () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), user: { id: "u1" } }),
-}));
+vi.mock("@/lib/auth", () => {
+  // One stable object: the real AuthProvider keeps `user` and `authHeaders`
+  // referentially stable per session, and useCloudGet re-fetches whenever the
+  // `user` identity changes — a fresh object per render makes every click
+  // flash the members fetch (and its tab-strip placeholder) back on.
+  const auth = { authHeaders: () => ({ Authorization: "Bearer test" }), user: { id: "u1" } };
+  return { useAuth: () => auth };
+});
 
 const originalFetch = global.fetch;
 
@@ -65,9 +70,11 @@ describe("Planner", () => {
     localStorage.clear();
   });
 
-  it("renders the document upload and stage stepper for a planning-stage project", () => {
+  it("renders the document upload and stage stepper for a planning-stage project", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
     expect(screen.getByText(/upload a prd/i)).toBeInTheDocument();
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
   });
 
@@ -195,6 +202,21 @@ describe("Planner", () => {
     expect(screen.queryByRole("button", { name: /send to tech lead/i })).not.toBeInTheDocument();
   });
 
+  it("withholds the tab strip until it knows whether the Plan tab belongs there", async () => {
+    // Membership never resolves here — the point is what renders meanwhile.
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) return new Promise(() => {});
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    // Showing Specify and Tasks now and growing a Plan tab a moment later
+    // reads as the page changing its mind.
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
   it("hides the Plan tab from a member who is not a workspace admin", async () => {
     members = [{ ...ADMIN_MEMBER, role: "member" }];
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
@@ -211,10 +233,42 @@ describe("Planner", () => {
         onChange={vi.fn()}
       />,
     );
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
-    await screen.findByRole("tab", { name: /plan/i });
     openTab(/plan/i);
     expect(screen.getByRole("button", { name: /create repository/i })).toBeInTheDocument();
+  });
+
+  it("enables create-repository as soon as the rules are saved, without a reload", async () => {
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    const create = screen.getByRole("button", { name: /create repository/i });
+    await waitFor(() => expect(create).toBeDisabled());
+
+    // Saving the rules is what unblocks it. The panel used to read the
+    // constitution once on mount, so it went on claiming the document was
+    // missing after it had just been written directly above.
+    const rules = within(
+      screen.getByRole("heading", { name: /project rules/i }).closest("div") as HTMLElement,
+    );
+    // The editor's textarea is the one with no form-field id of its own.
+    const editor = rules
+      .getAllByRole("textbox")
+      .find((el) => el.tagName === "TEXTAREA" && !el.id) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# Rules\n\nBe kind." } });
+    fireEvent.click(rules.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(create).toBeEnabled());
   });
 
   it("shows the success card and read-only docs when repo_created", () => {
@@ -294,10 +348,15 @@ describe("Planner", () => {
   // Stage documents keyed by stage, so a test can say which stages are already
   // done and exercise the ordering the Planner enforces.
   function mockStageDocuments(byStage: Partial<Record<string, string>>) {
-    global.fetch = vi.fn((url: RequestInfo | URL) => {
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
       const href = url.toString();
       const match = href.match(/\/stage-documents\/(\w+)/);
       if (match) {
+        // A PATCH echoes what it was sent, like the cloud does — a save has to
+        // be able to change what the rest of the page believes about a stage.
+        if (init?.method === "PATCH") {
+          byStage[match[1]] = JSON.parse(String(init.body)).content;
+        }
         const content = byStage[match[1]] ?? "";
         return Promise.resolve({
           ok: true,
@@ -314,6 +373,8 @@ describe("Planner", () => {
 
   it("asks for the specification as a structured business form, not one free-text box", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
 
     expect(screen.getByLabelText(/what are we building\?/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/key user journeys/i)).toBeInTheDocument();
@@ -427,6 +488,7 @@ describe("Planner", () => {
       />,
     );
 
+    await screen.findByRole("tab", { name: /tasks/i });
     openTab(/tasks/i);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /generate tasks/i })).toBeEnabled();
@@ -446,6 +508,7 @@ describe("Planner", () => {
       />,
     );
 
+    await screen.findByRole("tab", { name: /tasks/i });
     openTab(/tasks/i);
     fireEvent.click(await screen.findByRole("button", { name: /open the task board/i }));
     expect(onOpenTasks).toHaveBeenCalled();
@@ -475,6 +538,8 @@ describe("Planner", () => {
     }) as unknown as typeof fetch;
 
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
 
     // An answer the author already typed must survive the draft.
     fireEvent.change(screen.getByLabelText(/what are we building\?/i), {
@@ -508,6 +573,8 @@ describe("Planner", () => {
     }) as unknown as typeof fetch;
 
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
     fireEvent.click(screen.getByRole("button", { name: /draft the specify fields from the prd/i }));
 
     expect(await screen.findByText(/upload a prd \(or write the specification\) first/i)).toBeInTheDocument();
@@ -525,5 +592,39 @@ describe("Planner", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/couldn't load the saved document/i).length).toBeGreaterThan(0);
     });
+  });
+
+  it("opens on the Foundation tab, which holds the planning inputs", async () => {
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    const foundation = await screen.findByRole("tab", { name: /foundation/i });
+    expect(foundation).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("heading", { name: /policy scope/i })).toBeInTheDocument();
+    expect(screen.getByText(/upload a prd/i)).toBeInTheDocument();
+  });
+
+  it("disables the policy scope panel once the project is repo_created", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/policy-templates")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "gdpr", name: "GDPR", description: "EU data protection.", body: "# GDPR" },
+          ],
+        });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "repo_created" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("checkbox", { name: /gdpr/i })).toBeDisabled();
   });
 });

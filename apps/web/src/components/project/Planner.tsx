@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { DocumentUpload } from "./DocumentUpload";
 import { DocumentPreview } from "./DocumentPreview";
+import { PolicyScopePanel } from "./PolicyScopePanel";
 import { useStageGeneration } from "./useStageGeneration";
 import { StageInputForm } from "./StageInputForm";
 import {
@@ -37,7 +38,15 @@ const SEEDED_FILES = [
   "docs/architecture.md",
   "docs/tasks.md",
   "docs/conventions.md",
+  ".specify/memory/constitution.md",
 ];
+
+// Only seeded when the project has a non-empty policy scope (repo_seed.py),
+// so it is listed conditionally rather than as a fixed member of SEEDED_FILES.
+function hasPolicyScope(project: Project): boolean {
+  const scope = project.policy_scope;
+  return !!scope && (scope.selected.length > 0 || scope.custom_text.trim().length > 0);
+}
 
 type StageMeta = {
   stage: StageKind;
@@ -94,6 +103,10 @@ const STAGE_ORDER: StageMeta[] = [
 type TabMeta = { key: string; label: string; stages: StageKind[]; techLeadOnly?: boolean };
 
 const TABS: TabMeta[] = [
+  // Planning *inputs* — the PRD upload and the policy scope — live one step
+  // before the first generated document, so the numbered strip reads as the
+  // order the work actually happens in.
+  { key: "foundation", label: "0 · Foundation", stages: [] },
   { key: "specify", label: "1 · Specify", stages: ["specify"] },
   { key: "plan", label: "2 · Plan", stages: ["constitution", "plan"], techLeadOnly: true },
   { key: "tasks", label: "3 · Tasks", stages: ["tasks"] },
@@ -343,6 +356,7 @@ function SourceDocuments({ projectId, canUpload }: { projectId: string; canUploa
   const { authHeaders } = useAuth();
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentsError, setDocumentsError] = useState(false);
+  const [documentsLoading, setDocumentsLoading] = useState(true);
   const [previewId, setPreviewId] = useState<string | null>(null);
 
   // Uploads persist server-side, so the list is read back on mount rather than
@@ -359,6 +373,9 @@ function SourceDocuments({ projectId, canUpload }: { projectId: string; canUploa
       .catch(() => {
         if (cancelled) return;
         setDocumentsError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDocumentsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -379,6 +396,12 @@ function SourceDocuments({ projectId, canUpload }: { projectId: string; canUploa
             setDocuments((prev) => [...prev.filter((d) => d.id !== doc.id), doc])
           }
         />
+      )}
+      {/* Said, rather than left blank: an empty gap where a file is about to
+          appear reads as "nothing uploaded", which is what made people upload
+          the same PRD twice. */}
+      {documentsLoading && (
+        <p className="text-xs text-slate-500">Loading uploaded documents…</p>
       )}
       {documentsError && (
         <p className="text-xs text-amber-700">
@@ -434,13 +457,13 @@ export function Planner({
   onOpenTasks?: () => void;
 }) {
   const { authHeaders, user } = useAuth();
-  const [active, setActive] = useState<string>("specify");
+  const [active, setActive] = useState<string>("foundation");
 
   // "Tech Lead" is the workspace admin role — there is no separate role in the
   // schema (app/models/schemas.py's Role is admin | member), and the cloud
   // enforces the same rule on every plan-authoring endpoint
   // (app/api/_guards.py::require_stage_access).
-  const { data: members } = useCloudGet<WorkspaceMember[]>(
+  const { data: members, loading: membersLoading } = useCloudGet<WorkspaceMember[]>(
     `/workspaces/${project.workspace_id}/members`,
   );
   const isTechLead = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
@@ -520,13 +543,22 @@ export function Planner({
             {SEEDED_FILES.map((path) => (
               <li key={path}>{path}</li>
             ))}
+            {hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
           </ul>
           <p className="mt-2">Developers can now clone this repo in the PromptZone desktop app.</p>
         </div>
       )}
 
-      <SourceDocuments projectId={projectId} canUpload={!readOnly} />
-
+      {/* Which tabs exist depends on the caller's role, so the strip waits for
+          the membership fetch rather than rendering the non-admin set and
+          growing a Plan tab a moment later. One placeholder of the same height
+          keeps the panel below from jumping. */}
+      {membersLoading ? (
+        <div
+          aria-hidden
+          className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
+        />
+      ) : (
       <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 border-b border-slate-200">
         {visible.map((tab) => (
           <button
@@ -545,9 +577,16 @@ export function Planner({
           </button>
         ))}
       </div>
+      )}
 
       {visible.map((tab) => (
         <div key={tab.key} hidden={active !== tab.key} className="space-y-4">
+          {tab.key === "foundation" && (
+            <>
+              <SourceDocuments projectId={projectId} canUpload={!readOnly} />
+              <PolicyScopePanel project={project} readOnly={readOnly} onChange={onChange} />
+            </>
+          )}
           {tab.stages.map((stage) => {
             const meta = STAGE_META[stage];
             return (
@@ -586,6 +625,8 @@ export function Planner({
               projectId={projectId}
               projectName={project.name}
               onCreated={onChange}
+              constitutionReady={docPresent.constitution}
+              workspaceId={project.workspace_id}
             />
           )}
         </div>

@@ -28,6 +28,7 @@ from app.models.schemas import (
     Invitation,
     InvitationStatus,
     ModelConnection,
+    PolicyScope,
     Project,
     ProjectGraph,
     PullRequest,
@@ -133,6 +134,11 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project: ...
+
+    @abc.abstractmethod
+    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+        """Replace the whole policy scope atomically (last-write-wins);
+        `None` clears it. Bumps `updated_at`."""
 
     @abc.abstractmethod
     def update_project_repo(
@@ -532,6 +538,12 @@ class InMemoryRepository(Repository):
                 "updated_at": utcnow(),
             }
         )
+        self._projects[project_id] = updated
+        return updated
+
+    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+        project = self._projects[project_id]
+        updated = project.model_copy(update={"policy_scope": scope, "updated_at": utcnow()})
         self._projects[project_id] = updated
         return updated
 

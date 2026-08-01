@@ -49,11 +49,13 @@ from app.models.schemas import (
     GenerateRequest,
     GenerationRun,
     GraphUpsertRequest,
+    Project,
     Requirement,
     RequirementStatus,
     SpecDocument,
     Task,
 )
+from app.policies.registry import render_policy_context, render_policy_summary
 from app.rag.budget import estimate_tokens
 from app.rag.queue import EmbedJob, enqueue
 
@@ -114,17 +116,57 @@ async def generate(
     provider = getattr(request.app.state, "generation_provider", None) or HttpGenerationProvider()
 
     context = ""
-    if stage in ("specify", "plan"):
+    if stage == "constitution":
+        # Policy Scope injection (C5): server-side only, keyed off
+        # project.policy_scope — never client-composed input. Full template
+        # bodies + custom text, since the constitution is the one stage that
+        # had zero context before this feature and is the authoritative
+        # embodiment of the chosen scope.
+        context = _policy_block(project, stage)
+    elif stage in ("specify", "plan"):
         # Full-text injection, not embedding-retrieval (docs/superpowers/
         # specs/2026-07-25-cloud-planner-ui-design.md): a project realistically
         # has one or two PRD documents, so giving the model everything beats
         # top-8 semantic chunks for something plan-critical — and it works
         # with the managed (chat-only, no embed_model) connection, unlike the
         # retrieval path it replaces.
-        context = _assemble_document_context(repo.list_documents(project_id))
+        #
+        # Layered budget: (1) compact policy summary, (2) the generated
+        # constitution (capped — this also fixes cloud's pre-existing gap
+        # where specify/plan/tasks never saw the constitution at all,
+        # applying to scope-less projects too), (3) PRDs get whatever's left
+        # of the 40k document budget.
+        segments: list[str] = []
+        policy_summary = _policy_block(project, stage)
+        used = 0
+        if policy_summary:
+            segments.append(policy_summary)
+            used += len(policy_summary)
+        constitution_doc = repo.get_stage_document(project_id, "constitution")
+        if constitution_doc and constitution_doc.content.strip():
+            constitution_text = _truncate_with_marker(constitution_doc.content, 12_000)
+            segments.append(f"[constitution]\n{constitution_text}")
+            used += len(constitution_text)
+        remaining_budget = max(_DOCUMENT_CONTEXT_BUDGET - used, 0)
+        doc_context = _assemble_document_context(
+            repo.list_documents(project_id), budget=remaining_budget
+        )
+        if doc_context:
+            segments.append(doc_context)
+        context = "\n\n".join(segments)
     elif stage == "tasks":
-        # tasks grounds on the approved plan, not raw uploads.
-        context = f"[spec_documents:{spec.id}]\n{spec.content}"
+        # tasks grounds on the approved plan first (unchanged), then the
+        # constitution (capped tighter than specify/plan's — tasks needs less
+        # of it), then the policy summary.
+        segments = [f"[spec_documents:{spec.id}]\n{spec.content}"]
+        constitution_doc = repo.get_stage_document(project_id, "constitution")
+        if constitution_doc and constitution_doc.content.strip():
+            constitution_text = _truncate_with_marker(constitution_doc.content, 8_000)
+            segments.append(f"[constitution]\n{constitution_text}")
+        policy_summary = _policy_block(project, stage)
+        if policy_summary:
+            segments.append(policy_summary)
+        context = "\n\n".join(segments)
 
     system_prompt = driver_prompt(stage)
     user_content = f"{body.user_input}\n\nCONTEXT:\n{context}" if context else body.user_input
@@ -397,24 +439,57 @@ async def prefill(
 _DOCUMENT_CONTEXT_BUDGET = 40_000
 
 
-def _assemble_document_context(documents: list) -> str:
+def _assemble_document_context(documents: list, budget: int = _DOCUMENT_CONTEXT_BUDGET) -> str:
     parts = []
-    budget = _DOCUMENT_CONTEXT_BUDGET
+    remaining = budget
     truncated = False
     for doc in documents:
         if not doc.extracted_text:
             continue
-        if budget <= 0:
+        if remaining <= 0:
             truncated = True
             break
-        text = doc.extracted_text[:budget]
+        text = doc.extracted_text[:remaining]
         if len(text) < len(doc.extracted_text):
             truncated = True
-        budget -= len(text)
+        remaining -= len(text)
         parts.append(f"[document:{doc.title}]\n{text}")
     if truncated:
         parts.append("(remaining document content omitted — context budget reached)")
     return "\n\n".join(parts)
+
+
+# Visible marker for every truncation point in server-composed context, so a
+# capped section (constitution excerpt, policy templates, PRDs) never reads
+# as complete when it isn't.
+_TRUNCATION_MARKER = "\n\n...[truncated]"
+
+
+def _truncate_with_marker(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    cut = max(max_chars - len(_TRUNCATION_MARKER), 0)
+    return text[:cut] + _TRUNCATION_MARKER
+
+
+def _policy_block(project: Project, stage: str) -> str:
+    """Policy Scope injection (C5), keyed off `project.policy_scope` —
+    server-side only, never client-composed input. Returns "" when the scope
+    is empty/None, so a legacy (scope-less) project's prompt is
+    byte-identical to before this feature existed.
+
+    `constitution` gets the full template bodies + custom text (the
+    authoritative, reviewed embodiment of the scope); every later stage gets
+    the compact summary instead, since they also receive the generated
+    constitution itself (see the caller) — the summary is a hedge against a
+    constitution generated *before* scope selection, not the primary source.
+    """
+    scope = project.policy_scope
+    if scope is None or (not scope.selected and not scope.custom_text.strip()):
+        return ""
+    if stage == "constitution":
+        return render_policy_context(scope, max_chars=30_000)
+    return render_policy_summary(scope, max_chars=1_500)
 
 
 def _persist_requirement(repo: Repository, project_id: str, result, body: GenerateRequest) -> str:
