@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/lib/auth";
 import { WorkspaceProvider } from "@/lib/workspace";
@@ -34,9 +34,13 @@ function workspace(id: string, name: string) {
   };
 }
 
-// Routes each mocked call by path so a test only states the data it cares about.
+// Routes each mocked call by path so a test only states the data it cares
+// about. A key may be prefixed with a method ("POST /workspaces") to
+// distinguish a write from the GET on the same path.
 function route(responses: Record<string, unknown>) {
-  apiFetch.mockImplementation((path: string) => {
+  apiFetch.mockImplementation((path: string, _headers: unknown, init?: { method?: string }) => {
+    const keyed = `${init?.method ?? "GET"} ${path}`;
+    if (keyed in responses) return Promise.resolve(responses[keyed]);
     if (path in responses) return Promise.resolve(responses[path]);
     return Promise.resolve([]);
   });
@@ -99,6 +103,39 @@ describe("WorkspaceGate invitation precedence", () => {
     renderGate();
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/w/ws-personal"));
+  });
+
+  it("sends a newly created workspace to settings, not the workspace home", async () => {
+    // A new workspace can create no repositories until a GitHub token is
+    // configured, so setup is the landing page rather than an empty home.
+    route({
+      "/workspaces": [],
+      "/invitations/pending": [],
+      "POST /workspaces": workspace("ws-new", "Acme"),
+    });
+
+    renderGate();
+
+    const input = await screen.findByPlaceholderText("Workspace name");
+    fireEvent.change(input, { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/w/ws-new/settings"));
+    expect(replace).not.toHaveBeenCalledWith("/w/ws-new");
+  });
+
+  it("sends an existing workspace to the workspace home, not settings", async () => {
+    // The settings landing is specific to just-created workspaces; resuming a
+    // remembered one must not be diverted.
+    route({
+      "/workspaces": [workspace("ws-old", "Existing")],
+      "/invitations/pending": [],
+    });
+
+    renderGate();
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/w/ws-old"));
+    expect(replace).not.toHaveBeenCalledWith("/w/ws-old/settings");
   });
 
   it("accepting an invitation remembers and opens the invited workspace", async () => {

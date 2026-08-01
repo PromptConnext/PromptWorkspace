@@ -46,6 +46,9 @@ export function WorkspaceGate() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [acceptingToken, setAcceptingToken] = useState<string | null>(null);
   const [acceptError, setAcceptError] = useState<string | null>(null);
+  // Set by handleCreate so the redirect effect below can tell "just created by
+  // this user" from "resolved on load" — the two want different destinations.
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
   const handleAccept = async (token: string) => {
     setAcceptingToken(token);
@@ -74,7 +77,8 @@ export function WorkspaceGate() {
     setCreating(true);
     setCreateError(null);
     try {
-      await createWorkspace(name);
+      const workspace = await createWorkspace(name);
+      setJustCreatedId(workspace.id);
     } catch (err) {
       setCreateError(err instanceof ApiError ? err.message : "Failed to create workspace");
     } finally {
@@ -94,9 +98,23 @@ export function WorkspaceGate() {
   }, [loading, invitesBlocking, activeWorkspace, memberships, setActiveWorkspace]);
 
   // Once resolved (remembered or just auto-entered), redirect into the workspace.
+  //
+  // A workspace the user just created is the exception: it goes to settings
+  // instead. A brand-new workspace can't create project repositories until a
+  // GitHub token is configured, and the moment right after naming it is the
+  // one time the person is already thinking about setup — sending them to an
+  // empty workspace home means discovering the requirement later, from a
+  // failure. Both destinations resolve in this one effect rather than
+  // handleCreate navigating separately, because `createWorkspace` sets the
+  // active workspace itself: a second navigation would race this one.
   useEffect(() => {
-    if (activeWorkspace && !invitesBlocking) router.replace(`/w/${activeWorkspace.id}`);
-  }, [activeWorkspace, invitesBlocking, router]);
+    if (!activeWorkspace || invitesBlocking) return;
+    router.replace(
+      activeWorkspace.id === justCreatedId
+        ? `/w/${activeWorkspace.id}/settings`
+        : `/w/${activeWorkspace.id}`,
+    );
+  }, [activeWorkspace, invitesBlocking, justCreatedId, router]);
 
   if (loading || invitesLoading) {
     return <div className="p-6 text-sm text-slate-500">Loading…</div>;
