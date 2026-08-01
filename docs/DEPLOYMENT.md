@@ -161,7 +161,7 @@ already uses.
    |---|---|
    | `NEXT_PUBLIC_SITE_URL` | `https://<corp-domain>` (canonical/OG/sitemap base, no trailing slash) |
    | `NEXT_PUBLIC_APP_URL` | `https://<web-app-domain>` (cloud sign-in/signup target) |
-   | `NEXT_PUBLIC_APP_VERSION` | must equal `apps/desktop/src-tauri/tauri.conf.json`'s version — baked into the Windows installer filename |
+   | `NEXT_PUBLIC_APP_VERSION` | display copy only; `/download` links version-free filenames, so a bump needs no corp redeploy. Leave empty to omit the version from the page |
    | `NEXT_PUBLIC_DOWNLOAD_BASE_URL` | the R2 `installation/` prefix's public URL (§4); leave empty to render `/download`'s "coming soon" state |
    | `CONTACT_WEBHOOK_URL` | optional; `/api/contact` logs server-side only if unset |
 

@@ -12,12 +12,14 @@ type OS = "mac" | "windows";
 // Filenames must match what apps/desktop CI publishes to the R2 download host.
 // tauri bundle targets are ["app", "nsis"] with productName "PromptConnext":
 //   macOS   — the .app dir is zipped by the release workflow -> PromptConnext.app.zip
-//   Windows — NSIS installer -> PromptConnext_<version>_x64-setup.exe
-// The macOS asset name is version-stable; the Windows one embeds the version, so
-// NEXT_PUBLIC_APP_VERSION must equal apps/desktop/src-tauri/tauri.conf.json version.
-const platforms: { os: OS; label: string; note: string; file: (version: string) => string }[] = [
-  { os: "mac", label: "macOS", note: "Apple silicon · macOS 12+", file: () => "PromptConnext.app.zip" },
-  { os: "windows", label: "Windows", note: "Windows 10/11 · x64", file: (v) => `PromptConnext_${v}_x64-setup.exe` },
+//   Windows — NSIS installer, published under its versioned name AND copied to
+//             a version-free alias by the release workflow's upload step.
+// Both names are therefore version-stable, and this page never has to be
+// redeployed for a version bump: installed apps update themselves from
+// latest.json, and these links always resolve to whatever CI published last.
+const platforms: { os: OS; label: string; note: string; file: string }[] = [
+  { os: "mac", label: "macOS", note: "Apple silicon · macOS 12+", file: "PromptConnext.app.zip" },
+  { os: "windows", label: "Windows", note: "Windows 10/11 · x64", file: "PromptConnext_x64-setup.exe" },
 ];
 
 function detectOS(): OS {
@@ -78,12 +80,12 @@ export function DownloadOptions() {
           {t("detected")}: {primary.label}
         </p>
         <div className="mt-4">
-          <Button href={`${baseUrl}/${primary.file(version)}`} size="lg">
+          <Button href={`${baseUrl}/${primary.file}`} size="lg">
             {t("downloadFor", { platform: primary.label })}
           </Button>
         </div>
         <p className="mt-3 text-xs text-text-tertiary">
-          {t("versionFree", { version })} · {primary.note}
+          {version ? t("versionFree", { version }) : t("free")} · {primary.note}
         </p>
       </div>
 
@@ -93,7 +95,7 @@ export function DownloadOptions() {
             <CardTitle>{p.label}</CardTitle>
             <CardDescription>{p.note}</CardDescription>
             <div className="mt-4">
-              <Button href={`${baseUrl}/${p.file(version)}`} variant="secondary" size="sm">
+              <Button href={`${baseUrl}/${p.file}`} variant="secondary" size="sm">
                 {t("download")}
               </Button>
             </div>

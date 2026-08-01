@@ -36,6 +36,14 @@ Findings are grouped Must Have / Should Have / Nice to Have. Each item cites the
 - OCR ingestion (`apps/cloud/app/documents/ocr.py`) is a placeholder stub pending the managed Typhoon-OCR source.
 - Discussions are flat (no threading/@mentions/reactions) — functional for v1, thin next to Notion/Linear-grade collaboration tools.
 
+## Deferred to after launch (owner decision, 2026-08-01)
+
+Three items were reviewed on 2026-08-01 and consciously deferred rather than dropped. None is closed; each is recorded here so it survives the launch it is being deferred past.
+
+- **No CI test gate.** `.github/workflows/` holds three build workflows and nothing that runs `pytest`, `node --test`, `vitest`, or a typecheck. Every suite in this repo passes today only because someone ran it by hand — the same session that recorded this note found a cloud test failing purely from a developer's `.env.local` leaking into the run, which a gate would have caught the day it appeared. Cheapest of the three to close.
+- **macOS build unsigned and non-notarized.** Gatekeeper blocks first launch for every Mac user; the workaround is right-click-Open and a scary dialog. Needs an Apple Developer account before it can be started, which is why it sits with the owner rather than in a plan.
+- **`CLOUD_WEB_URL` on a shared Vercel subdomain.** Risk formally accepted for launch — the trade and its two standing obligations are written up in [ADR 0014's "Accepted risk" section](../decisions/0014-desktop-browser-auth-handoff.md). Repeated here so the deferral is visible from the readiness review as well as the ADR.
+
 ## Known coverage gaps left by the smoke-test pass
 
 - `agent-runner.ts`'s success path (a real agent CLI actually completing a task) isn't exercised in CI-portable tests — it requires an installed CLI on PATH, which isn't guaranteed across environments. The new tests cover the error paths (`no-agent`, `agent-crash`, `no-changes`) deterministically via the `PROMPTCONNEXT_AGENT_CMD` custom-adapter escape hatch instead.

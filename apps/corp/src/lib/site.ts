@@ -16,7 +16,12 @@ export const siteConfig = {
   twitter: "@promptconnext",
   githubUrl: "https://github.com/promptconnext",
   download: {
-    version: process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0",
+    // Display only — both installer URLs are version-free (see
+    // DownloadOptions), so an unset value costs a line of copy, not a working
+    // download. Null rather than a hardcoded fallback: a stale literal here
+    // once pointed Windows visitors at the pre-updater 0.1.0 build, which had
+    // no way to update itself out of that state.
+    version: process.env.NEXT_PUBLIC_APP_VERSION ?? null,
     // Empty when unset — the download page then shows a "coming soon" state
     // instead of linking to a release host that doesn't exist yet.
     baseUrl: process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL ?? "",

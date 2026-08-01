@@ -71,6 +71,21 @@ jobs:
             echo "Uploading $key"
             aws s3 cp "$src" "s3://$R2_BUCKET/installation/$key" \
               --endpoint-url "$R2_ENDPOINT"
+
+            # The NSIS filename embeds the version, so a download page linking
+            # it has to be redeployed on every release or it points at a stale
+            # build. Publish a version-free alias alongside it — the macOS
+            # asset name is already version-stable, so this makes both download
+            # URLs constant and apps/corp never needs the version to build a
+            # link. latest.json still carries the real version for the updater.
+            case "$key" in
+              *_x64-setup.exe)
+                echo "Aliasing $key -> PromptConnext_x64-setup.exe"
+                aws s3 cp "$src" \
+                  "s3://$R2_BUCKET/installation/PromptConnext_x64-setup.exe" \
+                  --endpoint-url "$R2_ENDPOINT"
+                ;;
+            esac
           done
         env:
           ARTIFACTS: ${{ steps.tauri.outputs.artifactPaths }}
