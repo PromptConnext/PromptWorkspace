@@ -9,7 +9,7 @@
 **Amends / extends:**
 
 - **ADR 0009** (orchestrate external agents, no own runtime): the agents PromptConnext orchestrates read their instructions from the repository. This ADR makes those instructions exist *before* the first agent ever runs.
-- **ADR 0010** §5 (credentials never sync): upheld, and extended to a new credential class. The cloud gains GitHub *write* capability but still persists no token; the desktop gains *clone* capability but holds no token at all.
+- **ADR 0010** §5 (credentials never sync): upheld in the sense that matters — no credential ever *syncs* anywhere, and the desktop still holds no token at all. The narrower "the cloud persists no token" claim no longer holds; see the 2026-08-01 amendment at the end of this ADR.
 - **ADR 0015** (cloud-projected roster): the roster already carries `lifecycle_status` and `repo_url` down to the engine. This ADR is what finally puts values in those fields and teaches the consumer side to act on them.
 - **Design spec** `docs/superpowers/specs/2026-07-25-cloud-planner-ui-design.md` §D, which named the desktop clone handoff and explicitly deferred it as unbuilt.
 
@@ -62,6 +62,8 @@ A missing or empty stage document simply yields no file, except `README.md` and 
 
 ### 3 — Credential posture: reuse the App JWT, persist nothing
 
+> **Superseded 2026-08-01.** This section is kept for the record; its reasoning is no longer what the code does. The App was replaced by a per-workspace fine-grained PAT — including the stored-PAT option this section explicitly rejects. The amendment at the end of this ADR gives the reasons, and they are mostly ones this section did not anticipate: the App's install form was unusable, and its unverified `installation_id` was a cross-tenant hole.
+
 `apps/cloud/app/integrations/github.py` already mints short-lived installation tokens from the shared GitHub App's private key (`Settings.github_app_id` / `github_app_private_key`, server env) and discards them after a single request. Its module docstring states the rule plainly: *"No installation access token is ever persisted."*
 
 That mechanism is reused unchanged for the write path. Explicitly rejected: a stored Personal Access Token, and putting a GitHub credential in `app/secrets.py` (which exists for workspace-scoped RAG model keys). Both would trade a strictly better posture for marginal convenience.
@@ -111,7 +113,7 @@ One operational detail is non-negotiable: the clone runs with `GIT_TERMINAL_PROM
 - **The GitHub App now needs org admin write.** A real privilege expansion, and one a security-conscious customer will ask about. A workspace-level org allowlist is the obvious future mitigation.
 - **A failure mode with an external system.** Partial seeding is possible and must be retried; the regression test that pins "seed failure leaves lifecycle at `tech_review` with `repo_url` null" is the guard against silently shipping a half-transition.
 - **Private repos need developer-side Git setup.** Unavoidable given the no-token posture, but it is friction at exactly the wrong moment (first clone), so the error copy carries real weight.
-- **Newly created repos are not webhook-indexed.** `find_workspace_by_github_repo` matches a single repo per workspace, so PR and push events for a repo created this way will not reach the RAG pipeline. Known gap, accepted for v1, tracked separately.
+- ~~**Newly created repos are not webhook-indexed.**~~ Closed by the 2026-08-01 amendment: repo creation now registers the repo's own webhook, so a repo born here is indexed from its first push.
 
 **Revisit when**
 
@@ -144,3 +146,25 @@ No database migration is required: `repo_url` and `repo_default_branch` already 
 3. [ ] Decide whether repo visibility should default to private per workspace policy rather than per request.
 4. [ ] Track the webhook single-repo-per-workspace gap so newly created repos eventually reach the RAG pipeline.
 5. [ ] Update `CLAUDE.md`'s cloud section once the endpoints land — the lifecycle description there currently says `submit-for-review` is the only wired transition.
+
+---
+
+## Amendment — 2026-08-01: GitHub auth is a per-workspace PAT, not a platform App
+
+**Status:** Accepted · supersedes the App-based auth this ADR assumed throughout.
+
+This ADR was written on top of M11's platform-wide GitHub App: one App registered by us, installed by each customer into their org, with per-workspace `installation_id` deciding scope. That model has been replaced by a **fine-grained Personal Access Token supplied per workspace** in workspace settings. Everything else in this ADR — when the repo is created, what is seeded, the retry semantics, the repo-write-before-lifecycle-flip ordering — is unchanged.
+
+Three things forced the change.
+
+The workspace settings form was **unusable in practice**. It asked an admin for an installation ID, a number no one can produce by hand without reading the App's install callback URL, plus a single `repo` in a form whose own sibling field was a project ID — workspace-scoped storage for per-project data, and directly contradicting the decision above that the cloud *creates* each project's repo.
+
+The App design carried a **cross-tenant hole** (issue #3). `installation_id` and `repo` were both taken from the request body and never verified. Installation IDs are small sequential integers, so any workspace admin — and anyone can create a workspace and be its admin — could mint a token scoped to another organisation's installation, or claim another workspace's repo name and intercept its webhook deliveries. A PAT closes this structurally rather than by validation: the token *is* the workspace's own credential, and there is no id left to forge.
+
+The App's **single shared webhook secret** could authenticate a delivery but not attribute it. Routing therefore scanned workspace rows for a matching repo string and took the first hit. Per-repo secrets, generated at repo creation and stored in the new `pz_repo_webhooks` table keyed by `repo_full_name`, make attribution structural: a delivery that validates provably belongs to exactly one project.
+
+**What this costs.** The cloud now persists a credential, which the original text of this ADR said it would not. It is Fernet-encrypted via `app/secrets.py` under `RAG_KEY_ENCRYPTION_KEY` — the same treatment workspace-BYO model keys already get, so no new secret-handling machinery — but it is a real change of posture and should be read as one. A PAT also belongs to a *person*: when they leave or rotate it, every project's push path in that workspace breaks. `verify_token()` records the expiry so settings can warn ahead of time, but the underlying fragility is inherent to the credential type, not to this implementation. And a fine-grained PAT grants whatever its author scoped it to, which may exceed the projects PromptConnext manages.
+
+**Revisit when** staff turnover or token rotation starts causing real incidents, or a customer's security review rejects storing a PAT at all. The answer then is not to go back to the body-supplied installation ID, but to add a proper GitHub App **install callback flow** — deriving `installation_id` from GitHub's redirect instead of the client — alongside the PAT path, with `integration_config["github"]["auth_kind"]` already in place to discriminate the two.
+
+**Superseded action items.** Items 2 and 4 above are void: there is no shared App to configure, and the webhook gap is closed rather than tracked.

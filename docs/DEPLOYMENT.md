@@ -83,7 +83,8 @@ Production values:
 | `TOMBSTONE_GC_INTERVAL_SECONDS` | `3600` | |
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_WEBHOOK_SECRET` | as needed | Only if the Jira/ClickUp mirror (M5) is in use |
 | `RAG_KEY_ENCRYPTION_KEY` | Fernet key | Required before any workspace configures a model connection (M9 RAG assistant); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, `POST /workspaces/{id}/model-connection` fails closed rather than storing a plaintext key. |
-| `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_WEBHOOK_SECRET` | as needed | Only if the Git-host integration (M11) is in use — one GitHub App shared across all workspaces, same posture as the Jira credentials above. No installation access token is ever stored. |
+| `WEB_APP_URL` | `https://<web-app>.vercel.app` | Base for every invitation accept link — both the URL emailed to the invitee and the `accept_url` handed to the admin who created the invite. **Required in production:** the default is `http://localhost:3000`, so leaving it unset mails invitees a link to their own machine and the invitation silently dead-ends. `{WEB_APP_URL}/invite/*` must also be allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs, as a `/**` wildcard — see [§2.8](#28-web-app-apps-web--vercel). |
+| `PUBLIC_API_URL` | **this** service's origin, e.g. `https://promptconnextcloud-production.up.railway.app` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
 
 Railway injects `PORT` automatically; the Dockerfile already honors it.
 
@@ -149,6 +150,26 @@ secrets, no WebSocket server of its own (presence is a client-side connection
 No changes to `apps/cloud` are required beyond that CORS entry: `apps/web`
 only calls the sync/graph/workspace/invitation endpoints the desktop client
 already uses.
+
+4. Set `apps/cloud`'s `WEB_APP_URL` to this deployment's origin. It is the base
+   for every invitation accept link, and it defaults to `http://localhost:3000`
+   — left unset in production, invitation emails point at the invitee's own
+   machine.
+
+5. In the Supabase dashboard (Authentication → URL Configuration), add
+   **wildcard** entries to Redirect URLs — `https://<project>.vercel.app/**`
+   and `http://localhost:3000/**` — alongside the Site URL.
+
+   This one is easy to get wrong and fails quietly. Supabase matches a
+   requested `redirect_to` against that allow list *literally*: a bare origin
+   entry matches the origin and nothing beneath it. Invitations redirect to
+   `{WEB_APP_URL}/invite/{token}` and password resets to
+   `{origin}/reset-password`, so without the `/**` suffix Supabase silently
+   falls back to the Site URL and drops the user on `/` with the token gone.
+   Nothing errors; the invitee simply never joins the workspace they were
+   invited to. (`apps/web` recovers from this — `/` surfaces any invitation
+   addressed to the signed-in user via `GET /invitations/pending` — but the
+   direct link is the intended path.)
 
 ### 2.9 Corp app (`apps/corp`) → Vercel
 
