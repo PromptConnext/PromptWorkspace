@@ -6,15 +6,27 @@ two backends feel familiar.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Pinning DATA_BACKEND/AUTH_MODE in the process environment (tests/conftest.py)
+# only neutralises the two settings it names — every other value in a
+# developer's .env.local still bleeds into the test run and silently changes
+# behaviour (a set MANAGED_MODEL_ENABLED, for one, turns "no model connection"
+# from a 400 into a managed-fallback 200). Dropping the env files wholesale
+# under this flag makes the suite hermetic for all settings at once rather
+# than one variable at a time.
+_ENV_FILES: tuple[str, ...] = (
+    () if os.getenv("PZ_DISABLE_ENV_FILE") == "1" else (".env.local", ".env")
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env.local", ".env"),
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
     )
