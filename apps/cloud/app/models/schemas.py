@@ -157,7 +157,7 @@ class Task(GraphEntity):
     # PMO fields, populated by the external-tracker mirror (M5).
     assignee: str | None = None
     sprint: str | None = None
-    # pz-owned: a workspace member's user_id, set by the app (ADR 0016).
+    # pz-owned: a workspace member's user_id, set by the app (ADR 0018).
     # Distinct from the pmo `assignee` free-text tracker name above.
     assigned_user_id: str | None = None
 

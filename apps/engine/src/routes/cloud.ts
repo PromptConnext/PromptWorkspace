@@ -150,7 +150,7 @@ async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; project
     repo_default_branch: p.repo_default_branch,
   }));
   storeRoster(workspaces, projects);
-  // Members cache (ADR 0016 M4): small addition to the same roster refresh —
+  // Members cache (ADR 0018 M4): small addition to the same roster refresh —
   // best-effort per workspace so one workspace's failure doesn't drop the rest.
   for (const ws of workspaces) {
     try {
@@ -204,7 +204,7 @@ cloud.post("/engine/cloud/roster/refresh", async (c) => {
 });
 
 // Cached workspace members, for resolving assigned_user_id -> a display name
-// (ADR 0016 M4). No network — reads the cache the roster refresh populates.
+// (ADR 0018 M4). No network — reads the cache the roster refresh populates.
 cloud.get("/engine/workspaces/:id/members", (c) => {
   const members: CachedMember[] = loadWorkspaceMembers(c.req.param("id"));
   return c.json({ members });

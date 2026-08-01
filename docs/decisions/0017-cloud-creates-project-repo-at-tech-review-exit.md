@@ -4,7 +4,7 @@
 
 **Prompted by the question:** *at what stage should the platform require a Git repository — at project creation, before planning, or only when the Tech Lead starts technical planning?*
 
-**Numbering note:** `0016` was accidentally used twice (`0016-assign-tasks-to-workspace-members.md` and `0016-vscode-compatible-shell.md`). This ADR takes `0017`; future authors should check before claiming a number.
+**Numbering note:** `0016` was briefly used twice; the task-assignment ADR has since been renumbered to [`0018`](0018-assign-tasks-to-workspace-members.md), leaving `0016` to the Theia shell decision. This ADR keeps `0017`; future authors should check before claiming a number.
 
 **Amends / extends:**
 

@@ -1,4 +1,4 @@
-"""Tests for PATCH /projects/{id}/tasks/{id}/assignment (ADR 0016 / M1)."""
+"""Tests for PATCH /projects/{id}/tasks/{id}/assignment (ADR 0018 / M1)."""
 
 from __future__ import annotations
 

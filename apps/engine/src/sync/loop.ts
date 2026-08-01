@@ -166,7 +166,7 @@ function assembleSnapshot(localProjectId: string, cloudProjectId: string) {
     feature_tag: t.feature_tag,
     acceptance_criteria: criteriaByTask.get(t.id) ?? [],
     // assignee/sprint are pmo-owned and not stored locally; assigned_user_id
-    // IS stored locally (ADR 0016) but is pz-owned and app-authored via the
+    // IS stored locally (ADR 0018) but is pz-owned and app-authored via the
     // dedicated assignment endpoint — omit all three rather than push null,
     // so this push can't clobber a tracker mirror or an app-set assignment.
     // pullProjectTaskAssignments (below) is the sole writer of the local column.
@@ -419,7 +419,7 @@ function assignmentsPullCursorKey(localProjectId: string): string {
 }
 
 // Ongoing pull of the one pz-owned field the app writes and the engine never
-// pushes (ADR 0016 §5). Reuses the incremental graph endpoint; reads only
+// pushes (ADR 0018 §5). Reuses the incremental graph endpoint; reads only
 // tasks[].assigned_user_id, ignoring every other array (engine stays the
 // source of truth for the rest). Narrow, single-field mirror — NOT the general
 // pull-and-apply still deferred at the bottom of this file.
@@ -669,7 +669,7 @@ export async function hydrateProjectGraph(
 // tasks/artifacts/agent_runs) remains out of scope: the local `tasks` table
 // still has no `assignee`/`sprint` columns, so there's nowhere to put the pmo
 // fields a live pull would bring back from a Jira/ClickUp mirror. The one
-// exception is `assigned_user_id` (ADR 0016): that pz-owned column now exists
+// exception is `assigned_user_id` (ADR 0018): that pz-owned column now exists
 // locally and is kept live by pullProjectTaskAssignments above, the same
 // narrow-mirror shape M12's discussions pull established. The bootstrap
 // hydrate above is still a one-shot replica into empty tables, not an ongoing

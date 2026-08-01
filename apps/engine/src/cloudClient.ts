@@ -124,7 +124,7 @@ export function clearRoster(): void {
   clearWorkspaceMembersCache();
 }
 
-// --- Workspace-members cache (ADR 0016 M4) ---------------------------------
+// --- Workspace-members cache (ADR 0018 M4) ---------------------------------
 // Resolves a task's assigned_user_id to a display name on the desktop.
 // Refreshed alongside the roster; scrubbed on sign-out for the same privacy
 // reason the roster itself is (ADR 0015 §3.4).

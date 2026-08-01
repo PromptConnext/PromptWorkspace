@@ -473,7 +473,7 @@ export const getCloudRoster = () => request<CloudRoster>("/engine/cloud/roster")
 export const refreshCloudRoster = () =>
   request<CloudRosterRefresh>("/engine/cloud/roster/refresh", { method: "POST" });
 
-// Cached workspace members (ADR 0016 M4) — resolves a task's assigned_user_id
+// Cached workspace members (ADR 0018 M4) — resolves a task's assigned_user_id
 // to a display name. No network; reads the cache the roster refresh fed.
 export type WorkspaceMember = { workspace_id: string; user_id: string; email: string | null; role: string };
 
