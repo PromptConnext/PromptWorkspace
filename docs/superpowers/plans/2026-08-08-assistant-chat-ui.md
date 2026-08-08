@@ -609,6 +609,16 @@ In `apps/web/src/components/project/DiscussionThread.tsx`, delete the local `use
 import { useNodeLabels } from "@/lib/node-labels";
 ```
 
+Then make one behavioral fix in `ComposeBox`, because the extended hook now feeds two consumers with different needs — citation chips need `discussions` labels, this picker must not offer them as targets:
+
+```ts
+    // A comment cannot parent a comment: the cloud rejects it with 422
+    // invalid_parent_node_type (_VALID_PARENT_TYPES, app/api/discussions.py:30).
+    const options = [...labels.entries()].filter(([key]) => !key.startsWith("discussions:"));
+```
+
+Add a test locking this in — render `DiscussionThread` with a graph carrying at least one task and one discussion, assert the compose `<select>` offers the task and offers nothing sourced from a discussion.
+
 Leave everything else in that file unchanged.
 
 - [ ] **Step 6: Verify nothing regressed**
