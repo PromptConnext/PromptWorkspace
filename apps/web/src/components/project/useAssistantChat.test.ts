@@ -172,6 +172,136 @@ describe("useAssistantChat", () => {
     expect(result.current.busy).toBe(false);
   });
 
+  it("does not clear busy when an aborted older run settles while a newer run is still streaming", async () => {
+    // Turn A never produces a second chunk on its own — its stream only ever
+    // settles via the abort that turn B's ask() issues against it. This
+    // mirrors what a real fetch does: aborting the request rejects the
+    // in-flight reader.read() with an AbortError.
+    const encoder = new TextEncoder();
+    let releaseB: () => void = () => {};
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+
+    global.fetch = vi
+      .fn()
+      .mockImplementationOnce(async (_url: string, init?: RequestInit) => ({
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"delta":"a"}\n\n'));
+            // No further enqueue/close — this read only ever settles via abort.
+            init?.signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+          },
+        }),
+      }))
+      .mockImplementationOnce(async () => ({
+        ok: true,
+        body: new ReadableStream({
+          async start(controller) {
+            controller.enqueue(encoder.encode('data: {"delta":"b"}\n\n'));
+            await gateB;
+            controller.enqueue(encoder.encode('event: citations\ndata: {"citations":[]}\n\n'));
+            controller.close();
+          },
+        }),
+      })) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useAssistantChat("p1"));
+
+    let pendingA!: Promise<void>;
+    act(() => {
+      pendingA = result.current.ask("a?");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    // Firing B aborts A's controller (still current at this point), then
+    // installs B's controller as current before A's rejection is even
+    // observed — that ordering is exactly what the `finally` guard checks.
+    let pendingB!: Promise<void>;
+    act(() => {
+      pendingB = result.current.ask("b?");
+    });
+
+    // Let A's abort propagate through its catch/finally.
+    await act(async () => {
+      await pendingA;
+    });
+
+    // B is still streaming (gated on gateB) — busy must still read true.
+    expect(result.current.busy).toBe(true);
+
+    await act(async () => {
+      releaseB();
+      await pendingB;
+    });
+    expect(result.current.busy).toBe(false);
+  });
+
+  it("retry clears the turn's prior state before the new stream's content arrives, and does not concatenate old and new answers", async () => {
+    // First attempt ends cut off (no citations frame), leaving the turn with
+    // a partial answer, lineage facts, and an error.
+    mockStream(
+      'event: facts\ndata: {"scope":"task","node_type":"tasks","node_id":"t1","title":"T","status":"todo","specs_total":0,"tasks_total":0,"tasks_done":0,"task_status_counts":{},"artifacts_total":0,"agent_runs":[]}',
+      'data: {"delta":"old partial"}',
+    );
+    const { result } = renderHook(() => useAssistantChat("p1"));
+    await act(async () => {
+      await result.current.ask("x");
+    });
+    const turnId = result.current.turns[0].id;
+    expect(result.current.turns[0].status).toBe("error");
+    expect(result.current.turns[0].answer).toBe("old partial");
+    expect(result.current.turns[0].facts).not.toBeNull();
+
+    // Gate the retry's stream so the turn can be inspected before any new
+    // content lands — proving the clear happens as part of retry() itself,
+    // not just that the old text got overwritten by the time the test ends.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        async start(controller) {
+          await gate;
+          controller.enqueue(encoder.encode('data: {"delta":"new answer"}\n\n'));
+          controller.enqueue(encoder.encode('event: citations\ndata: {"citations":[]}\n\n'));
+          controller.close();
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.retry(turnId);
+    });
+
+    await waitFor(() => {
+      const t = result.current.turns.find((x) => x.id === turnId);
+      expect(t?.status).toBe("streaming");
+    });
+    const cleared = result.current.turns.find((t) => t.id === turnId);
+    expect(cleared?.answer).toBe("");
+    expect(cleared?.facts).toBeNull();
+    expect(cleared?.citations).toEqual([]);
+    expect(cleared?.error).toBeNull();
+
+    await act(async () => {
+      release();
+      await pending;
+    });
+
+    const final = result.current.turns.find((t) => t.id === turnId);
+    expect(final?.status).toBe("done");
+    expect(final?.error).toBeNull();
+    expect(final?.answer).toBe("new answer");
+  });
+
   it("clears turns on reset", async () => {
     mockStream('data: {"delta":"a"}', 'event: citations\ndata: {"citations":[]}');
     const { result } = renderHook(() => useAssistantChat("p1"));

@@ -132,7 +132,10 @@ export function useAssistantChat(projectId: string) {
           error: { kind: "other", message: (err as Error).message || "Network error." },
         });
       } finally {
-        setBusy(false);
+        // Only the newest run owns `busy`. An aborted older run must not
+        // clear it out from under the run that superseded it, or the UI
+        // would think it is idle while a stream is still live.
+        if (abort.current === controller) setBusy(false);
       }
     },
     [projectId, authHeaders, patch],
@@ -162,17 +165,25 @@ export function useAssistantChat(projectId: string) {
 
   const retry = useCallback(
     async (turnId: number) => {
-      let question = "";
+      // Read the question from `turns` directly rather than capturing it as a
+      // side effect of the setTurns updater below: React does not guarantee
+      // that updater runs before this function continues, so a variable set
+      // inside it can still be its initial value here — which silently
+      // skipped every retry (the updater ran, later, on its own schedule;
+      // `run()` never did).
+      const turn = turns.find((t) => t.id === turnId);
+      if (!turn) return;
+      const question = turn.question;
       setTurns((prev) =>
-        prev.map((t) => {
-          if (t.id !== turnId) return t;
-          question = t.question;
-          return { ...t, facts: null, answer: "", citations: [], status: "streaming", error: null };
-        }),
+        prev.map((t) =>
+          t.id === turnId
+            ? { ...t, facts: null, answer: "", citations: [], status: "streaming", error: null }
+            : t,
+        ),
       );
-      if (question) await run(turnId, question);
+      await run(turnId, question);
     },
-    [run],
+    [run, turns],
   );
 
   const reset = useCallback(() => {
