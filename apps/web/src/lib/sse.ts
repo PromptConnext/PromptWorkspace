@@ -49,7 +49,7 @@ function parseBlock(block: string): SseFrame | null {
   if (data.length === 0) return null;
 
   try {
-    return { event, data: JSON.parse(data.join("\\n")) };
+    return { event, data: JSON.parse(data.join("\n")) };
   } catch {
     // A malformed payload costs one frame, not the rest of the stream.
     return null;

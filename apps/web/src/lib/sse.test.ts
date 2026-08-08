@@ -56,8 +56,8 @@ describe("parseFrames", () => {
   });
 
   it("joins multi-line data with a newline", () => {
-    const { frames: out } = parseFrames('data: {"delta":"a\ndata: b"}\n\n');
-    expect((out[0].data as { delta: string }).delta).toBe("a\nb");
+    const { frames: out } = parseFrames('data: {"delta":\ndata: "hello"}\n\n');
+    expect((out[0].data as { delta: string }).delta).toBe("hello");
   });
 
   it("passes unknown event names through unchanged", () => {
