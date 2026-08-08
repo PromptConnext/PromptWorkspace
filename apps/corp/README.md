@@ -14,15 +14,18 @@ React 19, TypeScript, and Tailwind CSS v4.
 
 ```bash
 cp .env.example .env.local   # set NEXT_PUBLIC_SITE_URL etc.
-npm install
-npm run dev                  # http://localhost:3000
+pnpm install                 # from the repo root — this is a pnpm workspace
+pnpm --dir apps/corp dev     # http://localhost:3002
 ```
+
+Port 3002, not 3000: `apps/web` (the team UI) owns 3000, and both run side by
+side during development.
 
 Build and run production:
 
 ```bash
-npm run build
-npm start
+pnpm --dir apps/corp build
+pnpm --dir apps/corp start   # also 3002
 ```
 
 ## Project structure
@@ -103,8 +106,9 @@ sitemap, and JSON-LD update automatically. Blog posts are MDX in `content/blog/{
 
 ## Notes
 
-- Contact forms (`src/components/sections/ContactForm.tsx`) render a success state without
-  submitting — wire them to your form/CRM endpoint before launch.
+- Contact forms (`src/components/sections/ContactForm.tsx`) POST to `/api/contact`, which
+  forwards to `CONTACT_WEBHOOK_URL`. Leave that env var unset and the route only logs the
+  submission — set it to your form/CRM endpoint before launch.
 - Download URLs point at `NEXT_PUBLIC_DOWNLOAD_BASE_URL`; set it to your release host.
 - Legal pages are templates — have counsel review before launch.
 - `src/components/sections/TopicGrid.tsx` and the `*Nav` exports in `src/lib/site.ts` are
