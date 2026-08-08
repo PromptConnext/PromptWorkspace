@@ -340,10 +340,14 @@ export interface Citation {
   node_id: string;
   chunk_index: number;
   source: CitationSource;
-  repo?: string | null;
-  path?: string | null;
-  start_line?: number | null;
-  end_line?: number | null;
+  // Required, not optional: the cloud serializes with `model_dump()` and no
+  // `exclude_none`/`exclude_unset` (app/api/assistant.py:265,298,301,303), so
+  // every key is always on the wire — `null` on a non-code citation, never
+  // absent.
+  repo: string | null;
+  path: string | null;
+  start_line: number | null;
+  end_line: number | null;
 }
 
 export interface LineageAgentRun {
