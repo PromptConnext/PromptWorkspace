@@ -316,7 +316,7 @@ async def chat(
 
     code_snippets, code_citations = await _fetch_code_context(request.app, repo, project, code_hits)
 
-    context = _assemble_context(facts, hits, code_snippets)
+    context = _assemble_context(repo, project_id, facts, hits, code_snippets)
 
     async def stream():
         if facts is not None:
@@ -429,14 +429,74 @@ async def _fetch_code_context(
     return snippets, citations
 
 
-def _assemble_context(facts: LineageFacts | None, hits: list, code_snippets: list[str]) -> str:
+def _node_display_label(node_type: str, node: object | None) -> str:
+    """Human-vocabulary description of what a retrieved artifact actually
+    *is*, for the context label the model sees. This is the fix for the
+    truthfulness bug that motivated this function: a bare `node_type:uuid`
+    label (e.g. `spec_documents:8f3a12b4-...`) told the model nothing about
+    provenance, so when a question said "the PRD" the model adopted that
+    framing even though the only thing retrieved was a specification
+    *generated from* the PRD during planning, not the uploaded PRD itself.
+
+    Dispatches on `node_type` alone — never on the question text — so the
+    same artifact gets the same label regardless of how it was asked about.
+    Includes a title/stage name when the node type carries one directly
+    (a single cheap attribute read on the node already fetched for this
+    label; no chained lookups). `spec_documents` has no title field at all
+    (just body content), which is itself informative: it's why that case
+    below is spelled out in words instead.
+    """
+    title = getattr(node, "title", None) if node is not None else None
+    if node_type == "documents":
+        return f'Uploaded source document: "{title}"' if title else "Uploaded source document"
+    if node_type == "requirements":
+        return f'Requirement: "{title}"' if title else "Requirement"
+    if node_type == "spec_documents":
+        return (
+            "Generated specification (produced from a requirement during "
+            "planning — not an uploaded document)"
+        )
+    if node_type == "tasks":
+        return f'Task: "{title}"' if title else "Task"
+    if node_type == "stage_documents":
+        stage = getattr(node, "stage", None) if node is not None else None
+        return (
+            f"Planning-stage document (\"{stage}\" stage — generated, not uploaded)"
+            if stage
+            else "Planning-stage document (generated, not uploaded)"
+        )
+    if node_type == "pull_requests":
+        return f'Pull request: "{title}"' if title else "Pull request"
+    if node_type == "discussions":
+        author = getattr(node, "author", None) if node is not None else None
+        return f"Discussion comment by {author}" if author else "Discussion comment"
+    return node_type
+
+
+def _assemble_context(
+    repo: Repository,
+    project_id: str,
+    facts: LineageFacts | None,
+    hits: list,
+    code_snippets: list[str],
+) -> str:
     parts = []
     if facts is not None:
         parts.append(f"GRAPH FACTS (exact, from the project graph):\n{facts_to_text(facts)}")
     if hits:
-        parts.append(
-            "\n\n".join(f"[{h.node_type}:{h.node_id}#{h.chunk_index}]\n{h.content}" for h in hits)
-        )
+        # The machine identifier (`node_type:node_id#chunk_index`) is kept
+        # alongside the human-readable label, not dropped: SYSTEM_PROMPT
+        # instructs the model to cite exactly this string, and chunk_index
+        # still does real work distinguishing multiple chunks retrieved from
+        # the same node. What changed is what leads — a self-describing label
+        # instead of a raw UUID the model (and, before this fix, the
+        # transcript) had no way to interpret.
+        labeled = []
+        for h in hits:
+            node = repo.get_node(project_id, h.node_type, h.node_id)
+            label = _node_display_label(h.node_type, node)
+            labeled.append(f"[{label} — {h.node_type}:{h.node_id}#{h.chunk_index}]\n{h.content}")
+        parts.append("\n\n".join(labeled))
     if code_snippets:
         parts.append("\n\n".join(code_snippets))
     if not parts:
