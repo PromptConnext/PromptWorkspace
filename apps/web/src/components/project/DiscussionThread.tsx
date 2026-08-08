@@ -1,30 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useNodeLabels } from "@/lib/node-labels";
 import type { Discussion, ProjectGraph } from "@/lib/types";
 
 const SOURCE_STYLE: Record<Discussion["source"], string> = {
   pz: "bg-indigo-100 text-indigo-700",
   pmo: "bg-amber-100 text-amber-700",
 };
-
-// (nodeType, nodeId) -> human label, built once from the graph so both the
-// compose picker and the thread list can show "Task: Build login form"
-// instead of a raw id.
-function useNodeLabels(graph: ProjectGraph) {
-  return useMemo(() => {
-    const labels = new Map<string, string>();
-    for (const r of graph.requirements) labels.set(`requirements:${r.id}`, `Requirement: ${r.title}`);
-    for (const s of graph.spec_documents) {
-      labels.set(`spec_documents:${s.id}`, `Spec v${s.version}`);
-    }
-    for (const t of graph.tasks) labels.set(`tasks:${t.id}`, `Task: ${t.title}`);
-    for (const a of graph.artifacts) labels.set(`artifacts:${a.id}`, `Artifact: ${a.uri}`);
-    return labels;
-  }, [graph]);
-}
 
 function ComposeBox({
   graph,
