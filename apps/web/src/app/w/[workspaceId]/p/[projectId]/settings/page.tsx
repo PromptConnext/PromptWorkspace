@@ -4,10 +4,10 @@ import Link from "next/link";
 import { use } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
-import { useAuth } from "@/lib/auth";
+import { ReindexPanel } from "@/components/project/ReindexPanel";
 import { useCloudGet } from "@/lib/hooks";
-import { useWorkspaceName } from "@/lib/workspace";
-import type { ProjectGraph, WorkspaceMember } from "@/lib/types";
+import { useIsWorkspaceAdmin, useWorkspaceName } from "@/lib/workspace";
+import type { ProjectGraph } from "@/lib/types";
 
 function ProjectSettingsView({
   workspaceId,
@@ -16,11 +16,9 @@ function ProjectSettingsView({
   workspaceId: string;
   projectId: string;
 }) {
-  const { user } = useAuth();
   const workspaceName = useWorkspaceName(workspaceId);
   const { data: graph } = useCloudGet<ProjectGraph>(`/sync/projects/${projectId}/graph`);
-  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
-  const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
+  const isAdmin = useIsWorkspaceAdmin(workspaceId);
 
   return (
     <>
@@ -41,6 +39,8 @@ function ProjectSettingsView({
         <h1 className="mb-8 text-2xl font-semibold tracking-tight text-slate-900">
           Project settings
         </h1>
+
+        {isAdmin && <ReindexPanel projectId={projectId} />}
       </main>
     </>
   );

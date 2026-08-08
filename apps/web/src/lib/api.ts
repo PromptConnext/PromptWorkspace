@@ -159,3 +159,12 @@ export function createRepository(
     body: JSON.stringify(body),
   });
 }
+
+// Enqueue-only: returns as soon as the embed jobs are queued, with no
+// completion signal and no progress endpoint (apps/cloud/app/api/assistant.py).
+// The UI must say "queued", never "indexed".
+export function reindexProject(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<{ enqueued: number }>(`/projects/${projectId}/assistant/reindex`, authHeaders, {
+    method: "POST",
+  });
+}

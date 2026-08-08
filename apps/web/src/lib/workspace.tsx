@@ -7,7 +7,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "./api";
 import { useAuth } from "./auth";
-import type { Workspace } from "./types";
+import { useCloudGet } from "./hooks";
+import type { Workspace, WorkspaceMember } from "./types";
 
 const ACTIVE_KEY = "pz_active_workspace";
 // Memberships are cached per user id so a reload can paint workspace names
@@ -182,4 +183,13 @@ export function useWorkspace(): WorkspaceContextValue {
 export function useWorkspaceName(id: string, fallback = "Workspace"): string {
   const { workspaceName } = useWorkspace();
   return workspaceName(id) ?? fallback;
+}
+
+// Whether the signed-in user administers this workspace. The server gates on
+// this too (require_admin), so this only decides whether to *offer* a control —
+// showing one to a member would just produce a 403 with worse copy.
+export function useIsWorkspaceAdmin(workspaceId: string): boolean {
+  const { user } = useAuth();
+  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
+  return !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 }

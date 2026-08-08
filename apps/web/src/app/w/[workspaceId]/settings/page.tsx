@@ -6,16 +6,11 @@ import { GithubConnectionForm } from "@/components/GithubConnectionForm";
 import { ModelConnectionForm } from "@/components/ModelConnectionForm";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
-import { useAuth } from "@/lib/auth";
-import { useCloudGet } from "@/lib/hooks";
-import { useWorkspaceName } from "@/lib/workspace";
-import type { WorkspaceMember } from "@/lib/types";
+import { useIsWorkspaceAdmin, useWorkspaceName } from "@/lib/workspace";
 
 function SettingsView({ workspaceId }: { workspaceId: string }) {
-  const { user } = useAuth();
   const workspaceName = useWorkspaceName(workspaceId);
-  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
-  const isAdmin = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
+  const isAdmin = useIsWorkspaceAdmin(workspaceId);
 
   return (
     <>
