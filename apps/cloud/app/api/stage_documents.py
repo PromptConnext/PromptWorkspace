@@ -30,6 +30,11 @@ StageName = Literal["constitution", "specify", "plan", "tasks"]
 
 
 class StageDocumentOut(BaseModel):
+    # Present so the web client can map a stage_documents citation
+    # (app/api/assistant.py) back to a stage name — the RAG citation carries
+    # the row id, and stage name is what a reader recognises. None when no
+    # document has been saved for this stage yet.
+    id: str | None
     stage: str
     content: str
     updated_at: str | None
@@ -49,8 +54,10 @@ def get_stage_document(
     require_project(repo, project_id, user)
     doc = repo.get_stage_document(project_id, stage)
     if doc is None:
-        return StageDocumentOut(stage=stage, content="", updated_at=None)
-    return StageDocumentOut(stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat())
+        return StageDocumentOut(id=None, stage=stage, content="", updated_at=None)
+    return StageDocumentOut(
+        id=doc.id, stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat()
+    )
 
 
 @router.patch("/projects/{project_id}/stage-documents/{stage}", response_model=StageDocumentOut)
@@ -75,4 +82,6 @@ def update_stage_document(
         logger.exception(
             "graph projection failed for project=%s stage=%s", project_id, stage
         )
-    return StageDocumentOut(stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat())
+    return StageDocumentOut(
+        id=doc.id, stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat()
+    )

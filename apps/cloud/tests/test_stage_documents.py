@@ -36,7 +36,7 @@ def test_get_returns_empty_content_when_no_document_exists():
 
     res = client.get(f"/projects/{pid}/stage-documents/plan", headers=ALICE)
     assert res.status_code == 200, res.text
-    assert res.json() == {"stage": "plan", "content": "", "updated_at": None}
+    assert res.json() == {"id": None, "stage": "plan", "content": "", "updated_at": None}
 
 
 def test_patch_then_get_roundtrips_content():
@@ -169,6 +169,44 @@ def test_a_failed_projection_does_not_fail_the_save(monkeypatch):
 
     assert res.status_code == 200, res.text
     assert res.json()["content"] == "# Spec"
+
+
+def test_get_stage_document_returns_id_after_save():
+    client = _client()
+    _ws_id, pid = _bootstrap(client)
+
+    client.patch(
+        f"/projects/{pid}/stage-documents/specify",
+        json={"content": "# Spec"},
+        headers=ALICE,
+    )
+    res = client.get(f"/projects/{pid}/stage-documents/specify", headers=ALICE)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"]
+    assert isinstance(body["id"], str)
+
+
+def test_get_stage_document_id_is_none_when_absent():
+    client = _client()
+    _ws_id, pid = _bootstrap(client)
+
+    res = client.get(f"/projects/{pid}/stage-documents/constitution", headers=ALICE)
+    assert res.status_code == 200
+    assert res.json()["id"] is None
+
+
+def test_patch_stage_document_returns_same_id_on_update():
+    client = _client()
+    _ws_id, pid = _bootstrap(client)
+
+    first = client.patch(
+        f"/projects/{pid}/stage-documents/plan", json={"content": "a"}, headers=ALICE
+    ).json()
+    second = client.patch(
+        f"/projects/{pid}/stage-documents/plan", json={"content": "b"}, headers=ALICE
+    ).json()
+    assert first["id"] == second["id"]
 
 
 def test_patch_enqueues_embed_job_for_rag(monkeypatch):
