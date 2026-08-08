@@ -793,13 +793,39 @@ describe("useAssistantChat", () => {
   });
 
   it("is busy while streaming and idle afterwards", async () => {
-    mockStream('data: {"delta":"a"}', 'event: citations\ndata: {"citations":[]}');
+    // The stream is held open on a gate so `busy` can be observed mid-flight;
+    // asserting it only before and after would pass even if it never flipped.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        async start(controller) {
+          controller.enqueue(encoder.encode('data: {"delta":"a"}\n\n'));
+          await gate;
+          controller.enqueue(encoder.encode('event: citations\ndata: {"citations":[]}\n\n'));
+          controller.close();
+        },
+      }),
+    }) as unknown as typeof fetch;
+
     const { result } = renderHook(() => useAssistantChat("p1"));
     expect(result.current.busy).toBe(false);
-    await act(async () => {
-      await result.current.ask("x");
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.ask("x");
     });
-    await waitFor(() => expect(result.current.busy).toBe(false));
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    await act(async () => {
+      release();
+      await pending;
+    });
+    expect(result.current.busy).toBe(false);
   });
 
   it("clears turns on reset", async () => {
