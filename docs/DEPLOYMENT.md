@@ -38,7 +38,30 @@ The engine always runs locally as a sidecar — only the sync backend and the in
 
 ### 2.2 Apply Supabase migrations
 
-Migrations are plain SQL in `apps/cloud/migrations/`, applied in order:
+Migrations are plain SQL in `apps/cloud/migrations/`. The recommended way to apply them is `apps/cloud/scripts/migrate.py` — a dependency-free wrapper around `psql` (see the script's own docstring for why it shells out rather than adding a Postgres driver) that reads `pz_schema_migrations` to know what's already applied, applies only what's pending in numeric order, wraps each migration in a transaction so a failure leaves it wholly unapplied, records the ledger row in that same transaction, and refuses — loudly, before touching anything — if an already-applied file's checksum no longer matches what's recorded:
+
+```bash
+cd apps/cloud
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --dry-run   # see what's pending first
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply             # then actually apply it
+```
+
+`SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database); `--db-url` can be omitted if that variable (or `DATABASE_URL`) is already in the environment. Migration 0003 installs the RLS policies that back workspace membership — do not skip it (the runner won't let you skip anything out of order regardless). On a brand-new database the runner bootstraps `pz_schema_migrations` itself (see 0024 below) before anything else, then proceeds through the rest in normal numeric order — a fresh database needs no separate ledger step, just run `apply` and stop.
+
+**Migration 0023 needs a deploy-time value.** It replaces the embedding column's fixed `vector(1536)` width with a parameter (there is no `1536` baked into the schema anymore), and doing so is destructive: any already-embedded `pz_rag_chunks`/`pz_code_chunks` rows are deleted, because a vector computed at one width cannot be reinterpreted at another. Its header declares this to the runner (`migration-runner: requires-vars=embed_dim`), so `apply` refuses to run it — before opening a connection — without a matching `--var`:
+
+```bash
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --var embed_dim=1024
+```
+
+Pick the width your embedding model actually produces (e.g. 1024 for BGE-m3 or Jina v3, 896 for KaLM-embedding-multilingual v2.5) — there is deliberately no default; omitting `--var embed_dim` stops the run rather than silently reapplying the 1536 ceiling this migration exists to remove. This `requires-vars` header convention is generic, not a one-off for 0023 — any future migration that needs a deploy-time value declares it the same way and gets the same fail-fast treatment; see the runner's docstring. **After 0023 runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
+
+**Migration 0024** creates `pz_schema_migrations` itself — the table that makes all of the above possible. It records, per file: filename, a sha256 checksum of the file's exact bytes (so an edit to an already-applied file becomes detectable instead of silently drifting from what actually ran — this repo has already had an operator decline to let a migration file be touched post-application for exactly that reason), when the row was written, who wrote it, and a `source` of either `applied` (the runner executed the file and wrote the row in the same action) or `adopted` (an operator asserted the row's truth without that execution — see below).
+
+<details>
+<summary>Fallback: applying migrations without the runner (no Python venv available)</summary>
+
+The runner is a thin wrapper — everything it does can still be done by hand with plain `psql`, and this is worth keeping documented for an environment with no `apps/cloud/.venv` handy:
 
 ```bash
 cd apps/cloud
@@ -47,62 +70,28 @@ for f in migrations/00*.sql; do
 done
 ```
 
-`SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database). Migration 0003 installs the RLS policies that back workspace membership — do not skip it. (The glob is `00*.sql`, not `000*.sql` — migration numbers passed 0009 long ago, and the tighter pattern silently stops matching anything from 0010 on.)
+(The glob is `00*.sql`, not `000*.sql` — migration numbers passed 0009 long ago, and the tighter pattern silently stops matching anything from 0010 on.) This loop does **not** wrap each file in its own transaction, does **not** write ledger rows, and does **not** check checksums — it is the pre-0024 behavior, kept only as a manual fallback. Migration 0023 is not part of it — run it by hand, in its numeric place, exactly as shown above but with plain `psql -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql`, before resuming the loop. If this fallback is ever used against a database the runner will later manage, follow up with the adoption procedure below so `pz_schema_migrations` reflects what actually happened.
 
-**Migration 0023 is not part of that loop — run it by hand, in its numeric place.** It replaces the embedding column's fixed `vector(1536)` width with a deploy-time parameter (there is no `1536` baked into the schema anymore), and doing so is destructive: any already-embedded `pz_rag_chunks`/`pz_code_chunks` rows are deleted, because a vector computed at one width cannot be reinterpreted at another. Apply everything up to 0022 with the loop above, stop, then run 0023 with the width your embedding model actually produces (e.g. 1024 for BGE-m3 or Jina v3, 896 for KaLM-embedding-multilingual v2.5):
-
-```bash
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql
-```
-
-before resuming the loop for anything numbered after it. There is deliberately no default for `embed_dim` — omitting it aborts the script (with `-v ON_ERROR_STOP=1`, a nonzero exit) rather than silently reapplying the 1536 ceiling this migration exists to remove. **After it runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
-
-**Migration 0024 needs no special handling** — unlike 0023, it's back in the plain loop above. It creates a single table, `pz_schema_migrations`, that records which migration files this database is known to have: filename, a sha256 checksum of the file's exact bytes (so an edit to an already-applied file becomes detectable instead of silently drifting from what actually ran — this repo has already had an operator decline to let a migration file be touched post-application for exactly that reason), when the row was written, who wrote it, and a `source` of either `applied` (a runner executed the file and wrote the row in the same action) or `adopted` (an operator asserted the row's truth without that execution — see below). Nothing yet writes rows into it automatically; that lands with the migration runner. On a fresh database this migration is a no-op beyond creating an empty table — apply it in order along with everything else and move on.
+</details>
 
 #### Adopting an existing database into the migrations ledger
 
 The ledger has a bootstrapping problem: the operator's production database almost certainly already carries 0001 through 0022 (0023 is destructive and requires its own deliberate `-v embed_dim` run, so don't assume it), applied over months by the plain `psql -f` loop, with nothing anywhere recording that fact. Once `pz_schema_migrations` exists, that history needs to be *in* it — but re-running 0001–0022 to populate it is exactly the wrong move: several of those files are only partially idempotent (0003 guards 15 of 32 DDL statements, 0009 guards 9 of 16, 0006 none of its one `GRANT`), so replaying them against a database that already has their effects would fail partway or silently duplicate work. The ledger has to be told this history, not made to re-derive it by force.
 
-It also must not be told automatically. A migration that inserted "every file numbered below me is applied" the first time it ran would be guessing on the operator's behalf and recording that guess as though it were observed fact — precisely the uncertainty this table exists to remove. So adoption is a separate, manual, explicit step the operator runs once, and every row it writes carries `source = 'adopted'` rather than `'applied'`, so the distinction between "we watched this happen" and "we were told this happened" survives in the data rather than being flattened away for convenience.
-
-Run it against the target database after `0024_schema_migrations_ledger.sql` has been applied (so the table exists) and before resuming the plain loop for anything after 0024:
+It also must not be told automatically. A migration that inserted "every file numbered below me is applied" the first time it ran would be guessing on the operator's behalf and recording that guess as though it were observed fact — precisely the uncertainty this table exists to remove. `apps/cloud/scripts/migrate.py apply` never does this on its own; adoption is its own subcommand, gated behind an explicit `--through` and an interactive confirmation (or `--yes`), so it can't be triggered by running the ordinary `apply` path. Every row it writes carries `source = 'adopted'` rather than `'applied'`, so the distinction between "we watched this happen" and "we were told this happened" survives in the data rather than being flattened away for convenience.
 
 ```bash
 cd apps/cloud
-ADOPT_THROUGH="0022"      # the last migration you believe this database already has
-ADOPTED_BY="${USER:-$(whoami)}"
-ADOPTED_AT="$(date -u +%FT%TZ)"
-
-for mig_file in migrations/00*.sql; do
-  f=$(basename "$mig_file")
-  num="${f%%_*}"
-  (( 10#$num > 10#$ADOPT_THROUGH )) && continue
-  checksum=$(shasum -a 256 "$mig_file" | awk '{print $1}')   # sha256sum on Linux
-  note="Adopted ${ADOPTED_AT} by ${ADOPTED_BY}: asserted already applied to this database; not independently verified, only checksummed against the current file."
-  psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -v filename="$f" -v checksum="$checksum" -v note="$note" <<SQL
-insert into pz_schema_migrations (filename, checksum, source, notes)
-values (:'filename', :'checksum', 'adopted', :'note')
-on conflict (filename) do nothing;
-SQL
-done
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" adopt --through 0022
 ```
 
-(Use a heredoc or `-f`, not `psql -c`, for the insert — `-c` does not interpolate `:'variable'` the way piped/scripted input does, and will fail with a syntax error at the colon.) The checksum recorded is of the file as it exists on disk *today*, not as it looked whenever the migration actually ran — this table cannot recover that historical byte-for-byte state, and doesn't pretend to. What it buys is a going-forward baseline: if that file changes after adoption, a checksum comparison will catch the drift, which is the failure mode this column exists for regardless of whether the row's origin was `applied` or `adopted`.
+`--through` is the last migration you believe this database already has (0023 is refused unless you also pass `--yes` — see the warning it prints; 0024 and anything after it is always refused outright, since those are only ever recorded by actually running them). Run with no `--yes` first: it prints the full plan — which files will be marked `adopted`, whether the ledger table itself still needs creating — and prompts before writing anything, so nothing changes on a dry look. Add `--yes` (optionally `--adopted-by NAME` and `--note "..."`) to actually commit it. This single command replaces what used to be three separate manual `psql` steps (create the ledger table, loop-insert the adopted rows, separately record 0024 itself as `applied`): it creates `pz_schema_migrations` by actually running 0024 if it isn't there yet — recorded `source='applied'`, because that part really is watched, not asserted — then records everything through `--through` as `adopted` in one transaction. It's also safe to re-run: rows already in the ledger are left alone (`on conflict (filename) do nothing`), so retrying after a partial failure or re-checking an already-adopted database is a no-op, not a duplicate.
 
-Immediately after creating the table (before or after the adoption loop; order between them doesn't matter), record 0024 itself with `source = 'applied'` — that one is not a guess, since you just watched it run:
+The checksum recorded for each adopted row is of the file as it exists on disk *today*, not as it looked whenever the migration actually ran — this table cannot recover that historical byte-for-byte state, and doesn't pretend to. What it buys is a going-forward baseline: if that file changes after adoption, a checksum comparison will catch the drift on the next `apply`, which is the failure mode this column exists for regardless of whether the row's origin was `applied` or `adopted`.
 
-```bash
-checksum=$(shasum -a 256 migrations/0024_schema_migrations_ledger.sql | awk '{print $1}')
-psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -v filename="0024_schema_migrations_ledger.sql" -v checksum="$checksum" <<SQL
-insert into pz_schema_migrations (filename, checksum, source)
-values (:'filename', :'checksum', 'applied')
-on conflict (filename) do nothing;
-SQL
-```
+After adoption, resume with the runner for anything past `--through` that hasn't run yet — `apply --var embed_dim=<N>` will stop and ask for it when it reaches 0023, exactly as it would on any other database.
 
-After adoption, resume the loop for anything past `ADOPT_THROUGH` that hasn't run yet — 0023 by hand with its required `-v embed_dim` (§2.2 above), then the plain loop for anything numbered after 0024.
-
-A **fresh** database needs none of this: run the loop from 0001 as always, `0024_schema_migrations_ledger.sql` included in its numeric place, and stop. The ledger table exists and starts empty — there is no history to assert, so there is nothing to adopt.
+A **fresh** database needs none of this: `apply` bootstraps the ledger table itself and proceeds through everything else in numeric order, with no history to assert and therefore nothing to adopt.
 
 ### 2.3 Create the Railway service
 
@@ -366,14 +355,14 @@ Manual is fine now; when ready, GitHub Actions is the natural fit:
 
 **Desktop (release on tag `v*`):** matrix build — `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 with the S3 action/CLI (secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists.
 
-**Migrations:** keep applying manually via `psql` before deploying code that needs them; automate later with a pre-deploy job.
+**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job.
 
 ---
 
 ## 7. Production checklist
 
-- [ ] Supabase migrations applied in order (0001 → latest), `schema_version` on `/health` matches — including 0023 by hand with `-v embed_dim=<N>` (§2.2), followed by a reindex
-- [ ] `pz_schema_migrations` reflects this database's real history — for a database that had migrations applied before the ledger existed, that means the adoption procedure (§2.2) ran once, not that the loop was silently skipped
+- [ ] `scripts/migrate.py apply` run against the target database, `schema_version` on `/health` matches — including 0023 with its required `--var embed_dim=<N>` (§2.2), followed by a reindex
+- [ ] `pz_schema_migrations` reflects this database's real history — for a database that had migrations applied before the ledger existed, that means `scripts/migrate.py adopt` (§2.2) ran once, not that it was silently skipped
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`
 - [ ] service_role key set only in Railway variables — never in the repo or client
 - [ ] Replicas = 1 (in-process presence/rate-limit state)

@@ -41,6 +41,13 @@
 -- then resume the loop for anything after it. See docs/DEPLOYMENT.md and
 -- apps/cloud/README.md.
 --
+-- migration-runner: requires-vars=embed_dim
+-- (read by scripts/migrate.py, which refuses — before opening a connection
+-- — to apply this file without a matching `--var embed_dim=<N>`. The \if
+-- guard a few lines down is the same protection for anyone who runs this
+-- file with plain psql instead of the runner; the two are independent on
+-- purpose, so neither path can silently skip the check.)
+--
 -- WHY DESTRUCTIVE, NOT AN IN-PLACE WIDEN/NARROW
 -- A vector(1536) value cannot be reinterpreted as a vector(N) value for any
 -- N != 1536 — the numbers at each position mean something only in the
