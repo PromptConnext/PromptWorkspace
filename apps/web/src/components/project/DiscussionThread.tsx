@@ -23,7 +23,11 @@ function ComposeBox({
   onPosted: () => void;
 }) {
   const { authHeaders } = useAuth();
-  const options = [...labels.entries()];
+  // A comment cannot parent a comment: the cloud rejects it with 422
+  // invalid_parent_node_type (_VALID_PARENT_TYPES, app/api/discussions.py:30).
+  // useNodeLabels covers discussions because the assistant's citation chips
+  // need those labels — this picker must not offer them as targets.
+  const options = [...labels.entries()].filter(([key]) => !key.startsWith("discussions:"));
   const [target, setTarget] = useState(options[0]?.[0] ?? "");
   const [body, setBody] = useState("");
   const [posting, setPosting] = useState(false);
