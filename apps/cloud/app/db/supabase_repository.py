@@ -659,6 +659,17 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return rows[0]["embed_model"] if rows else None
 
+    def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:
+        res = (
+            self._client.table(_RAG_CHUNKS)
+            .select("id", count="exact")
+            .eq("workspace_id", workspace_id)
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        return res.count or 0
+
     def vector_search(
         self,
         workspace_id: str,

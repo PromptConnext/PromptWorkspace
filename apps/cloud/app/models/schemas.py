@@ -577,6 +577,27 @@ class ModelConnectionStatusOut(BaseModel):
     embed_source: Literal["byo", "managed", "none"]
 
 
+class IndexStatusOut(BaseModel):
+    """What GET /projects/{id}/assistant/index-status returns — the
+    completion signal POST .../reindex itself never had (that endpoint
+    returns the instant jobs are queued, before any embedding runs).
+
+    `pending` is deliberately absent, not `False`: the in-process embed
+    queue (app/rag/queue.py's `EmbedQueue`, an `asyncio.Queue`) exposes no
+    per-project introspection, only an opaque FIFO drained by a single
+    background worker. There is no cheap, honest way to say "this project's
+    jobs are still in flight" from that queue — a global depth wouldn't mean
+    THIS project, and the worker typically drains within milliseconds of an
+    enqueue anyway, so a naive check would almost always read `False` right
+    after a real enqueue and mislead exactly when it matters. Reporting a
+    guess as fact is the bug this endpoint exists to fix, not repeat.
+    """
+
+    indexed_chunks: int
+    indexable_nodes: int
+    embed_model: str | None = None
+
+
 class RagChunk(BaseModel):
     """A stored, embedded chunk. `embedding` never leaves the repository
     layer — retrieval returns `RagChunkHit`, which drops it.

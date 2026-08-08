@@ -23,6 +23,7 @@ app/api/workspaces.py can import it without either importing the other.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from app.db.repository import Repository
@@ -38,6 +39,28 @@ _GRAPH_SKIP_NODE_TYPES = ("pull_requests", "documents", "stage_documents")
 _STAGE_NAMES = ("constitution", "specify", "plan", "tasks")
 
 
+def _iter_backfill_targets(repo: Repository, project: Project) -> Iterator[tuple[str, str]]:
+    """Yield (node_type, node_id) for every node a full backfill sweep
+    touches — the single enumeration both `enqueue_project_backfill` (which
+    turns each into an EmbedJob) and `count_indexable_nodes` (which just
+    counts them, for the index-status endpoint) share, so the "what counts
+    as indexable" definition can't drift between the two call sites."""
+    graph = repo.get_graph(project.id)  # bootstrap pull: live rows only
+    for node_type in RAG_NODE_TYPES:
+        if node_type in _GRAPH_SKIP_NODE_TYPES:
+            continue
+        for item in getattr(graph, node_type):
+            yield node_type, item.id
+
+    for stage in _STAGE_NAMES:
+        stage_doc = repo.get_stage_document(project.id, stage)
+        if stage_doc is not None:
+            yield "stage_documents", stage_doc.id
+
+    for document in repo.list_documents(project.id):
+        yield "documents", document.id
+
+
 def enqueue_project_backfill(app: Any, repo: Repository, project: Project) -> int:
     """Sweep one project's existing content into the embed queue.
 
@@ -45,32 +68,18 @@ def enqueue_project_backfill(app: Any, repo: Repository, project: Project) -> in
     so no batching/rate-limiting is applied here.
     """
     enqueued = 0
-
-    graph = repo.get_graph(project.id)  # bootstrap pull: live rows only
-    for node_type in RAG_NODE_TYPES:
-        if node_type in _GRAPH_SKIP_NODE_TYPES:
-            continue
-        for item in getattr(graph, node_type):
-            enqueue(app, EmbedJob(project.workspace_id, project.id, node_type, item.id))
-            enqueued += 1
-
-    for stage in _STAGE_NAMES:
-        stage_doc = repo.get_stage_document(project.id, stage)
-        if stage_doc is not None:
-            enqueue(
-                app,
-                EmbedJob(project.workspace_id, project.id, "stage_documents", stage_doc.id),
-            )
-            enqueued += 1
-
-    for document in repo.list_documents(project.id):
-        enqueue(
-            app,
-            EmbedJob(project.workspace_id, project.id, "documents", document.id),
-        )
+    for node_type, node_id in _iter_backfill_targets(repo, project):
+        enqueue(app, EmbedJob(project.workspace_id, project.id, node_type, node_id))
         enqueued += 1
-
     return enqueued
+
+
+def count_indexable_nodes(repo: Repository, project: Project) -> int:
+    """How many nodes a full backfill (`enqueue_project_backfill`) would
+    enqueue right now, without enqueueing anything — used by
+    GET /projects/{id}/assistant/index-status so an operator can see the
+    target count before deciding whether reindexing is worth it."""
+    return sum(1 for _ in _iter_backfill_targets(repo, project))
 
 
 def enqueue_workspace_backfill(app: Any, repo: Repository, workspace_id: str) -> int:

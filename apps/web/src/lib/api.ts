@@ -4,6 +4,7 @@
 import { CLOUD_API_URL } from "./config";
 import type {
   DocumentOut,
+  IndexStatus,
   PolicyScope,
   PolicyTemplateOut,
   PrefillOut,
@@ -161,10 +162,18 @@ export function createRepository(
 }
 
 // Enqueue-only: returns as soon as the embed jobs are queued, with no
-// completion signal and no progress endpoint (apps/cloud/app/api/assistant.py).
-// The UI must say "queued", never "indexed".
+// completion signal of its own (apps/cloud/app/api/assistant.py). The UI
+// must say "queued", never "indexed" — pair with getIndexStatus below to
+// show whether the queue actually drained.
 export function reindexProject(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<{ enqueued: number }>(`/projects/${projectId}/assistant/reindex`, authHeaders, {
     method: "POST",
   });
+}
+
+// The honest completion signal reindexProject doesn't provide: what's
+// actually indexed right now, read fresh from storage rather than inferred
+// from an enqueue response.
+export function getIndexStatus(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<IndexStatus>(`/projects/${projectId}/assistant/index-status`, authHeaders);
 }

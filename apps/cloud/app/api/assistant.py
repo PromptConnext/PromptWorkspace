@@ -1,10 +1,13 @@
 """RAG assistant API: workspace model connection + project chat.
 
 Endpoints:
-  GET  /workspaces/{id}/model-connection   admin — non-secret status
-  POST /workspaces/{id}/model-connection   admin — configure workspace-BYO model
-  POST /projects/{id}/assistant/chat       member — SSE-streamed, cited answer
-  POST /projects/{id}/assistant/reindex    admin — backfill existing graph nodes
+  GET  /workspaces/{id}/model-connection      admin — non-secret status
+  POST /workspaces/{id}/model-connection      admin — configure workspace-BYO model
+  POST /projects/{id}/assistant/chat          member — SSE-streamed, cited answer
+  POST /projects/{id}/assistant/reindex       admin — backfill existing graph nodes
+  GET  /projects/{id}/assistant/index-status  member — chunk count / embed model,
+                                               the completion signal reindex itself
+                                               never had
 
 Retrieval is membership-scoped before similarity (ADR 0011): `require_project`
 gates the caller to the project's workspace, and `vector_search` additionally
@@ -50,12 +53,17 @@ from app.models.schemas import (
     ChatRequest,
     Citation,
     CodeChunkHit,
+    IndexStatusOut,
     LineageFacts,
     ModelConnectionCreate,
     ModelConnectionOut,
     ModelConnectionStatusOut,
 )
-from app.rag.backfill import enqueue_project_backfill, enqueue_workspace_backfill
+from app.rag.backfill import (
+    count_indexable_nodes,
+    enqueue_project_backfill,
+    enqueue_workspace_backfill,
+)
 from app.rag.budget import estimate_tokens
 from app.rag.chat import HttpChatProvider
 from app.rag.classify import classify_question
@@ -169,6 +177,33 @@ def reindex_project(
     require_admin(repo, project.workspace_id, user)
     enqueued = enqueue_project_backfill(request.app, repo, project)
     return {"enqueued": enqueued}
+
+
+@router.get(
+    "/projects/{project_id}/assistant/index-status", response_model=IndexStatusOut
+)
+def get_index_status(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> IndexStatusOut:
+    """The completion signal `POST .../reindex` never had: that endpoint
+    returns `{"enqueued": N}` the instant jobs are queued, with no way to
+    tell "queued" apart from "indexed" or "silently dropped" (e.g. a reindex
+    run while no model connection was configured — app/rag/queue.py's
+    `_process_job` discards a job outright rather than deferring it).
+
+    Membership-gated like chat, not admin-only like reindex itself — seeing
+    whether the assistant has anything to work with isn't privileged, and
+    the panel that will render this is visible to every member even though
+    only an admin can press the reindex button.
+    """
+    project = require_project(repo, project_id, user)
+    return IndexStatusOut(
+        indexed_chunks=repo.count_project_rag_chunks(project.workspace_id, project_id),
+        indexable_nodes=count_indexable_nodes(repo, project),
+        embed_model=repo.get_project_embed_model(project.workspace_id, project_id),
+    )
 
 
 @router.post("/projects/{project_id}/assistant/chat")

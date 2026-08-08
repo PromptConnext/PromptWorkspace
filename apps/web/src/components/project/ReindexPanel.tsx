@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { reindexProject } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { getIndexStatus, reindexProject } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import type { IndexStatus } from "@/lib/types";
 
 export function ReindexPanel({ projectId }: { projectId: string }) {
   const { authHeaders } = useAuth();
@@ -10,6 +11,29 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
   const [running, setRunning] = useState(false);
   const [enqueued, setEnqueued] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<IndexStatus | null>(null);
+
+  // Every number here comes straight from the server (indexed_chunks,
+  // indexable_nodes, embed_model) — no interpolation, no estimate. This is
+  // what makes it safe to re-fetch after a reindex rather than fake a
+  // progress bar: the count either visibly moved or it didn't.
+  const refreshStatus = useCallback(async () => {
+    try {
+      const next = await getIndexStatus(projectId, authHeaders());
+      setStatus(next);
+    } catch {
+      // Status is a nice-to-have next to the reindex button itself; a
+      // member without permission or a transient failure here shouldn't
+      // block the reindex flow, so just leave the last-known status in place.
+    }
+    // authHeaders() is stable per user/token (useCallback in AuthProvider) —
+    // see TaskBoard.tsx for the same pattern.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus]);
 
   async function run() {
     setRunning(true);
@@ -19,6 +43,9 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
       const res = await reindexProject(projectId, authHeaders());
       setEnqueued(res.enqueued);
       setConfirming(false);
+      // "Queued" isn't "indexed" — re-fetch so the operator can see whether
+      // the queue actually drained, instead of trusting the enqueue count.
+      await refreshStatus();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -33,6 +60,17 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
         Re-embeds this project&apos;s requirements, specs, tasks and planning documents. Needed
         after changing the workspace&apos;s embedding model.
       </p>
+
+      {/* Current index state, read fresh from storage every time — not
+          derived from the enqueue response above. This is the only honest
+          answer to "did the reindex actually do anything." */}
+      {status && (
+        <p className="mt-2 text-sm text-slate-600">
+          {status.indexed_chunks} chunk{status.indexed_chunks === 1 ? "" : "s"} indexed
+          {status.embed_model ? ` with ${status.embed_model}` : ""} · {status.indexable_nodes}{" "}
+          item{status.indexable_nodes === 1 ? "" : "s"} indexable
+        </p>
+      )}
 
       {!confirming ? (
         <button

@@ -325,3 +325,15 @@ export interface PolicyTemplateOut {
   description: string;
   body: string;
 }
+
+// GET /projects/{id}/assistant/index-status (apps/cloud/app/api/assistant.py)
+// — the completion signal POST .../reindex itself never had: that endpoint
+// returns `{enqueued}` the instant jobs are queued, before anything is
+// embedded. This is what actually landed. `pending` is intentionally not a
+// field here — the cloud has no cheap, honest way to say "still queued" per
+// project, and omits it rather than guess (see the endpoint's docstring).
+export interface IndexStatus {
+  indexed_chunks: number;
+  indexable_nodes: number;
+  embed_model: string | null;
+}

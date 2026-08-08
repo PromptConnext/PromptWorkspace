@@ -277,6 +277,12 @@ class Repository(abc.ABC):
         incompatible vector dimensions in the same fixed-width column."""
 
     @abc.abstractmethod
+    def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:
+        """How many chunks currently exist for this project — the honest
+        "did the last reindex actually do anything" signal for
+        GET /projects/{id}/assistant/index-status."""
+
+    @abc.abstractmethod
     def vector_search(
         self,
         workspace_id: str,
@@ -838,6 +844,14 @@ class InMemoryRepository(Repository):
                 if chunk.workspace_id == workspace_id:
                     return chunk.embed_model
         return None
+
+    def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:
+        return sum(
+            1
+            for chunks_by_index in self._rag_chunks.get(project_id, {}).values()
+            for chunk in chunks_by_index.values()
+            if chunk.workspace_id == workspace_id
+        )
 
     def vector_search(
         self,
