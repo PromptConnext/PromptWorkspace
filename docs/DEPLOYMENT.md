@@ -57,6 +57,53 @@ psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v embed_dim=1024 -f migrations/0023_
 
 before resuming the loop for anything numbered after it. There is deliberately no default for `embed_dim` — omitting it aborts the script (with `-v ON_ERROR_STOP=1`, a nonzero exit) rather than silently reapplying the 1536 ceiling this migration exists to remove. **After it runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
 
+**Migration 0024 needs no special handling** — unlike 0023, it's back in the plain loop above. It creates a single table, `pz_schema_migrations`, that records which migration files this database is known to have: filename, a sha256 checksum of the file's exact bytes (so an edit to an already-applied file becomes detectable instead of silently drifting from what actually ran — this repo has already had an operator decline to let a migration file be touched post-application for exactly that reason), when the row was written, who wrote it, and a `source` of either `applied` (a runner executed the file and wrote the row in the same action) or `adopted` (an operator asserted the row's truth without that execution — see below). Nothing yet writes rows into it automatically; that lands with the migration runner. On a fresh database this migration is a no-op beyond creating an empty table — apply it in order along with everything else and move on.
+
+#### Adopting an existing database into the migrations ledger
+
+The ledger has a bootstrapping problem: the operator's production database almost certainly already carries 0001 through 0022 (0023 is destructive and requires its own deliberate `-v embed_dim` run, so don't assume it), applied over months by the plain `psql -f` loop, with nothing anywhere recording that fact. Once `pz_schema_migrations` exists, that history needs to be *in* it — but re-running 0001–0022 to populate it is exactly the wrong move: several of those files are only partially idempotent (0003 guards 15 of 32 DDL statements, 0009 guards 9 of 16, 0006 none of its one `GRANT`), so replaying them against a database that already has their effects would fail partway or silently duplicate work. The ledger has to be told this history, not made to re-derive it by force.
+
+It also must not be told automatically. A migration that inserted "every file numbered below me is applied" the first time it ran would be guessing on the operator's behalf and recording that guess as though it were observed fact — precisely the uncertainty this table exists to remove. So adoption is a separate, manual, explicit step the operator runs once, and every row it writes carries `source = 'adopted'` rather than `'applied'`, so the distinction between "we watched this happen" and "we were told this happened" survives in the data rather than being flattened away for convenience.
+
+Run it against the target database after `0024_schema_migrations_ledger.sql` has been applied (so the table exists) and before resuming the plain loop for anything after 0024:
+
+```bash
+cd apps/cloud
+ADOPT_THROUGH="0022"      # the last migration you believe this database already has
+ADOPTED_BY="${USER:-$(whoami)}"
+ADOPTED_AT="$(date -u +%FT%TZ)"
+
+for mig_file in migrations/00*.sql; do
+  f=$(basename "$mig_file")
+  num="${f%%_*}"
+  (( 10#$num > 10#$ADOPT_THROUGH )) && continue
+  checksum=$(shasum -a 256 "$mig_file" | awk '{print $1}')   # sha256sum on Linux
+  note="Adopted ${ADOPTED_AT} by ${ADOPTED_BY}: asserted already applied to this database; not independently verified, only checksummed against the current file."
+  psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -v filename="$f" -v checksum="$checksum" -v note="$note" <<SQL
+insert into pz_schema_migrations (filename, checksum, source, notes)
+values (:'filename', :'checksum', 'adopted', :'note')
+on conflict (filename) do nothing;
+SQL
+done
+```
+
+(Use a heredoc or `-f`, not `psql -c`, for the insert — `-c` does not interpolate `:'variable'` the way piped/scripted input does, and will fail with a syntax error at the colon.) The checksum recorded is of the file as it exists on disk *today*, not as it looked whenever the migration actually ran — this table cannot recover that historical byte-for-byte state, and doesn't pretend to. What it buys is a going-forward baseline: if that file changes after adoption, a checksum comparison will catch the drift, which is the failure mode this column exists for regardless of whether the row's origin was `applied` or `adopted`.
+
+Immediately after creating the table (before or after the adoption loop; order between them doesn't matter), record 0024 itself with `source = 'applied'` — that one is not a guess, since you just watched it run:
+
+```bash
+checksum=$(shasum -a 256 migrations/0024_schema_migrations_ledger.sql | awk '{print $1}')
+psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -v filename="0024_schema_migrations_ledger.sql" -v checksum="$checksum" <<SQL
+insert into pz_schema_migrations (filename, checksum, source)
+values (:'filename', :'checksum', 'applied')
+on conflict (filename) do nothing;
+SQL
+```
+
+After adoption, resume the loop for anything past `ADOPT_THROUGH` that hasn't run yet — 0023 by hand with its required `-v embed_dim` (§2.2 above), then the plain loop for anything numbered after 0024.
+
+A **fresh** database needs none of this: run the loop from 0001 as always, `0024_schema_migrations_ledger.sql` included in its numeric place, and stop. The ledger table exists and starts empty — there is no history to assert, so there is nothing to adopt.
+
 ### 2.3 Create the Railway service
 
 The repo already has a working `apps/cloud/Dockerfile` (respects `$PORT`, single uvicorn worker). Two options:
@@ -326,6 +373,7 @@ Manual is fine now; when ready, GitHub Actions is the natural fit:
 ## 7. Production checklist
 
 - [ ] Supabase migrations applied in order (0001 → latest), `schema_version` on `/health` matches — including 0023 by hand with `-v embed_dim=<N>` (§2.2), followed by a reindex
+- [ ] `pz_schema_migrations` reflects this database's real history — for a database that had migrations applied before the ledger existed, that means the adoption procedure (§2.2) ran once, not that the loop was silently skipped
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`
 - [ ] service_role key set only in Railway variables — never in the repo or client
 - [ ] Replicas = 1 (in-process presence/rate-limit state)
