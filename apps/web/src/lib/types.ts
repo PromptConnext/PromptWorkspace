@@ -217,10 +217,10 @@ export interface Citation {
   node_id: string;
   chunk_index: number;
   source: CitationSource;
-  repo?: string | null;
-  path?: string | null;
-  start_line?: number | null;
-  end_line?: number | null;
+  repo: string | null;
+  path: string | null;
+  start_line: number | null;
+  end_line: number | null;
 }
 
 export interface LineageAgentRun {
