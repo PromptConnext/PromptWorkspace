@@ -1048,17 +1048,24 @@ export function useAssistantChat(projectId: string) {
 
   const retry = useCallback(
     async (turnId: number) => {
-      let question = "";
+      // Read the question from `turns` directly rather than capturing it as a
+      // side effect of the setTurns updater below: React does not guarantee
+      // that updater runs before this function continues, so a variable set
+      // inside it would still hold its initial value here — which silently
+      // skipped every retry.
+      const turn = turns.find((t) => t.id === turnId);
+      if (!turn) return;
+      const question = turn.question;
       setTurns((prev) =>
-        prev.map((t) => {
-          if (t.id !== turnId) return t;
-          question = t.question;
-          return { ...t, facts: null, answer: "", citations: [], status: "streaming", error: null };
-        }),
+        prev.map((t) =>
+          t.id === turnId
+            ? { ...t, facts: null, answer: "", citations: [], status: "streaming", error: null }
+            : t,
+        ),
       );
-      if (question) await run(turnId, question);
+      await run(turnId, question);
     },
-    [run],
+    [run, turns],
   );
 
   const reset = useCallback(() => {
