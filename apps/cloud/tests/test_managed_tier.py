@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.main import create_app
 from app.models.schemas import ModelConnection
@@ -219,3 +221,54 @@ def test_global_managed_limiter_protects_shared_key(client: TestClient):
         statuses.append(res.status_code)
 
     assert any(s == 429 for s in statuses), "global limiter never engaged across 20 rapid requests"
+
+
+# --------------------------------------------------------------------------- #
+# Startup warning when the managed tier is on but embeddings aren't
+# configured (plan 0008 follow-up) — this combination means every content
+# question in every keyless workspace silently returns "no matching
+# artifacts" with no retrieval attempted, which is worth shouting about at
+# startup rather than only surfacing in a settings form nobody visits when
+# the symptom is a bad chat answer.
+# --------------------------------------------------------------------------- #
+
+_MISSING_EMBED_WARNING = "Managed embeddings are not configured"
+
+
+@pytest.fixture
+def _clean_settings_cache():
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_startup_warns_when_managed_tier_on_but_embed_unconfigured(
+    monkeypatch, caplog, _clean_settings_cache
+):
+    monkeypatch.setenv("MANAGED_MODEL_ENABLED", "true")
+    monkeypatch.setenv("MANAGED_MODEL_API_KEY", "sk-platform-key")
+    monkeypatch.delenv("MANAGED_EMBED_BASE_URL", raising=False)
+    monkeypatch.delenv("MANAGED_EMBED_MODEL", raising=False)
+
+    app = create_app()
+    with caplog.at_level(logging.WARNING, logger="promptconnext"):
+        with TestClient(app):
+            pass
+
+    assert any(_MISSING_EMBED_WARNING in record.message for record in caplog.records)
+
+
+def test_startup_silent_about_embeddings_when_managed_tier_off(
+    monkeypatch, caplog, _clean_settings_cache
+):
+    monkeypatch.setenv("MANAGED_MODEL_ENABLED", "false")
+    monkeypatch.delenv("MANAGED_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("MANAGED_EMBED_BASE_URL", raising=False)
+    monkeypatch.delenv("MANAGED_EMBED_MODEL", raising=False)
+
+    app = create_app()
+    with caplog.at_level(logging.WARNING, logger="promptconnext"):
+        with TestClient(app):
+            pass
+
+    assert not any(_MISSING_EMBED_WARNING in record.message for record in caplog.records)

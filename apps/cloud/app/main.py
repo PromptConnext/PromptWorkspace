@@ -140,6 +140,24 @@ async def lifespan(app: FastAPI):
     app.state.managed_embed_connection = build_managed_embed_connection(
         settings, app.state.secret_store
     )
+    # managed_model_enabled=true with no resolved embed connection is an
+    # operational fault, not a deliberate opt-out: every keyless workspace's
+    # content questions will silently retrieve nothing and the assistant will
+    # answer "I don't have enough information" as if it were a genuine
+    # unknown, indistinguishable from a working deployment. A deployment
+    # with the managed tier off entirely has opted out on purpose and must
+    # stay quiet.
+    if settings.managed_model_enabled and app.state.managed_embed_connection is None:
+        logger.warning(
+            "Managed embeddings are not configured (MANAGED_EMBED_BASE_URL / "
+            "MANAGED_EMBED_MODEL are unset) even though MANAGED_MODEL_ENABLED=true. "
+            "Keyless workspaces' assistant will still answer status/lineage "
+            "questions, but every document-content question will silently "
+            "return \"I don't have enough information\" with no retrieval "
+            "attempted. Set MANAGED_EMBED_BASE_URL, MANAGED_EMBED_MODEL, and "
+            "MANAGED_EMBED_API_KEY (see apps/cloud/.env.example) to enable "
+            "content grounding."
+        )
     # Global (not per-workspace) token bucket protecting the shared free
     # Typhoon key from the platform's own aggregate traffic — separate from
     # the per-workspace DailyTokenBudget check every stage already goes

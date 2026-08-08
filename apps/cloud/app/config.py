@@ -136,13 +136,18 @@ class Settings(BaseSettings):
     # generation-only, so a keyless (no BYO) workspace needs a separate
     # platform-hosted embedding model to ground content questions. Any
     # OpenAI-compatible /embeddings endpoint works (Text-Embeddings-Inference,
-    # vLLM, ...) — recommend a BGE-m3-class multilingual model for Thai+
-    # English. IMPORTANT: pz_rag_chunks.embedding is a fixed vector(1536)
-    # column (migrations/0009_rag.sql) — the chosen model's output dimension
-    # must be 1536, or chunks embedded with it won't fit the column at all.
-    # Left unset (empty base_url/model), the assistant still answers
-    # lineage/status questions on the managed chat model alone; content
-    # questions degrade to "no matching artifacts" rather than erroring.
+    # vLLM, ...), but pz_rag_chunks.embedding is a fixed vector(1536) column
+    # (migrations/0009_rag.sql), so the chosen model's output dimension must
+    # be 1536 or chunks embedded with it won't fit the column at all. Most
+    # open multilingual encoders do NOT fit (BGE-m3 emits 1024, Jina v3 1024,
+    # KaLM-embedding-multilingual v2.5 896); known-good 1536 options are
+    # OpenAI text-embedding-3-small (1536 native), Google gemini-embedding-001
+    # via its OpenAI-compatible endpoint (3072 native, MRL-truncated to 1536
+    # via the `dimensions` param), or Alibaba-NLP/gte-Qwen2-1.5B-instruct
+    # (1536 native, self-hosted). Left unset (empty base_url/model), the
+    # assistant still answers lineage/status questions on the managed chat
+    # model alone; content questions degrade to "no matching artifacts"
+    # rather than erroring.
     managed_embed_base_url: str = ""
     managed_embed_model: str = ""
     managed_embed_dim: int = 1536
