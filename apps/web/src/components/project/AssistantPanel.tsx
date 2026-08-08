@@ -10,7 +10,9 @@
 // only and pronoun follow-ups will be answered without prior context.
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, memo, useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
 import { getStageDocument, listDocuments } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
@@ -21,6 +23,71 @@ import { CitationList } from "./CitationList";
 import { useAssistantChat, type AssistantError, type Turn } from "./useAssistantChat";
 
 const STAGES: StageKind[] = ["constitution", "specify", "plan", "tasks"];
+
+// Minimal child-selector styling so Markdown elements (lists, bold, inline
+// code, headings) read correctly while inheriting the panel's own slate
+// palette and text-sm sizing — deliberately not the Tailwind Typography
+// `prose` classes MarkdownEditor.tsx uses, which bring a document theme
+// (different type scale, spacing, colors) that would restyle the panel.
+const ANSWER_CLASSNAME =
+  "whitespace-pre-wrap text-sm text-slate-700 " +
+  "[&_p]:my-0 [&_p+p]:mt-2 " +
+  "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 " +
+  "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 " +
+  "[&_li]:my-0.5 " +
+  "[&_strong]:font-semibold [&_em]:italic " +
+  "[&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs " +
+  "[&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-slate-100 [&_pre]:p-2 [&_pre]:text-xs " +
+  "[&_a]:underline " +
+  "[&_h1]:text-sm [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold " +
+  "[&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-2 [&_blockquote]:text-slate-600";
+
+// The model's answer is untrusted twice over (model output derived from
+// user-uploaded documents), so raw HTML passthrough must stay off. This repo
+// never installs rehype-raw, and react-markdown does not execute or render
+// raw HTML without it — an `<script>`/`onerror=` payload in the source text
+// comes out as an escaped/ignored node, never a live DOM element (verified
+// in AssistantPanel.test.tsx). `skipHtml` is set anyway, belt-and-suspenders,
+// so any literal HTML node is dropped rather than echoed as escaped text.
+// `img` is also overridden to avoid auto-fetching attacker-controlled URLs
+// embedded in streamed answers (a known markdown-image exfiltration vector
+// for LLM output) — it renders the alt text only, no network request.
+const MARKDOWN_COMPONENTS = {
+  img: ({ alt }: { alt?: string }) => <span>{alt ?? ""}</span>,
+};
+
+// remark/mdast are CommonMark parsers, which are designed to be tolerant of
+// incomplete input (a half-written `**bold` or an unterminated list) rather
+// than throw — but this streams on every SSE delta, so a defensive boundary
+// costs little and guarantees constraint 1 (must not throw) even against an
+// edge case the parser doesn't handle. Keyed by the answer text itself: a
+// fresh mount (and thus a fresh attempt) each time the streamed text grows,
+// while an unrelated re-render (e.g. citations arriving) leaves the same key
+// and skips remounting.
+class MarkdownErrorBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
+// Memoized on `answer` alone so citations/facts/retrieval updates on the same
+// turn don't force react-markdown to re-parse and re-render the answer body.
+const AssistantAnswer = memo(function AssistantAnswer({ answer }: { answer: string }) {
+  return (
+    <div className={ANSWER_CLASSNAME}>
+      <ReactMarkdown skipHtml components={MARKDOWN_COMPONENTS}>
+        {answer}
+      </ReactMarkdown>
+    </div>
+  );
+});
 
 function ErrorBlock({
   error,
@@ -292,7 +359,14 @@ export function AssistantPanel({
               )}
               {turn.facts && <AssistantFactCard facts={turn.facts} />}
               {turn.answer && (
-                <p className="whitespace-pre-wrap text-sm text-slate-700">{turn.answer}</p>
+                <MarkdownErrorBoundary
+                  key={turn.answer}
+                  fallback={
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{turn.answer}</p>
+                  }
+                >
+                  <AssistantAnswer answer={turn.answer} />
+                </MarkdownErrorBoundary>
               )}
               {turn.error && (
                 <ErrorBlock

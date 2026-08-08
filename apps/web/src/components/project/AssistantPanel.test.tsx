@@ -324,6 +324,97 @@ describe("AssistantPanel", () => {
     expect(screen.queryByText(/isn't grounded/i)).not.toBeInTheDocument();
   });
 
+  // Task 8 (overnight run): the model emits Markdown, and the panel used to
+  // render turn.answer as literal text — every bullet/bold answer showed its
+  // asterisks and hyphens verbatim. This is the regression test: a streamed
+  // "- **Bold**: text" delta must come out as a real list item containing a
+  // <strong>, not the raw markup as a text node.
+  it("renders a streamed Markdown bullet with bold as an actual list item and <strong>, not literal asterisks", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"- **Bold**: text"}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    const { container } = panel();
+    await userEvent.type(screen.getByRole("textbox"), "what features exist?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    // "li ul li" (not just "ul li") to land inside the Markdown-rendered list
+    // nested under the turn's own <li>, not the transcript's outer <li>.
+    await waitFor(() => expect(container.querySelector("li ul li")).not.toBeNull());
+    const bullet = container.querySelector("li ul li");
+    expect(bullet?.querySelector("strong")).toHaveTextContent("Bold");
+    expect(screen.queryByText("- **Bold**: text")).not.toBeInTheDocument();
+    expect(screen.queryByText(/\*\*Bold\*\*/)).not.toBeInTheDocument();
+  });
+
+  // Constraint 1: turn.answer grows by an SSE delta on every frame, so the
+  // Markdown renderer runs against genuinely incomplete input mid-stream —
+  // here, an unclosed bold marker, an unclosed link, and an unclosed inline
+  // code span, all still open when this assertion runs (the citations frame,
+  // and thus turn completion, is gated behind `release()` below).
+  it("renders a partial, unterminated Markdown fragment mid-stream without throwing", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        async start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'data: {"delta":"Here is a **bold start, an unterminated [link, and a `code"}\n\n',
+            ),
+          );
+          await gate;
+          controller.enqueue(encoder.encode('event: citations\ndata: {"citations":[]}\n\n'));
+          controller.close();
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "partial please");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText(/Here is a/)).toBeInTheDocument());
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(screen.getByText(/code/)).toBeInTheDocument());
+  });
+
+  // Constraint 2: the content is model output derived from user-uploaded
+  // documents, so it's untrusted twice over. Neither a <script> nor an
+  // onerror-bearing <img> may become a live element or execute.
+  it("does not render an HTML payload in the streamed answer as a live DOM element", async () => {
+    const payload =
+      'Before <script>window.__assistantPwned = true</script> after ' +
+      '<img src="x" onerror="window.__assistantPwned = true"> end';
+    const frame = `data: ${JSON.stringify({ delta: payload })}`;
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(frame, 'event: citations\ndata: {"citations":[]}'),
+    }) as unknown as typeof fetch;
+
+    const { container } = panel();
+    await userEvent.type(screen.getByRole("textbox"), "explain the html");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText(/Before/)).toBeInTheDocument());
+
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect((window as unknown as { __assistantPwned?: boolean }).__assistantPwned).toBeUndefined();
+  });
+
   it("closes on Escape", async () => {
     const onClose = vi.fn();
     render(
