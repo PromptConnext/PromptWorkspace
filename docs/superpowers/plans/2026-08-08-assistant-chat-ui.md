@@ -16,7 +16,7 @@
 - `apps/web` is TypeScript **strict** (`tsconfig.json:11`). No `any` in committed code.
 - `src/lib/types.ts` mirrors `apps/cloud/app/models/schemas.py` field-for-field. It is a read-only client mirror, not an independent schema — do not invent fields.
 - Do **not** modify `src/lib/planner-sse.ts`, `src/components/project/useStageGeneration.ts`, or `src/components/project/Planner.tsx`. Migrating the Planner onto the new reader is explicitly out of scope.
-- Web tests run with `pnpm --dir apps/web vitest run`. Typecheck with `pnpm --dir apps/web tsc --noEmit`.
+- Web tests run with `cd apps/web && pnpm test`; typecheck with `cd apps/web && pnpm typecheck`. Do **not** use `pnpm --dir apps/web vitest run` or `-C apps/web` — both fail with `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` on this pnpm version. The root `package.json`'s `--dir` scripts work only because they invoke a named script.
 - Cloud tests run with `cd apps/cloud && pytest`; lint with `ruff check .` (line-length 100).
 - Internal links use `next/link` in `apps/web` (the locale-aware `@/i18n/navigation` rule applies to `apps/corp` only).
 - Assistant answers are **never** written to any cloud endpoint. The panel is read-only apart from the reindex button in Task 8.
