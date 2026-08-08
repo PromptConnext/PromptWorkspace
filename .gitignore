@@ -16,3 +16,4 @@ apps/cloud/.venv/
 __pycache__/
 apps/cloud/scripts/brevo-test-email.sh
 *.png
+graphify-out/
