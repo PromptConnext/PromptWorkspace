@@ -131,7 +131,9 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
     secret_store = app.state.secret_store
     api_key = secret_store.decrypt(conn.secret_ref)
     embedder = app.state.embedding_provider
-    vectors = await embedder.embed(chunks, conn.embed_model, api_key, conn.base_url)
+    vectors = await embedder.embed(
+        chunks, conn.embed_model, api_key, conn.base_url, conn.embed_dim
+    )
     repo.upsert_rag_chunks(
         job.workspace_id,
         job.project_id,
@@ -173,7 +175,9 @@ async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
     secret_store = app.state.secret_store
     api_key = secret_store.decrypt(conn.secret_ref)
     embedder = app.state.embedding_provider
-    vectors = await embedder.embed(texts, conn.embed_model, api_key, conn.base_url)
+    vectors = await embedder.embed(
+        texts, conn.embed_model, api_key, conn.base_url, conn.embed_dim
+    )
     repo.upsert_code_chunks(
         job.workspace_id, job.project_id, job.repo, job.path, job.sha, line_ranges, vectors
     )

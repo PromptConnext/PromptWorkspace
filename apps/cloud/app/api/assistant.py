@@ -125,7 +125,9 @@ async def set_model_connection(
 
     embedder = getattr(request.app.state, "embedding_provider", None) or HttpEmbeddingProvider()
     try:
-        await embedder.embed(["healthcheck"], body.embed_model, body.api_key, body.base_url)
+        await embedder.embed(
+            ["healthcheck"], body.embed_model, body.api_key, body.base_url, body.embed_dim
+        )
     except Exception as exc:  # noqa: BLE001 - any failure means the key/URL don't work
         logger.warning("model connection health check failed: %s", exc)
         raise HTTPException(
@@ -249,7 +251,11 @@ async def chat(
             )
         embed_api_key = secret_store.decrypt(embed_conn.secret_ref)
         [query_embedding] = await embedder.embed(
-            [body.question], embed_conn.embed_model, embed_api_key, embed_conn.base_url
+            [body.question],
+            embed_conn.embed_model,
+            embed_api_key,
+            embed_conn.base_url,
+            embed_conn.embed_dim,
         )
         hits = repo.vector_search(project.workspace_id, project_id, query_embedding, top_k=8)
         code_hits = repo.code_vector_search(

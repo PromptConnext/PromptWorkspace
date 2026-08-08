@@ -15,19 +15,39 @@ import httpx
 
 class EmbeddingProvider(Protocol):
     async def embed(
-        self, texts: list[str], model: str, api_key: str, base_url: str
+        self,
+        texts: list[str],
+        model: str,
+        api_key: str,
+        base_url: str,
+        dim: int | None = None,
     ) -> list[list[float]]: ...
 
 
 class HttpEmbeddingProvider:
     async def embed(
-        self, texts: list[str], model: str, api_key: str, base_url: str
+        self,
+        texts: list[str],
+        model: str,
+        api_key: str,
+        base_url: str,
+        dim: int | None = None,
     ) -> list[list[float]]:
         url = base_url.rstrip("/") + "/embeddings"
+        payload: dict[str, object] = {"input": texts, "model": model}
+        # `dimensions` is sent only when the connection configures one. Some
+        # models return a width that does not fit pz_rag_chunks.embedding
+        # unless asked to truncate — Gemini's gemini-embedding-001 defaults to
+        # 3072 and supports MRL truncation to 1536, and OpenAI's
+        # text-embedding-3-* accept the same parameter. It is deliberately
+        # omitted when unset, because self-hosted gateways (Ollama, TEI) may
+        # reject an unknown field outright.
+        if dim is not None:
+            payload["dimensions"] = dim
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 url,
-                json={"input": texts, "model": model},
+                json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             resp.raise_for_status()
@@ -43,8 +63,15 @@ class FakeEmbeddingProvider:
     dim = 32
 
     async def embed(
-        self, texts: list[str], model: str, api_key: str, base_url: str
+        self,
+        texts: list[str],
+        model: str,
+        api_key: str,
+        base_url: str,
+        dim: int | None = None,
     ) -> list[list[float]]:
+        # The requested width is accepted and ignored: these vectors are for
+        # plumbing tests, where a stable 32-wide hash is the point.
         return [_hash_vector(t, self.dim) for t in texts]
 
 
