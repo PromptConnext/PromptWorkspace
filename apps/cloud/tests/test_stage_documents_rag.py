@@ -125,3 +125,57 @@ def test_patch_stage_document_produces_rag_chunks_end_to_end():
     assert res.status_code == 200, res.text
 
     assert _wait_until(lambda: _chunk_count() > 0), "chunks never appeared"
+
+
+def test_reindex_sweeps_uploaded_documents(monkeypatch):
+    """The PRD must be recoverable by reindexing.
+
+    Reindex used to skip `documents` entirely, on the reasoning that
+    documents.py enqueues on upload so no backfill scenario existed. That only
+    holds if a model connection resolved at upload time; when none did, the job
+    was dropped by app/rag/queue.py and the PRD stayed permanently unindexed —
+    while the reindex button reported a healthy count that silently excluded
+    the one artifact users most expect the assistant to have read.
+    """
+    from app.main import create_app
+    from app.models.schemas import Document
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    repo = client.app.state.repository
+    doc = Document(
+        workspace_id=ws["id"],
+        project_id=pid,
+        title="MakeStoryTime-PRD.pdf",
+        mime="application/pdf",
+        source_kind="upload",
+        storage_ref="test/MakeStoryTime-PRD.pdf",
+        extracted_text="The product lets families write bedtime stories together.",
+        status="extracted",
+        created_by="alice",
+    )
+    repo.create_document(doc)
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.api.assistant.enqueue", lambda app, job: captured.append(job))
+
+    res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
+    assert res.status_code == 200
+
+    document_jobs = [j for j in captured if j.node_type == "documents"]
+    assert [j.node_id for j in document_jobs] == [doc.id]
+    assert res.json()["enqueued"] >= 1
+
+    client.__exit__(None, None, None)

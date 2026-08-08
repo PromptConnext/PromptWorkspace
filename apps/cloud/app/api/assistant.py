@@ -163,13 +163,9 @@ def reindex_project(
     for node_type in RAG_NODE_TYPES:
         if node_type in ("pull_requests", "documents", "stage_documents"):
             # None of these are GraphEntity members of ProjectGraph.
-            # PullRequest rows have GitHub as their source of truth (M11);
-            # Document rows are written once by the upload endpoint (M0),
-            # which enqueues its own embed job immediately — both index the
-            # moment they arrive, so no backfill scenario exists for them the
-            # way there is for requirements/specs/tasks that pre-date RAG.
-            # stage_documents is a separate per-stage store, not a graph
-            # entity (Task 1) — swept explicitly below instead.
+            # PullRequest rows have GitHub as their source of truth (M11).
+            # documents and stage_documents are swept explicitly below —
+            # they have their own stores, not graph entities.
             continue
         for item in getattr(graph, node_type):
             enqueue(request.app, EmbedJob(project.workspace_id, project_id, node_type, item.id))
@@ -182,6 +178,20 @@ def reindex_project(
                 EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
             )
             enqueued += 1
+    # Uploaded source documents (the PRD) are swept too. This used to be
+    # skipped on the reasoning that documents.py enqueues on upload, so no
+    # backfill scenario existed — but that only holds if a model connection
+    # resolved at upload time. When none did, the job was dropped
+    # (app/rag/queue.py's "skip embed: no model connection") and the PRD stayed
+    # permanently unindexed with no way back short of re-uploading the file:
+    # the reindex button reported a healthy count while silently excluding the
+    # one artifact users most expect the assistant to have read.
+    for document in repo.list_documents(project_id):
+        enqueue(
+            request.app,
+            EmbedJob(project.workspace_id, project_id, "documents", document.id),
+        )
+        enqueued += 1
     return {"enqueued": enqueued}
 
 
