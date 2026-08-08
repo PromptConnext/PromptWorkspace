@@ -1,11 +1,13 @@
 """Unit tests for scripts/migrate.py — everything here is pure-function
 logic exercised without a live database. Live-database behaviour (actually
 applying migrations, rolling back on failure, refusing a tampered checksum,
-0023's required variable end to end) was exercised by hand against a
-throwaway pgvector/pgvector:pg16 Docker container; see
-.claude/overnight/logs/mig-task-3-report.md for that session transcript —
-it is deliberately not repeated here as an automated test, since this
-suite must stay runnable with no live database and no new dependencies."""
+0023's required variable end to end, and — added for `status` — the
+no-ledger/fully-migrated/partial/adopted/drifted cases plus a read-only
+proof) was exercised by hand against a throwaway pgvector/pgvector:pg16
+Docker container; see .claude/overnight/logs/mig-task-3-report.md and
+.claude/overnight/logs/mig-task-5-report.md for those session transcripts —
+deliberately not repeated here as automated tests, since this suite must
+stay runnable with no live database and no new dependencies."""
 
 from __future__ import annotations
 
@@ -244,3 +246,146 @@ def test_adopt_through_0024_or_later_is_rejected(monkeypatch, tmp_path):
         ["--migrations-dir", str(tmp_path), "adopt", "--through", "0024", "--yes"]
     )
     assert migrate.cmd_adopt(args) != 0
+
+
+# --- status: ledger row parsing -------------------------------------------------
+
+
+def test_parse_ledger_rows_splits_tab_separated_columns():
+    output = "0001_a.sql\tabc123\t2026-08-01T00:00:00Z\tpostgres\tapplied\t\n"
+    rows = migrate.parse_ledger_rows(output)
+    assert rows == [
+        migrate.LedgerEntry(
+            "0001_a.sql", "abc123", "2026-08-01T00:00:00Z", "postgres", "applied", ""
+        )
+    ]
+
+
+def test_parse_ledger_rows_keeps_notes_with_embedded_tab_in_last_field():
+    output = "0001_a.sql\tabc123\t2026-08-01T00:00:00Z\tpostgres\tadopted\tnote\twith tab\n"
+    rows = migrate.parse_ledger_rows(output)
+    assert rows[0].notes == "note\twith tab"
+
+
+def test_parse_ledger_rows_skips_blank_lines():
+    output = "0001_a.sql\tabc\t2026-08-01T00:00:00Z\tpostgres\tapplied\t\n\n"
+    rows = migrate.parse_ledger_rows(output)
+    assert len(rows) == 1
+
+
+def test_parse_ledger_rows_rejects_malformed_row():
+    with pytest.raises(migrate.MigrationError):
+        migrate.parse_ledger_rows("not-enough-columns\n")
+
+
+# --- status: report construction -------------------------------------------------
+
+
+def _entry(filename, checksum, source="applied", notes=""):
+    return migrate.LedgerEntry(
+        filename, checksum, "2026-08-01T00:00:00Z", "postgres", source, notes
+    )
+
+
+def test_build_status_report_no_ledger_marks_all_pending(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql", "0002_b.sql"])
+    report = migrate.build_status_report(migrations, ledger_present=False, ledger_rows=[])
+
+    assert report.ledger_present is False
+    assert report.applied == []
+    assert report.pending == migrations
+    assert report.orphaned == []
+    assert report.mismatches == []
+
+
+def test_build_status_report_splits_applied_and_pending(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql", "0002_b.sql", "0003_c.sql"])
+    ledger_rows = [
+        _entry("0001_a.sql", migrations[0].checksum(), source="applied"),
+        _entry("0002_b.sql", migrations[1].checksum(), source="adopted", notes="adopted by ops"),
+    ]
+
+    report = migrate.build_status_report(migrations, ledger_present=True, ledger_rows=ledger_rows)
+
+    assert [e.filename for e in report.applied] == ["0001_a.sql", "0002_b.sql"]
+    assert [e.source for e in report.applied] == ["applied", "adopted"]
+    assert [m.filename for m in report.pending] == ["0003_c.sql"]
+    assert report.mismatches == []
+    assert report.orphaned == []
+
+
+def test_build_status_report_detects_checksum_drift(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql"])
+    ledger_rows = [_entry("0001_a.sql", "0" * 64)]
+
+    report = migrate.build_status_report(migrations, ledger_present=True, ledger_rows=ledger_rows)
+
+    assert report.mismatches == [("0001_a.sql", "0" * 64, migrations[0].checksum())]
+
+
+def test_build_status_report_flags_orphaned_ledger_rows_with_no_file_on_disk(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql"])
+    ledger_rows = [
+        _entry("0001_a.sql", migrations[0].checksum()),
+        _entry("0002_removed.sql", "deadbeef" * 8),
+    ]
+
+    report = migrate.build_status_report(migrations, ledger_present=True, ledger_rows=ledger_rows)
+
+    assert [e.filename for e in report.orphaned] == ["0002_removed.sql"]
+
+
+# --- status: text formatting -------------------------------------------------
+
+
+def test_format_status_report_no_ledger_says_history_unknown_and_points_at_adopt(tmp_path):
+    report = migrate.StatusReport(
+        ledger_present=False, applied=[], pending=[], orphaned=[], mismatches=[]
+    )
+    text = migrate.format_status_report(tmp_path, "postgres://host/db", report)
+
+    assert "history unknown" in text
+    assert "adopt" in text
+    # must not claim knowledge it doesn't have
+    assert "0001" not in text
+
+
+def test_format_status_report_lists_applied_with_source_and_pending(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql", "0002_b.sql"])
+    report = migrate.build_status_report(
+        migrations,
+        ledger_present=True,
+        ledger_rows=[_entry("0001_a.sql", migrations[0].checksum(), source="adopted")],
+    )
+    text = migrate.format_status_report(tmp_path, "postgres://host/db", report)
+
+    assert "0001_a.sql" in text
+    assert "adopted" in text
+    assert "Pending (1)" in text
+    assert "0002_b.sql" in text
+
+
+def test_format_status_report_surfaces_checksum_drift(tmp_path):
+    migrations = _migrations(tmp_path, ["0001_a.sql"])
+    report = migrate.build_status_report(
+        migrations, ledger_present=True, ledger_rows=[_entry("0001_a.sql", "0" * 64)]
+    )
+    text = migrate.format_status_report(tmp_path, "postgres://host/db", report)
+
+    assert "CHECKSUM DRIFT" in text
+    assert "0" * 64 in text
+
+
+def test_format_status_report_redacts_credentials_in_db_url(tmp_path):
+    report = migrate.StatusReport(
+        ledger_present=False, applied=[], pending=[], orphaned=[], mismatches=[]
+    )
+    text = migrate.format_status_report(tmp_path, "postgres://user:hunter2@host/db", report)
+
+    assert "hunter2" not in text
+    assert "postgres://user:***@host/db" in text
+
+
+def test_status_subcommand_is_wired_into_the_parser():
+    args = migrate.build_parser().parse_args(["status"])
+    assert args.func is migrate.cmd_status

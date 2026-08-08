@@ -41,20 +41,26 @@ uvicorn app.main:app --reload --port 8080
 cp .env.example .env.local
 # set DATA_BACKEND=supabase, SUPABASE_URL, SUPABASE_KEY
 # for real auth: AUTH_MODE=supabase, SUPABASE_JWT_SECRET
-# apply the schema, in order (0023 is the exception — see below):
-for f in migrations/00*.sql; do
-  psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -f "$f" || { echo "migration failed: $f" >&2; break; }
-done
+
+# apply the schema — scripts/migrate.py tracks what's already applied in
+# pz_schema_migrations, so it's safe to re-run and stops on the first failure:
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --dry-run
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply
+
 uvicorn app.main:app --reload --port 8080 --env-file=.env.local
 ```
 
-**Migration 0023** (`pz_rag_chunks`/`pz_code_chunks.embedding` width, see the file's own header) isn't in that loop — a plain `vector(1536)` column can't become `vector(N)` for any other `N` without deleting whatever's already embedded (there is no valid reinterpretation of a vector at a different width), so it takes the width as a required `-v` parameter instead of a new hardcoded default:
+**Migration 0023** (`pz_rag_chunks`/`pz_code_chunks.embedding` width, see the file's own header) is destructive — a plain `vector(1536)` column can't become `vector(N)` for any other `N` without deleting whatever's already embedded — so the runner refuses to apply it without an explicit width:
 
 ```bash
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --var embed_dim=1024
 ```
 
-Match `embed_dim` to whatever embedding model you're actually running (1024 for BGE-m3/Jina v3, 896 for KaLM-embedding-multilingual v2.5). Skip `-v embed_dim=<N>` and the script aborts rather than quietly resurrecting the 1536 ceiling it exists to remove. It's destructive by design — apply it, then reindex (`POST /workspaces/{id}/assistant/reindex`) before the assistant can ground content questions again; full detail in [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md#22-apply-supabase-migrations).
+Match `embed_dim` to whatever embedding model you're actually running (1024 for BGE-m3/Jina v3, 896 for KaLM-embedding-multilingual v2.5). Skip `--var embed_dim=<N>` and the runner stops before touching the database, rather than quietly resurrecting the 1536 ceiling it exists to remove. Apply it, then reindex (`POST /workspaces/{id}/assistant/reindex`) before the assistant can ground content questions again.
+
+Not sure what state a database is in — including production, where nobody may have been tracking this? `scripts/migrate.py status --db-url "$SUPABASE_DB_URL"` is read-only: it reports which migrations are recorded, whether each was actually run by a tool (`applied`) or only asserted by an operator (`adopted`), which are still pending, and flags any applied file that's since been edited. A database with no `pz_schema_migrations` table yet reports its history as unknown rather than guessing from which tables happen to exist — that's what the adoption procedure in DEPLOYMENT.md below is for.
+
+Full detail — including the pre-ledger adoption procedure (`scripts/migrate.py adopt --through NNNN`) for a database with pre-existing, untracked history, and a plain-`psql` fallback for an environment with no Python venv — lives in [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md#22-apply-supabase-migrations); this is the quickstart version.
 
 ## Tests
 
@@ -391,7 +397,10 @@ is in Postgres and scales normally.
 
 ## Migrations
 
-Apply in order; each is additive and backward-compatible:
+Apply in order; each is additive and backward-compatible unless noted. `scripts/migrate.py apply`
+(§ above) is the recommended way to run them — it tracks what's already applied in
+`pz_schema_migrations` (added by 0024) so re-running is safe, and `scripts/migrate.py status` reports
+that ledger read-only.
 
 | File | Adds |
 |---|---|
@@ -406,6 +415,19 @@ Apply in order; each is additive and backward-compatible:
 | `0009_rag.sql` | `pgvector` extension, `pz_workspace_model_connections`, `pz_rag_chunks`, `pz_rag_match_chunks` RPC (M9) |
 | `0010_github.sql` | `pz_pull_requests`, `pz_code_chunks` (no `content` column), `pz_code_match_chunks` RPC (M11) |
 | `0011_discussions.sql` | `pz_discussions` (comments, RLS), `pz_workspaces.rag_index_pmo_discussions` (M12) |
+| `0012_member_email.sql` | denormalizes member email onto `pz_workspace_members` |
+| `0013_documents.sql` | `documents` graph node (uploaded PRDs) riding the M9 RAG rails |
+| `0014_generation_runs.sql` | `pz_generation_runs` — audit + token/cost accounting for stage generation |
+| `0015_stage_model_routing.sql` | per-workspace/per-project stage → model routing overrides |
+| `0016_rag_chunk_embed_model.sql` | tracks which embed model produced each `pz_rag_chunks` row |
+| `0017_task_assigned_user.sql` | pz-owned `assigned_user_id` on tasks (ADR 0018) |
+| `0018_project_lifecycle.sql` | `lifecycle_status` + repo linkage for the cloud Planner handoff |
+| `0019_stage_documents.sql` | `pz_stage_documents` — raw-markdown side store for Planner stages |
+| `0020_repo_webhooks.sql` | `pz_repo_webhooks` — per-repo webhook secrets (ADR 0017 amendment) |
+| `0021_repo_webhooks_anon_revoke.sql` | revokes `anon` access to `pz_repo_webhooks` (0020 left it granted) |
+| `0022_policy_scope.sql` | project `policy_scope` (compliance templates), seeded into generation + repo |
+| `0023_configurable_embed_dim.sql` | **destructive** — replaces the fixed `vector(1536)` embedding width with a required `--var embed_dim=<N>`; deletes existing embeddings, needs a reindex after |
+| `0024_schema_migrations_ledger.sql` | `pz_schema_migrations` — the ledger `scripts/migrate.py` reads/writes |
 
 **0006–0008 were found by actually running `apps/cloud` against a real local
 Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`
