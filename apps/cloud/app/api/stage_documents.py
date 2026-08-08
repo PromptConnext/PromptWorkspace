@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.generation.projection import project_stage_document
+from app.generation.projection import PROJECTION_NODE_TYPE, project_stage_document
 from app.rag.queue import EmbedJob, enqueue
 
 logger = logging.getLogger("promptconnext.stage_documents")
@@ -74,7 +74,7 @@ def update_stage_document(
     doc = repo.upsert_stage_document(project_id, project.workspace_id, stage, body.content, user.id)
     enqueue(request.app, EmbedJob(project.workspace_id, project_id, "stage_documents", doc.id))
     try:
-        project_stage_document(repo, project, stage, body.content)
+        entity_id = project_stage_document(repo, project, stage, body.content)
     except Exception:
         # The document itself is already saved. A failed projection costs the
         # next stage its unlock, not the user's text, so it must not 500 the
@@ -82,6 +82,17 @@ def update_stage_document(
         logger.exception(
             "graph projection failed for project=%s stage=%s", project_id, stage
         )
+    else:
+        # The stage document above is one EmbedJob; the graph entity it was
+        # just projected onto (Requirement for specify, SpecDocument for
+        # plan) is a second, separate one — upsert_graph's own callers
+        # (app/api/sync.py) enqueue for a push, but project_stage_document
+        # calls the repository directly and enqueues nothing on its own.
+        node_type = PROJECTION_NODE_TYPE.get(stage)
+        if entity_id is not None and node_type is not None:
+            enqueue(
+                request.app, EmbedJob(project.workspace_id, project_id, node_type, entity_id)
+            )
     return StageDocumentOut(
         id=doc.id, stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat()
     )

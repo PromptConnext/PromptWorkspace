@@ -35,6 +35,16 @@ from app.models.schemas import (
 
 _TITLE_FALLBACK = "Untitled specification"
 
+# Stage -> the graph node_type it projects onto. Stated exactly once here so
+# callers (app/api/stage_documents.py, to enqueue an EmbedJob for the entity
+# `project_stage_document` returns) don't each carry their own copy of the
+# stage->entity mapping. Stages absent from this dict (constitution, tasks)
+# project onto nothing, matching project_stage_document's None return.
+PROJECTION_NODE_TYPE: dict[str, str] = {
+    "specify": "requirements",
+    "plan": "spec_documents",
+}
+
 
 def markdown_title(content: str, fallback: str = _TITLE_FALLBACK) -> str:
     """First H1, matching how parse_stage_output titles a generated document."""

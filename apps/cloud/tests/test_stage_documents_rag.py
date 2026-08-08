@@ -179,3 +179,158 @@ def test_reindex_sweeps_uploaded_documents(monkeypatch):
     assert res.json()["enqueued"] >= 1
 
     client.__exit__(None, None, None)
+
+
+def test_specify_patch_enqueues_projection_job_for_requirement(monkeypatch):
+    """app/generation/projection.py::project_stage_document upserts the
+    Requirement directly through the repository, bypassing the enqueue loop
+    that lives in app/api/sync.py's push handler — so the projected entity
+    was never getting embedded until the caller enqueued it itself."""
+    from app.main import create_app
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify",
+        json={"content": "# Spec\n\nDo the thing."},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    requirement = client.app.state.repository.get_latest_requirement(pid)
+    assert requirement is not None
+
+    projection_jobs = [j for j in captured if j.node_type == "requirements"]
+    assert [j.node_id for j in projection_jobs] == [requirement.id]
+
+    client.__exit__(None, None, None)
+
+
+def test_plan_patch_enqueues_projection_job_for_spec_document(monkeypatch):
+    from app.main import create_app
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    # A plan projects onto a SpecDocument tied to the latest Requirement, so
+    # specify must land first (same precondition test_plan_saved_before_any_
+    # specify_projects_nothing exercises in test_stage_documents.py).
+    client.patch(
+        f"/projects/{pid}/stage-documents/specify",
+        json={"content": "# Spec"},
+        headers=ALICE,
+    )
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/plan",
+        json={"content": "# Plan\n\nBuild it."},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    spec_document = client.app.state.repository.get_latest_spec_document(pid)
+    assert spec_document is not None
+
+    projection_jobs = [j for j in captured if j.node_type == "spec_documents"]
+    assert [j.node_id for j in projection_jobs] == [spec_document.id]
+
+    client.__exit__(None, None, None)
+
+
+def test_constitution_patch_enqueues_no_projection_job(monkeypatch):
+    """constitution has no graph entity (app/generation/projection.py's
+    module docstring), so nothing beyond the stage_documents job itself
+    should be enqueued."""
+    from app.main import create_app
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/constitution",
+        json={"content": "# Constitution"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    assert [j.node_type for j in captured] == ["stage_documents"]
+
+    client.__exit__(None, None, None)
+
+
+def test_empty_specify_patch_enqueues_no_projection_job(monkeypatch):
+    """An empty document projects nothing (project_stage_document returns
+    None), so there is no entity id to enqueue a job for."""
+    from app.main import create_app
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify",
+        json={"content": "   "},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    assert [j.node_type for j in captured] == ["stage_documents"]
+    assert client.app.state.repository.get_latest_requirement(pid) is None
+
+    client.__exit__(None, None, None)
