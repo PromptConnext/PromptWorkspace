@@ -81,23 +81,27 @@ export function AssistantPanel({
   const [stageNames, setStageNames] = useState<Map<string, string>>(new Map());
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const resolved = useRef(false);
+  // The element focus should return to on close — captured at the moment the
+  // panel opens, which is whatever the caller's trigger button was (it still
+  // has focus at that point; nothing has moved it yet).
+  const previousFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (open) {
+      previousFocus.current = document.activeElement as HTMLElement | null;
+      inputRef.current?.focus();
+    } else if (previousFocus.current) {
+      previousFocus.current.focus();
+      previousFocus.current = null;
+    }
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   // Neither documents nor stage documents are ProjectGraph members, so their
-  // titles need their own fetches. Fired once, lazily, the first time a
-  // citation actually needs them — not on open.
+  // titles need their own fetches. Fired once per panel session, lazily, the
+  // first time a citation actually needs them — not on open. `close()` below
+  // resets `resolved` so the next session re-fetches instead of trusting a
+  // cache that may now be stale (the Planner tab can rename stage documents
+  // or upload new ones while the panel sits open).
   const needsLookup = turns.some((t) =>
     t.citations.some((c) => c.node_type === "documents" || c.node_type === "stage_documents"),
   );
@@ -133,10 +137,28 @@ export function AssistantPanel({
     };
   }, [needsLookup, projectId, authHeaders]);
 
+  // The only path that clears the transcript, aborts an in-flight stream
+  // (via reset()) and re-arms the label lookup for next time. Both the Close
+  // button and Escape must go through this — calling onClose() directly
+  // leaves a stream running and stale state behind, since DiscussionThread
+  // never unmounts this component (it only toggles `open`), so the
+  // unmount-abort effect inside useAssistantChat never gets a chance to fire.
   const close = useCallback(() => {
     reset();
+    resolved.current = false;
+    setDocumentTitles(new Map());
+    setStageNames(new Map());
     onClose();
   }, [reset, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") close();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close]);
 
   if (!open) return null;
 
