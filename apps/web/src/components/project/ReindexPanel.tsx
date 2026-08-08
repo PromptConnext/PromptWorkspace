@@ -70,11 +70,19 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
       )}
 
       {/* "Queued", never "indexed" — the endpoint returns before any embedding
-          runs and there is nothing to poll. */}
+          runs and there is nothing to poll. aria-live so a screen-reader user
+          waiting on the async result gets it announced instead of having to
+          poll the page themselves. */}
       {enqueued !== null && (
-        <p className="mt-2 text-sm text-slate-600">{enqueued} items queued for indexing.</p>
+        <p className="mt-2 text-sm text-slate-600" aria-live="polite">
+          {enqueued} items queued for indexing.
+        </p>
       )}
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p className="mt-2 text-sm text-red-600" aria-live="polite">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

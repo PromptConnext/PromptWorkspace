@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAssistantChat } from "./useAssistantChat";
 
@@ -8,6 +8,11 @@ vi.mock("@/lib/auth", () => ({
 
 const originalFetch = global.fetch;
 afterEach(() => {
+  // renderHook renders like any other component; this repo registers no
+  // global auto-cleanup (vitest.config.ts sets neither `globals` nor
+  // `setupFiles`), so every rendering test file — this one included — must
+  // unmount itself.
+  cleanup();
   global.fetch = originalFetch;
 });
 
@@ -300,6 +305,57 @@ describe("useAssistantChat", () => {
     expect(final?.status).toBe("done");
     expect(final?.error).toBeNull();
     expect(final?.answer).toBe("new answer");
+  });
+
+  it("aborts on unmount and does not write state after teardown", async () => {
+    // Spec requirement (not previously covered): AssistantPanel.test.tsx's
+    // "aborts ... via Escape" case exercises reset(), which is close()'s
+    // path — it never unmounts the component, so it never exercises the
+    // `useEffect(() => () => abort.current?.abort(), [])` cleanup itself.
+    // A stream that never closes on its own and only ever settles via that
+    // effect's abort is the only way to prove the effect is what stops it.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let capturedSignal: AbortSignal | undefined;
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      capturedSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"delta":"partial"}\n\n'));
+            // No further enqueue/close — this read only ever settles via the
+            // unmount effect's abort, never on its own.
+            init?.signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+          },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const { result, unmount } = renderHook(() => useAssistantChat("p1"));
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.ask("x");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    unmount();
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Let the aborted read's rejection propagate through run()'s catch. If
+    // the AbortError branch didn't return early, or the unmount effect
+    // didn't fire, this would call setState on the unmounted hook and React
+    // would log the "state update on an unmounted component" warning.
+    await act(async () => {
+      await pending;
+    });
+
+    for (const call of consoleError.mock.calls) {
+      expect(String(call[0])).not.toMatch(/state update.*unmounted/i);
+    }
+    consoleError.mockRestore();
   });
 
   it("clears turns on reset", async () => {

@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
 import { listDocuments } from "@/lib/api";
 import type { ProjectGraph } from "@/lib/types";
@@ -16,7 +16,18 @@ vi.mock("@/lib/api", () => ({
   getStageDocument: vi.fn().mockResolvedValue({ id: null, stage: "specify", content: "", updated_at: null }),
 }));
 
+// Default admin=true so the pre-existing link-rendering tests below don't
+// need to know this mock exists. The two "non-admin" tests (finding 1) flip
+// it per-test.
+const isWorkspaceAdmin = vi.fn();
+vi.mock("@/lib/workspace", () => ({
+  useIsWorkspaceAdmin: (...args: unknown[]) => isWorkspaceAdmin(...args),
+}));
+
 const originalFetch = global.fetch;
+beforeEach(() => {
+  isWorkspaceAdmin.mockReturnValue(true);
+});
 afterEach(() => {
   // This repo registers no global auto-cleanup (vitest.config.ts sets neither
   // `globals` nor `setupFiles`), so every rendering test file unmounts itself.
@@ -66,6 +77,42 @@ describe("AssistantPanel", () => {
   it("shows the empty state before any question", () => {
     panel();
     expect(screen.getByText(/grounded in this project/i)).toBeInTheDocument();
+  });
+
+  // Finding 3: aria-live="polite" alone on the transcript makes assistive
+  // tech re-announce the growing answer on every delta (a 200-delta answer
+  // would produce ~200 announcements). aria-busy tells the AT to hold off
+  // until the region settles, then announce once.
+  it("marks the transcript region busy while a turn streams and idle once it settles", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        async start(controller) {
+          controller.enqueue(encoder.encode('data: {"delta":"a"}\n\n'));
+          await gate;
+          controller.enqueue(encoder.encode('event: citations\ndata: {"citations":[]}\n\n'));
+          controller.close();
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    panel();
+    const region = screen.getByRole("dialog").querySelector('[aria-live="polite"]');
+    expect(region).toHaveAttribute("aria-busy", "false");
+
+    await userEvent.type(screen.getByRole("textbox"), "x");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(region).toHaveAttribute("aria-busy", "true"));
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(region).toHaveAttribute("aria-busy", "false"));
   });
 
   it("streams an answer and shows its citations", async () => {
@@ -122,6 +169,49 @@ describe("AssistantPanel", () => {
         "/w/w1/p/p1/settings#assistant-index",
       ),
     );
+  });
+
+  // Finding 1: the two links above render unconditionally, regardless of the
+  // signed-in user's role. require_admin would 403 a member who follows
+  // either one anyway, so the spec calls for explanatory copy and no link.
+  it("offers no settings link to a non-admin when no model is connected, only explanatory copy", async () => {
+    isWorkspaceAdmin.mockReturnValue(false);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ detail: "model_connection_not_configured" }),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "x");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no model is connected/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/ask a workspace admin to connect one/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /workspace settings/i })).not.toBeInTheDocument();
+  });
+
+  it("offers no reindex link to a non-admin on an embed-model mismatch, only explanatory copy", async () => {
+    isWorkspaceAdmin.mockReturnValue(false);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        detail: "embed_model_mismatch: this project's chunks were embedded with 'a'",
+      }),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "x");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/indexed with a different embedding model/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/ask an admin to reindex it/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /reindex/i })).not.toBeInTheDocument();
   });
 
   it("closes on Escape", async () => {
@@ -281,6 +371,67 @@ describe("AssistantPanel", () => {
 
     await waitFor(() => expect(screen.getByText("full answer")).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Finding 2: Retry had no `disabled` guard (unlike the composer), so it was
+  // a second, ungated entry point into run(). Clicking an older turn's Retry
+  // while a newer turn streams calls run() again, which aborts the newer
+  // turn's controller; that turn's reader.read() then rejects AbortError and
+  // useAssistantChat's catch returns before any patch() — the newer turn is
+  // stranded at status "streaming" forever, with no way to recover short of
+  // closing the panel.
+  it("disables an older turn's Retry while a newer turn is still streaming, so the newer turn is never stranded", async () => {
+    let releaseTurnTwo: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTurnTwo = resolve;
+    });
+    const encoder = new TextEncoder();
+    const fetchMock = vi
+      .fn()
+      // Turn 1: cut off, no citations frame.
+      .mockResolvedValueOnce({
+        ok: true,
+        body: sseBody('data: {"delta":"partial"}'),
+      })
+      // Turn 2: gated open so it is still "streaming" when Retry is clicked.
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            async start(controller) {
+              controller.enqueue(encoder.encode('data: {"delta":"turn two "}\n\n'));
+              await gate;
+              controller.enqueue(encoder.encode('data: {"delta":"answer"}\n\n'));
+              controller.enqueue(
+                encoder.encode('event: citations\ndata: {"citations":[]}\n\n'),
+              );
+              controller.close();
+            },
+          }),
+        }),
+      );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "first");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.getByText(/cut off/i)).toBeInTheDocument());
+
+    await userEvent.type(screen.getByRole("textbox"), "second");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.getByText(/turn two/i)).toBeInTheDocument());
+
+    const retryButton = screen.getByRole("button", { name: /retry/i });
+    expect(retryButton).toBeDisabled();
+    await userEvent.click(retryButton);
+    // Still 2: the disabled button swallowed the click, so no third request
+    // (which would have aborted turn 2's controller) was ever made.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      releaseTurnTwo();
+    });
+    await waitFor(() => expect(screen.getByText("turn two answer")).toBeInTheDocument());
   });
 
   it("offers Retry for a generic network error", async () => {

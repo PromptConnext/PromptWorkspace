@@ -15,6 +15,7 @@ import { getStageDocument, listDocuments } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
 import type { ProjectGraph, StageKind } from "@/lib/types";
+import { useIsWorkspaceAdmin } from "@/lib/workspace";
 import { AssistantFactCard } from "./AssistantFactCard";
 import { CitationList } from "./CitationList";
 import { useAssistantChat, type AssistantError, type Turn } from "./useAssistantChat";
@@ -25,34 +26,53 @@ function ErrorBlock({
   error,
   workspaceId,
   projectId,
+  isAdmin,
+  busy,
   onRetry,
 }: {
   error: AssistantError;
   workspaceId: string;
   projectId: string;
+  isAdmin: boolean;
+  busy: boolean;
   onRetry: () => void;
 }) {
   return (
     <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">
       <p>{error.message}</p>
-      {error.kind === "no_model" && (
-        <Link href={`/w/${workspaceId}/settings`} className="mt-1 inline-block underline">
-          Workspace settings
-        </Link>
-      )}
-      {error.kind === "embed_mismatch" && (
-        <Link
-          href={`/w/${workspaceId}/p/${projectId}/settings#assistant-index`}
-          className="mt-1 inline-block underline"
-        >
-          Reindex this project
-        </Link>
-      )}
+      {/* require_admin would 403 a member anyway, so offering the control
+          would only produce a worse error than not offering it at all. */}
+      {error.kind === "no_model" &&
+        (isAdmin ? (
+          <Link href={`/w/${workspaceId}/settings`} className="mt-1 inline-block underline">
+            Workspace settings
+          </Link>
+        ) : (
+          <p className="mt-1">Ask a workspace admin to connect one.</p>
+        ))}
+      {error.kind === "embed_mismatch" &&
+        (isAdmin ? (
+          <Link
+            href={`/w/${workspaceId}/p/${projectId}/settings#assistant-index`}
+            className="mt-1 inline-block underline"
+          >
+            Reindex this project
+          </Link>
+        ) : (
+          <p className="mt-1">Ask an admin to reindex it.</p>
+        ))}
       {/* Retry only where retrying can plausibly change the outcome. A missing
           model, a mismatched index and an exhausted budget are all unchanged
-          by asking again. */}
+          by asking again. Disabled while another turn is in flight — the
+          composer has the same guard, and retry() re-enters run() the same
+          way ask() does, so it must not become a second concurrent request. */}
       {(error.kind === "other" || error.kind === "cut_off") && (
-        <button type="button" onClick={onRetry} className="mt-1 block underline">
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={busy}
+          className="mt-1 block underline disabled:opacity-50"
+        >
           Retry
         </button>
       )}
@@ -75,6 +95,7 @@ export function AssistantPanel({
 }) {
   const { authHeaders } = useAuth();
   const labels = useNodeLabels(graph);
+  const isAdmin = useIsWorkspaceAdmin(workspaceId);
   const { turns, busy, ask, retry, reset } = useAssistantChat(projectId);
   const [question, setQuestion] = useState("");
   const [documentTitles, setDocumentTitles] = useState<Map<string, string>>(new Map());
@@ -183,7 +204,17 @@ export function AssistantPanel({
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3" aria-live="polite">
+      {/* aria-busy tracks the chat's own busy flag: while a turn streams,
+          each delta rewrites the same text node, and an AT that announces
+          every mutation of a "polite" region would re-read the growing
+          answer on every chunk. aria-busy tells it to hold off and announce
+          once, when the region settles at the end of the turn — the whole
+          transcript stays one region because busy already covers exactly
+          the window (ask start -> stream settle) that needs suppressing;
+          narrowing to a per-turn region wouldn't change what gets announced
+          during that window, only what doesn't (unrelated card/citation
+          content) once it's over. */}
+      <div className="flex-1 overflow-y-auto px-4 py-3" aria-live="polite" aria-busy={busy}>
         {turns.length === 0 && (
           <p className="text-sm text-slate-500">
             Answers are grounded in this project&apos;s synced requirements, specs, tasks and
@@ -204,6 +235,8 @@ export function AssistantPanel({
                   error={turn.error}
                   workspaceId={workspaceId}
                   projectId={projectId}
+                  isAdmin={isAdmin}
+                  busy={busy}
                   onRetry={() => retry(turn.id)}
                 />
               )}
