@@ -438,8 +438,20 @@ const labels: NodeLabels = new Map([
   ["tasks:t1", "Task: Wire the OAuth callback"],
 ]);
 
+// repo/path/start_line/end_line are required-and-nullable on Citation, so the
+// base object must supply them explicitly — `Partial` overrides layer on top.
 function cite(over: Partial<Citation>): Citation {
-  return { node_type: "requirements", node_id: "r1", chunk_index: 0, source: "vector", ...over };
+  return {
+    node_type: "requirements",
+    node_id: "r1",
+    chunk_index: 0,
+    source: "vector",
+    repo: null,
+    path: null,
+    start_line: null,
+    end_line: null,
+    ...over,
+  };
 }
 
 describe("citationLabel", () => {
@@ -1167,8 +1179,20 @@ const labels: NodeLabels = new Map([["tasks:t1", "Task: Wire the OAuth callback"
 
 const empty = new Map<string, string>();
 
+// repo/path/start_line/end_line are required-and-nullable on Citation, so the
+// base object must supply them explicitly — `Partial` overrides layer on top.
 function cite(over: Partial<Citation>): Citation {
-  return { node_type: "tasks", node_id: "t1", chunk_index: 0, source: "vector", ...over };
+  return {
+    node_type: "tasks",
+    node_id: "t1",
+    chunk_index: 0,
+    source: "vector",
+    repo: null,
+    path: null,
+    start_line: null,
+    end_line: null,
+    ...over,
+  };
 }
 
 describe("CitationList", () => {
