@@ -268,22 +268,38 @@ It's also part of the normal `pytest -q` run — no separate CI wiring needed.
 ### Git-host integration (M11)
 
 PRs and code, without storing source code at rest (ADR 0011's "no source code
-→ no source code *at rest*" amendment). One GitHub App is shared across all
-workspaces — server-env credentials (`GITHUB_APP_ID`,
-`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`), same posture as
-`JIRA_API_TOKEN`. No installation access token is ever stored: one is minted
-on demand (`app/integrations/github.py`, RS256 App JWT → GitHub's
-installation-token endpoint) per use and discarded.
+→ no source code *at rest*" amendment). Auth is a **per-workspace fine-grained
+Personal Access Token**, not a platform GitHub App: an admin supplies one in
+workspace settings, it is verified against GitHub before storage, and it is
+then held as ciphertext (`secret_ref`) under `RAG_KEY_ENCRYPTION_KEY` — the
+same secret-store treatment as a workspace's BYO model key. There is
+deliberately no server-level GitHub credential; the only env value this
+integration needs is `PUBLIC_API_URL`, this service's own origin, used as the
+callback when registering each new repo's webhook (leave it empty locally and
+webhook registration is simply skipped). `github_auth.resolve_token()` is the
+single reader for all three consumers — repo creation, RAG code indexing, and
+assistant snippet fetch — and returns `None` for every "not configured" shape,
+so an unconnected workspace is a skip rather than a failure.
 
 | Method | Path | Guard |
 |---|---|---|
-| POST | `/workspaces/{id}/integrations/github/install` | admin — non-secret config (`installation_id`, `repo`, `default_branch`, `project_id`) |
+| GET | `/workspaces/{id}/integrations/github` | admin — non-secret status (owner, account login, token expiry) |
+| PUT | `/workspaces/{id}/integrations/github` | admin — connect: verify the PAT can reach `owner`, then store it encrypted |
+| DELETE | `/workspaces/{id}/integrations/github` | admin — disconnect; the customer's repos and webhooks are left alone |
 | POST | `/api/webhooks/github` | public, HMAC-signature-verified (`X-Hub-Signature-256`) |
 
-v1 is one-repo-per-workspace; the admin completes the App install on
-GitHub's own site first (external, one-time — no OAuth redirect handling
-lives in this repo, same posture as generating a Jira API token today) and
-supplies the resulting `installation_id`.
+Workspace config carries no repo name. The cloud creates one repo per project
+at tech-review exit (ADR 0017) and registers that repo's **own** webhook secret
+in `pz_repo_webhooks`, keyed by `repo_full_name`, which is what makes an
+inbound delivery attributable to exactly one project. Routing therefore runs
+*before* signature verification — under per-repo secrets the repository is what
+selects the key — and an unknown repo is acked without the payload ever being
+touched. A config left over from the App era (an `installation_id` with no
+`secret_ref`) reads as *unconnected* rather than half-working, so those
+workspaces reconnect with a token instead of failing hours later at
+tech-review exit. Neither `installation_id` nor a workspace-level `repo` field
+is to be reintroduced: both were unverified client input and formed a
+cross-tenant hole (issue #3, ADR 0017's 2026-08-01 amendment).
 
 **PRs** are a different data class from code — ADR 0011 explicitly names PR
 title/description as an indexable v2 source, not source code. A
@@ -312,7 +328,7 @@ deleted directly (no fetch needed).
 At answer time, a content/mixed chat question also runs
 `code_vector_search` (same query embedding, no separate per-workspace code
 model in v1). For each hit, `app/api/assistant.py::_fetch_code_context`
-mints a fresh installation token and re-fetches just that line range from
+resolves the workspace's PAT and re-fetches just that line range from
 GitHub — used to build the model's context for that one request, then
 discarded. `Citation.source` gains `"code"`, with `repo`/`path`/
 `start_line`/`end_line` so the web UI can link straight to the Git host

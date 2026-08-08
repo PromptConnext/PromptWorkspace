@@ -1,5 +1,5 @@
-"""GitHub App integration (M11): PR + push webhook parsing, installation-
-token minting, and fetch-on-demand file content.
+"""Git-host integration (M11): PR + push webhook parsing, repo creation and
+seeding, and fetch-on-demand file content.
 
 Doesn't fit app/integrations/tracker.py's TrackerAdapter protocol — that's
 shaped around pmo-field task mirroring (InboundUpdate.status/assignee/
