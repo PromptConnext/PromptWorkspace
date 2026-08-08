@@ -5,6 +5,7 @@ import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
 import type { Discussion, ProjectGraph } from "@/lib/types";
+import { AssistantPanel } from "./AssistantPanel";
 
 const SOURCE_STYLE: Record<Discussion["source"], string> = {
   pz: "bg-indigo-100 text-indigo-700",
@@ -91,20 +92,33 @@ function ComposeBox({
 
 export function DiscussionThread({
   graph,
+  workspaceId,
   projectId,
   onPosted,
 }: {
   graph: ProjectGraph;
+  workspaceId: string;
   projectId: string;
   onPosted: () => void;
 }) {
   const labels = useNodeLabels(graph);
+  const [askOpen, setAskOpen] = useState(false);
   const sorted = [...graph.discussions].sort((a, b) =>
     (a.updated_at ?? "").localeCompare(b.updated_at ?? ""),
   );
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setAskOpen(true)}
+          className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:border-slate-300"
+        >
+          Ask the assistant
+        </button>
+      </div>
+
       <ComposeBox graph={graph} labels={labels} projectId={projectId} onPosted={onPosted} />
 
       {sorted.length === 0 ? (
@@ -125,6 +139,14 @@ export function DiscussionThread({
           ))}
         </ul>
       )}
+
+      <AssistantPanel
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        graph={graph}
+        workspaceId={workspaceId}
+        projectId={projectId}
+      />
     </div>
   );
 }

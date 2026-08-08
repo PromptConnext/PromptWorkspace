@@ -76,7 +76,7 @@ describe("DiscussionThread", () => {
     // those labels), so the compose picker must filter them back out — this
     // locks that filtering in against a future edit to the shared hook.
     const graph = makeGraph();
-    render(<DiscussionThread graph={graph} projectId="p1" onPosted={vi.fn()} />);
+    render(<DiscussionThread graph={graph} workspaceId="ws1" projectId="p1" onPosted={vi.fn()} />);
 
     const select = screen.getByRole("combobox");
     const options = Array.from(select.querySelectorAll("option"));
