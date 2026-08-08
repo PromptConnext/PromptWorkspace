@@ -42,7 +42,7 @@ Migrations are plain SQL in `apps/cloud/migrations/`, applied in order:
 
 ```bash
 cd apps/cloud
-for f in migrations/00*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
+for f in migrations/00*.sql; do psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -f "$f" || exit 1; done
 ```
 
 `SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database). Migration 0003 installs the RLS policies that back workspace membership — do not skip it. (The glob is `00*.sql`, not `000*.sql` — migration numbers passed 0009 long ago, and the tighter pattern silently stops matching anything from 0010 on.)

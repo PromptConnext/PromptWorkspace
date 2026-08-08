@@ -42,7 +42,7 @@ cp .env.example .env.local
 # set DATA_BACKEND=supabase, SUPABASE_URL, SUPABASE_KEY
 # for real auth: AUTH_MODE=supabase, SUPABASE_JWT_SECRET
 # apply the schema, in order (0023 is the exception — see below):
-for f in migrations/00*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
+for f in migrations/00*.sql; do psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -f "$f" || exit 1; done
 uvicorn app.main:app --reload --port 8080 --env-file=.env.local
 ```
 
