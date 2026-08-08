@@ -1119,10 +1119,15 @@ Create `apps/web/src/components/project/AssistantFactCard.test.tsx`:
 
 ```tsx
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { AssistantFactCard } from "./AssistantFactCard";
 import type { LineageFacts } from "@/lib/types";
+
+// vitest.config.ts sets neither `globals` nor `setupFiles`, so
+// @testing-library/react's auto-cleanup never registers. Every test file in
+// this repo that renders calls cleanup itself — follow that convention.
+afterEach(cleanup);
 
 function facts(over: Partial<LineageFacts> = {}): LineageFacts {
   return {
@@ -1145,7 +1150,9 @@ describe("AssistantFactCard", () => {
   it("shows the title and status", () => {
     render(<AssistantFactCard facts={facts()} />);
     expect(screen.getByText("Login must support SSO")).toBeInTheDocument();
-    expect(screen.getByText(/in_progress/)).toBeInTheDocument();
+    // Anchored on the status line: a bare /in_progress/ also matches the
+    // task_status_counts breakdown, which makes the query ambiguous.
+    expect(screen.getByText(/status · in_progress/)).toBeInTheDocument();
   });
 
   it("marks the card as coming from the graph, not the model", () => {
@@ -1180,11 +1187,14 @@ Create `apps/web/src/components/project/CitationList.test.tsx`:
 
 ```tsx
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { CitationList } from "./CitationList";
 import type { Citation } from "@/lib/types";
 import type { NodeLabels } from "@/lib/node-labels";
+
+// See AssistantFactCard.test.tsx: this repo registers no global auto-cleanup.
+afterEach(cleanup);
 
 const labels: NodeLabels = new Map([["tasks:t1", "Task: Wire the OAuth callback"]]);
 
@@ -1410,7 +1420,7 @@ Create `apps/web/src/components/project/AssistantPanel.test.tsx`:
 
 ```tsx
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AssistantPanel } from "./AssistantPanel";
@@ -1427,6 +1437,9 @@ vi.mock("@/lib/api", () => ({
 
 const originalFetch = global.fetch;
 afterEach(() => {
+  // This repo registers no global auto-cleanup (vitest.config.ts sets neither
+  // `globals` nor `setupFiles`), so every rendering test file unmounts itself.
+  cleanup();
   global.fetch = originalFetch;
   vi.clearAllMocks();
 });
@@ -1895,7 +1908,7 @@ Create `apps/web/src/components/project/ReindexPanel.test.tsx`:
 
 ```tsx
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReindexPanel } from "./ReindexPanel";
@@ -1909,7 +1922,11 @@ vi.mock("@/lib/api", () => ({
   reindexProject: (...args: unknown[]) => reindexProject(...args),
 }));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  // No global auto-cleanup in this repo — see the other component test files.
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("ReindexPanel", () => {
   it("asks for confirmation before spending on embeddings", async () => {
