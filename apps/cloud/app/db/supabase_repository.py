@@ -621,6 +621,7 @@ class SupabaseRepository(Repository):
         chunks: list[str],
         embeddings: list[list[float]],
         embed_model: str = "",
+        embed_dim: int = 0,
     ) -> None:
         # Replace wholesale so a shrinking node doesn't leave stale trailing
         # chunks (e.g. index 5 survives after a re-embed only produces 3).
@@ -637,6 +638,7 @@ class SupabaseRepository(Repository):
                 "content": content,
                 "embedding": embedding,
                 "embed_model": embed_model,
+                "embed_dim": embed_dim,
                 "updated_at": utcnow().isoformat(),
             }
             for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
@@ -658,6 +660,18 @@ class SupabaseRepository(Repository):
         )
         rows = res.data or []
         return rows[0]["embed_model"] if rows else None
+
+    def get_project_embed_dim(self, workspace_id: str, project_id: str) -> int | None:
+        res = (
+            self._client.table(_RAG_CHUNKS)
+            .select("embed_dim")
+            .eq("workspace_id", workspace_id)
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return rows[0]["embed_dim"] if rows else None
 
     def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:
         res = (

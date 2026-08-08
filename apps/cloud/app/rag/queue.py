@@ -142,6 +142,7 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         chunks,
         vectors,
         embed_model=conn.embed_model,
+        embed_dim=conn.embed_dim,
     )
 
 

@@ -262,6 +262,7 @@ class Repository(abc.ABC):
         chunks: list[str],
         embeddings: list[list[float]],
         embed_model: str = "",
+        embed_dim: int = 0,
     ) -> None:
         """Replace all stored chunks for one node — wholesale, so a shrinking
         node doesn't leave stale trailing chunks behind."""
@@ -274,7 +275,17 @@ class Repository(abc.ABC):
         """The embed model recorded on this project's existing chunks, or
         `None` if it has none yet (plan 0008 M1) — used to detect an
         embedding-source switch that would otherwise silently mix
-        incompatible vector dimensions in the same fixed-width column."""
+        incompatible vector dimensions in the same column."""
+
+    @abc.abstractmethod
+    def get_project_embed_dim(self, workspace_id: str, project_id: str) -> int | None:
+        """The embed dimension recorded on this project's existing chunks,
+        or `None` if it has none yet (migration 0023) — the width sibling of
+        `get_project_embed_model`. Needed once `pz_rag_chunks.embedding`'s
+        width stopped being a fixed `vector(1536)` constant: two connections
+        can share an `embed_model` name and still disagree on width (e.g. an
+        MRL-truncated dimension), and a width mismatch is worse than a name
+        mismatch — the vectors don't even fit the column."""
 
     @abc.abstractmethod
     def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:
@@ -814,6 +825,7 @@ class InMemoryRepository(Repository):
         chunks: list[str],
         embeddings: list[list[float]],
         embed_model: str = "",
+        embed_dim: int = 0,
     ) -> None:
         project_store = self._rag_chunks.setdefault(project_id, {})
         project_store[node_id] = {
@@ -826,6 +838,7 @@ class InMemoryRepository(Repository):
                 content=content,
                 embedding=embedding,
                 embed_model=embed_model,
+                embed_dim=embed_dim,
             )
             for idx, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
         }
@@ -843,6 +856,13 @@ class InMemoryRepository(Repository):
             for chunk in chunks_by_index.values():
                 if chunk.workspace_id == workspace_id:
                     return chunk.embed_model
+        return None
+
+    def get_project_embed_dim(self, workspace_id: str, project_id: str) -> int | None:
+        for chunks_by_index in self._rag_chunks.get(project_id, {}).values():
+            for chunk in chunks_by_index.values():
+                if chunk.workspace_id == workspace_id:
+                    return chunk.embed_dim
         return None
 
     def count_project_rag_chunks(self, workspace_id: str, project_id: str) -> int:

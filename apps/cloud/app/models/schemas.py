@@ -626,10 +626,19 @@ class RagChunk(BaseModel):
 
     `embed_model` (plan 0008 M1) records which model actually produced this
     chunk's vector — a project's chunks must stay homogeneous in embed
-    model/dimension (pz_rag_chunks.embedding is a fixed-width column), so
-    this is how a query-time model switch (e.g. BYO -> managed embeddings)
-    gets caught as "reindex required" instead of silently comparing
-    incompatible vectors."""
+    model/dimension, so this is how a query-time model switch (e.g. BYO ->
+    managed embeddings) gets caught as "reindex required" instead of
+    silently comparing incompatible vectors.
+
+    `embed_dim` (migration 0023) records the vector's width. Before 0023
+    `pz_rag_chunks.embedding` was a fixed `vector(1536)` column, so no chunk
+    could ever be a different width and this field would have been
+    redundant. Once the column width became a deploy-time parameter, a
+    workspace whose connection's `embed_dim` no longer matches what its
+    existing chunks were embedded at is reachable, and the mismatch is
+    worse than an `embed_model` mismatch — the vectors are not even the
+    same shape, so the guard in app/api/assistant.py checks this field the
+    same way it checks `embed_model`."""
 
     workspace_id: str
     project_id: str
@@ -639,6 +648,7 @@ class RagChunk(BaseModel):
     content: str
     embedding: list[float]
     embed_model: str = ""
+    embed_dim: int = 0
     updated_at: datetime = Field(default_factory=utcnow)
 
 

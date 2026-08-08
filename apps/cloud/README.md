@@ -41,10 +41,18 @@ uvicorn app.main:app --reload --port 8080
 cp .env.example .env.local
 # set DATA_BACKEND=supabase, SUPABASE_URL, SUPABASE_KEY
 # for real auth: AUTH_MODE=supabase, SUPABASE_JWT_SECRET
-# apply the schema, in order:
-for f in migrations/000*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
+# apply the schema, in order (0023 is the exception — see below):
+for f in migrations/00*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
 uvicorn app.main:app --reload --port 8080 --env-file=.env.local
 ```
+
+**Migration 0023** (`pz_rag_chunks`/`pz_code_chunks.embedding` width, see the file's own header) isn't in that loop — a plain `vector(1536)` column can't become `vector(N)` for any other `N` without deleting whatever's already embedded (there is no valid reinterpretation of a vector at a different width), so it takes the width as a required `-v` parameter instead of a new hardcoded default:
+
+```bash
+psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql
+```
+
+Match `embed_dim` to whatever embedding model you're actually running (1024 for BGE-m3/Jina v3, 896 for KaLM-embedding-multilingual v2.5). Skip `-v embed_dim=<N>` and the script aborts rather than quietly resurrecting the 1536 ceiling it exists to remove. It's destructive by design — apply it, then reindex (`POST /workspaces/{id}/assistant/reindex`) before the assistant can ground content questions again; full detail in [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md#22-apply-supabase-migrations).
 
 ## Tests
 

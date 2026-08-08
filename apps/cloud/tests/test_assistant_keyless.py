@@ -154,6 +154,35 @@ def test_embed_model_mismatch_requires_reindex(client: TestClient):
     assert "reindex" in res.json()["detail"]
 
 
+def test_embed_dim_mismatch_requires_reindex(client: TestClient):
+    """Same embed_model name as the resolved managed connection ('bge-m3'),
+    but a different width — e.g. the operator narrowed pz_rag_chunks.embedding
+    (migration 0023) without reindexing yet, or an MRL-truncated model
+    dropped to a shorter width under an unchanged name. A dimension mismatch
+    must be caught on its own, independent of the model-name check: matching
+    names must not be enough to let a shape-incompatible query through."""
+    ws_id, pid = _bootstrap_keyless_workspace(client)
+    client.app.state.repository.upsert_rag_chunks(
+        ws_id,
+        pid,
+        "documents",
+        "doc-1",
+        ["some prior content"],
+        [[0.0] * 1024],
+        "bge-m3",
+        embed_dim=1024,
+    )
+
+    res = client.post(
+        f"/projects/{pid}/assistant/chat",
+        json={"question": "Explain the payments PRD"},
+        headers=ALICE,
+    )
+    assert res.status_code == 409
+    assert "embed_dim_mismatch" in res.json()["detail"]
+    assert "reindex" in res.json()["detail"]
+
+
 def test_managed_daily_budget_enforced_with_no_facts_fallback(client: TestClient):
     """A pure-content question (no lineage markers, so no graph-walk facts to
     fall back on) still hard-429s when the budget is exhausted — there's

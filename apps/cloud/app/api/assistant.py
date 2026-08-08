@@ -301,6 +301,31 @@ async def chat(
                     f"(POST /projects/{project_id}/assistant/reindex)"
                 ),
             )
+        # Width sibling of the model-name check above (migration 0023): once
+        # pz_rag_chunks.embedding stopped being a fixed vector(1536) column,
+        # two connections can share an embed_model name and still disagree
+        # on dimension (e.g. an MRL-truncated width), and that mismatch is
+        # worse than a name mismatch — the stored vectors are not even the
+        # same shape as the query vector, so comparing them isn't "wrong
+        # answer", it's a query-time error against the column/index.
+        # Width sibling of the model-name check above (migration 0023): once
+        # pz_rag_chunks.embedding stopped being a fixed vector(1536) column,
+        # two connections can share an embed_model name and still disagree
+        # on dimension (e.g. an MRL-truncated width), and that mismatch is
+        # worse than a name mismatch — the stored vectors are not even the
+        # same shape as the query vector, so comparing them isn't "wrong
+        # answer", it's a query-time error against the column/index.
+        existing_embed_dim = repo.get_project_embed_dim(project.workspace_id, project_id)
+        if existing_embed_dim and existing_embed_dim != embed_conn.embed_dim:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"embed_dim_mismatch: this project's chunks were embedded at "
+                    f"{existing_embed_dim} dimensions; reindex required before switching to "
+                    f"{embed_conn.embed_dim} "
+                    f"(POST /projects/{project_id}/assistant/reindex)"
+                ),
+            )
         embed_api_key = secret_store.decrypt(embed_conn.secret_ref)
         [query_embedding] = await embedder.embed(
             [body.question],

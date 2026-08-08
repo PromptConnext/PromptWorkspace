@@ -42,10 +42,18 @@ Migrations are plain SQL in `apps/cloud/migrations/`, applied in order:
 
 ```bash
 cd apps/cloud
-for f in migrations/000*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
+for f in migrations/00*.sql; do psql "$SUPABASE_DB_URL" -f "$f"; done
 ```
 
-`SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database). Migration 0003 installs the RLS policies that back workspace membership — do not skip it.
+`SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database). Migration 0003 installs the RLS policies that back workspace membership — do not skip it. (The glob is `00*.sql`, not `000*.sql` — migration numbers passed 0009 long ago, and the tighter pattern silently stops matching anything from 0010 on.)
+
+**Migration 0023 is not part of that loop — run it by hand, in its numeric place.** It replaces the embedding column's fixed `vector(1536)` width with a deploy-time parameter (there is no `1536` baked into the schema anymore), and doing so is destructive: any already-embedded `pz_rag_chunks`/`pz_code_chunks` rows are deleted, because a vector computed at one width cannot be reinterpreted at another. Apply everything up to 0022 with the loop above, stop, then run 0023 with the width your embedding model actually produces (e.g. 1024 for BGE-m3 or Jina v3, 896 for KaLM-embedding-multilingual v2.5):
+
+```bash
+psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql
+```
+
+before resuming the loop for anything numbered after it. There is deliberately no default for `embed_dim` — omitting it aborts the script (with `-v ON_ERROR_STOP=1`, a nonzero exit) rather than silently reapplying the 1536 ceiling this migration exists to remove. **After it runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
 
 ### 2.3 Create the Railway service
 
@@ -315,7 +323,7 @@ Manual is fine now; when ready, GitHub Actions is the natural fit:
 
 ## 7. Production checklist
 
-- [ ] Supabase migrations applied in order (0001 → latest), `schema_version` on `/health` matches
+- [ ] Supabase migrations applied in order (0001 → latest), `schema_version` on `/health` matches — including 0023 by hand with `-v embed_dim=<N>` (§2.2), followed by a reindex
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`
 - [ ] service_role key set only in Railway variables — never in the repo or client
 - [ ] Replicas = 1 (in-process presence/rate-limit state)
