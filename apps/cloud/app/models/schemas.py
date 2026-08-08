@@ -598,6 +598,28 @@ class IndexStatusOut(BaseModel):
     embed_model: str | None = None
 
 
+class ProjectReindexCount(BaseModel):
+    """One project's share of a workspace-wide reindex — see
+    WorkspaceReindexOut."""
+
+    project_id: str
+    enqueued: int
+
+
+class WorkspaceReindexOut(BaseModel):
+    """What POST /workspaces/{id}/assistant/reindex returns: the same
+    enqueue-only contract as the per-project reindex (this spends real
+    money, one embedding call per node per project, so the response says
+    "queued", never "indexed" — there is no completion signal here either,
+    only GET .../index-status per project has one), fanned out across every
+    project in the workspace via app/rag/backfill.py::enqueue_workspace_backfill.
+    """
+
+    enqueued: int
+    projects_swept: int
+    projects: list[ProjectReindexCount]
+
+
 class RagChunk(BaseModel):
     """A stored, embedded chunk. `embedding` never leaves the repository
     layer — retrieval returns `RagChunkHit`, which drops it.

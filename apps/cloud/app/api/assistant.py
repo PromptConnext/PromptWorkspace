@@ -8,6 +8,8 @@ Endpoints:
   GET  /projects/{id}/assistant/index-status  member — chunk count / embed model,
                                                the completion signal reindex itself
                                                never had
+  POST /workspaces/{id}/assistant/reindex     admin — same backfill, every project
+                                               in the workspace at once
 
 Retrieval is membership-scoped before similarity (ADR 0011): `require_project`
 gates the caller to the project's workspace, and `vector_search` additionally
@@ -58,6 +60,8 @@ from app.models.schemas import (
     ModelConnectionCreate,
     ModelConnectionOut,
     ModelConnectionStatusOut,
+    ProjectReindexCount,
+    WorkspaceReindexOut,
 )
 from app.rag.backfill import (
     count_indexable_nodes,
@@ -177,6 +181,33 @@ def reindex_project(
     require_admin(repo, project.workspace_id, user)
     enqueued = enqueue_project_backfill(request.app, repo, project)
     return {"enqueued": enqueued}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/assistant/reindex", response_model=WorkspaceReindexOut
+)
+def reindex_workspace(
+    workspace_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> WorkspaceReindexOut:
+    """The workspace-wide sibling of `reindex_project`: recovering from a
+    model swapped in place, an embedding dimension change, a failed batch,
+    or plain doubt about index freshness used to mean visiting every
+    project's settings page by hand. Same admin gate, same enqueue-only
+    contract, same underlying sweep (`enqueue_workspace_backfill`) the
+    model-connection path already fans out on connect — this is that same
+    fan-out available on demand instead of only on (re)configure.
+    """
+    require_admin(repo, workspace_id, user)
+    counts = enqueue_workspace_backfill(request.app, repo, workspace_id)
+    projects = [ProjectReindexCount(project_id=c.project_id, enqueued=c.enqueued) for c in counts]
+    return WorkspaceReindexOut(
+        enqueued=sum(c.enqueued for c in counts),
+        projects_swept=len(counts),
+        projects=projects,
+    )
 
 
 @router.get(

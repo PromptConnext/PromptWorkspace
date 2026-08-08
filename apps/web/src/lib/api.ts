@@ -13,6 +13,7 @@ import type {
   StageKind,
   Task,
   WorkspaceMember,
+  WorkspaceReindexResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -176,4 +177,16 @@ export function reindexProject(projectId: string, authHeaders: Record<string, st
 // from an enqueue response.
 export function getIndexStatus(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<IndexStatus>(`/projects/${projectId}/assistant/index-status`, authHeaders);
+}
+
+// Same enqueue-only contract as reindexProject, fanned out across every
+// project in the workspace (apps/cloud/app/api/assistant.py::reindex_workspace).
+// There is no workspace-level index-status endpoint — the response's
+// per-project breakdown is the only completion signal this call gets.
+export function reindexWorkspace(workspaceId: string, authHeaders: Record<string, string>) {
+  return apiFetch<WorkspaceReindexResult>(
+    `/workspaces/${workspaceId}/assistant/reindex`,
+    authHeaders,
+    { method: "POST" },
+  );
 }

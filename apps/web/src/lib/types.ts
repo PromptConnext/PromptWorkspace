@@ -337,3 +337,15 @@ export interface IndexStatus {
   indexable_nodes: number;
   embed_model: string | null;
 }
+
+// POST /workspaces/{id}/assistant/reindex (apps/cloud/app/api/assistant.py)
+// — the workspace-wide sibling of reindexProject: same enqueue-only
+// contract ("queued", not "indexed" — no completion signal), fanned out
+// across every project in the workspace. `projects` is the per-project
+// breakdown the server computes while sweeping, not something the client
+// derives.
+export interface WorkspaceReindexResult {
+  enqueued: number;
+  projects_swept: number;
+  projects: { project_id: string; enqueued: number }[];
+}

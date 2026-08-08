@@ -24,12 +24,22 @@ app/api/workspaces.py can import it without either importing the other.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.db.repository import Repository
 from app.models.schemas import Project
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
+
+
+class ProjectBackfillCount(NamedTuple):
+    """One project's contribution to a workspace-wide sweep — lets a caller
+    (POST /workspaces/{id}/assistant/reindex) report a per-project breakdown
+    without `enqueue_workspace_backfill` itself knowing anything about HTTP
+    response shapes."""
+
+    project_id: str
+    enqueued: int
 
 # None of these are GraphEntity members of ProjectGraph:
 # - pull_requests: GitHub is the source of truth (M11).
@@ -82,15 +92,23 @@ def count_indexable_nodes(repo: Repository, project: Project) -> int:
     return sum(1 for _ in _iter_backfill_targets(repo, project))
 
 
-def enqueue_workspace_backfill(app: Any, repo: Repository, workspace_id: str) -> int:
+def enqueue_workspace_backfill(
+    app: Any, repo: Repository, workspace_id: str
+) -> list[ProjectBackfillCount]:
     """Fan out `enqueue_project_backfill` over every project in a workspace.
 
     Used after a workspace model connection is (re)configured, so content
     that was unindexable before the connection existed — every job silently
     dropped by app/rag/queue.py's "no model connection" branch — becomes
-    retrievable without an admin having to press reindex per project.
+    retrievable without an admin having to press reindex per project. Also
+    used directly by POST /workspaces/{id}/assistant/reindex for a
+    deliberate "reindex everything" control (a model swapped in place, an
+    embedding dimension change, a failed batch, or plain doubt about
+    freshness) — the model-connection path only ever discards this return
+    value, so returning a per-project breakdown instead of a bare total
+    doesn't disturb that caller.
     """
-    enqueued = 0
-    for project in repo.list_projects_by_workspace(workspace_id):
-        enqueued += enqueue_project_backfill(app, repo, project)
-    return enqueued
+    return [
+        ProjectBackfillCount(project.id, enqueue_project_backfill(app, repo, project))
+        for project in repo.list_projects_by_workspace(workspace_id)
+    ]
