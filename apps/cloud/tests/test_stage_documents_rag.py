@@ -64,7 +64,7 @@ def test_reindex_sweeps_stage_documents(monkeypatch):
     client.patch(f"/projects/{pid}/stage-documents/plan", json={"content": "x"}, headers=ALICE)
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.assistant.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.rag.backfill.enqueue", lambda app, job: captured.append(job))
 
     res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
     assert res.status_code == 200, res.text
@@ -169,7 +169,7 @@ def test_reindex_sweeps_uploaded_documents(monkeypatch):
     repo.create_document(doc)
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.assistant.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.rag.backfill.enqueue", lambda app, job: captured.append(job))
 
     res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
     assert res.status_code == 200
@@ -177,6 +177,82 @@ def test_reindex_sweeps_uploaded_documents(monkeypatch):
     document_jobs = [j for j in captured if j.node_type == "documents"]
     assert [j.node_id for j in document_jobs] == [doc.id]
     assert res.json()["enqueued"] >= 1
+
+    client.__exit__(None, None, None)
+
+
+def test_reindex_sweeps_all_three_categories(monkeypatch):
+    """Guards the app/rag/backfill.py extraction itself: reindex_project used
+    to inline all three sweeps (graph entities, stage documents, uploaded
+    documents) directly; now it delegates to enqueue_project_backfill. This
+    seeds one of each and checks a single reindex call still covers all
+    three — the exact drift the extraction exists to prevent."""
+    from app.main import create_app
+    from app.models.schemas import Document
+    from app.rag.chat import FakeChatProvider
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    app = create_app()
+    client = TestClient(app)
+    client.__enter__()
+    client.app.state.embedding_provider = FakeEmbeddingProvider()
+    client.app.state.chat_provider = FakeChatProvider()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    project = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+    ).json()
+    pid = project["id"]
+
+    # Graph entity, via sync push (no model connection needed to land it).
+    res = client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {"id": "r1", "project_id": pid, "title": "Payments", "description": "x " * 20}
+            ]
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    # Stage document. Uses "constitution" specifically because it has no
+    # graph-entity projection (app/generation/projection.py) — "plan" would
+    # also enqueue a spec_documents projection job once a requirement
+    # exists, muddying this test's node-type assertion below.
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/constitution",
+        json={"content": "# Constitution"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    stage_doc = client.app.state.repository.get_stage_document(pid, "constitution")
+    assert stage_doc is not None
+
+    # Uploaded document.
+    repo = client.app.state.repository
+    doc = Document(
+        workspace_id=ws["id"],
+        project_id=pid,
+        title="PRD.pdf",
+        mime="application/pdf",
+        source_kind="upload",
+        storage_ref="test/PRD.pdf",
+        extracted_text="The product does the thing.",
+        status="extracted",
+        created_by="alice",
+    )
+    repo.create_document(doc)
+
+    captured: list[object] = []
+    monkeypatch.setattr("app.rag.backfill.enqueue", lambda app, job: captured.append(job))
+
+    res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
+    assert res.status_code == 200, res.text
+
+    node_types = {j.node_type for j in captured}
+    assert node_types == {"requirements", "stage_documents", "documents"}
+    assert res.json()["enqueued"] == 3
 
     client.__exit__(None, None, None)
 
