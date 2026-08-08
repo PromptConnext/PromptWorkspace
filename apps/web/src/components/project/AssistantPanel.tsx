@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getStageDocument, listDocuments } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
-import type { ProjectGraph, StageKind } from "@/lib/types";
+import type { ProjectGraph, RetrievalNotice, StageKind } from "@/lib/types";
 import { useIsWorkspaceAdmin } from "@/lib/workspace";
 import { AssistantFactCard } from "./AssistantFactCard";
 import { CitationList } from "./CitationList";
@@ -78,6 +78,62 @@ function ErrorBlock({
       )}
     </div>
   );
+}
+
+// Retrieval transparency (Task 10): distinguishes an answer the corpus
+// genuinely can't ground from one that was never searched at all — both
+// look identical in the model's prose. This is a warning, not an error: the
+// answer above it is still shown and still useful, so amber rather than the
+// red ErrorBlock uses.
+function RetrievalNoticeBlock({
+  retrieval,
+  workspaceId,
+  projectId,
+  isAdmin,
+}: {
+  retrieval: RetrievalNotice;
+  workspaceId: string;
+  projectId: string;
+  isAdmin: boolean;
+}) {
+  if (retrieval.reason === "no_embed_model") {
+    return (
+      <div className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">
+        <p>
+          This answer isn&apos;t grounded in your project&apos;s documents: no embedding model is
+          connected, so only status and progress questions can be answered.
+        </p>
+        {isAdmin ? (
+          <Link href={`/w/${workspaceId}/settings`} className="mt-1 inline-block underline">
+            Workspace settings
+          </Link>
+        ) : (
+          <p className="mt-1">Ask a workspace admin to connect one.</p>
+        )}
+      </div>
+    );
+  }
+  if (retrieval.reason === "no_indexed_content") {
+    return (
+      <div className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">
+        <p>
+          This project has no indexed content yet, so this answer isn&apos;t grounded in your
+          documents.
+        </p>
+        {isAdmin ? (
+          <Link
+            href={`/w/${workspaceId}/p/${projectId}/settings#assistant-index`}
+            className="mt-1 inline-block underline"
+          >
+            Reindex this project
+          </Link>
+        ) : (
+          <p className="mt-1">Ask an admin to reindex it.</p>
+        )}
+      </div>
+    );
+  }
+  return null;
 }
 
 export function AssistantPanel({
@@ -226,6 +282,14 @@ export function AssistantPanel({
           {turns.map((turn: Turn) => (
             <li key={turn.id} className="flex flex-col gap-2">
               <p className="text-sm font-medium text-slate-900">{turn.question}</p>
+              {turn.retrieval && (
+                <RetrievalNoticeBlock
+                  retrieval={turn.retrieval}
+                  workspaceId={workspaceId}
+                  projectId={projectId}
+                  isAdmin={isAdmin}
+                />
+              )}
               {turn.facts && <AssistantFactCard facts={turn.facts} />}
               {turn.answer && (
                 <p className="whitespace-pre-wrap text-sm text-slate-700">{turn.answer}</p>

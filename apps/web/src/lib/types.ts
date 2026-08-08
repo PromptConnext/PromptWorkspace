@@ -223,6 +223,16 @@ export interface Citation {
   end_line: number | null;
 }
 
+// Emitted by app/api/assistant.py when a content question's retrieval
+// produced nothing, so the panel can distinguish "not in your documents"
+// from "your documents were never searched".
+export type RetrievalGap = "no_embed_model" | "no_indexed_content";
+
+export interface RetrievalNotice {
+  grounded: boolean;
+  reason: RetrievalGap | null;
+}
+
 export interface LineageAgentRun {
   id: string;
   status: AgentRunStatus;

@@ -97,6 +97,38 @@ describe("useAssistantChat", () => {
     expect(result.current.turns[0].facts).not.toBeNull();
   });
 
+  it("stores a retrieval notice from the retrieval frame", async () => {
+    mockStream(
+      'data: {"delta":"I don\'t have enough information."}',
+      'event: retrieval\ndata: {"grounded":false,"reason":"no_embed_model"}',
+      'event: citations\ndata: {"citations":[]}',
+    );
+
+    const { result } = renderHook(() => useAssistantChat("p1"));
+    await act(async () => {
+      await result.current.ask("explain the PRD");
+    });
+
+    expect(result.current.turns[0].retrieval).toEqual({
+      grounded: false,
+      reason: "no_embed_model",
+    });
+  });
+
+  it("leaves the retrieval notice null when no retrieval frame arrives", async () => {
+    mockStream(
+      'data: {"delta":"Two of four tasks."}',
+      'event: citations\ndata: {"citations":[]}',
+    );
+
+    const { result } = renderHook(() => useAssistantChat("p1"));
+    await act(async () => {
+      await result.current.ask("how is it going?");
+    });
+
+    expect(result.current.turns[0].retrieval).toBeNull();
+  });
+
   it("classifies a missing model connection", async () => {
     mockFailure(400, "model_connection_not_configured");
     const { result } = renderHook(() => useAssistantChat("p1"));

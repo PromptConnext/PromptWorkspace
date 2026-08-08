@@ -214,6 +214,116 @@ describe("AssistantPanel", () => {
     expect(screen.queryByRole("link", { name: /reindex/i })).not.toBeInTheDocument();
   });
 
+  // Task 10: retrieval transparency — a content answer that was never
+  // grounded looks identical in its prose to one the corpus genuinely can't
+  // answer, so the server says which via a `retrieval` SSE frame.
+  it("shows the no-embed-model notice with an admin link to workspace settings", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"I don\'t have enough information."}',
+        'event: retrieval\ndata: {"grounded":false,"reason":"no_embed_model"}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "explain the PRD");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no embedding model is connected/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: /workspace settings/i })).toHaveAttribute(
+      "href",
+      "/w/w1/settings",
+    );
+  });
+
+  it("shows ask-an-admin copy instead of a link for a non-admin on the no-embed-model notice", async () => {
+    isWorkspaceAdmin.mockReturnValue(false);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"I don\'t have enough information."}',
+        'event: retrieval\ndata: {"grounded":false,"reason":"no_embed_model"}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "explain the PRD");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no embedding model is connected/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/ask a workspace admin to connect one/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /workspace settings/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the no-indexed-content notice with an admin link to reindex", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"I don\'t have enough information."}',
+        'event: retrieval\ndata: {"grounded":false,"reason":"no_indexed_content"}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "explain the PRD");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no indexed content yet/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: /reindex this project/i })).toHaveAttribute(
+      "href",
+      "/w/w1/p/p1/settings#assistant-index",
+    );
+  });
+
+  it("shows ask-an-admin copy instead of a link for a non-admin on the no-indexed-content notice", async () => {
+    isWorkspaceAdmin.mockReturnValue(false);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"I don\'t have enough information."}',
+        'event: retrieval\ndata: {"grounded":false,"reason":"no_indexed_content"}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "explain the PRD");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/no indexed content yet/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/ask an admin to reindex it/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /reindex this project/i })).not.toBeInTheDocument();
+  });
+
+  it("renders no retrieval notice when no retrieval frame arrives", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: sseBody(
+        'data: {"delta":"Two of four."}',
+        'event: citations\ndata: {"citations":[]}',
+      ),
+    }) as unknown as typeof fetch;
+
+    panel();
+    await userEvent.type(screen.getByRole("textbox"), "how is it going?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText("Two of four.")).toBeInTheDocument());
+    expect(screen.queryByText(/isn't grounded/i)).not.toBeInTheDocument();
+  });
+
   it("closes on Escape", async () => {
     const onClose = vi.fn();
     render(

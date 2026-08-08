@@ -22,8 +22,8 @@ Code retrieval (M11): a content/mixed question also runs `code_vector_search`
 against the same query embedding (no separate per-workspace code-embedding
 model in v1). Unlike every other hit type, a code hit's `content` is never
 stored — the matching line range is fetched fresh from GitHub for this
-request only, using a freshly-minted installation token, and discarded once
-the answer streams (ADR 0011: no source code at rest).
+request only, using the workspace's own PAT (ADR 0017 amendment), and
+discarded once the answer streams (ADR 0011: no source code at rest).
 
 Keyless (plan 0008 M1): `resolve_assistant_models` (app/rag/models.py)
 resolves BYO-then-managed the same way generation's `select_model` does, but
@@ -264,6 +264,24 @@ async def chat(
         if facts is not None:
             yield f"event: facts\ndata: {facts.model_dump_json()}\n\n"
 
+        # Retrieval transparency: an ungrounded content answer is
+        # indistinguishable in its text from one the corpus genuinely cannot
+        # answer, so say which it was. `no_embed_model` is an operator
+        # problem (Typhoon is chat-only; a separate embedding model must be
+        # configured); `no_indexed_content` is fixable by reindexing.
+        if not budget_exhausted and classification in ("content", "mixed"):
+            reason = None
+            if models.embed is None:
+                reason = "no_embed_model"
+            elif not hits and not code_hits:
+                reason = "no_indexed_content"
+            if reason is not None:
+                yield (
+                    "event: retrieval\ndata: "
+                    + json.dumps({"grounded": False, "reason": reason})
+                    + "\n\n"
+                )
+
         if budget_exhausted:
             # facts must be non-None here (otherwise the 429 above already
             # fired) — degrade to lineage-only rather than spending more
@@ -309,7 +327,7 @@ async def chat(
 async def _fetch_code_context(
     app, repo: Repository, project, code_hits: list[CodeChunkHit]
 ) -> tuple[list[str], list[Citation]]:
-    """Fetch-on-demand: mint an installation token and pull just the matched
+    """Fetch-on-demand: resolve the workspace's PAT and pull just the matched
     line range fresh from GitHub for *this request only*. The fetched text
     (`full`, `snippet`) never reaches any repository write — it's a local
     variable that goes out of scope when this function returns (ADR 0011: no

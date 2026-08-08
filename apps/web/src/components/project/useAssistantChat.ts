@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { CLOUD_API_URL } from "@/lib/config";
 import { parseFrames } from "@/lib/sse";
-import type { Citation, LineageFacts } from "@/lib/types";
+import type { Citation, LineageFacts, RetrievalNotice } from "@/lib/types";
 
 export type AssistantErrorKind = "no_model" | "embed_mismatch" | "budget" | "cut_off" | "other";
 
@@ -21,6 +21,7 @@ export interface Turn {
   citations: Citation[];
   status: "streaming" | "done" | "error";
   error: AssistantError | null;
+  retrieval: RetrievalNotice | null;
 }
 
 // The 400 and 429 details are bare identifiers, but the 409's is a full
@@ -109,6 +110,8 @@ export function useAssistantChat(projectId: string) {
               patch(turnId, {
                 citations: (frame.data as { citations: Citation[] }).citations ?? [],
               });
+            } else if (frame.event === "retrieval") {
+              patch(turnId, { retrieval: frame.data as RetrievalNotice });
             }
             // Unknown event kinds are ignored so a newer server degrades this
             // tab to prose instead of breaking it.
@@ -156,6 +159,7 @@ export function useAssistantChat(projectId: string) {
           citations: [],
           status: "streaming",
           error: null,
+          retrieval: null,
         },
       ]);
       await run(id, trimmed);
@@ -177,7 +181,15 @@ export function useAssistantChat(projectId: string) {
       setTurns((prev) =>
         prev.map((t) =>
           t.id === turnId
-            ? { ...t, facts: null, answer: "", citations: [], status: "streaming", error: null }
+            ? {
+                ...t,
+                facts: null,
+                answer: "",
+                citations: [],
+                status: "streaming",
+                error: null,
+                retrieval: null,
+              }
             : t,
         ),
       );
