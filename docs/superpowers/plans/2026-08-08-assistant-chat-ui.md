@@ -1014,7 +1014,11 @@ export function useAssistantChat(projectId: string) {
           error: { kind: "other", message: (err as Error).message || "Network error." },
         });
       } finally {
-        setBusy(false);
+        // Only the newest run owns `busy`. An aborted older run must not clear
+        // it out from under the run that superseded it, or the UI would think
+        // it is idle while a stream is still live — reachable by clicking
+        // Retry on an older errored turn while a newer turn is mid-answer.
+        if (abort.current === controller) setBusy(false);
       }
     },
     [projectId, authHeaders, patch],
