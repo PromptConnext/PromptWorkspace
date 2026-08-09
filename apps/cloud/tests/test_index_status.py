@@ -268,6 +268,96 @@ def test_a_job_is_counted_before_its_delivery_callback_runs():
     assert app.state.embed_queue.pending_for("p1") == 1
 
 
+def test_pending_jobs_is_visible_over_http_while_the_worker_is_mid_flight():
+    """End-to-end proof the depth is observable, not just bookkept: a real
+    POST .../reindex followed by a real GET .../index-status, with the live
+    worker held inside the embedding call. Counting at delivery instead of at
+    enqueue made this read 0 — the request returned before the loop ran the
+    callback that would have incremented it, so the client that just paid for
+    a sweep was told nothing was queued."""
+    import threading
+    import time
+
+    from app.rag.embedder import FakeEmbeddingProvider
+
+    release = threading.Event()
+    inner = FakeEmbeddingProvider()
+
+    class BlockingEmbedder:
+        """Blocks in a worker thread, not on the event loop, so HTTP keeps
+        being served while a job is stuck inside embed()."""
+
+        async def embed(self, texts, model, api_key, base_url, embed_dim=None):
+            import asyncio
+
+            await asyncio.get_running_loop().run_in_executor(None, release.wait)
+            return await inner.embed(texts, model, api_key, base_url, embed_dim)
+
+    client = _make_client()
+
+    ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+    ws_id = ws["id"]
+    pid = client.post(
+        "/projects", json={"name": "P", "workspace_id": ws_id}, headers=ALICE
+    ).json()["id"]
+    # Configure the connection while the *fast* embedder is still installed:
+    # this endpoint validates the connection by embedding through it, so
+    # blocking first deadlocks the setup rather than the worker.
+    res = client.post(
+        f"/workspaces/{ws_id}/model-connection",
+        json={
+            "provider": "openai",
+            "base_url": "https://api.example.com/v1",
+            "model": "gpt-x",
+            "embed_model": "embed-x",
+            "api_key": "sk-test",
+        },
+        headers=ALICE,
+    )
+    assert res.status_code in (200, 201), res.text
+    client.app.state.embedding_provider = BlockingEmbedder()
+
+    res = client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "requirements": [
+                {"id": f"r{i}", "project_id": pid, "title": f"R{i}", "description": "x " * 30}
+                for i in range(3)
+            ]
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+
+    try:
+        res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
+        assert res.status_code == 200, res.text
+        assert res.json()["enqueued"] == 3
+
+        # Not an exact count: the sync PUT above enqueues its own jobs on
+        # upsert, so the depth here is "the sweep plus whatever sync queued".
+        # Zero versus non-zero is the whole regression.
+        body = client.get(f"/projects/{pid}/assistant/index-status", headers=ALICE).json()
+        assert body["pending_jobs"] >= 3, "the sweep must be visible to the client that queued it"
+        assert body["indexed_chunks"] == 0
+    finally:
+        # Unconditional: this unblocks a non-daemon executor thread that the
+        # interpreter joins at exit, so an assertion failure above would
+        # otherwise hang the whole test session instead of failing it.
+        release.set()
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        body = client.get(f"/projects/{pid}/assistant/index-status", headers=ALICE).json()
+        if body["pending_jobs"] == 0 and body["indexed_chunks"] > 0:
+            break
+    assert body["pending_jobs"] == 0
+    assert body["indexed_chunks"] > 0
+    assert body["last_error"] is None
+
+    client.__exit__(None, None, None)
+
+
 def test_a_successful_job_retires_an_earlier_error():
     """A fixed misconfiguration must stop accusing itself once chunks land,
     otherwise the panel shows a permanent red line after a successful reindex."""

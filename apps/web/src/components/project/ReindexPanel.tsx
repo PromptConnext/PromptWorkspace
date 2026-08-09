@@ -14,7 +14,7 @@ const MAX_POLLS_WITHOUT_PROGRESS = 150; // ~5 minutes at POLL_MS
 // Keep watching briefly after a sweep is queued even if the queue already
 // reads empty — a short backfill can drain entirely between the enqueue and
 // the first status read.
-const SETTLE_POLLS_AFTER_REINDEX = 5;
+const SETTLE_POLLS_AFTER_REINDEX = 3;
 
 function Spinner({ label }: { label: string }) {
   return (
@@ -40,6 +40,15 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
   // the enqueue — even when the first read says the queue is already empty —
   // that outcome is indistinguishable from a panel that did nothing.
   const [settlePolls, setSettlePolls] = useState(0);
+  const [completion, setCompletion] = useState<{
+    at: string;
+    items: number;
+    chunks: number;
+    delta: number;
+  } | null>(null);
+  // What the sweep claimed, captured at enqueue time, so the completion line
+  // can report a real before/after instead of restating the current numbers.
+  const sweep = useRef<{ items: number; chunksBefore: number } | null>(null);
   const pollsLeft = useRef(MAX_POLLS_WITHOUT_PROGRESS);
 
   // Every number here comes straight from the server (indexed_chunks,
@@ -88,16 +97,37 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
     return () => clearInterval(id);
   }, [pending, settlePolls, refreshStatus]);
 
+  // A sweep is over once the queue is empty and the settle window is spent.
+  // Reporting it explicitly is the point: re-embedding unchanged nodes leaves
+  // every count identical, so without this the only evidence a reindex ran at
+  // all is a timestamp the user has to have memorised.
+  useEffect(() => {
+    if (!sweep.current || !status) return;
+    if (running || pending > 0 || settlePolls > 0) return;
+    const { items, chunksBefore } = sweep.current;
+    sweep.current = null;
+    setEnqueued(null);
+    setCompletion({
+      at: new Date().toLocaleTimeString(),
+      items,
+      chunks: status.indexed_chunks,
+      delta: status.indexed_chunks - chunksBefore,
+    });
+  }, [running, pending, settlePolls, status]);
+
   const busy = loading || running || pending > 0;
 
   async function run() {
     setRunning(true);
     setError(null);
     setEnqueued(null);
+    setCompletion(null);
+    const chunksBefore = status?.indexed_chunks ?? 0;
     try {
       const res = await reindexProject(projectId, authHeaders());
       setEnqueued(res.enqueued);
       setConfirming(false);
+      sweep.current = { items: res.enqueued, chunksBefore };
       setSettlePolls(SETTLE_POLLS_AFTER_REINDEX);
       // "Queued" isn't "indexed" — re-fetch so the operator can see the queue
       // depth and, from there, whether it actually drains.
@@ -209,6 +239,22 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
       {enqueued !== null && (
         <p className="mt-2 text-sm text-slate-600" aria-live="polite">
           {enqueued} items queued for indexing.
+        </p>
+      )}
+
+      {/* The positive acknowledgment a no-op sweep otherwise never gets. Only
+          rendered when the server reported no failure — a discarded sweep is
+          reported by the amber block above, and both at once would contradict
+          each other. */}
+      {completion && !status?.last_error && (
+        <p className="mt-2 text-sm text-slate-700" aria-live="polite">
+          ✓ Reindex finished {completion.at} — {completion.items} item
+          {completion.items === 1 ? "" : "s"} re-embedded, {completion.chunks} chunk
+          {completion.chunks === 1 ? "" : "s"}{" "}
+          {completion.delta === 0
+            ? "(unchanged)"
+            : `(${completion.delta > 0 ? "+" : ""}${completion.delta})`}
+          .
         </p>
       )}
       {error && (

@@ -204,6 +204,71 @@ describe("ReindexPanel", () => {
     }
   });
 
+  it("reports the finished sweep even when it changed nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      // 19 nodes already indexed: re-embedding upserts in place, so the chunk
+      // count is identical before and after. The sweep still happened.
+      getIndexStatus.mockResolvedValue({
+        ...IDLE,
+        indexed_chunks: 21,
+        indexable_nodes: 19,
+        embed_model: "gemini-embedding-001",
+      });
+      reindexProject.mockResolvedValue({ enqueued: 19 });
+
+      render(<ReindexPanel projectId="p1" />);
+      await vi.waitFor(() =>
+        expect(screen.getByRole("button", { name: /reindex project/i })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /reindex project/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^confirm$/i }));
+
+      // Nothing is claimed until the settle window is spent — a completion
+      // line printed while jobs could still be queued would be a guess.
+      await vi.waitFor(() => expect(getIndexStatus).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/reindex finished/i)).not.toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      const done = await vi.waitFor(() => screen.getByText(/reindex finished/i));
+      expect(done).toHaveTextContent("19 items re-embedded");
+      expect(done).toHaveTextContent("21 chunks (unchanged)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not claim success when the server reported a dropped job", async () => {
+    vi.useFakeTimers();
+    try {
+      getIndexStatus.mockResolvedValue({
+        ...IDLE,
+        indexable_nodes: 19,
+        last_error: {
+          code: "no_model_connection",
+          message: "No embedding model resolved for this workspace.",
+          node_type: "requirements",
+          node_id: "r1",
+          at: "2026-08-09T12:00:00Z",
+        },
+      });
+      reindexProject.mockResolvedValue({ enqueued: 19 });
+
+      render(<ReindexPanel projectId="p1" />);
+      await vi.waitFor(() =>
+        expect(screen.getByRole("button", { name: /reindex project/i })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /reindex project/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^confirm$/i }));
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(screen.getByText(/no_model_connection/)).toBeInTheDocument();
+      expect(screen.queryByText(/reindex finished/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("timestamps each check so an unchanged count still shows the panel looked", async () => {
     getIndexStatus.mockResolvedValue({ ...IDLE, indexed_chunks: 21, indexable_nodes: 19 });
 
