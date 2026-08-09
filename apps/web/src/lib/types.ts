@@ -329,13 +329,25 @@ export interface PolicyTemplateOut {
 // GET /projects/{id}/assistant/index-status (apps/cloud/app/api/assistant.py)
 // — the completion signal POST .../reindex itself never had: that endpoint
 // returns `{enqueued}` the instant jobs are queued, before anything is
-// embedded. This is what actually landed. `pending` is intentionally not a
-// field here — the cloud has no cheap, honest way to say "still queued" per
-// project, and omits it rather than guess (see the endpoint's docstring).
+// embedded. This is what actually landed, plus the two fields that make a
+// frozen count readable: `pending_jobs` (this project's measured in-flight
+// count, from the queue's own bookkeeping — poll while it's > 0) and
+// `last_error` (a job that was discarded rather than deferred, e.g. no
+// embedding model configured, which no chunk count can express).
+export interface IndexJobError {
+  code: string;
+  message: string;
+  node_type: string;
+  node_id: string;
+  at: string;
+}
+
 export interface IndexStatus {
   indexed_chunks: number;
   indexable_nodes: number;
   embed_model: string | null;
+  pending_jobs: number;
+  last_error: IndexJobError | null;
 }
 
 // POST /workspaces/{id}/assistant/reindex (apps/cloud/app/api/assistant.py)

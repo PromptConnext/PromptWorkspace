@@ -577,25 +577,45 @@ class ModelConnectionStatusOut(BaseModel):
     embed_source: Literal["byo", "managed", "none"]
 
 
+class IndexJobError(BaseModel):
+    """The last thing that stopped one of this project's embed jobs from
+    storing chunks — app/rag/queue.py::JobFailure over the wire. `code` is
+    stable enough for the UI to branch on ("no_model_connection",
+    "github_not_connected", "embed_failed"); `message` carries the detail."""
+
+    code: str
+    message: str
+    node_type: str
+    node_id: str
+    at: datetime
+
+
 class IndexStatusOut(BaseModel):
     """What GET /projects/{id}/assistant/index-status returns — the
     completion signal POST .../reindex itself never had (that endpoint
     returns the instant jobs are queued, before any embedding runs).
 
-    `pending` is deliberately absent, not `False`: the in-process embed
-    queue (app/rag/queue.py's `EmbedQueue`, an `asyncio.Queue`) exposes no
-    per-project introspection, only an opaque FIFO drained by a single
-    background worker. There is no cheap, honest way to say "this project's
-    jobs are still in flight" from that queue — a global depth wouldn't mean
-    THIS project, and the worker typically drains within milliseconds of an
-    enqueue anyway, so a naive check would almost always read `False` right
-    after a real enqueue and mislead exactly when it matters. Reporting a
-    guess as fact is the bug this endpoint exists to fix, not repeat.
+    `pending_jobs` and `last_error` come from bookkeeping `EmbedQueue` keeps
+    around its own enqueue/complete pair (app/rag/queue.py), not from probing
+    an opaque FIFO: the count is per-project and measured, so "still draining"
+    is distinguishable from "drained" without guessing. `last_error` covers
+    the case the chunk count can never express — jobs that were discarded
+    rather than deferred (no model connection resolved, no GitHub token) or
+    that raised — which is what makes a frozen "0 chunks indexed" readable
+    instead of merely alarming.
+
+    Both are this process's in-memory view: a restart zeroes them, and only
+    the instance that ran the jobs knows about them. The single-instance
+    constraint that already governs presence (see ADR 0011 / ws/manager.py)
+    applies here too — with a second instance these numbers describe that
+    instance's share, not the workspace's.
     """
 
     indexed_chunks: int
     indexable_nodes: int
     embed_model: str | None = None
+    pending_jobs: int = 0
+    last_error: IndexJobError | None = None
 
 
 class ProjectReindexCount(BaseModel):

@@ -5,8 +5,9 @@ Endpoints:
   POST /workspaces/{id}/model-connection      admin — configure workspace-BYO model
   POST /projects/{id}/assistant/chat          member — SSE-streamed, cited answer
   POST /projects/{id}/assistant/reindex       admin — backfill existing graph nodes
-  GET  /projects/{id}/assistant/index-status  member — chunk count / embed model,
-                                               the completion signal reindex itself
+  GET  /projects/{id}/assistant/index-status  member — chunk count / embed model /
+                                               queue depth / last job error, the
+                                               completion signal reindex itself
                                                never had
   POST /workspaces/{id}/assistant/reindex     admin — same backfill, every project
                                                in the workspace at once
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -55,6 +57,7 @@ from app.models.schemas import (
     ChatRequest,
     Citation,
     CodeChunkHit,
+    IndexJobError,
     IndexStatusOut,
     LineageFacts,
     ModelConnectionCreate,
@@ -74,6 +77,7 @@ from app.rag.classify import classify_question
 from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.lineage import compute_facts, facts_to_text, resolve_target
 from app.rag.models import resolve_assistant_models
+from app.rag.queue import EmbedQueue
 
 logger = logging.getLogger("promptconnext.assistant")
 router = APIRouter(tags=["assistant"])
@@ -215,6 +219,7 @@ def reindex_workspace(
 )
 def get_index_status(
     project_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> IndexStatusOut:
@@ -224,16 +229,25 @@ def get_index_status(
     run while no model connection was configured — app/rag/queue.py's
     `_process_job` discards a job outright rather than deferring it).
 
+    `pending_jobs` and `last_error` are read off the live queue's per-project
+    bookkeeping, which is what separates those three states: a moving chunk
+    count with jobs still pending means draining, zero pending with a
+    `no_model_connection` error means discarded, and neither means done.
+
     Membership-gated like chat, not admin-only like reindex itself — seeing
     whether the assistant has anything to work with isn't privileged, and
     the panel that will render this is visible to every member even though
     only an admin can press the reindex button.
     """
     project = require_project(repo, project_id, user)
+    queue: EmbedQueue | None = getattr(request.app.state, "embed_queue", None)
+    failure = queue.last_failure_for(project_id) if queue else None
     return IndexStatusOut(
         indexed_chunks=repo.count_project_rag_chunks(project.workspace_id, project_id),
         indexable_nodes=count_indexable_nodes(repo, project),
         embed_model=repo.get_project_embed_model(project.workspace_id, project_id),
+        pending_jobs=queue.pending_for(project_id) if queue else 0,
+        last_error=IndexJobError(**asdict(failure)) if failure else None,
     )
 
 

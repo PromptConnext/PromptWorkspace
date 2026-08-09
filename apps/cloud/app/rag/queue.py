@@ -16,6 +16,16 @@ M11 reuses this same off-request-path queue for code files: fetching a file
 from GitHub is exactly the kind of external call that must never block a
 webhook response, the same reasoning that already applies to the embedding
 call itself.
+
+`EmbedQueue` also keeps a per-project in-flight count and the last failure or
+silent drop per project, which is what GET .../assistant/index-status reports
+as `pending_jobs` / `last_error`. Both are bookkeeping around the same
+enqueue/complete pair — a measured count, not an estimate — so an operator can
+tell "still draining" apart from "dropped, nothing will ever arrive" (the
+no-model-connection branch below), which the chunk count alone can't express.
+They live in this process's memory only: a restart resets them, and a
+multi-instance deployment would see only its own share, the same
+single-instance constraint presence already carries.
 """
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from app.integrations.github_auth import resolve_token
@@ -48,18 +59,66 @@ class EmbedJob:
     sha: str | None = None
 
 
+@dataclass(frozen=True)
+class JobFailure:
+    """Why a project's last job produced no chunks. `code` is a stable
+    machine string the UI can branch on; `message` is the human detail."""
+
+    code: str
+    message: str
+    node_type: str
+    node_id: str
+    at: datetime
+
+
 class EmbedQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[EmbedJob] = asyncio.Queue()
+        # Counters mutate on the event-loop thread only (enqueue marshals via
+        # call_soon_threadsafe, the worker is a loop task); the readers are
+        # sync route handlers on a worker thread doing a single dict lookup,
+        # which needs no lock in CPython and can at worst be one job stale.
+        self._pending: dict[str, int] = {}
+        self._failures: dict[str, JobFailure] = {}
 
     async def get(self) -> EmbedJob:
         return await self._queue.get()
 
-    def task_done(self) -> None:
+    def complete(self, job: EmbedJob) -> None:
+        """Mark one job finished — settled or failed, both leave the queue."""
+        remaining = self._pending.get(job.project_id, 1) - 1
+        if remaining > 0:
+            self._pending[job.project_id] = remaining
+        else:
+            self._pending.pop(job.project_id, None)
         self._queue.task_done()
 
     def put_nowait(self, job: EmbedJob) -> None:
+        self._pending[job.project_id] = self._pending.get(job.project_id, 0) + 1
         self._queue.put_nowait(job)
+
+    def pending_for(self, project_id: str) -> int:
+        return self._pending.get(project_id, 0)
+
+    def record_failure(
+        self, job: EmbedJob, code: str, message: str, *, at: datetime | None = None
+    ) -> None:
+        self._failures[job.project_id] = JobFailure(
+            code=code,
+            message=message,
+            node_type=job.node_type,
+            node_id=job.node_id,
+            at=at or datetime.now(timezone.utc),
+        )
+
+    def clear_failure(self, project_id: str) -> None:
+        """A job that actually stored chunks retires the project's last
+        error — otherwise a fixed misconfiguration keeps accusing itself
+        long after the reindex that fixed it succeeded."""
+        self._failures.pop(project_id, None)
+
+    def last_failure_for(self, project_id: str) -> JobFailure | None:
+        return self._failures.get(project_id)
 
 
 def enqueue(app: Any, job: EmbedJob) -> None:
@@ -78,10 +137,13 @@ async def embed_worker_loop(app: Any) -> None:
         job = await queue.get()
         try:
             await _process_job(app, job)
-        except Exception:  # noqa: BLE001 - one bad job must never kill the worker
+        except Exception as exc:  # noqa: BLE001 - one bad job must never kill the worker
             logger.exception("embed job failed node=%s type=%s", job.node_id, job.node_type)
+            # Same reason index-status exists: the operator otherwise sees a
+            # chunk count that never moves and no way to learn why.
+            queue.record_failure(job, "embed_failed", str(exc) or type(exc).__name__)
         finally:
-            queue.task_done()
+            queue.complete(job)
 
 
 async def _process_job(app: Any, job: EmbedJob) -> None:
@@ -89,6 +151,7 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         await _process_code_file_job(app, job)
         return
 
+    queue: EmbedQueue = app.state.embed_queue
     repo = app.state.repository
     conn = repo.get_model_connection(job.workspace_id)
     if conn is None:
@@ -99,8 +162,20 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         conn = getattr(app.state, "managed_embed_connection", None)
     if conn is None:
         # Steady-state condition, not an event: it repeats once per node on
-        # every push for a workspace that has no connection configured.
+        # every push for a workspace that has no connection configured. Logged
+        # at debug for that reason — but recorded as this project's last error
+        # regardless, because from the operator's side it is indistinguishable
+        # from a stuck queue: jobs enqueued, chunk count frozen at zero. This
+        # drop is exactly what a "0 chunks indexed · 59 items queued" screen
+        # cannot otherwise explain.
         logger.debug("skip embed: no model connection workspace=%s", job.workspace_id)
+        queue.record_failure(
+            job,
+            "no_model_connection",
+            "No embedding model resolved for this workspace — jobs were discarded, "
+            "not deferred. Configure a workspace model connection (or enable the "
+            "managed tier) and reindex.",
+        )
         return
 
     node = repo.get_node(job.project_id, job.node_type, job.node_id)
@@ -144,22 +219,36 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
         embed_model=conn.embed_model,
         embed_dim=conn.embed_dim,
     )
+    queue.clear_failure(job.project_id)
 
 
 async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
     """Fetch, chunk, embed, store refs — the fetched content (`content`,
     `texts` below) never leaves this function; only line ranges and
     embeddings reach `upsert_code_chunks` (ADR 0011: no source at rest)."""
+    queue: EmbedQueue = app.state.embed_queue
     repo = app.state.repository
     conn = repo.get_model_connection(job.workspace_id)
     if conn is None:
         logger.info("skip code embed: no model connection workspace=%s", job.workspace_id)
+        queue.record_failure(
+            job,
+            "no_model_connection",
+            "No embedding model configured for this workspace — code files were "
+            "discarded, not deferred.",
+        )
         return
 
     workspace = repo.get_workspace(job.workspace_id)
     resolved = resolve_token(app, workspace)
     if resolved is None:
         logger.info("skip code embed: github not connected for workspace=%s", job.workspace_id)
+        queue.record_failure(
+            job,
+            "github_not_connected",
+            "No usable GitHub token for this workspace — code files can't be fetched "
+            "to index.",
+        )
         return
     token, _ = resolved
 
@@ -182,3 +271,4 @@ async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
     repo.upsert_code_chunks(
         job.workspace_id, job.project_id, job.repo, job.path, job.sha, line_ranges, vectors
     )
+    queue.clear_failure(job.project_id)
