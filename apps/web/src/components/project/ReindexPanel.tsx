@@ -11,6 +11,10 @@ const POLL_MS = 2000;
 // moves, so this bounds "stuck", not "slow". Without it a permanently wedged
 // worker would leave every open settings tab polling until the tab closes.
 const MAX_POLLS_WITHOUT_PROGRESS = 150; // ~5 minutes at POLL_MS
+// Keep watching briefly after a sweep is queued even if the queue already
+// reads empty — a short backfill can drain entirely between the enqueue and
+// the first status read.
+const SETTLE_POLLS_AFTER_REINDEX = 5;
 
 function Spinner({ label }: { label: string }) {
   return (
@@ -30,6 +34,12 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<IndexStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
+  // Re-embedding the same nodes upserts over the same rows, so a successful
+  // sweep very often leaves every number identical. Without a few polls after
+  // the enqueue — even when the first read says the queue is already empty —
+  // that outcome is indistinguishable from a panel that did nothing.
+  const [settlePolls, setSettlePolls] = useState(0);
   const pollsLeft = useRef(MAX_POLLS_WITHOUT_PROGRESS);
 
   // Every number here comes straight from the server (indexed_chunks,
@@ -40,6 +50,7 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
     try {
       const next = await getIndexStatus(projectId, authHeaders());
       setStatus(next);
+      setLastCheckedAt(new Date().toLocaleTimeString());
     } catch {
       // Status is a nice-to-have next to the reindex button itself; a
       // member without permission or a transient failure here shouldn't
@@ -63,7 +74,7 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
   // what refreshes the stuck-budget: real progress buys more time, a frozen
   // depth doesn't.
   useEffect(() => {
-    if (pending <= 0) return;
+    if (pending <= 0 && settlePolls <= 0) return;
     pollsLeft.current = MAX_POLLS_WITHOUT_PROGRESS;
     const id = setInterval(() => {
       if (pollsLeft.current <= 0) {
@@ -71,10 +82,11 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
         return;
       }
       pollsLeft.current -= 1;
+      setSettlePolls((n) => (n > 0 ? n - 1 : 0));
       refreshStatus();
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [pending, refreshStatus]);
+  }, [pending, settlePolls, refreshStatus]);
 
   const busy = loading || running || pending > 0;
 
@@ -86,6 +98,7 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
       const res = await reindexProject(projectId, authHeaders());
       setEnqueued(res.enqueued);
       setConfirming(false);
+      setSettlePolls(SETTLE_POLLS_AFTER_REINDEX);
       // "Queued" isn't "indexed" — re-fetch so the operator can see the queue
       // depth and, from there, whether it actually drains.
       await refreshStatus();
@@ -123,6 +136,11 @@ export function ReindexPanel({ projectId }: { projectId: string }) {
           {status.indexed_chunks} chunk{status.indexed_chunks === 1 ? "" : "s"} indexed
           {status.embed_model ? ` with ${status.embed_model}` : ""} · {status.indexable_nodes}{" "}
           item{status.indexable_nodes === 1 ? "" : "s"} indexable
+          {/* Re-embedding unchanged nodes upserts in place, so a correct
+              sweep routinely leaves every count identical. The timestamp is
+              the only thing distinguishing that from a panel that never
+              re-read the server. */}
+          {lastCheckedAt && <span className="text-slate-400"> · checked {lastCheckedAt}</span>}
         </p>
       )}
 

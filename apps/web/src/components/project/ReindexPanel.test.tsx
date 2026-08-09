@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IndexStatus } from "@/lib/types";
@@ -34,6 +34,9 @@ beforeEach(() => {
 afterEach(() => {
   // No global auto-cleanup in this repo — see the other component test files.
   cleanup();
+  // Unconditional: a fake-timer test that fails mid-way would otherwise leave
+  // them installed and hang every test after it.
+  vi.useRealTimers();
   vi.resetAllMocks();
 });
 
@@ -71,9 +74,12 @@ describe("ReindexPanel", () => {
     });
     render(<ReindexPanel projectId="p1" />);
     await waitFor(() => expect(getIndexStatus).toHaveBeenCalledWith("p1", expect.anything()));
-    expect(await screen.findByText(/12/)).toBeInTheDocument();
-    expect(screen.getByText(/15/)).toBeInTheDocument();
-    expect(screen.getByText(/text-embed-3/)).toBeInTheDocument();
+    // Assert against the whole status line, not bare numbers: the "checked
+    // HH:MM:SS" timestamp shares this paragraph and its digits would satisfy
+    // a loose /15/ twice over.
+    const line = await screen.findByText(/chunks indexed/i);
+    expect(line).toHaveTextContent("12 chunks indexed with text-embed-3");
+    expect(line).toHaveTextContent("15 items indexable");
   });
 
   it("re-fetches after a successful reindex so the count updates", async () => {
@@ -160,6 +166,49 @@ describe("ReindexPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps polling briefly after a reindex even when the queue already reads empty", async () => {
+    // A 19-item backfill can drain between the enqueue and the first status
+    // read. Without the settle window the panel would show pre-sweep numbers
+    // and never look again — which reads as "the button did nothing".
+    vi.useFakeTimers();
+    try {
+      getIndexStatus.mockResolvedValue({ ...IDLE, indexable_nodes: 19 });
+      reindexProject.mockResolvedValue({ enqueued: 19 });
+
+      render(<ReindexPanel projectId="p1" />);
+      // Wait for the button to leave its loading-disabled state — a click on a
+      // disabled button is silently dropped.
+      await vi.waitFor(() =>
+        expect(screen.getByRole("button", { name: /reindex project/i })).toBeEnabled(),
+      );
+
+      // fireEvent, not userEvent: userEvent's own internal delays deadlock
+      // against fake timers here, and the click itself is all this test needs.
+      fireEvent.click(screen.getByRole("button", { name: /reindex project/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^confirm$/i }));
+
+      // The post-enqueue refetch reported pending_jobs: 0 the whole time.
+      await vi.waitFor(() => expect(getIndexStatus).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => expect(getIndexStatus).toHaveBeenCalledTimes(3));
+
+      // …and it stops once the settle window is spent, rather than polling forever.
+      await vi.advanceTimersByTimeAsync(60_000);
+      const settled = getIndexStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getIndexStatus).toHaveBeenCalledTimes(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("timestamps each check so an unchanged count still shows the panel looked", async () => {
+    getIndexStatus.mockResolvedValue({ ...IDLE, indexed_chunks: 21, indexable_nodes: 19 });
+
+    render(<ReindexPanel projectId="p1" />);
+    expect(await screen.findByText(/checked /i)).toBeInTheDocument();
   });
 
   it("explains a dropped job instead of leaving a frozen count unexplained", async () => {

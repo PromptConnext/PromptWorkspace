@@ -232,6 +232,42 @@ def test_a_reindex_with_no_model_connection_reports_the_drop_as_last_error():
     client.__exit__(None, None, None)
 
 
+def test_a_job_is_counted_before_its_delivery_callback_runs():
+    """The whole point of `pending_jobs`: it must be true at the instant the
+    enqueueing request returns, because that is when the client asks. Counting
+    inside the `call_soon_threadsafe` callback instead would report zero to a
+    status call that lands before the loop drains its callbacks, and the panel
+    would never start polling — the reindex would look like a no-op."""
+    from app.rag.queue import EmbedQueue, enqueue
+
+    deferred: list = []
+
+    class _Loop:
+        def call_soon_threadsafe(self, fn, *args):
+            deferred.append((fn, args))  # never run — simulates a busy loop
+
+    class _State:
+        pass
+
+    class _App:
+        state = _State()
+
+    app = _App()
+    app.state.embed_queue = EmbedQueue()
+    app.state.loop = _Loop()
+
+    job = EmbedJob(workspace_id="w1", project_id="p1", node_type="requirements", node_id="r1")
+    enqueue(app, job)
+
+    assert deferred, "delivery should still be marshalled onto the loop thread"
+    assert app.state.embed_queue.pending_for("p1") == 1
+
+    # And once it does run, the job isn't double-counted.
+    fn, args = deferred[0]
+    fn(*args)
+    assert app.state.embed_queue.pending_for("p1") == 1
+
+
 def test_a_successful_job_retires_an_earlier_error():
     """A fixed misconfiguration must stop accusing itself once chunks land,
     otherwise the panel shows a permanent red line after a successful reindex."""

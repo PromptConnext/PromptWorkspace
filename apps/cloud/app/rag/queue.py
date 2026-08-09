@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -72,63 +73,97 @@ class JobFailure:
 
 
 class EmbedQueue:
+    """Counting is deliberately separate from delivery (`reserve` vs
+    `deliver`). The asyncio put has to happen on the event-loop thread, so
+    `enqueue()` marshals it — but a count that also waited for that callback
+    would still read zero at the moment `POST .../reindex` returns, which is
+    exactly when the client asks. The panel would then see "nothing pending",
+    never start polling, and sit on pre-sweep numbers until a manual reload:
+    the reserved-then-delivered split is what makes the depth true as soon as
+    the enqueueing request can be observed at all.
+
+    A lock rather than bare dict ops: reservations come from request threads
+    while completions come from the loop thread, and read-modify-write on a
+    counter is not atomic — free-threaded builds aside, `+= 1` is three
+    bytecodes even under a GIL.
+    """
+
     def __init__(self) -> None:
         self._queue: asyncio.Queue[EmbedJob] = asyncio.Queue()
-        # Counters mutate on the event-loop thread only (enqueue marshals via
-        # call_soon_threadsafe, the worker is a loop task); the readers are
-        # sync route handlers on a worker thread doing a single dict lookup,
-        # which needs no lock in CPython and can at worst be one job stale.
+        self._lock = threading.Lock()
         self._pending: dict[str, int] = {}
         self._failures: dict[str, JobFailure] = {}
 
     async def get(self) -> EmbedJob:
         return await self._queue.get()
 
+    def reserve(self, job: EmbedJob) -> None:
+        """Count a job as in-flight. Thread-safe, and correct to call before
+        the job physically reaches the asyncio queue."""
+        with self._lock:
+            self._pending[job.project_id] = self._pending.get(job.project_id, 0) + 1
+
+    def deliver(self, job: EmbedJob) -> None:
+        """Event-loop thread only: hand an already-reserved job to the queue."""
+        self._queue.put_nowait(job)
+
     def complete(self, job: EmbedJob) -> None:
         """Mark one job finished — settled or failed, both leave the queue."""
-        remaining = self._pending.get(job.project_id, 1) - 1
-        if remaining > 0:
-            self._pending[job.project_id] = remaining
-        else:
-            self._pending.pop(job.project_id, None)
+        with self._lock:
+            remaining = self._pending.get(job.project_id, 1) - 1
+            if remaining > 0:
+                self._pending[job.project_id] = remaining
+            else:
+                self._pending.pop(job.project_id, None)
         self._queue.task_done()
 
     def put_nowait(self, job: EmbedJob) -> None:
-        self._pending[job.project_id] = self._pending.get(job.project_id, 0) + 1
-        self._queue.put_nowait(job)
+        """reserve + deliver for callers already on the event-loop thread."""
+        self.reserve(job)
+        self.deliver(job)
 
     def pending_for(self, project_id: str) -> int:
-        return self._pending.get(project_id, 0)
+        with self._lock:
+            return self._pending.get(project_id, 0)
 
     def record_failure(
         self, job: EmbedJob, code: str, message: str, *, at: datetime | None = None
     ) -> None:
-        self._failures[job.project_id] = JobFailure(
-            code=code,
-            message=message,
-            node_type=job.node_type,
-            node_id=job.node_id,
-            at=at or datetime.now(timezone.utc),
-        )
+        with self._lock:
+            self._failures[job.project_id] = JobFailure(
+                code=code,
+                message=message,
+                node_type=job.node_type,
+                node_id=job.node_id,
+                at=at or datetime.now(timezone.utc),
+            )
 
     def clear_failure(self, project_id: str) -> None:
         """A job that actually stored chunks retires the project's last
         error — otherwise a fixed misconfiguration keeps accusing itself
         long after the reindex that fixed it succeeded."""
-        self._failures.pop(project_id, None)
+        with self._lock:
+            self._failures.pop(project_id, None)
 
     def last_failure_for(self, project_id: str) -> JobFailure | None:
-        return self._failures.get(project_id)
+        with self._lock:
+            return self._failures.get(project_id)
 
 
 def enqueue(app: Any, job: EmbedJob) -> None:
-    """Safe to call from a sync request handler or the event-loop thread."""
+    """Safe to call from a sync request handler or the event-loop thread.
+
+    The reservation is taken here, synchronously, so the job is already
+    counted by the time the enqueueing request returns; only the asyncio put
+    is deferred to the loop thread.
+    """
     queue: EmbedQueue = app.state.embed_queue
+    queue.reserve(job)
     loop: asyncio.AbstractEventLoop | None = getattr(app.state, "loop", None)
     if loop is None:
-        queue.put_nowait(job)  # e.g. called during startup/tests, same thread
+        queue.deliver(job)  # e.g. called during startup/tests, same thread
         return
-    loop.call_soon_threadsafe(queue.put_nowait, job)
+    loop.call_soon_threadsafe(queue.deliver, job)
 
 
 async def embed_worker_loop(app: Any) -> None:
