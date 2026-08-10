@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { connectModel, getRecommendations, type Recommendation } from "../api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/Select";
 
 const CUSTOM: Recommendation = {
   provider: "",
@@ -148,12 +149,19 @@ export default function ConnectForm({
         <p className="muted">No key needed — this runs locally on your machine.</p>
       )}
 
+      {/* The label no longer names the control implicitly — a Radix trigger is
+          a button, which isn't labelable — so the name is stated on it. */}
       <label>
         Use this model for
-        <select value={connRole} onChange={(e) => setConnRole(e.target.value as "plan" | "code")}>
-          <option value="plan">Planning — Scope &amp; Spec</option>
-          <option value="code">Coding — implementation &amp; the Run button</option>
-        </select>
+        <Select value={connRole} onValueChange={(v) => setConnRole(v as "plan" | "code")}>
+          <SelectTrigger aria-label="Use this model for">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="plan">Planning — Scope &amp; Spec</SelectItem>
+            <SelectItem value="code">Coding — implementation &amp; the Run button</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
 
       <button type="button" className="link" onClick={() => setAdvanced((v) => !v)}>

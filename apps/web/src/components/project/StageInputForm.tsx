@@ -11,6 +11,7 @@ import {
   type StageField,
 } from "./stage-forms";
 import type { StageKind } from "@/lib/types";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
 const PREFILL_ERROR_TEXT: Record<string, string> = {
   no_source_material:
@@ -153,20 +154,25 @@ export function StageInputForm({
             </label>
             {field.hint && <p className="mb-1 text-xs text-slate-500">{field.hint}</p>}
             {field.type === "select" ? (
-              <select
-                id={id}
+              <Select
                 value={answers[field.key] ?? ""}
                 disabled={disabled}
-                onChange={(e) => set(field.key, e.target.value)}
-                className="mt-1 w-full rounded border border-slate-300 p-2 text-sm disabled:bg-slate-50"
+                onValueChange={(v) => set(field.key, v)}
               >
-                <option value="">Select…</option>
-                {(field.options ?? []).map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+                {/* `id` stays on the trigger so the <label htmlFor> above still
+                    names it; the blank "Select…" option becomes a placeholder,
+                    since Radix won't take an item with an empty value. */}
+                <SelectTrigger id={id} className="mt-1 w-full">
+                  <SelectValue placeholder="Select…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(field.options ?? []).map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             ) : field.type === "textarea" ? (
               <textarea
                 id={id}

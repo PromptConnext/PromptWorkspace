@@ -17,6 +17,7 @@ import {
   type CloudWorkspace,
   type Project,
 } from "../api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/Select";
 
 export type WorkspaceContext = {
   connected: boolean;
@@ -392,19 +393,26 @@ export default function TopBar({
           {/* The switcher already shows the active workspace's name — printing
               it again beside the select was the same string twice in a row. */}
           {connected && workspaces.length > 1 ? (
-            <select
-              className="tb-workspace-select"
-              title="Switch workspace"
-              value={active?.id ?? ""}
-              onChange={(e) => e.target.value && selectWorkspace(e.target.value)}
-            >
-              {!active && <option value="">Choose a workspace…</option>}
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
+            <Select value={active?.id ?? ""} onValueChange={selectWorkspace}>
+              {/* The blank "Choose a workspace…" entry is a placeholder now:
+                  Radix keeps the empty value for "nothing selected" and won't
+                  accept it on an item, which also means onValueChange can no
+                  longer hand back the "" the old handler guarded against. */}
+              <SelectTrigger
+                className="tb-workspace-select"
+                title="Switch workspace"
+                aria-label="Switch workspace"
+              >
+                <SelectValue placeholder="Choose a workspace…" />
+              </SelectTrigger>
+              <SelectContent>
+                {workspaces.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           ) : (
             <span className="tb-workspace-name" title={workspaceLabel}>
               {workspaceLabel}

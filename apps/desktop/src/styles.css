@@ -69,6 +69,110 @@ textarea {
   color: inherit;
 }
 
+/* Radix Select (components/ui/Select.tsx). Kept beside the other form-control
+   base styles, and deliberately above the per-site rules further down the file:
+   both are single-class selectors, so a caller's own class only wins by coming
+   later. `.tb-workspace-select` relies on that. */
+.pz-select-trigger {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pz-select-trigger:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pz-select-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.pz-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pz-select-trigger[data-placeholder] {
+  color: var(--muted);
+}
+
+/* Portaled to <body>, so it inherits none of the app's surfaces — `Canvas` is
+   the system-color pair that tracks the `color-scheme: light dark` on :root,
+   which the `transparent` the inline controls use would not survive here. */
+.pz-select-content {
+  z-index: 50;
+  min-width: var(--radix-select-trigger-width);
+  max-height: 18rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.pz-select-viewport {
+  padding: 4px;
+}
+
+.pz-select-scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  color: var(--muted);
+}
+
+.pz-select-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 26px;
+  border-radius: 6px;
+  font-size: 0.9em;
+  position: relative;
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+
+.pz-select-item[data-highlighted] {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.pz-select-item[data-disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.pz-select-indicator {
+  position: absolute;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pz-select-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.pz-select-check {
+  width: 12px;
+  height: 12px;
+}
+
 /* onboarding */
 .onboarding {
   max-width: 560px;
@@ -212,13 +316,12 @@ textarea {
   font-size: 0.9em;
 }
 
-.connect-detail select {
-  font: inherit;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
+/* These pickers used to need their own rule to match the inputs stacked beside
+   them; `.pz-select-trigger` now carries that look everywhere, so all that is
+   left is stretching an inline-flex trigger across the label's grid column. */
+.connect-detail label > .pz-select-trigger,
+.connect-form label > .pz-select-trigger {
+  width: 100%;
 }
 
 .steps {
@@ -374,20 +477,28 @@ button.link {
   white-space: nowrap;
 }
 
-.tb-workspace-select {
-  font: inherit;
+/* Compounded with .pz-select-trigger so these beat the base rules rather than
+   racing them on equal specificity — the switcher is meant to read as a label
+   until you reach for it, not as a bordered control in the chrome. */
+.pz-select-trigger.tb-workspace-select {
   font-weight: 600;
   font-size: 0.95em;
   max-width: 220px;
   padding: 4px 8px;
-  border: 1px solid transparent;
+  border-color: transparent;
   border-radius: 6px;
-  background: transparent;
-  color: inherit;
 }
 
-.tb-workspace-select:hover {
+.pz-select-trigger.tb-workspace-select:hover:not(:disabled) {
   border-color: var(--border);
+}
+
+/* A long workspace name has to clip inside max-width instead of pushing the
+   chevron out of the trigger. */
+.tb-workspace-select > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tb-projects {

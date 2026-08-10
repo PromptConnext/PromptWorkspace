@@ -15,6 +15,7 @@ import {
   type CloudSyncResult,
   type CloudWorkspace,
 } from "../api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/Select";
 
 // D1 (docs/plans/0004): opt-in "link this project to a workspace" panel.
 // Renders nothing when cloud sync isn't configured server-side (CLOUD_API_URL
@@ -128,14 +129,18 @@ export default function CloudConnect({
       {workspaces.length > 0 && (
         <label>
           Workspace
-          <select value={pickedWorkspace} onChange={(e) => setPickedWorkspace(e.target.value)}>
-            <option value="">Select…</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
+          <Select value={pickedWorkspace} onValueChange={setPickedWorkspace}>
+            <SelectTrigger aria-label="Workspace">
+              <SelectValue placeholder="Select…" />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaces.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
       )}
       <button

@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
 import type { Discussion, ProjectGraph } from "@/lib/types";
 import { AssistantPanel } from "./AssistantPanel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
 const SOURCE_STYLE: Record<Discussion["source"], string> = {
   pz: "bg-indigo-100 text-indigo-700",
@@ -60,17 +61,18 @@ function ComposeBox({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 rounded border border-slate-200 bg-white p-3">
-      <select
-        value={target}
-        onChange={(e) => setTarget(e.target.value)}
-        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-      >
-        {options.map(([key, label]) => (
-          <option key={key} value={key}>
-            {label}
-          </option>
-        ))}
-      </select>
+      <Select value={target} onValueChange={setTarget}>
+        <SelectTrigger aria-label="Comment target" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([key, label]) => (
+            <SelectItem key={key} value={key}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}

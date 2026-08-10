@@ -4,6 +4,7 @@ import { useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { InvitationCreateResponse, Role } from "@/lib/types";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
 export function InviteForm({
   workspaceId,
@@ -69,17 +70,21 @@ export function InviteForm({
             required
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        {/* A <label> wrapping a Radix trigger names nothing — the trigger is a
+            button, which isn't a labelable element — so the accessible name has
+            to be stated on the trigger itself. */}
+        <div className="flex flex-col gap-1 text-sm">
           <span className="text-slate-500">Role</span>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as Role)}
-            className="rounded-lg border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
-          >
-            <option value="member">Member</option>
-            <option value="admin">Admin</option>
-          </select>
-        </label>
+          <Select value={role} onValueChange={(v) => setRole(v as Role)}>
+            <SelectTrigger aria-label="Role">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="member">Member</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <button
           type="submit"
           disabled={pending}

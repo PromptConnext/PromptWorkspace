@@ -5,8 +5,17 @@ import { assignTask, listMembers } from "@/lib/api";
 import { authorityOf } from "@/lib/fieldAuthority";
 import { useAuth } from "@/lib/auth";
 import type { ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
 const COLUMNS: TaskStatus[] = ["todo", "in_progress", "implemented", "verified"];
+
+/**
+ * Unassigning is a choice the user makes, not the absence of one, so it has to
+ * be a real item in the list. Radix refuses `value=""` on an item (it reserves
+ * the empty string for "nothing selected"), hence a sentinel that
+ * `handleChange` maps back to the null the assign endpoint expects.
+ */
+const UNASSIGNED = "__unassigned__";
 
 const AUTHORITY_STYLE: Record<string, string> = {
   pz: "bg-indigo-100 text-indigo-700",
@@ -66,8 +75,8 @@ function AssigneeControl({
     );
   }
 
-  async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const value = e.target.value || null;
+  async function handleChange(next: string) {
+    const value = next === UNASSIGNED ? null : next;
     setSaving(true);
     setError(null);
     try {
@@ -82,19 +91,23 @@ function AssigneeControl({
 
   return (
     <div className="flex flex-col gap-0.5">
-      <select
-        value={task.assigned_user_id ?? ""}
-        onChange={handleChange}
+      <Select
+        value={task.assigned_user_id ?? UNASSIGNED}
+        onValueChange={handleChange}
         disabled={saving}
-        className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] disabled:opacity-50"
       >
-        <option value="">Unassigned</option>
-        {members.map((m) => (
-          <option key={m.user_id} value={m.user_id}>
-            {m.email ?? m.user_id}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger aria-label="Assignee" size="sm" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+          {members.map((m) => (
+            <SelectItem key={m.user_id} value={m.user_id}>
+              {m.email ?? m.user_id}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {error && <span className="text-[10px] text-red-600">{error}</span>}
     </div>
   );

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscussionThread } from "./DiscussionThread";
 import type { ProjectGraph } from "@/lib/types";
@@ -78,9 +78,12 @@ describe("DiscussionThread", () => {
     const graph = makeGraph();
     render(<DiscussionThread graph={graph} workspaceId="ws1" projectId="p1" onPosted={vi.fn()} />);
 
-    const select = screen.getByRole("combobox");
-    const options = Array.from(select.querySelectorAll("option"));
-    const optionTexts = options.map((o) => o.textContent);
+    // The picker is a Radix Select now, so its options only exist in the DOM
+    // while it is open — and it opens on ArrowDown, which is the one path that
+    // needs no pointer-capture emulation from happy-dom.
+    const trigger = screen.getByRole("combobox");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const optionTexts = screen.getAllByRole("option").map((o) => o.textContent);
 
     expect(optionTexts).toContain("Task: Wire the OAuth callback");
     expect(optionTexts).not.toContain("Comment by Alice");

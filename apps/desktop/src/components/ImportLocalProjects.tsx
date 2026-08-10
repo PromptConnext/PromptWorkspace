@@ -5,6 +5,7 @@ import {
   type Project,
   type RosterWorkspace,
 } from "../api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/Select";
 
 // Migration affordance for existing installs (ADR 0015 §, plan 0006 G4). Under
 // the membership gate, projects that were never linked to a workspace
@@ -104,18 +105,21 @@ export default function ImportLocalProjects({
           <li key={p.id} className="import-row">
             <span className="import-name">{p.name}</span>
             {workspaces.length > 1 && (
-              <select
-                className="import-select"
+              <Select
                 value={targets[p.id] ?? ""}
-                onChange={(e) => setTargets((t) => ({ ...t, [p.id]: e.target.value }))}
+                onValueChange={(v) => setTargets((t) => ({ ...t, [p.id]: v }))}
               >
-                <option value="">Choose a workspace…</option>
-                {workspaces.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="import-select" aria-label={`Workspace for ${p.name}`}>
+                  <SelectValue placeholder="Choose a workspace…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workspaces.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             <button
               type="button"

@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "happy-dom",
+    setupFiles: ["./src/test-setup.ts"],
     env: {
       NEXT_PUBLIC_AUTH_MODE: "stub",
     },

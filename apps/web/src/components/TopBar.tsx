@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
 export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[] }) {
   const { user, signOut } = useAuth();
@@ -21,12 +22,9 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
             "All workspaces" option is their only route back to the gate —
             where a pending invitation would be waiting. */}
         {memberships.length >= 1 && (
-          <select
-            aria-label="Active workspace"
-            className="ml-2 rounded border border-slate-300 px-2 py-1 text-slate-700"
+          <Select
             value={activeWorkspace?.id ?? ""}
-            onChange={(e) => {
-              const id = e.target.value;
+            onValueChange={(id) => {
               if (id === "__all__") {
                 // Drop the remembered selection so the gate shows the picker
                 // (and any pending invitation) instead of resuming this one.
@@ -34,19 +32,26 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
                 router.push("/");
                 return;
               }
-              if (!id) return;
               setActiveWorkspace(id);
               router.push(`/w/${id}`);
             }}
           >
-            {!activeWorkspace && <option value="">Select workspace…</option>}
-            {memberships.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-            <option value="__all__">All workspaces…</option>
-          </select>
+            <SelectTrigger aria-label="Active workspace" className="ml-2">
+              {/* The old blank <option> is a placeholder now — Radix reserves
+                  the empty value for "nothing selected" and refuses it on an
+                  item, which also means onValueChange can no longer hand back
+                  the "" the previous handler had to guard against. */}
+              <SelectValue placeholder="Select workspace…" />
+            </SelectTrigger>
+            <SelectContent>
+              {memberships.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+              <SelectItem value="__all__">All workspaces…</SelectItem>
+            </SelectContent>
+          </Select>
         )}
         {crumbs?.map((c) => (
           <span key={c.label} className="flex items-center gap-2 text-slate-500">
