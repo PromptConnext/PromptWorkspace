@@ -9,6 +9,7 @@ How to develop PromptConnext and how to build the desktop app for **both macOS a
 | `apps/desktop` | Tauri 2 (Rust shell) + React/Vite webview | The app window; spawns the engine as a sidecar |
 | `apps/engine` | Node 24 / TypeScript (Hono, `node:sqlite`, `node-pty`) | Local engine on `127.0.0.1:47131` — runs TS natively, no build step |
 | `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to the hosted Railway instance, override with `CLOUD_API_URL`, or set it to `""` to disable |
+| `apps/vscode` | VS Code extension (TypeScript, esbuild) | Assigned tasks, project coding rules and commit-driven task close, straight against `apps/cloud` — no sidecar (ADR 0019) |
 
 Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptConnext orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTCONNEXT_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
 
@@ -51,6 +52,25 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8080     # in-memory backend, stub auth — no Supabase
 pytest                                         # cloud is the only app with a test suite today
 ```
+
+**VS Code extension** — no Rust, no engine, no sidecar:
+
+```bash
+pnpm vscode                      # = pnpm --dir apps/vscode watch  (esbuild, incremental)
+pnpm --dir apps/vscode typecheck
+pnpm --dir apps/vscode test      # node --test on the pure modules; no editor host needed
+pnpm --dir apps/vscode package   # produces a .vsix
+```
+
+Open `apps/vscode` in VS Code and press **F5** for an Extension Development Host. Point it at a
+local cloud with the `promptconnext.cloudApiUrl` / `promptconnext.cloudWebUrl` settings — the
+extension reads settings, never `process.env`, because nothing sets env for the extension host.
+Settings: `cloudApiUrl`, `cloudWebUrl`, `supabaseUrl`, `supabaseAnonKey`, `projectId`
+(resource-scoped, safe to commit), `closeTasksFromCommits`, `commitScanLimit`.
+
+The one repo-level rule worth knowing: `src/git/git.d.ts` is a **vendored, pinned copy** of the
+built-in Git extension's API, and `src/git/gitBridge.ts` is the only file allowed to import it.
+`pnpm --dir apps/vscode typecheck` is what catches it drifting.
 
 Point the engine at it with `CLOUD_API_URL=http://localhost:8080` — otherwise the engine talks to the hosted production instance by default. For real auth/persistence against your local instance, set `DATA_BACKEND=supabase`, `SUPABASE_URL`, `SUPABASE_KEY` (see `apps/cloud/README.md`).
 

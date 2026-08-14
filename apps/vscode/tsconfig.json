@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    // The pure modules (cloud client, queue, cache, task refs, repo-url
+    // normalisation) are unit-tested by bare `node --test`, which type-strips
+    // rather than compiles. Enums, namespaces and parameter properties would
+    // need a real emit, so they are banned outright rather than "avoided in
+    // the tested files" — the import graph is what decides, not the file.
+    "erasableSyntaxOnly": true,
+    // The unit tests import "../../src/x.ts" because that is what bare
+    // `node --test` resolves. src/ itself imports without the extension —
+    // esbuild resolves those, and a .ts specifier would survive into the
+    // bundle's own resolution.
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vscode"]
+  },
+  "include": ["src", "test"],
+  "exclude": ["dist", "node_modules"]
+}

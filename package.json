@@ -8,7 +8,8 @@
     "engine": "pnpm --dir apps/engine start",
     "desktop": "pnpm --dir apps/desktop tauri dev",
     "web": "pnpm --dir apps/web dev",
-    "corp": "pnpm --dir apps/corp dev"
+    "corp": "pnpm --dir apps/corp dev",
+    "vscode": "pnpm --dir apps/vscode watch"
   },
   "pnpm": {
     "overrides": {

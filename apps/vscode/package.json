@@ -1,0 +1,224 @@
+{
+  "name": "promptconnext-vscode",
+  "displayName": "PromptConnext",
+  "description": "Your assigned PromptConnext tasks, project context and AI coding rules, inside the editor.",
+  "version": "0.1.0",
+  "publisher": "promptconnext",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/9haroon/prompt-zone.git",
+    "directory": "apps/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onUri",
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Needs a local clone and a local git repository."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "promptconnext",
+          "title": "PromptConnext",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "promptconnext": [
+        {
+          "id": "promptconnext.tasks",
+          "name": "My Tasks"
+        },
+        {
+          "id": "promptconnext.context",
+          "name": "Project Context",
+          "type": "webview"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "promptconnext.tasks",
+        "when": "!promptconnext.signedIn",
+        "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptconnext.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptconnext.signInWithCode)"
+      },
+      {
+        "view": "promptconnext.tasks",
+        "when": "promptconnext.signedIn",
+        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "promptconnext.signIn",
+        "title": "Sign In",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.signInWithCode",
+        "title": "Sign In with a Code",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.signOut",
+        "title": "Sign Out",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.refreshTasks",
+        "title": "Refresh Tasks",
+        "category": "PromptConnext",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "promptconnext.setTaskStatus",
+        "title": "Set Task Status…",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.copyTaskContext",
+        "title": "Copy Task Context",
+        "category": "PromptConnext",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "promptconnext.openTaskInWeb",
+        "title": "Open Task in the Web App",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.linkProject",
+        "title": "Link This Folder to a Project…",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.flushQueue",
+        "title": "Retry Pending Task Updates",
+        "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.showLog",
+        "title": "Show Log",
+        "category": "PromptConnext"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "promptconnext.refreshTasks",
+          "when": "view == promptconnext.tasks",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "promptconnext.copyTaskContext",
+          "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
+          "group": "inline"
+        },
+        {
+          "command": "promptconnext.setTaskStatus",
+          "when": "view == promptconnext.tasks && viewItem == promptconnext.task"
+        },
+        {
+          "command": "promptconnext.openTaskInWeb",
+          "when": "view == promptconnext.tasks && viewItem == promptconnext.task"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "promptconnext.setTaskStatus",
+          "when": "false"
+        },
+        {
+          "command": "promptconnext.copyTaskContext",
+          "when": "false"
+        },
+        {
+          "command": "promptconnext.openTaskInWeb",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PromptConnext",
+      "properties": {
+        "promptconnext.cloudApiUrl": {
+          "type": "string",
+          "default": "https://promptconnextcloud-production.up.railway.app",
+          "description": "Base URL of the PromptConnext cloud API."
+        },
+        "promptconnext.cloudWebUrl": {
+          "type": "string",
+          "default": "https://prompt-zone-web-app.vercel.app",
+          "description": "Base URL of the PromptConnext web app, which hosts the sign-in pages."
+        },
+        "promptconnext.supabaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Supabase project URL. Leave empty to use the cloud's stub auth mode (local development only)."
+        },
+        "promptconnext.supabaseAnonKey": {
+          "type": "string",
+          "default": "",
+          "description": "Supabase anon key. Required alongside supabaseUrl for real authentication."
+        },
+        "promptconnext.projectId": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Cloud project this folder belongs to. Set by 'Link This Folder to a Project…'; safe to commit in .vscode/settings.json — a project id is not a secret."
+        },
+        "promptconnext.closeTasksFromCommits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mark a task implemented when a commit subject references it (for example 'T003: add retry')."
+        },
+        "promptconnext.commitScanLimit": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 10,
+          "maximum": 10000,
+          "description": "How far back to read commits the first time a repository is scanned, or after history is rewritten."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "pretest": "node scripts/check-feature-detection.mjs",
+    "test": "node --test test/unit/*.test.ts",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}

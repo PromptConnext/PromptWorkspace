@@ -22,6 +22,7 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 | `apps/cloud` | FastAPI (Python ≥ 3.10) + Supabase/Postgres | **Optional** sync + collaboration backend (task-graph hub, RAG assistant) |
 | `apps/web` | Next.js 16 App Router, React 19, TypeScript | Team-member web UI; read/collaborate against `apps/cloud` |
 | `apps/corp` | Next.js 16 App Router, React 19, `next-intl` (EN/TH), Tailwind v4 | Public **marketing website** + the **desktop-app download page**; static/SEO-first, no backend |
+| `apps/vscode` | VS Code extension — TypeScript, esbuild, no runtime deps | Developer surface for cloud-planned work (ADR 0019): assigned tasks, coding rules from the clone, commit-driven task close. Talks straight to `apps/cloud` — **no sidecar** |
 
 `apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; root `package.json`'s `pnpm.packageExtensions` pins each package's `@types/react` edge explicitly (not `pnpm-workspace.yaml` — pnpm 9.x only reads `packageExtensions` from `package.json`) — don't remove those. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
 
@@ -35,6 +36,7 @@ pnpm desktop     # full app: Tauri window + engine sidecar + hot-reload UI (firs
 pnpm engine      # engine alone on 127.0.0.1:47131 (tokenless dev mode)
 pnpm web         # apps/web (team UI) on http://localhost:3000
 pnpm corp        # apps/corp (marketing + download) on http://localhost:3002
+pnpm vscode      # apps/vscode esbuild watch; press F5 in apps/vscode for an Extension Host
 ```
 
 `apps/web` and `apps/corp` are both Next.js on different ports (3000 vs 3002) so they can run side by side.
@@ -55,6 +57,8 @@ ruff check .                                   # lint (line-length 100)
 ```
 
 **Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck) / `vitest run` (test suite).
+
+**VS Code extension** (`apps/vscode`): `typecheck` / `build` (esbuild) / `test` (`node --test test/unit/*.test.ts`, no editor host) / `package` (VSIX). Configured through VS Code settings (`promptconnext.*`), never `process.env` — nothing sets env for the extension host. `src/git/git.d.ts` is a **vendored pinned copy** of the built-in Git extension's API and `src/git/gitBridge.ts` is its only importer; typecheck is the drift tripwire. It has no sidecar and must not grow one (ADR 0019).
 
 **Corp** (`apps/corp`): `pnpm --dir apps/corp dev` (port 3002) / `build` / `typecheck` / `lint`. Copy `.env.example` → `.env.local` and set `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (leave the last empty to render the download page's "coming soon" state).
 

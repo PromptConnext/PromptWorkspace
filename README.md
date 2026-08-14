@@ -14,6 +14,7 @@ pnpm workspace (`apps/*`) plus one Python app. No monorepo build tool — the ap
 - `apps/cloud` — FastAPI (Python ≥ 3.10) + Supabase/Postgres. **Optional** sync + collaboration backend: workspaces and membership, task-graph sync, the web Planner's stage generator (managed Typhoon), the RAG assistant, presence, and tracker integrations. Credentials never sync; source code never syncs (that's Git).
 - `apps/web` — Next.js 16 App Router / React 19. Team-member web UI against `apps/cloud`: Planner (authoring — PRD upload, stage generation, project creation), Graph, Tasks, Progress, Discussion. No Next API routes.
 - `apps/corp` — Next.js 16 / React 19 / `next-intl` (EN/TH) / Tailwind v4. Public marketing site and the desktop **download page**. Static, SEO-first, unauthenticated — talks to no engine and no cloud API.
+- `apps/vscode` — VS Code extension (ADR 0019), bundled with esbuild. The developer surface for cloud-planned work: assigned tasks, the project's AI coding rules read from the clone, copy-task-context for any assistant, and task status closed from a commit. Talks straight to `apps/cloud` — **no sidecar, no engine, no local server**. Tests: `node --test test/unit/*.test.ts`.
 
 ## Run (dev)
 
@@ -25,6 +26,7 @@ pnpm desktop        # full app: Tauri window + vite + engine sidecar (first run 
 pnpm engine         # engine alone on 127.0.0.1:47131 (tokenless dev mode)
 pnpm web            # team web UI      → http://localhost:3000
 pnpm corp           # marketing + download → http://localhost:3002
+pnpm vscode         # extension: esbuild watch, then press F5 in apps/vscode
 ```
 
 Browser-only UI iteration, no Rust compile: `pnpm engine` in one terminal, `pnpm --dir apps/desktop dev` (Vite on `:1420`) in another.

@@ -288,6 +288,45 @@ Bump `version` in `apps/desktop/src-tauri/tauri.conf.json` (and keep `apps/deskt
 
 ---
 
+## 3A. VS Code extension (`apps/vscode`) → Marketplace + Open VSX
+
+The extension is not an installer and does not touch R2. It has no bundled runtime and spawns no
+executable, so there is nothing to sign and nothing to disclose beyond saying so.
+
+```bash
+pnpm --dir apps/vscode typecheck
+pnpm --dir apps/vscode test
+pnpm --dir apps/vscode build
+pnpm --dir apps/vscode package        # → promptconnext-vscode-<version>.vsix
+```
+
+**Publish from Linux or macOS, never Windows.** Packaging on Windows strips the POSIX executable
+bit from bundled files. Harmless while we bundle no executables — establish the habit before that
+stops being true.
+
+Two registries, both from day one (ADR 0019):
+
+```bash
+npx @vscode/vsce publish --azure-credential   # Microsoft Marketplace → VS Code
+npx ovsx publish promptconnext-vscode-<version>.vsix -p "$OVSX_TOKEN"   # → Cursor, Windsurf, VSCodium, code-server
+```
+
+Three things to get right before the first release:
+
+- **Register the publisher on both registries.** The extension id (`publisher.name`) is baked into
+  the sign-in callback URI (`src/auth/signIn.ts::EXTENSION_ID`) and into the web app's scheme
+  allow-list expectations. Renaming after release breaks in-flight sign-ins.
+- **Do not build a PAT-based publishing flow.** Global Azure DevOps PATs retire **2026-12-01**;
+  use Entra ID workload identity federation with `vsce publish --azure-credential`.
+- **Marketplace Participation Policies §3(b)**: the listing and walkthrough may not promote our
+  other IDE offerings. That pitch belongs on `apps/corp`.
+
+Bumping `version` in `apps/vscode/package.json` is the whole release process — installed
+extensions auto-update from the registry, so there is no manifest to assemble and no channel to
+maintain.
+
+---
+
 ## 4. Publish installers to Cloudflare R2
 
 ### 4.1 One-time bucket setup
