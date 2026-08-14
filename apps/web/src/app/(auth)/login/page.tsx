@@ -12,19 +12,84 @@ import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@
 // lib/ so the register page can share it without importing a route module.
 export { safeNext };
 
-// Deep-link schemes a desktop shell may ask us to hand the session back to:
+// Deep-link schemes a client may ask us to hand the session back to:
 // `promptconnext` is the shipping Tauri shell, `promptconnext-theia` the
-// in-development Electron one, and the engine names its own via ?scheme= so a
-// login returns to the shell that started it (ADR 0014's 2026-08-01 amendment).
+// in-development Electron one, and the rest are the VS Code family the
+// extension in apps/vscode runs inside (ADR 0019) — every fork registers its
+// own scheme, so `env.uriScheme` differs per editor and cannot be hardcoded.
 //
 // The allow-list is a security control, not tidiness: the URL below carries a
 // one-time code that redeems a real session, and the query string is
 // attacker-controllable, so an arbitrary scheme would hand that code to any
 // locally-installed app willing to register for it.
-const DESKTOP_SCHEMES: string[] = ["promptconnext", "promptconnext-theia"];
+//
+// Widening it to the editor schemes has a real, accepted cost: OS URL-scheme
+// registration is unauthenticated and last-writer-wins on every platform, so
+// any local app claiming `vscode://` can receive the code. What bounds it is
+// that the code is single-use with a 120s TTL (app/desktop_auth_store.py) and
+// that `state` never leaves the client's machine except in the outbound URL —
+// a thief who takes the code without the state cannot complete *our* sign-in,
+// and the user sees a failed login rather than a silent one. What it does not
+// bound is an app that hijacks the scheme and wins the race; that risk already
+// existed for `promptconnext://` and this enlarges the colliding set.
+const DESKTOP_SCHEMES: string[] = [
+  "promptconnext",
+  "promptconnext-theia",
+  "vscode",
+  "vscode-insiders",
+  "vscode-exploration",
+  "vscodium",
+  "codium",
+  "cursor",
+  "windsurf",
+];
 
 export function desktopScheme(raw: string | null): string {
   return raw && DESKTOP_SCHEMES.includes(raw) ? raw : "promptconnext";
+}
+
+// Where to send the one-time code.
+//
+// The two desktop shells accept the authority-less `scheme://auth/callback`
+// this has always built. A VS Code extension cannot: `registerUriHandler` only
+// receives URIs whose authority is the extension id
+// (`vscode://publisher.name/path`), and the scheme varies per editor. So a
+// client may instead send its own fully-resolved callback as `redirect_uri`
+// (built with `env.asExternalUri`), and we validate it rather than construct it.
+//
+// microsoft/vscode#141640: `handleUri` drops the URI *fragment*, so `code` and
+// `state` must stay in the query string. They already do — do not "tidy" them
+// into a hash.
+export function desktopRedirect(
+  rawRedirectUri: string | null,
+  rawScheme: string | null,
+  code: string,
+  state: string,
+): string {
+  const fallback =
+    `${desktopScheme(rawScheme)}://auth/callback?code=${encodeURIComponent(code)}` +
+    `&state=${encodeURIComponent(state)}`;
+  if (!rawRedirectUri) return fallback;
+
+  let target: URL;
+  try {
+    target = new URL(rawRedirectUri);
+  } catch {
+    return fallback;
+  }
+  // `https:` is refused outright even though asExternalUri can legitimately
+  // return an https tunnel under Remote/Codespaces: allowing arbitrary https
+  // here is an open redirect that leaks a live session code to any origin.
+  // Remote hosts use the paste-the-code fallback below instead. If that ever
+  // needs to change, add an exact-host allow-list — never a bare `https:`.
+  if (!DESKTOP_SCHEMES.includes(target.protocol.replace(/:$/, ""))) return fallback;
+  // A callback that already carries these is trying to pin them past us.
+  if (target.hash || target.searchParams.has("code") || target.searchParams.has("state")) {
+    return fallback;
+  }
+  target.searchParams.set("code", code);
+  target.searchParams.set("state", state);
+  return target.toString();
 }
 
 function LoginForm() {
@@ -34,7 +99,8 @@ function LoginForm() {
   const next = safeNext(params.get("next"));
   const desktop = params.get("desktop") === "1";
   const desktopState = params.get("state");
-  const scheme = desktopScheme(params.get("scheme"));
+  const rawScheme = params.get("scheme");
+  const rawRedirectUri = params.get("redirect_uri");
 
   const [userId, setUserId] = useState("dev-user");
   const [email, setEmail] = useState("");
@@ -73,9 +139,12 @@ function LoginForm() {
             },
           );
           setHandoffCode(code);
-          window.location.href =
-            `${scheme}://auth/callback?code=${encodeURIComponent(code)}` +
-            `&state=${encodeURIComponent(desktopState)}`;
+          window.location.href = desktopRedirect(
+            rawRedirectUri,
+            rawScheme,
+            code,
+            desktopState,
+          );
         } catch (err) {
           setHandoffError(err instanceof Error ? err.message : "Failed to hand off to the desktop app.");
         }
@@ -83,7 +152,7 @@ function LoginForm() {
       return;
     }
     router.replace(next);
-  }, [user, desktop, desktopState, scheme, getSessionTokens, next, router]);
+  }, [user, desktop, desktopState, rawScheme, rawRedirectUri, getSessionTokens, next, router]);
 
   if (user && desktop && desktopState) {
     return (
@@ -93,9 +162,9 @@ function LoginForm() {
         ) : handoffCode ? (
           <>
             <p className="text-sm text-slate-600">
-              Redirecting you back to the desktop app… If nothing happens in a few seconds
-              (common when running the app in development), copy this code and paste it into
-              the desktop app&apos;s sign-in screen instead:
+              Redirecting you back to the app… If nothing happens in a few seconds (common in
+              development builds, and on Linux where the URL scheme is often unregistered),
+              copy this code and paste it into the app&apos;s sign-in screen instead:
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm">
