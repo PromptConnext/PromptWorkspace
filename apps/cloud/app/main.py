@@ -24,6 +24,7 @@ from app.api import (
     github,
     health,
     integrations,
+    me,
     policies,
     presence,
     stage_documents,
@@ -222,6 +223,7 @@ def create_app() -> FastAPI:
     app.include_router(integrations.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
+    app.include_router(me.router)
     app.include_router(assistant.router)
     app.include_router(discussions.router)
     app.include_router(documents.router)

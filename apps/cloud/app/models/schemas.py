@@ -200,6 +200,27 @@ class TaskAssignmentUpdate(BaseModel):
     assigned_user_id: str | None = None
 
 
+class TaskStatusArtifact(BaseModel):
+    """Evidence for a status change — the commit that closed the task.
+
+    Rides the status PATCH rather than the full-graph PUT: ADR 0020 decision 2
+    names the status write and its evidence together, and a purpose-built route
+    grants a task client exactly one writable field plus one append-only child
+    row, where `PUT /sync/projects/{id}/graph` would grant it every entity.
+    """
+
+    commit_sha: str
+    uri: str
+    kind: ArtifactKind = ArtifactKind.code
+
+
+class TaskStatusUpdate(BaseModel):
+    """Set a task's status, optionally attaching the commit that closed it."""
+
+    status: TaskStatus
+    artifact: TaskStatusArtifact | None = None
+
+
 class DiscussionCreate(BaseModel):
     """Web/desktop authoring request. `author` is deliberately absent —
     the endpoint sets it to the authenticated caller, never client-supplied
@@ -484,6 +505,23 @@ class ProjectGraph(BaseModel):
     # re-pulls with since=cursor & after_id=next_id. None means fully drained.
     next_id: str | None = None
     has_more: bool = False
+
+
+class AssignedTask(BaseModel):
+    """A task assigned to the caller, flattened with the context a task client
+    needs to render it and to match it against a local clone.
+
+    `repo_url` is carried deliberately: an editor client has a workspace folder
+    and a git remote, and this is what lets it work out which cloud project the
+    folder belongs to without a second round trip per project.
+    """
+
+    task: Task
+    project_id: str
+    project_name: str
+    workspace_id: str
+    workspace_name: str
+    repo_url: str | None = None
 
 
 class RepoWebhook(BaseModel):

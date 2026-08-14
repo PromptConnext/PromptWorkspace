@@ -23,6 +23,9 @@ from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    Artifact,
+    ArtifactKind,
+    AssignedTask,
     CodeChunkHit,
     Document,
     GenerationRun,
@@ -43,6 +46,7 @@ from app.models.schemas import (
     StageDocument,
     Task,
     TaskLink,
+    TaskStatus,
     Workspace,
     WorkspaceMember,
     new_id,
@@ -301,6 +305,70 @@ class SupabaseRepository(Repository):
         res = self._client.table(_PROJECTS).select("*").eq("workspace_id", workspace_id).execute()
         return [Project(**row) for row in (res.data or [])]
 
+    def list_assigned_tasks(
+        self,
+        user_id: str,
+        workspace_id: str | None = None,
+        statuses: list[TaskStatus] | None = None,
+        limit: int = 200,
+    ) -> list[AssignedTask]:
+        # Membership first: the workspace set bounds everything below, and it
+        # is also the guard — an assignment outlives a membership removal, so
+        # the assigned_user_id filter alone would leak a removed member's rows.
+        mem = self._client.table(_MEMBERS).select("workspace_id").eq("user_id", user_id).execute()
+        ws_ids = {m["workspace_id"] for m in (mem.data or [])}
+        if workspace_id is not None:
+            ws_ids &= {workspace_id}
+        if not ws_ids:
+            return []
+
+        q = (
+            self._client.table(_TABLE["tasks"])
+            .select("*")
+            .eq("assigned_user_id", user_id)
+            .is_("deleted_at", "null")
+        )
+        if statuses:
+            q = q.in_("status", [s.value for s in statuses])
+        rows = (q.limit(limit).execute().data) or []
+        if not rows:
+            return []
+
+        project_ids = {r["project_id"] for r in rows}
+        pres = self._client.table(_PROJECTS).select("*").in_("id", list(project_ids)).execute()
+        projects = {
+            p["id"]: Project(**p)
+            for p in (pres.data or [])
+            if p["workspace_id"] in ws_ids
+        }
+        if not projects:
+            return []
+        wres = (
+            self._client.table(_WORKSPACES)
+            .select("id,name")
+            .in_("id", list({p.workspace_id for p in projects.values()}))
+            .execute()
+        )
+        ws_names = {w["id"]: w["name"] for w in (wres.data or [])}
+
+        out: list[AssignedTask] = []
+        for row in rows:
+            project = projects.get(row["project_id"])
+            if project is None:
+                continue
+            out.append(
+                AssignedTask(
+                    task=Task(**row),
+                    project_id=project.id,
+                    project_name=project.name,
+                    workspace_id=project.workspace_id,
+                    workspace_name=ws_names.get(project.workspace_id, ""),
+                    repo_url=project.repo_url,
+                )
+            )
+        out.sort(key=lambda a: (a.project_name, a.task.feature_tag or "", a.task.id))
+        return out
+
     def list_invitations(
         self, workspace_id: str, status: InvitationStatus | None = None
     ) -> list[Invitation]:
@@ -478,6 +546,63 @@ class SupabaseRepository(Repository):
             }
         ).eq("id", task_id).eq("project_id", project_id).execute()
         return self.get_task(project_id, task_id)  # type: ignore[return-value]
+
+    def set_task_status(
+        self, project_id: str, task_id: str, status: TaskStatus, now: datetime
+    ) -> Task:
+        stored = self._fetch_row("tasks", task_id)
+        if stored is None or stored.get("project_id") != project_id:
+            raise KeyError(task_id)
+        versions = dict(stored.get("field_versions") or {})
+        versions["status"] = {"updated_at": now.isoformat(), "source": "pz"}
+        self._client.table(_TABLE["tasks"]).update(
+            {
+                "status": status.value,
+                "field_versions": versions,
+                "updated_at": now.isoformat(),
+            }
+        ).eq("id", task_id).eq("project_id", project_id).execute()
+        return self.get_task(project_id, task_id)  # type: ignore[return-value]
+
+    def upsert_task_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        uri: str,
+        commit_sha: str | None,
+        kind: ArtifactKind,
+        now: datetime,
+    ) -> Artifact:
+        # Select-then-insert reads racy, and is: the authoritative guard is the
+        # partial unique index on (task_id, commit_sha) from migration 0025.
+        # This lookup exists to return the existing row on the common replay
+        # path rather than to prevent the duplicate.
+        if commit_sha is not None:
+            res = (
+                self._client.table(_TABLE["artifacts"])
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("task_id", task_id)
+                .eq("commit_sha", commit_sha)
+                .is_("deleted_at", "null")
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            if rows:
+                return Artifact(**rows[0])
+        artifact = Artifact(
+            project_id=project_id,
+            task_id=task_id,
+            kind=kind,
+            uri=uri,
+            commit_sha=commit_sha,
+            updated_at=now,
+        )
+        self._client.table(_TABLE["artifacts"]).insert(
+            artifact.model_dump(mode="json")
+        ).execute()
+        return artifact
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str

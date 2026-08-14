@@ -19,6 +19,9 @@ from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    Artifact,
+    ArtifactKind,
+    AssignedTask,
     CodeChunk,
     CodeChunkHit,
     Document,
@@ -41,6 +44,7 @@ from app.models.schemas import (
     StageDocument,
     Task,
     TaskLink,
+    TaskStatus,
     Workspace,
     WorkspaceMember,
     new_id,
@@ -133,6 +137,21 @@ class Repository(abc.ABC):
     def list_projects_by_workspace(self, workspace_id: str) -> list[Project]: ...
 
     @abc.abstractmethod
+    def list_assigned_tasks(
+        self,
+        user_id: str,
+        workspace_id: str | None = None,
+        statuses: list[TaskStatus] | None = None,
+        limit: int = 200,
+    ) -> list[AssignedTask]:
+        """Every live task assigned to `user_id`, across every workspace they
+        belong to, with project and workspace context attached.
+
+        Implementations MUST re-check membership per row rather than trusting
+        the assignment: an assignment outlives a membership removal, so a
+        removed member would otherwise keep reading their old tasks."""
+
+    @abc.abstractmethod
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project: ...
 
     @abc.abstractmethod
@@ -204,6 +223,35 @@ class Repository(abc.ABC):
     ) -> Task:
         """Single-field pz write of `assigned_user_id`, stamping its field
         version. Raises KeyError if the task doesn't exist."""
+
+    @abc.abstractmethod
+    def set_task_status(
+        self, project_id: str, task_id: str, status: TaskStatus, now: datetime
+    ) -> Task:
+        """Single-field pz write of `status`, stamping its field version. The
+        twin of `assign_task`, and for the same reason (ADR 0020): a full-graph
+        push cannot express "only the status changed" — `title` is shared
+        authority and `acceptance_criteria` is a pz-owned list that a
+        `model_dump` cannot distinguish from "cleared".
+
+        Raises KeyError if the task doesn't exist."""
+
+    @abc.abstractmethod
+    def upsert_task_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        uri: str,
+        commit_sha: str | None,
+        kind: ArtifactKind,
+        now: datetime,
+    ) -> Artifact:
+        """Append evidence for a status change (the commit that closed a task).
+
+        Idempotent on (task_id, commit_sha) when commit_sha is not None. That
+        is load-bearing rather than tidy: the git-driven caller replays commits
+        whenever its local cache is dropped or a repo is re-cloned, so a
+        duplicate write is the expected case, not the exceptional one."""
 
     @abc.abstractmethod
     def get_node(
@@ -573,6 +621,44 @@ class InMemoryRepository(Repository):
     def list_projects_by_workspace(self, workspace_id: str) -> list[Project]:
         return [p for p in self._projects.values() if p.workspace_id == workspace_id]
 
+    def list_assigned_tasks(
+        self,
+        user_id: str,
+        workspace_id: str | None = None,
+        statuses: list[TaskStatus] | None = None,
+        limit: int = 200,
+    ) -> list[AssignedTask]:
+        wanted = set(statuses) if statuses else None
+        out: list[AssignedTask] = []
+        for project in self._projects.values():
+            if workspace_id is not None and project.workspace_id != workspace_id:
+                continue
+            # Membership is re-checked here, not inherited from the assignment:
+            # a removed member keeps their assigned_user_id on the row.
+            if self.get_membership(project.workspace_id, user_id) is None:
+                continue
+            store = self._graph.get(project.id)
+            if not store:
+                continue
+            workspace = self._workspaces.get(project.workspace_id)
+            for task in store["tasks"].values():
+                if task.assigned_user_id != user_id or task.deleted_at is not None:
+                    continue
+                if wanted is not None and task.status not in wanted:
+                    continue
+                out.append(
+                    AssignedTask(
+                        task=copy.deepcopy(task),
+                        project_id=project.id,
+                        project_name=project.name,
+                        workspace_id=project.workspace_id,
+                        workspace_name=workspace.name if workspace else "",
+                        repo_url=project.repo_url,
+                    )
+                )
+        out.sort(key=lambda a: (a.project_name, a.task.feature_tag or "", a.task.id))
+        return out[:limit]
+
     def list_invitations(
         self, workspace_id: str, status: InvitationStatus | None = None
     ) -> list[Invitation]:
@@ -729,6 +815,49 @@ class InMemoryRepository(Repository):
         task.field_versions = versions
         task.updated_at = now
         return copy.deepcopy(task)
+
+    def set_task_status(
+        self, project_id: str, task_id: str, status: TaskStatus, now: datetime
+    ) -> Task:
+        store = self._graph.get(project_id)
+        task = store["tasks"].get(task_id) if store else None
+        if task is None:
+            raise KeyError(task_id)
+        versions = dict(task.field_versions or {})
+        versions["status"] = {"updated_at": now.isoformat(), "source": "pz"}
+        task.status = status
+        task.field_versions = versions
+        task.updated_at = now
+        return copy.deepcopy(task)
+
+    def upsert_task_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        uri: str,
+        commit_sha: str | None,
+        kind: ArtifactKind,
+        now: datetime,
+    ) -> Artifact:
+        store = self._graph.setdefault(project_id, {e: {} for e in ENTITY_TYPES})
+        if commit_sha is not None:
+            for existing in store["artifacts"].values():
+                if (
+                    existing.task_id == task_id
+                    and existing.commit_sha == commit_sha
+                    and existing.deleted_at is None
+                ):
+                    return copy.deepcopy(existing)
+        artifact = Artifact(
+            project_id=project_id,
+            task_id=task_id,
+            kind=kind,
+            uri=uri,
+            commit_sha=commit_sha,
+            updated_at=now,
+        )
+        store["artifacts"][artifact.id] = artifact
+        return copy.deepcopy(artifact)
 
     def get_node(
         self, project_id: str, node_type: str, node_id: str

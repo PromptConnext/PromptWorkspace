@@ -1,15 +1,21 @@
 """Projects + Sync API.
 
-The local engine is the source of truth; the cloud holds the shared graph so
-collaborators (and business stakeholders) see the same requirement -> spec ->
-task -> agent-run -> progress lineage.
+The cloud is authoritative for the task graph (ADR 0020): requirements, spec
+documents, tasks and their acceptance criteria are authored here and flow
+*down*. A local graph in a desktop or editor client is a cache that may be
+deleted and rebuilt without loss. The push route below predates that inversion
+and remains for the existing engine; a task client writes through the
+purpose-built single-field routes instead (assignment, status), never the
+full-graph PUT.
 
-Endpoints (this milestone):
-  POST /projects                     create a project
-  GET  /projects                     list caller's projects
-  GET  /projects/{id}                fetch one project
-  PUT  /sync/projects/{id}/graph     push a graph delta (upsert)
-  GET  /sync/projects/{id}/graph     pull the graph (optionally ?since= cursor)
+Endpoints:
+  POST  /projects                                    create a project
+  GET   /projects                                    list caller's projects
+  GET   /projects/{id}                               fetch one project
+  PUT   /sync/projects/{id}/graph                    push a graph delta (upsert)
+  GET   /sync/projects/{id}/graph                    pull the graph (?since= cursor)
+  PATCH /projects/{id}/tasks/{tid}/assignment        set/clear the pz assignee
+  PATCH /projects/{id}/tasks/{tid}/status            set status (+ closing commit)
 """
 
 from __future__ import annotations
@@ -43,6 +49,8 @@ from app.models.schemas import (
     Role,
     Task,
     TaskAssignmentUpdate,
+    TaskStatus,
+    TaskStatusUpdate,
     utcnow,
 )
 from app.rag.queue import EmbedJob, enqueue
@@ -329,6 +337,57 @@ def assign_task(
             raise HTTPException(status_code=400, detail="assignee_not_a_member")
 
     return repo.assign_task(project_id, task_id, target, utcnow())
+
+
+@router.patch("/projects/{project_id}/tasks/{task_id}/status", response_model=Task)
+def set_task_status(
+    project_id: str,
+    task_id: str,
+    body: TaskStatusUpdate,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Task:
+    """Close the loop from wherever a developer works (ADR 0020 decision 2).
+
+    Deliberately not `PUT /sync/projects/{id}/graph`: that route takes a full
+    `Task`, whose `title` is *shared* authority (a naive "mark done" would
+    overwrite a tracker's rename) and whose `acceptance_criteria` is a pz-owned
+    list a `model_dump` cannot distinguish from "cleared". Same argument ADR
+    0018 made for assignment, same answer.
+    """
+    project = require_project(repo, project_id, user)  # membership-gated
+    task = repo.get_task(project_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task_not_found")
+
+    caller_role = repo.get_membership(project.workspace_id, user.id)
+
+    # Permission mirrors assign_task's shape — admins act on any task, a member
+    # acts only on their own. An unassigned task is therefore forbidden to a
+    # member by design: without that, a commit mentioning "T012" would close a
+    # task nobody claimed, or somebody else's. Clients self-assign first
+    # (members may already do that) and then call this.
+    if caller_role != Role.admin:
+        if task.assigned_user_id != user.id:
+            raise HTTPException(status_code=403, detail="status_forbidden")
+        # `verified` is a review state, and the implemented/verified distinction
+        # is exactly what ADR 0020 flags as the lossy edge. A developer reports
+        # implementation; someone else verifies it.
+        if body.status == TaskStatus.verified:
+            raise HTTPException(status_code=403, detail="verified_requires_admin")
+
+    now = utcnow()
+    # Evidence first, so a task is never closed with its artifact missing.
+    if body.artifact is not None:
+        repo.upsert_task_artifact(
+            project_id,
+            task_id,
+            body.artifact.uri,
+            body.artifact.commit_sha,
+            body.artifact.kind,
+            now,
+        )
+    return repo.set_task_status(project_id, task_id, body.status, now)
 
 
 @router.put("/sync/projects/{project_id}/graph", response_model=GraphUpsertResponse)
