@@ -2,18 +2,24 @@
 // the extension has something to render in an Extension Development Host.
 //
 //   cd apps/cloud && DATA_BACKEND=memory AUTH_MODE=stub \
-//     .venv/bin/uvicorn app.main:app --port 8080
+//     .venv/bin/uvicorn app.main:app --port 8081
 //   node apps/vscode/scripts/seed-local.mjs
+//
+// Override with PZ_API if you run the cloud elsewhere.
 //
 // The memory backend keeps everything in process, so restarting uvicorn wipes
 // it and you re-run this. That is the point: it costs nothing to start over.
 //
-// Note the API base is 127.0.0.1, not localhost. uvicorn binds IPv4 only,
-// `localhost` resolves to ::1 first on macOS, and whatever else happens to be
-// listening there answers instead — a confusing 404 from a server you did not
-// start.
+// Two things the port and host choice are working around:
+//
+//   8081, not the cloud's usual 8080 — that port is often already taken on a
+//   development machine, and the symptom is not a bind failure but a 404 from
+//   somebody else's server, which reads like a routing bug in ours.
+//
+//   127.0.0.1, not localhost — uvicorn binds IPv4 only, macOS resolves
+//   `localhost` to ::1 first, and an unrelated IPv6 listener answers instead.
 
-const API = process.env.PZ_API ?? "http://127.0.0.1:8080";
+const API = process.env.PZ_API ?? "http://127.0.0.1:8081";
 const USER = process.env.PZ_USER ?? "dev-user";
 
 async function call(method, path, body) {
@@ -34,7 +40,8 @@ const health = await call("GET", "/health").catch((err) => {
     `Cannot reach the cloud at ${API}.\n` +
       "Start it with:\n" +
       "  cd apps/cloud && DATA_BACKEND=memory AUTH_MODE=stub \\\n" +
-      "    .venv/bin/uvicorn app.main:app --port 8080\n",
+      "    .venv/bin/uvicorn app.main:app --port 8081\n" +
+      "\nOr point this script elsewhere with PZ_API=http://127.0.0.1:<port>\n",
   );
   throw err;
 });

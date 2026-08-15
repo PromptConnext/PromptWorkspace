@@ -79,7 +79,7 @@ signing in is just a user id.
 
 ```bash
 cd apps/cloud
-DATA_BACKEND=memory AUTH_MODE=stub .venv/bin/uvicorn app.main:app --port 8080
+DATA_BACKEND=memory AUTH_MODE=stub .venv/bin/uvicorn app.main:app --port 8081
 
 node apps/vscode/scripts/seed-local.mjs    # workspace + project + 3 assigned tasks
 ```
@@ -87,9 +87,13 @@ node apps/vscode/scripts/seed-local.mjs    # workspace + project + 3 assigned ta
 The script prints the settings to paste into the Extension Development Host's `settings.json`.
 Then: **PromptConnext: Sign In** → enter `dev-user` → the tree fills.
 
-Use `127.0.0.1`, not `localhost`. uvicorn binds IPv4 only, macOS resolves `localhost` to `::1`
-first, and whatever else is listening there answers instead — a 404 from a server you did not
-start.
+Port **8081**, not the cloud's usual 8080: that port is commonly taken already, and the symptom
+is not a bind failure but a 404 from someone else's server, which reads like a routing bug in
+ours. Check with `lsof -iTCP:8081 -sTCP:LISTEN -n -P` and use `PZ_API` plus `--port` to move
+both halves together if it is busy too.
+
+Host `127.0.0.1`, not `localhost`: uvicorn binds IPv4 only, macOS resolves `localhost` to `::1`
+first, and an unrelated IPv6 listener answers instead.
 
 To exercise the commit-close path, link a folder with **PromptConnext: Link This Folder to a
 Project…**, then `git commit --allow-empty -m "T1: add login retry"`. Within a couple of seconds
