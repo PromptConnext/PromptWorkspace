@@ -93,7 +93,7 @@ export function desktopRedirect(
 }
 
 function LoginForm() {
-  const { user, signInStub, signInSupabase, getSessionTokens } = useAuth();
+  const { user, signInStub, signInSupabase, signOut, getSessionTokens } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const next = safeNext(params.get("next"));
@@ -115,10 +115,18 @@ function LoginForm() {
   const [handoffCode, setHandoffCode] = useState<string | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // A desktop/editor handoff mints a code that redeems a *real* session into a
+  // native app, so a session this browser happens to be carrying is not consent
+  // to grant one. Without this gate the flow is invisible: a user who signs in
+  // from the editor is handed straight back as whoever the browser was already
+  // logged in as, with no form shown and no way to pick a different account.
+  const [approved, setApproved] = useState(false);
+  const handoff = desktop && Boolean(desktopState);
 
   useEffect(() => {
     if (!user) return;
     if (desktop && desktopState) {
+      if (!approved) return;
       // Hand the session to the cloud broker, then bounce to the desktop.
       (async () => {
         const tokens = await getSessionTokens();
@@ -152,7 +160,50 @@ function LoginForm() {
       return;
     }
     router.replace(next);
-  }, [user, desktop, desktopState, rawScheme, rawRedirectUri, getSessionTokens, next, router]);
+  }, [
+    user,
+    approved,
+    desktop,
+    desktopState,
+    rawScheme,
+    rawRedirectUri,
+    getSessionTokens,
+    next,
+    router,
+  ]);
+
+  if (user && handoff && !approved) {
+    return (
+      <AuthCard
+        title="Continue to the app"
+        subtitle="This browser already has a PromptConnext session."
+      >
+        <p className="text-sm text-slate-600">
+          Signing in will hand <strong>{user.email || user.id}</strong> to the app that opened
+          this page. Not the account you want? Sign out here and enter your email and password
+          instead.
+        </p>
+        <div className="mt-6 flex flex-col gap-3">
+          <button
+            type="button"
+            onClick={() => setApproved(true)}
+            className="rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white transition hover:bg-indigo-500"
+          >
+            Continue as {user.email || user.id}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void signOut();
+            }}
+            className="rounded-lg border border-slate-300 px-3 py-2 font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Use a different account
+          </button>
+        </div>
+      </AuthCard>
+    );
+  }
 
   if (user && desktop && desktopState) {
     return (
@@ -195,9 +246,16 @@ function LoginForm() {
   const qs = params.toString();
   const withQuery = (path: string) => (qs ? `${path}?${qs}` : path);
 
+  // Signing in here *is* the approval, so the confirm screen is skipped and the
+  // effect above runs the handoff. Navigating to `next` instead would race it:
+  // the route change unmounts this component mid-request.
   async function handleStubSubmit(e: React.FormEvent) {
     e.preventDefault();
     signInStub(userId.trim() || "dev-user");
+    if (handoff) {
+      setApproved(true);
+      return;
+    }
     router.replace(next);
   }
 
@@ -207,6 +265,10 @@ function LoginForm() {
     setPending(true);
     try {
       await signInSupabase(email, password);
+      if (handoff) {
+        setApproved(true);
+        return;
+      }
       router.replace(next);
     } catch (err) {
       setError((err as Error).message);

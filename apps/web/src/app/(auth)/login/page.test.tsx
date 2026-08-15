@@ -1,14 +1,16 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/lib/auth";
 import LoginPage, { desktopRedirect, desktopScheme, safeNext } from "./page";
 
 const replace = vi.fn();
+// Read lazily inside the hook, so a test can set the query before rendering.
+let mockSearchParams = new URLSearchParams();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => mockSearchParams,
 }));
 
 describe("safeNext", () => {
@@ -132,6 +134,7 @@ describe("LoginPage (stub mode submit)", () => {
   beforeEach(() => {
     localStorage.clear();
     replace.mockClear();
+    mockSearchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -153,5 +156,52 @@ describe("LoginPage (stub mode submit)", () => {
 
     await waitFor(() => expect(localStorage.getItem(STUB_USER_KEY)).toBe("carol"));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/"));
+  });
+});
+
+// The editor/desktop handoff mints a code that redeems a real session into a
+// native app. A session the browser already carries is not consent to grant
+// one, so the page must ask — and must offer a way to sign in as someone else.
+describe("LoginPage (desktop handoff with an existing browser session)", () => {
+  const STUB_USER_KEY = "pz_stub_user_id";
+
+  beforeEach(() => {
+    localStorage.clear();
+    replace.mockClear();
+    mockSearchParams = new URLSearchParams("desktop=1&state=s1");
+  });
+
+  afterEach(() => {
+    // These two both render the same card; without an explicit unmount the
+    // second query matches the first test's leftover DOM.
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("asks before handing the existing session to the app", async () => {
+    localStorage.setItem(STUB_USER_KEY, "carol");
+    render(
+      <AuthProvider>
+        <LoginPage />
+      </AuthProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: /continue as carol/i })).toBeInTheDocument();
+    expect(screen.queryByText(/preparing handoff/i)).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the sign-in form when the user wants another account", async () => {
+    localStorage.setItem(STUB_USER_KEY, "carol");
+    render(
+      <AuthProvider>
+        <LoginPage />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /use a different account/i }));
+
+    expect(await screen.findByLabelText(/user id/i)).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(STUB_USER_KEY)).toBeNull());
   });
 });
