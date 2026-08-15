@@ -12,6 +12,7 @@ import type {
   StageDocumentOut,
   StageKind,
   Task,
+  TaskStatus,
   WorkspaceMember,
   WorkspaceReindexResult,
 } from "./types";
@@ -57,6 +58,25 @@ export function assignTask(
   return apiFetch<Task>(`/projects/${projectId}/tasks/${taskId}/assignment`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ assigned_user_id: assignedUserId }),
+  });
+}
+
+/**
+ * Moving a card between board columns. Deliberately the narrow status route
+ * and not a graph push — see the docstring on `set_task_status` in
+ * apps/cloud/app/api/sync.py for why a full-`Task` write would clobber
+ * tracker-owned fields. The `artifact` half of that endpoint's body is for
+ * commit-driven closes (the VS Code extension); the board sends status alone.
+ */
+export function setTaskStatus(
+  projectId: string,
+  taskId: string,
+  status: TaskStatus,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Task>(`/projects/${projectId}/tasks/${taskId}/status`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
   });
 }
 

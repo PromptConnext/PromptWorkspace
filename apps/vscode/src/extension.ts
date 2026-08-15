@@ -90,13 +90,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const setSignedInContext = (signedIn: boolean) =>
     vscode.commands.executeCommand("setContext", "promptconnext.signedIn", signedIn);
 
+  // The view title carries the two things the tree itself cannot say when it is
+  // empty: *who* this is (so "Sign Out" reads as yours, not a stray command)
+  // and *when* the list was last confirmed against the cloud. Without the
+  // second, a Refresh that legitimately returns no tasks looks like a dead
+  // button. email is a display-only claim (see session.ts), never an auth
+  // decision.
+  const showTitle = () => {
+    const current = session.read();
+    if (!current) {
+      treeView.description = undefined;
+      return;
+    }
+    const who = current.email ?? current.userId;
+    if (store.lastRefreshError) {
+      treeView.description = `${who} · offline`;
+      return;
+    }
+    const at = store.refreshedAt;
+    treeView.description = at
+      ? `${who} · updated ${new Date(at).toLocaleTimeString()}`
+      : who;
+  };
+
   context.subscriptions.push(
     store.onDidChange(() => {
       tree.refresh();
+      showTitle();
       void link.offerLinks(store.all());
     }),
     session.onDidChange((current) => {
       void setSignedInContext(current !== null);
+      showTitle();
       if (current) {
         void store.refresh().then(() => writer.flush());
       } else {
@@ -146,10 +171,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await session.clear();
     }),
+    // Explicit refresh, unlike the background triggers, owes the user an
+    // answer: a progress bar on the view while it runs, and a message if it
+    // failed. `store.refresh()` deliberately never rejects (it keeps the
+    // cache), so the outcome has to be read back off the store.
     vscode.commands.registerCommand("promptconnext.refreshTasks", async () => {
-      await store.refresh();
-      await writer.flush();
-      await contextView.render();
+      await vscode.window.withProgress(
+        { location: { viewId: "promptconnext.tasks" } },
+        async () => {
+          await store.refresh();
+          await writer.flush();
+          await contextView.render();
+        },
+      );
+      showTitle();
+      const failure = store.lastRefreshError;
+      if (!failure) return;
+      const choice = await vscode.window.showWarningMessage(
+        `PromptConnext could not reach the cloud: ${failure}. Showing the tasks it had.`,
+        "Show Log",
+      );
+      if (choice === "Show Log") log.show();
     }),
     vscode.commands.registerCommand("promptconnext.flushQueue", async () => {
       await queue.retryAll();
@@ -207,6 +249,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ------------------------------------------------------------- start-up
 
   await setSignedInContext(session.read() !== null);
+  showTitle();
   refreshStatusBar();
   await store.loadFromCache();
 

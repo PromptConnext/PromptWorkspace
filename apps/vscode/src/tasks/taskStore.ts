@@ -17,6 +17,7 @@ const FOCUS_REFRESH_THROTTLE_MS = 60_000;
 export class TaskStore {
   private tasks: AssignedTask[] = [];
   private lastRefreshedAt = 0;
+  private lastError: string | null = null;
   private refreshing: Promise<void> | null = null;
   private readonly emitter = new vscode.EventEmitter<void>();
 
@@ -38,6 +39,19 @@ export class TaskStore {
 
   all(): AssignedTask[] {
     return this.tasks;
+  }
+
+  /** Why the last refresh kept the cache, or null if it succeeded. Background
+   *  triggers ignore this — an offline window should not nag. The explicit
+   *  Refresh command reads it, because a click that silently does nothing is
+   *  indistinguishable from a broken button. */
+  get lastRefreshError(): string | null {
+    return this.lastError;
+  }
+
+  /** Epoch ms of the last *successful* refresh; 0 if there has never been one. */
+  get refreshedAt(): number {
+    return this.lastRefreshedAt;
   }
 
   find(taskId: string): AssignedTask | undefined {
@@ -98,12 +112,17 @@ export class TaskStore {
         statuses: ["todo", "in_progress", "implemented", "verified"],
       });
       this.lastRefreshedAt = Date.now();
+      this.lastError = null;
       await this.cache.write(CACHE_FILES.tasks, this.tasks);
       this.emitter.fire();
     } catch (err) {
       // Offline is the normal case here, not an error state: the cache is
-      // already rendered and the queue holds anything unsent.
+      // already rendered and the queue holds anything unsent. Recorded rather
+      // than thrown so background refreshes stay quiet and the explicit command
+      // can still report it.
+      this.lastError = err instanceof Error ? err.message : String(err);
       this.log.info(`task refresh failed, keeping cache: ${String(err)}`);
+      this.emitter.fire();
     }
   }
 

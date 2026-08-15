@@ -67,7 +67,7 @@
       {
         "view": "promptconnext.tasks",
         "when": "promptconnext.signedIn",
-        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)"
+        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)\n\nSigned in as the account in the view title.\n[Sign out](command:promptconnext.signOut)"
       }
     ],
     "commands": [
@@ -84,7 +84,8 @@
       {
         "command": "promptconnext.signOut",
         "title": "Sign Out",
-        "category": "PromptConnext"
+        "category": "PromptConnext",
+        "icon": "$(sign-out)"
       },
       {
         "command": "promptconnext.refreshTasks",
@@ -130,6 +131,26 @@
           "command": "promptconnext.refreshTasks",
           "when": "view == promptconnext.tasks",
           "group": "navigation"
+        },
+        {
+          "command": "promptconnext.signIn",
+          "when": "view == promptconnext.tasks && !promptconnext.signedIn",
+          "group": "1_account@1"
+        },
+        {
+          "command": "promptconnext.signInWithCode",
+          "when": "view == promptconnext.tasks && !promptconnext.signedIn",
+          "group": "1_account@2"
+        },
+        {
+          "command": "promptconnext.signOut",
+          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "group": "1_account@1"
+        },
+        {
+          "command": "promptconnext.showLog",
+          "when": "view == promptconnext.tasks",
+          "group": "9_diagnostics@1"
         }
       ],
       "view/item/context": [
@@ -149,6 +170,18 @@
       ],
       "commandPalette": [
         {
+          "command": "promptconnext.signIn",
+          "when": "!promptconnext.signedIn"
+        },
+        {
+          "command": "promptconnext.signInWithCode",
+          "when": "!promptconnext.signedIn"
+        },
+        {
+          "command": "promptconnext.signOut",
+          "when": "promptconnext.signedIn"
+        },
+        {
           "command": "promptconnext.setTaskStatus",
           "when": "false"
         },
@@ -167,7 +200,7 @@
       "properties": {
         "promptconnext.cloudApiUrl": {
           "type": "string",
-          "default": "https://promptconnextcloud-production.up.railway.app",
+          "default": "https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run",
           "description": "Base URL of the PromptConnext cloud API."
         },
         "promptconnext.cloudWebUrl": {

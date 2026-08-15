@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AuthProvider } from "@/lib/auth";
+import { ToastProvider } from "@/lib/toast";
 import { WorkspaceProvider } from "@/lib/workspace";
 import "./globals.css";
 
@@ -13,7 +14,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
         <AuthProvider>
-          <WorkspaceProvider>{children}</WorkspaceProvider>
+          <WorkspaceProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </WorkspaceProvider>
         </AuthProvider>
       </body>
     </html>
