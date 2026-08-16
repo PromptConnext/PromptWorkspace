@@ -18,6 +18,7 @@
     "Other",
     "SCM Providers"
   ],
+  "icon": "media/prompt-connext.png",
   "main": "./dist/extension.js",
   "activationEvents": [
     "onUri",
@@ -275,7 +276,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "node scripts/check-feature-detection.mjs",
     "test": "node --test test/unit/*.test.ts",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
