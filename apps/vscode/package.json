@@ -67,7 +67,7 @@
       {
         "view": "promptconnext.tasks",
         "when": "promptconnext.signedIn",
-        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)\n\nSigned in as the account in the view title.\n[Sign out](command:promptconnext.signOut)"
+        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)\n\nPlan and assign work in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)\n\nSigned in as the account in the view title.\n[Sign out](command:promptconnext.signOut)"
       }
     ],
     "commands": [
@@ -110,6 +110,12 @@
         "category": "PromptConnext"
       },
       {
+        "command": "promptconnext.openProjectInWeb",
+        "title": "Open Project in the Web App",
+        "category": "PromptConnext",
+        "icon": "$(link-external)"
+      },
+      {
         "command": "promptconnext.linkProject",
         "title": "Link This Folder to a Project…",
         "category": "PromptConnext"
@@ -148,12 +154,31 @@
           "group": "1_account@1"
         },
         {
+          "command": "promptconnext.openProjectInWeb",
+          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "group": "2_open@1"
+        },
+        {
+          "command": "promptconnext.linkProject",
+          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "group": "2_open@2"
+        },
+        {
           "command": "promptconnext.showLog",
           "when": "view == promptconnext.tasks",
           "group": "9_diagnostics@1"
         }
       ],
       "view/item/context": [
+        {
+          "command": "promptconnext.openProjectInWeb",
+          "when": "view == promptconnext.tasks && viewItem == promptconnext.project",
+          "group": "inline"
+        },
+        {
+          "command": "promptconnext.openProjectInWeb",
+          "when": "view == promptconnext.tasks && viewItem == promptconnext.project"
+        },
         {
           "command": "promptconnext.copyTaskContext",
           "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
@@ -192,6 +217,10 @@
         {
           "command": "promptconnext.openTaskInWeb",
           "when": "false"
+        },
+        {
+          "command": "promptconnext.openProjectInWeb",
+          "when": "promptconnext.signedIn"
         }
       ]
     },

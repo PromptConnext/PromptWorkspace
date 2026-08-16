@@ -8,7 +8,13 @@ import { randomUUID } from "node:crypto";
 import { SignInFlow } from "./auth/signIn.ts";
 import { CloudClient } from "./cloud/client.ts";
 import { SessionStore } from "./cloud/session.ts";
-import { TASK_STATUSES, TASK_STATUS_LABELS, isClosed, type TaskStatus } from "./cloud/types.ts";
+import {
+  TASK_STATUSES,
+  TASK_STATUS_LABELS,
+  isClosed,
+  type AssignedTask,
+  type TaskStatus,
+} from "./cloud/types.ts";
 import { projectIdFor, readConfig } from "./config.ts";
 import { ContextViewProvider } from "./context/contextView.ts";
 import { RepoDocs } from "./context/repoDocs.ts";
@@ -240,6 +246,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
       },
     ),
+    // Project-level counterpart to openTaskInWeb. Reachable three ways, because
+    // the case that most needs it — an empty tree — has no node to right-click:
+    // from a project row, from the welcome view, and from the palette. With
+    // nothing known locally it opens the web app root, which is the workspace
+    // list, rather than failing.
+    vscode.commands.registerCommand(
+      "promptconnext.openProjectInWeb",
+      async (node?: TreeNode) => {
+        const { webUrl } = readConfig();
+        if (!webUrl) {
+          void vscode.window.showErrorMessage(
+            "Set promptconnext.cloudWebUrl before opening the web app.",
+          );
+          return;
+        }
+        const target = nodeTarget(node) ?? (await pickProject(store.all()));
+        // `undefined` is a dismissed picker — opening anything would be a
+        // browser window the user just declined. `null` is "nothing linked
+        // yet", which the root handles.
+        if (target === undefined) return;
+        await vscode.env.openExternal(
+          vscode.Uri.parse(
+            target === null ? webUrl : `${webUrl}/w/${target.workspaceId}/p/${target.projectId}`,
+          ),
+        );
+      },
+    ),
     vscode.commands.registerCommand("promptconnext.linkProject", () =>
       link.linkInteractively(store.all()),
     ),
@@ -279,6 +312,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       projectIdFor(f.uri),
     ).length})`,
   );
+}
+
+interface WebTarget {
+  workspaceId: string;
+  projectId: string;
+}
+
+function nodeTarget(node?: TreeNode): WebTarget | undefined {
+  if (node?.kind === "project") {
+    return { workspaceId: node.workspaceId, projectId: node.projectId };
+  }
+  if (node?.kind === "task") {
+    return {
+      workspaceId: node.entry.workspace_id,
+      projectId: node.entry.project_id,
+    };
+  }
+  return undefined;
+}
+
+/** `null` when nothing is known locally (caller falls back to the web root);
+ *  `undefined` when the user dismissed the picker. */
+async function pickProject(tasks: AssignedTask[]): Promise<WebTarget | null | undefined> {
+  const projects = new Map<string, { label: string; description: string } & WebTarget>();
+  for (const entry of tasks) {
+    if (projects.has(entry.project_id)) continue;
+    projects.set(entry.project_id, {
+      label: entry.project_name,
+      description: entry.workspace_name,
+      workspaceId: entry.workspace_id,
+      projectId: entry.project_id,
+    });
+  }
+  const options = [...projects.values()];
+  if (options.length === 0) return null;
+  if (options.length === 1) return options[0];
+  return vscode.window.showQuickPick(options, {
+    title: "Open in the PromptConnext web app",
+  });
 }
 
 export function deactivate(): void {

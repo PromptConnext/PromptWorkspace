@@ -13,11 +13,21 @@ export class ProjectNode {
   readonly kind = "project";
   readonly projectId: string;
   readonly projectName: string;
+  // Carried even though nothing renders it: the web app has no bare
+  // /p/{projectId} route, so opening a project in the browser needs the
+  // workspace that owns it (apps/web routes: /w/[workspaceId]/p/[projectId]).
+  readonly workspaceId: string;
   readonly workspaceName: string;
 
-  constructor(projectId: string, projectName: string, workspaceName: string) {
+  constructor(
+    projectId: string,
+    projectName: string,
+    workspaceId: string,
+    workspaceName: string,
+  ) {
     this.projectId = projectId;
     this.projectName = projectName;
+    this.workspaceId = workspaceId;
     this.workspaceName = workspaceName;
   }
 }
@@ -86,7 +96,12 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         if (!seen.has(entry.project_id)) {
           seen.set(
             entry.project_id,
-            new ProjectNode(entry.project_id, entry.project_name, entry.workspace_name),
+            new ProjectNode(
+              entry.project_id,
+              entry.project_name,
+              entry.workspace_id,
+              entry.workspace_name,
+            ),
           );
         }
       }
