@@ -1,0 +1,45 @@
+PromptConnext for Visual Studio Code
+
+Copyright (c) 2026 PromptConnext. All rights reserved.
+
+This software and its accompanying source code, documentation and assets (the
+"Software") are proprietary and confidential. They are licensed, not sold.
+
+No license is granted, expressly or by implication, except as set out below.
+Without prior written permission from PromptConnext you may not copy, modify,
+merge, publish, distribute, sublicense, sell, rent, lease, reverse engineer,
+decompile or disassemble the Software, or create derivative works from it, in
+whole or in part.
+
+Permitted use
+-------------
+
+If you have obtained the Software through an official distribution channel —
+the Visual Studio Marketplace, Open VSX, or a signed VSIX supplied by
+PromptConnext — you may install and use it, in the form supplied, to work with
+a PromptConnext account, for as long as your account remains in good standing.
+That permission covers ordinary internal use, including commercial use, by you
+and by the organisation on whose behalf you obtained it.
+
+Third-party components
+----------------------
+
+The published extension bundles no third-party runtime dependencies. Build-time
+tools (esbuild, TypeScript, @vscode/vsce and their dependencies) remain under
+their own licenses and are not covered by this notice.
+
+The file src/git/git.d.ts is a vendored type declaration copied from the Visual
+Studio Code built-in Git extension, which is distributed by Microsoft under the
+MIT License. Microsoft's copyright and the MIT terms apply to that file and are
+reproduced in its header.
+
+No warranty
+-----------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
