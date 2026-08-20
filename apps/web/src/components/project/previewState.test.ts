@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPreviewReadyMessage, resolvePreview, shortSha } from "./previewState";
+import { isPreviewReadyMessage, resolvePreview, safeWebUrl, shortSha } from "./previewState";
 import type { DeploymentStatus } from "@/lib/types";
 
 function status(overrides: Partial<DeploymentStatus> = {}): DeploymentStatus {
@@ -120,5 +120,52 @@ describe("shortSha", () => {
     expect(shortSha("abc1234def5678")).toBe("abc1234");
     expect(shortSha(null)).toBeNull();
     expect(shortSha(undefined)).toBeNull();
+  });
+});
+
+
+describe("safeWebUrl", () => {
+  // This value's provenance is a webhook payload written by whoever can push
+  // to the project repo, and it ends up in an href and an iframe src. React
+  // does not sanitise either.
+  it.each([
+    "javascript:alert(document.domain)",
+    "JavaScript:alert(1)",
+    "  javascript:alert(1)",
+    "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+    "vbscript:msgbox(1)",
+    "file:///etc/passwd",
+    "/relative/path",
+    "not a url",
+    "",
+  ])("refuses %s", (url) => {
+    expect(safeWebUrl(url)).toBeNull();
+  });
+
+  it("refuses null and undefined", () => {
+    expect(safeWebUrl(null)).toBeNull();
+    expect(safeWebUrl(undefined)).toBeNull();
+  });
+
+  it("accepts ordinary http and https urls", () => {
+    expect(safeWebUrl("https://preview.test/p/")).toBe("https://preview.test/p/");
+    expect(safeWebUrl("http://localhost:3000/")).toBe("http://localhost:3000/");
+  });
+});
+
+describe("resolvePreview url safety", () => {
+  it("never hands a javascript: url to any mode", () => {
+    for (const state of ["live", "failed", "building", "awaiting_first_deploy"] as const) {
+      const view = resolvePreview(
+        status({ state, url: "javascript:alert(1)" }),
+        "confirmed",
+      );
+      expect(view.url).toBeNull();
+    }
+  });
+
+  it("does not claim to embed a url it had to reject", () => {
+    const view = resolvePreview(status({ url: "javascript:alert(1)" }), "confirmed");
+    expect(view.mode).toBe("waiting");
   });
 });

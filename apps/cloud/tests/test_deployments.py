@@ -484,3 +484,57 @@ def test_a_provider_minted_url_is_taken_as_given(client):
         _trusted_environment_url(client.app, _Project(), template, "https://x.vercel.app/")
         == "https://x.vercel.app/"
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(document.domain)",
+        "JavaScript:alert(1)",
+        "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "/relative/path",
+        "https://",
+        "not a url",
+    ],
+)
+def test_non_web_urls_are_never_stored(client, url):
+    """The stored URL is rendered by the web app as an `<a href>` and an
+    `<iframe src>`, so a javascript: URL here is script execution in the
+    workspace's own origin for every member who opens the project. The probe's
+    SSRF guard does not cover this: it decides whether *we* may fetch a URL and
+    never runs on the storage path."""
+    _ws, pid = _project(client)
+    res = _post(client, "deployment_status", _deployment_status(pid, state="success", url=url))
+    assert res.status_code == 200
+    assert _status(client, pid)["url"] is None
+
+
+def test_scheme_is_checked_even_for_provider_minted_urls(client):
+    """A provider template has no expected prefix to pin against, so the
+    scheme check is the only thing standing between its report and an href."""
+    from app.api.github import _trusted_environment_url
+    from app.deployments.registry import DeploymentTemplate
+
+    template = DeploymentTemplate(
+        id="x",
+        name="X",
+        description="",
+        stack="static",
+        provider="vercel",
+        provider_credential_kind="vercel",
+        scaffold_dir="static-r2",
+        url_kind="provider",
+    )
+
+    class _Project:
+        id = "p1"
+
+    assert (
+        _trusted_environment_url(client.app, _Project(), template, "javascript:alert(1)") is None
+    )
+    assert (
+        _trusted_environment_url(client.app, _Project(), template, "https://x.vercel.app/")
+        == "https://x.vercel.app/"
+    )

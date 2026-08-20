@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { Avatar } from "@/components/Avatar";
+import { safeWebUrl } from "@/components/project/previewState";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { apiFetch } from "@/lib/api";
@@ -173,6 +174,12 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         ) : (
           <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
             {projects?.map((p) => (
+              // safeWebUrl because this href comes from a webhook payload
+              // written by whoever can push to the project repo; React does
+              // not sanitise href, so a javascript: URL here would execute in
+              // this origin on click. The cloud refuses one on the storage
+              // path too — this is the second half of that.
+              //
               // The live link is a sibling of the row link, not nested
               // inside it: an anchor inside an anchor is invalid, and this is
               // the one place a business user can reach the running
@@ -186,9 +193,9 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
                   <ProjectIcon />
                   <span className="flex-1 font-medium text-slate-900">{p.name}</span>
                 </Link>
-                {p.deployment_state?.state === "live" && p.deployment_state.url && (
+                {p.deployment_state?.state === "live" && safeWebUrl(p.deployment_state.url) && (
                   <a
-                    href={p.deployment_state.url}
+                    href={safeWebUrl(p.deployment_state.url)!}
                     target="_blank"
                     rel="noreferrer"
                     title="Open the live application"

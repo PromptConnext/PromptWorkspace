@@ -34,6 +34,30 @@ export interface PreviewView {
   fallbackReason: string | null;
 }
 
+/**
+ * The URL if it is safe to put in an `href` or an `iframe src`, else null.
+ *
+ * The cloud already refuses a non-http(s) `environment_url` on the storage
+ * path, so this is the second half of a defence in depth rather than the
+ * only check — and it is worth having because this value's provenance is a
+ * webhook payload written by whoever can push to the project repo. React
+ * does not sanitise `href`, so a `javascript:` URL reaching this component
+ * would execute in the workspace's own origin the moment a member clicked
+ * the link — and an `iframe src` would not even need the click.
+ *
+ * Relative URLs are refused too: this is always an absolute address on
+ * someone else's host, so a relative one means something upstream is wrong.
+ */
+export function safeWebUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Whether the deploy history says anything is still moving. */
 export function isPending(status: DeploymentStatus | null): boolean {
   return !!status && status.pending > 0;
@@ -49,21 +73,24 @@ export function resolvePreview(
   }
 
   const polling = status.pending > 0;
+  // Checked once, here, so no branch below can leak an unchecked URL into an
+  // href or an iframe src.
+  const url = safeWebUrl(status.url);
 
   if (status.state === "awaiting_first_deploy") {
-    return { mode: "waiting", url: status.url, polling: true, fallbackReason: null };
+    return { mode: "waiting", url, polling: true, fallbackReason: null };
   }
   if (status.state === "queued" || status.state === "building") {
-    return { mode: "building", url: status.url, polling: true, fallbackReason: null };
+    return { mode: "building", url, polling: true, fallbackReason: null };
   }
   if (status.state === "failed") {
     // Deliberately still carries `url`: the last good deploy is usually still
     // serving, and taking the business user's link away because a later build
     // broke would be the wrong side to err on.
-    return { mode: "failed", url: status.url, polling, fallbackReason: null };
+    return { mode: "failed", url, polling, fallbackReason: null };
   }
 
-  if (!status.url) {
+  if (!url) {
     return { mode: "waiting", url: null, polling, fallbackReason: null };
   }
 
@@ -72,7 +99,7 @@ export function resolvePreview(
   if (!status.embeddable || framePolicy === "deny") {
     return {
       mode: "link",
-      url: status.url,
+      url,
       polling,
       fallbackReason: "This application asks not to be displayed inside another page.",
     };
@@ -81,7 +108,7 @@ export function resolvePreview(
   if (handshake === "timed-out") {
     return {
       mode: "link",
-      url: status.url,
+      url,
       polling,
       // Not "it refuses embedding" — the absence of a handshake is genuinely
       // ambiguous, and claiming a refusal we did not observe would be a lie
@@ -90,7 +117,7 @@ export function resolvePreview(
     };
   }
 
-  return { mode: "embed", url: status.url, polling, fallbackReason: null };
+  return { mode: "embed", url, polling, fallbackReason: null };
 }
 
 /** A message is ours only if it came from the deployed origin and carries our tag. */

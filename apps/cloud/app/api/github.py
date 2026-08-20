@@ -212,22 +212,56 @@ async def github_webhook(request: Request, repo: Repository = Depends(get_reposi
     return {"received": True, "matched": True}
 
 
+def _is_web_url(candidate: str) -> bool:
+    """True only for an absolute http(s) URL with a host.
+
+    The scheme check is the load-bearing part. This value is stored and then
+    rendered by the web app as an `<a href>` and an `<iframe src>`, so a
+    `javascript:` (or `data:`) URL reported here would be script execution in
+    the workspace's own origin, for every member who opens the project —
+    stored XSS, delivered through a signed webhook.
+
+    Deliberately separate from the SSRF guard on the probe: that one decides
+    whether *we* may fetch a URL, and it does not run on the storage path at
+    all. A probe that declines still stores whatever it was given.
+    """
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+
+
 def _trusted_environment_url(app, project, template, reported: str | None) -> str | None:
     """The URL to record for a deploy, or None.
 
     A workflow reports its own `environment_url`, and a workflow is editable
-    by anyone with push access to the project repo. For a template whose URL
-    the *platform* mints, we already know what it should be — so a reported
-    URL outside that prefix is not a preview we provisioned, and recording it
-    would let a repo pusher choose what the workspace's Preview tab embeds
-    and what its project list links to.
+    by anyone with push access to the project repo. Two separate questions
+    follow, and both have to be answered here rather than at render time.
 
+    Is it even a web URL? Anything that is not absolute http(s) is refused
+    outright, whatever the template — see `_is_web_url`.
+
+    Is it *our* preview? For a template whose URL the platform mints we know
+    what it should be, so a reported URL outside that prefix is not a preview
+    we provisioned, and recording it would let a repo pusher choose what the
+    workspace's Preview tab embeds and what its project list links to.
     Providers that mint their own URLs (Vercel, Pages, Northflank) have no
-    such expected value, so their reports are taken as given; the SSRF guard
-    on the probe is what bounds those.
+    such expected value, so beyond the scheme check their reports are taken
+    as given.
     """
     if not reported or template is None:
-        return reported or None
+        reported = reported or None
+        if reported is not None and not _is_web_url(reported):
+            logger.warning("deploy reported a non-http(s) preview URL; ignoring it")
+            return None
+        return reported
+    if not _is_web_url(reported):
+        logger.warning(
+            "deploy for project=%s reported a non-http(s) preview URL; ignoring it",
+            project.id,
+        )
+        return None
     if template.url_kind != "platform":
         return reported
 
