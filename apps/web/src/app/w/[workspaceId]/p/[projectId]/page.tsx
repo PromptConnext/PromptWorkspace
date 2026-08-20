@@ -7,6 +7,7 @@ import { TopBar } from "@/components/TopBar";
 import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
 import { Planner } from "@/components/project/Planner";
+import { PreviewPanel } from "@/components/project/PreviewPanel";
 import { TaskBoard } from "@/components/project/TaskBoard";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
@@ -14,7 +15,11 @@ import { useCloudGet } from "@/lib/hooks";
 import { useWorkspaceName } from "@/lib/workspace";
 import type { ProjectGraph } from "@/lib/types";
 
-const TABS = ["Planner", "Graph", "Tasks", "Progress", "Discussion"] as const;
+// "Preview" is ungated on purpose (ADR 0021): a business user opening the
+// running application is the reason it exists. It is always present, even
+// with no deployment configured, so the strip does not change shape
+// between projects.
+const TABS = ["Planner", "Graph", "Tasks", "Progress", "Discussion", "Preview"] as const;
 type Tab = (typeof TABS)[number];
 
 function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
@@ -86,6 +91,7 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
                 onPosted={refetch}
               />
             )}
+            {tab === "Preview" && <PreviewPanel projectId={projectId} />}
           </>
         )}
       </main>

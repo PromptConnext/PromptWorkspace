@@ -13,25 +13,37 @@ updates. See app/integrations/github.py's module docstring.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
+import socket
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api._guards import require_admin
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.registry import PREVIEW_ENVIRONMENT, WORKFLOW_PATH
+from app.deployments.registry import get_template as get_deployment_template
+from app.integrations.deploy_providers import platform_r2_preview_url
 from app.integrations.github import (
     GithubAuthError,
     GithubWriteError,
     extract_task_refs,
+    parse_deployment_status_event,
     parse_pull_request_event,
     parse_push_event,
+    parse_workflow_run_event,
     verify_signature,
 )
 from app.integrations.github_auth import github_config
 from app.models.schemas import (
     Artifact,
     ArtifactKind,
+    Deployment,
+    DeploymentState,
     GithubConnectionOut,
     GithubConnectRequest,
     GraphUpsertRequest,
@@ -187,8 +199,280 @@ async def github_webhook(request: Request, repo: Repository = Depends(get_reposi
             {"repo": repo_full_name, "default_branch": project.repo_default_branch or "main"},
             payload,
         )
+    # ADR 0021. `repo` here is already the *unscoped* service repository —
+    # app/dependencies.py::get_repository returns it when a request carries no
+    # Authorization header, and GitHub sends none — so unlike api/sync.py's
+    # repo-creation path there is no request.app.state.repository dance to do.
+    # Worth saying out loud, because the reader will expect that pattern.
+    elif event_type == "deployment_status":
+        await _handle_deployment_status(request.app, repo, project, payload)
+    elif event_type == "workflow_run":
+        _handle_workflow_run(repo, project, payload)
 
     return {"received": True, "matched": True}
+
+
+def _trusted_environment_url(app, project, template, reported: str | None) -> str | None:
+    """The URL to record for a deploy, or None.
+
+    A workflow reports its own `environment_url`, and a workflow is editable
+    by anyone with push access to the project repo. For a template whose URL
+    the *platform* mints, we already know what it should be — so a reported
+    URL outside that prefix is not a preview we provisioned, and recording it
+    would let a repo pusher choose what the workspace's Preview tab embeds
+    and what its project list links to.
+
+    Providers that mint their own URLs (Vercel, Pages, Northflank) have no
+    such expected value, so their reports are taken as given; the SSRF guard
+    on the probe is what bounds those.
+    """
+    if not reported or template is None:
+        return reported or None
+    if template.url_kind != "platform":
+        return reported
+
+    expected = platform_r2_preview_url(app.state.settings, project.id, template.health_path)
+    if not expected:
+        return None
+    base = expected.rsplit("/", 1)[0] + "/"
+    if not reported.startswith(base):
+        logger.warning(
+            "deploy for project=%s reported a preview URL outside the provisioned "
+            "prefix; ignoring it",
+            project.id,
+        )
+        return None
+    return reported
+
+
+async def _handle_deployment_status(app, repo: Repository, project, payload: dict) -> None:
+    """Record a deploy and update the project's current deployment view.
+
+    Filtered to the preview environment on purpose: a repository that grows
+    its own staging or production workflows must not start reporting those as
+    the business user's preview.
+    """
+    event = parse_deployment_status_event(payload)
+    if event is None or event.environment != PREVIEW_ENVIRONMENT:
+        return
+
+    config = project.deployment_config
+    template = get_deployment_template(config.template_id) if config else None
+    state = _DEPLOY_STATE_BY_GITHUB.get(event.state)
+    if state is None:
+        return
+
+    url = _trusted_environment_url(app, project, template, event.environment_url)
+
+    frame_policy = None
+    if state == "live" and url:
+        frame_policy = await _probe_frame_policy(url)
+
+    repo.upsert_deployment(
+        Deployment(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            provider=(template.provider if template else "unknown"),
+            template_id=(config.template_id if config else "unknown"),
+            external_key=event.external_key,
+            state=state,
+            url=url,
+            commit_sha=event.commit_sha,
+            ref=event.ref,
+            run_url=event.log_url,
+            error_code=None if state != "failed" else "deploy_failed",
+            error_message=event.description if state == "failed" else None,
+            frame_policy=frame_policy,
+        )
+    )
+    _refresh_deployment_state(repo, project)
+
+
+def _handle_workflow_run(repo: Repository, project, payload: dict) -> None:
+    """Only terminal *failures* of the seeded workflow are recorded here.
+
+    A successful run has already reported itself as a deployment carrying a
+    URL, and duplicating it would fight that row for the project's current
+    state. What `deployment_status` cannot tell us is that a build died
+    before it ever posted a deployment — which is precisely the case that
+    would otherwise look like a preview stuck "building" forever.
+    """
+    event = parse_workflow_run_event(payload)
+    if event is None or event.workflow_path != WORKFLOW_PATH:
+        return
+    if event.status != "completed" or event.conclusion in (None, "success", "skipped"):
+        return
+
+    config = project.deployment_config
+    template = get_deployment_template(config.template_id) if config else None
+    repo.upsert_deployment(
+        Deployment(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            provider=(template.provider if template else "unknown"),
+            template_id=(config.template_id if config else "unknown"),
+            external_key=event.external_key,
+            state="failed",
+            # No url: a failed build produced nothing to look at. The
+            # project's last-known-good url is preserved separately, in
+            # _refresh_deployment_state.
+            commit_sha=event.commit_sha,
+            ref=event.ref,
+            run_url=event.run_url,
+            error_code="build_failed",
+            error_message=f"workflow run {event.conclusion}",
+        )
+    )
+    _refresh_deployment_state(repo, project)
+
+
+# GitHub's deployment states, mapped onto the five this feature shows. Both
+# `error` and `failure` are failures to a business user; `inactive` means a
+# newer deploy superseded this one.
+_DEPLOY_STATE_BY_GITHUB = {
+    "queued": "queued",
+    "pending": "queued",
+    "in_progress": "building",
+    "success": "live",
+    "failure": "failed",
+    "error": "failed",
+    "inactive": "inactive",
+}
+
+
+def _refresh_deployment_state(repo: Repository, project) -> None:
+    """Recompute the project's denormalized current view from its rows.
+
+    `url` is deliberately last-known-good while `state` is current: a failed
+    deploy must not blank a preview that is still serving. The business
+    user's link keeps working while the Tech Lead fixes the build, which is
+    the whole point of showing them a preview in the first place.
+    """
+    rows = repo.list_deployments(project.id, limit=10)
+    if not rows:
+        return
+    latest = rows[0]
+    last_good_url = next((r.url for r in rows if r.state == "live" and r.url), None)
+    config = project.deployment_config
+    template = get_deployment_template(config.template_id) if config else None
+    repo.update_project_deployment_state(
+        project.id,
+        DeploymentState(
+            template_id=config.template_id if config else None,
+            provider=template.provider if template else None,
+            state=latest.state,
+            url=last_good_url,
+            commit_sha=latest.commit_sha,
+            run_url=latest.run_url,
+        ),
+    )
+
+
+# The probe below fetches a URL that arrived in a webhook payload. The
+# delivery is HMAC-verified, but `environment_url` is written by the workflow
+# — so anyone with push access to a project repo chooses it. Without these
+# checks that is a server-side request forgery primitive into the cloud's own
+# network, answered by a three-valued oracle (allow/deny/unknown) plus timing.
+_PROBE_TIMEOUT_S = 5
+
+
+def _probe_target_is_public(url: str) -> bool:
+    """True only for an http(s) URL whose hostname resolves entirely to
+    public addresses.
+
+    Every resolved address is checked, not just the first: a hostname with
+    both a public and a loopback record would otherwise pass and then connect
+    to whichever the client picked.
+
+    Residual risk, stated rather than hidden: this is a resolve-then-connect
+    check, so a hostname that answers differently on the second lookup (DNS
+    rebinding) can still slip past. Closing that needs the connection pinned
+    to the address checked here, or an egress proxy enforcing the rule at the
+    network layer — the latter is the right answer in production and is
+    recorded in docs/DEPLOYMENT.md.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 0, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    if not infos:
+        return False
+
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            return False
+    return True
+
+
+async def _probe_frame_policy(url: str) -> str:
+    """allow | deny | unknown, measured from the deployed app's own response.
+
+    This exists because the browser cannot answer it. A cross-origin iframe
+    hides its response headers, its document and its location; a refused
+    frame still fires `load` and never fires `error`. The server has no such
+    restriction, so the one honest reading of "will this embed" is taken
+    here, once per successful deploy, and stored.
+
+    Best-effort by design — a probe failure records "unknown", which the web
+    app treats as "show the embed but keep the link prominent", not as a
+    refusal. That is also what makes the SSRF guard free: refusing to probe
+    costs nothing but a fallback to the link card.
+    """
+    # Resolution is a blocking syscall; off-thread so a slow or hostile
+    # resolver cannot stall the event loop this webhook route shares.
+    if not await asyncio.to_thread(_probe_target_is_public, url):
+        logger.warning("refusing to probe a non-public preview URL")
+        return "unknown"
+
+    try:
+        # No redirects. A frame-policy probe has no reason to follow one, and
+        # following would re-open the SSRF hole this function just closed —
+        # the guard above validates the URL we were given, not wherever a
+        # Location header points. A host that redirects simply reads as
+        # "unknown", which is the honest answer: we did not see its headers.
+        async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S, follow_redirects=False) as client:
+            resp = await client.head(url)
+            if resp.status_code >= 400:
+                # Some static hosts refuse HEAD but serve GET. One retry
+                # rather than recording a wrong answer.
+                resp = await client.get(url)
+    except Exception:  # noqa: BLE001 - an unreachable preview is not an error here
+        return "unknown"
+
+    if resp.is_redirect:
+        return "unknown"
+
+    xfo = (resp.headers.get("x-frame-options") or "").strip().lower()
+    if xfo in ("deny", "sameorigin"):
+        return "deny"
+    csp = (resp.headers.get("content-security-policy") or "").lower()
+    if "frame-ancestors" in csp:
+        directive = csp.split("frame-ancestors", 1)[1].split(";", 1)[0]
+        if "'none'" in directive:
+            return "deny"
+        # A frame-ancestors that names origins may or may not include ours.
+        # "allow" here would be a guess; the postMessage handshake in the web
+        # app is what settles it.
+        return "unknown"
+    return "allow"
 
 
 def _handle_pull_request(

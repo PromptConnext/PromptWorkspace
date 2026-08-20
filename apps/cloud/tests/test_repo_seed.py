@@ -4,8 +4,8 @@ seeded into a project's repo at the tech_review -> repo_created transition.
 
 from __future__ import annotations
 
-from app.integrations.repo_seed import build_seed_files
-from app.models.schemas import PolicyScope, Project
+from app.integrations.repo_seed import build_deployment_files, build_seed_files
+from app.models.schemas import DeploymentConfig, PolicyScope, Project
 
 
 def _project(**overrides) -> Project:
@@ -127,3 +127,58 @@ def test_missing_stages_do_not_crash():
     assert "docs/scope.md" not in paths
     assert "docs/architecture.md" not in paths
     assert "docs/tasks.md" not in paths
+
+
+# --------------------------------------------------------------------------- #
+# Deployment templates (ADR 0021)
+# --------------------------------------------------------------------------- #
+def test_no_template_builds_no_deployment_files():
+    """Backward compatibility at the builder level: the deployment builder is
+    separate from build_seed_files precisely so a project with no template
+    cannot be affected by it at all."""
+    project = Project(name="P", workspace_id="w", owner_id="u")
+    assert build_deployment_files(project, None) == []
+
+
+def test_template_builds_scaffold_workflow_and_docs():
+    project = Project(
+        name="Rocket",
+        workspace_id="w",
+        owner_id="u",
+        deployment_config=DeploymentConfig(template_id="static-r2"),
+    )
+    files = build_deployment_files(project, "https://preview.test/p/")
+    paths = {f.path for f in files}
+    assert ".github/workflows/deploy.yml" in paths
+    assert "site/index.html" in paths
+    assert "docs/deployment.md" in paths
+
+    doc = next(f.content for f in files if f.path == "docs/deployment.md")
+    assert "https://preview.test/p/" in doc
+    assert "Rocket" in doc
+
+
+def test_withdrawn_template_seeds_nothing_rather_than_failing():
+    """A selection that no longer resolves must not cost the project its repo
+    and its AI context — those are still worth having."""
+    project = Project(
+        name="P",
+        workspace_id="w",
+        owner_id="u",
+        deployment_config=DeploymentConfig(template_id="retired-template"),
+    )
+    assert build_deployment_files(project, None) == []
+
+
+def test_deployment_files_do_not_collide_with_the_derived_documents():
+    """The two builders are concatenated into one commit, so a shared path
+    would mean one silently overwriting the other in the tree."""
+    project = Project(
+        name="P",
+        workspace_id="w",
+        owner_id="u",
+        deployment_config=DeploymentConfig(template_id="static-r2"),
+    )
+    derived = {f.path for f in build_seed_files(project, {})}
+    deployment = {f.path for f in build_deployment_files(project, None)}
+    assert derived.isdisjoint(deployment)

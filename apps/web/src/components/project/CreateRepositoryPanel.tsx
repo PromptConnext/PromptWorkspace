@@ -25,6 +25,26 @@ const DETAIL_MESSAGES: Record<string, string> = {
     '"Only select repositories" never covers a repo created after it was issued. A workspace admin ' +
     'needs to set the token\'s repository access to "All repositories" (or add this new repo to the ' +
     "list) and reissue it, then try again — this will adopt the existing repo, not create a second one.",
+  // ADR 0021 added Secrets/Variables write to what the workspace token needs.
+  // Fine-grained PATs expose no way to check their own permissions, so this
+  // cannot be caught on the connection form — it surfaces here, on a token
+  // that has otherwise worked for months.
+  github_secrets_not_in_token_scope:
+    "The repository was created, but the workspace's GitHub token can't write repository secrets — " +
+    "deployment needs them to hand credentials to the pipeline. A workspace admin needs to reissue " +
+    "the token with Secrets and Variables write access, then try again — this will adopt the " +
+    "existing repo, not create a second one.",
+  github_secrets_failed:
+    "GitHub couldn't store the deployment credentials. Try again in a moment.",
+  deployment_provider_not_configured:
+    "The selected deployment template's provider isn't configured. A workspace admin needs to " +
+    "connect it in workspace settings before the repository can be created.",
+  deployment_provider_incomplete:
+    "The deployment provider's stored credential is missing something the template needs — " +
+    "reconnect it in workspace settings.",
+  deployment_preview_url_not_configured:
+    "PromptZone hosting isn't fully configured on this server, so there is no preview address to " +
+    "give the pipeline. Contact your administrator.",
 };
 
 /** `github_not_configured` is the one failure whose fix is a whole other form,
@@ -52,9 +72,10 @@ function NotConfiguredMessage({ workspaceId }: { workspaceId?: string }) {
         >
           fine-grained personal access token
         </a>{" "}
-        (<code>github_pat_…</code>) with <strong>Contents</strong>, <strong>Administration</strong>{" "}
-        and <strong>Webhooks</strong> write access. The token is verified against GitHub before it
-        is stored, so a bad one fails on that form rather than here.
+        (<code>github_pat_…</code>) with <strong>Contents</strong>, <strong>Administration</strong>,{" "}
+        <strong>Webhooks</strong>, <strong>Secrets</strong> and <strong>Variables</strong> write
+        access. The token is verified against GitHub before it is stored, so a bad one fails on that
+        form rather than here — except the last two, which GitHub gives no way to check in advance.
       </p>
     </>
   );

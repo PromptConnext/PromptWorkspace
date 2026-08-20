@@ -29,6 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.deployments.registry import get_template as get_deployment_template
+from app.deployments.registry import render_deployment_doc, template_files
 from app.models.schemas import Project
 from app.policies.registry import render_policy_scope_doc
 
@@ -42,6 +44,10 @@ _PREAMBLE = (
 class SeedFile:
     path: str
     content: str
+    # Git tree mode 100755 rather than 100644. Only deployment-template
+    # scaffolds set this (a build script a workflow invokes); every derived
+    # document below is a plain file.
+    executable: bool = False
 
 
 def _footer(project: Project) -> str:
@@ -149,4 +155,46 @@ def build_seed_files(project: Project, stage_docs: dict[str, str | None]) -> lis
             SeedFile("docs/policy-scope.md", render_policy_scope_doc(scope) + _footer(project))
         )
 
+    return files
+
+
+def build_deployment_files(project: Project, preview_url: str | None) -> list[SeedFile]:
+    """The deployment template's scaffold, workflow and `docs/deployment.md`
+    (ADR 0021), or an empty list when no template was selected.
+
+    Kept separate from `build_seed_files` rather than folded into it, for two
+    reasons. These files are *verbatim scaffold* rather than derived views
+    over stage documents, so the module docstring's contract above still
+    holds exactly. And a project with no template must produce a byte-identical
+    seed to the one it produced before this feature existed — which is much
+    easier to keep true, and to test, when the two builders cannot interact.
+
+    Pure and I/O-free in the same sense as its sibling: template files are
+    read from this package's own directory, the way
+    app/policies/registry.py::template_body already reads policy bodies. No
+    network, no model call.
+    """
+    config = project.deployment_config
+    if config is None:
+        return []
+    template = get_deployment_template(config.template_id)
+    if template is None:
+        # A selection that no longer resolves (a template withdrawn between
+        # selection and repo creation) seeds nothing rather than failing the
+        # transition: the repo and its AI context are still worth having.
+        return []
+
+    files = [
+        SeedFile(path, content, executable=executable)
+        for path, content, executable in template_files(template.id)
+    ]
+    files.append(
+        SeedFile(
+            template.docs_path,
+            render_deployment_doc(
+                template, project_name=project.name, preview_url=preview_url
+            )
+            + _footer(project),
+        )
+    )
     return files

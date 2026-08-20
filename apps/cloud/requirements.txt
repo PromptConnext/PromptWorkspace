@@ -14,6 +14,12 @@ supabase>=2.6,<3
 # (app/documents/ocr.py) — no extra dependency for it yet.
 pypdf>=5.0,<6
 python-multipart>=0.0.9,<0.1
+# Deployment templates (ADR 0021): GitHub Actions secrets must be supplied as
+# a libsodium sealed box (crypto_box_seal) against the repository's public
+# key — GitHub rejects a plaintext value outright. Imported lazily in
+# app/integrations/github.py, so a deployment that never seeds a repo does
+# not need the wheel present.
+PyNaCl>=1.5,<2
 
 # Dev / test
 pytest>=8.2,<9

@@ -26,21 +26,47 @@ Webhooks are likewise per-repository: `create_repo_webhook()` registers one
 at repo-creation time with a freshly generated secret, stored (encrypted)
 alongside the project. There is no shared platform signing secret, so a
 delivery can only be attributed to the project whose secret validates it.
+
+ADR 0021 adds the deployment half: the same hook also carries `workflow_run`
+and `deployment_status`, and this module gains the three writes that make a
+seeded CI pipeline work — a single-commit tree write (`create_commit_with_
+files`), sealed-box Actions secrets, and plaintext Actions variables.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import re
 import secrets
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.integrations.repo_seed import SeedFile
+
 GITHUB_API = "https://api.github.com"
+
+# The one list of events every repo hook subscribes to. Named because it now
+# has three consumers — registration, the inbound dispatch in
+# app/api/github.py, and the repair path that fixes repos created before
+# ADR 0021 — and three copies is how they would drift apart.
+#
+# `deployment_status` is the only event carrying a deployed URL.
+# `workflow_run` is the only one that fires when a build dies *before* it
+# posts a deployment; without it a broken build looks like a preview that is
+# eternally "building".
+WEBHOOK_EVENTS = ["push", "pull_request", "workflow_run", "deployment_status"]
+
+# How many blob uploads run at once inside create_commit_with_files. Blobs are
+# independent, so this is what keeps a 40-file scaffold to a few seconds
+# instead of 40 serial round-trips; kept modest to stay well inside GitHub's
+# secondary rate limits for concurrent writes.
+_BLOB_CONCURRENCY = 8
 
 # Same convention apps/engine/src/routes/projects.ts's syncTasksFromGit uses
 # to mark tasks done from commit subjects (ADR 0007/0009) — kept identical
@@ -149,6 +175,80 @@ def parse_push_event(payload: dict, default_branch: str) -> PushEvent | None:
     return PushEvent(after_sha=after_sha, changed_paths=changed, removed_paths=removed)
 
 
+@dataclass(frozen=True)
+class DeploymentStatusEvent:
+    """A `deployment_status` delivery for the preview environment (ADR 0021).
+
+    `external_key` is GitHub's deployment id as a string. It is the
+    idempotency key for `pz_deployments`, and it has to be: one deploy emits
+    several of these (`in_progress`, then `success` or `failure`), so without
+    a stable key each delivery would insert a duplicate row.
+    """
+
+    external_key: str
+    state: str  # queued | in_progress | success | failure | error | inactive
+    environment: str
+    environment_url: str | None
+    commit_sha: str | None
+    ref: str | None
+    log_url: str | None
+    description: str | None
+
+
+def parse_deployment_status_event(payload: dict) -> DeploymentStatusEvent | None:
+    status = payload.get("deployment_status") or {}
+    deployment = payload.get("deployment") or {}
+    deployment_id = deployment.get("id")
+    state = status.get("state")
+    if deployment_id is None or not state:
+        return None
+    url = status.get("environment_url") or None
+    return DeploymentStatusEvent(
+        external_key=str(deployment_id),
+        state=str(state),
+        # The environment is read from the status first: a deploy may be
+        # re-targeted mid-flight, and the status is the newer of the two.
+        environment=str(status.get("environment") or deployment.get("environment") or ""),
+        environment_url=url,
+        commit_sha=deployment.get("sha") or None,
+        ref=deployment.get("ref") or None,
+        log_url=status.get("log_url") or status.get("target_url") or None,
+        description=status.get("description") or None,
+    )
+
+
+@dataclass(frozen=True)
+class WorkflowRunEvent:
+    """A `workflow_run` delivery. Only terminal, non-success runs are
+    interesting: a successful run already reported itself as a deployment
+    with a URL, and duplicating it here would fight that row for the same
+    project's current state."""
+
+    external_key: str
+    workflow_path: str
+    status: str  # queued | in_progress | completed
+    conclusion: str | None  # success | failure | cancelled | timed_out | ...
+    commit_sha: str | None
+    ref: str | None
+    run_url: str | None
+
+
+def parse_workflow_run_event(payload: dict) -> WorkflowRunEvent | None:
+    run = payload.get("workflow_run") or {}
+    run_id = run.get("id")
+    if run_id is None:
+        return None
+    return WorkflowRunEvent(
+        external_key=f"run-{run_id}",
+        workflow_path=str(run.get("path") or ""),
+        status=str(run.get("status") or ""),
+        conclusion=run.get("conclusion") or None,
+        commit_sha=run.get("head_sha") or None,
+        ref=run.get("head_branch") or None,
+        run_url=run.get("html_url") or None,
+    )
+
+
 class GithubWriteError(RuntimeError):
     """A GitHub write call (repo create / file commit) failed. `sync.py`
     catches this instead of importing httpx directly, keeping the API layer
@@ -189,6 +289,50 @@ def _normalize_expiry(raw: str | None) -> str | None:
     return None
 
 
+async def ensure_hook_events(client, token: str, repo: str, callback_url: str) -> bool:
+    """Make sure this repo's PromptZone hook is subscribed to WEBHOOK_EVENTS,
+    widening it if not. True when a hook was found and is now correct.
+
+    This is the only migration route for repositories created before ADR
+    0021. Re-running `create_repo_webhook` cannot do it: that call swallows
+    GitHub's 422 "a hook with this config already exists" as success, which
+    is what makes repo-creation retries safe and what makes re-registration a
+    silent no-op.
+
+    Matching on `config.url` rather than on the first hook: a repository may
+    carry hooks belonging to CI providers, chat integrations or the customer
+    themselves, and widening one of those would be someone else's outage.
+    """
+    hooks = await client.list_repo_hooks(token, repo)
+    wanted = set(WEBHOOK_EVENTS)
+    for hook in hooks:
+        if (hook.get("config") or {}).get("url") != callback_url:
+            continue
+        if wanted.issubset(set(hook.get("events") or [])):
+            return True
+        await client.update_repo_hook(token, repo, hook["id"], list(WEBHOOK_EVENTS))
+        return True
+    return False
+
+
+def _seal_secret(public_key_b64: str, value: str) -> str:
+    """libsodium sealed box (`crypto_box_seal`) of `value` against a repo's
+    Actions public key, base64-encoded — the only form GitHub accepts for a
+    secret value.
+
+    Imported lazily, matching app/secrets.py's treatment of `cryptography`:
+    a deployment that never seeds a repo should not need the wheel present
+    to import this module.
+    """
+    from nacl.encoding import Base64Encoder
+    from nacl.public import PublicKey, SealedBox
+
+    sealed = SealedBox(PublicKey(public_key_b64.encode(), Base64Encoder)).encrypt(
+        value.encode("utf-8")
+    )
+    return base64.b64encode(sealed).decode("ascii")
+
+
 class RepoAlreadyExistsError(GithubWriteError):
     """`create_org_repo` got a 422 "name already exists" — the caller
     decides whether to adopt the existing repo (retry after a partial
@@ -205,7 +349,13 @@ class GithubClient(Protocol):
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str: ...
 
     async def create_org_repo(
-        self, token: str, org: str, name: str, description: str, private: bool
+        self,
+        token: str,
+        org: str,
+        name: str,
+        description: str,
+        private: bool,
+        owner_type: str = "Organization",
     ) -> dict: ...
 
     async def get_repo(self, token: str, repo: str) -> dict | None: ...
@@ -220,6 +370,25 @@ class GithubClient(Protocol):
         branch: str,
         sha: str | None = None,
     ) -> str: ...
+
+    async def create_commit_with_files(
+        self,
+        token: str,
+        repo: str,
+        branch: str,
+        files: list[SeedFile],
+        message: str,
+    ) -> str: ...
+
+    async def put_actions_secret(self, token: str, repo: str, name: str, value: str) -> None: ...
+
+    async def put_actions_variable(self, token: str, repo: str, name: str, value: str) -> None: ...
+
+    async def list_repo_hooks(self, token: str, repo: str) -> list[dict]: ...
+
+    async def update_repo_hook(
+        self, token: str, repo: str, hook_id: int, events: list[str]
+    ) -> None: ...
 
 
 async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> httpx.Response:
@@ -284,7 +453,7 @@ class HttpGithubClient:
             json={
                 "name": "web",
                 "active": True,
-                "events": ["push", "pull_request"],
+                "events": list(WEBHOOK_EVENTS),
                 "config": {
                     "url": callback_url,
                     "content_type": "json",
@@ -430,6 +599,264 @@ class HttpGithubClient:
         data = resp.json()
         return data["content"]["sha"]
 
+    async def create_commit_with_files(
+        self,
+        token: str,
+        repo: str,
+        branch: str,
+        files: list[SeedFile],
+        message: str,
+    ) -> str:
+        """Write every seed file as ONE commit, through the Git Data API.
+
+        `put_file_content` is the right primitive for one file and the wrong
+        one for a scaffold: it costs two round-trips and one commit each, so
+        a forty-file template would mean eighty serial requests inside a
+        single HTTP request and forty junk commits — and a failure partway
+        leaves a repo that looks seeded with no workflow in it.
+
+        Here, only the final ref update is observable. Blobs, the tree and
+        the commit are all built without moving the branch, so a crash before
+        that last call leaves dangling objects GitHub garbage-collects and a
+        branch that never moved. That is what shrinks ADR 0017's partial-seed
+        window from "N files" to one atomic reference update, and it is what
+        makes the adopt-on-retry path in api/sync.py actually true rather
+        than merely hoped for.
+
+        Never force-pushes: a non-fast-forward means someone else moved the
+        branch, which is a transient conflict to retry, not something to
+        overwrite.
+        """
+        if not files:
+            raise GithubWriteError("create_commit_with_files called with no files")
+
+        base_sha, base_tree = await self._read_branch_head(token, repo, branch)
+
+        # Blobs are independent of each other and of the tree, so they go out
+        # concurrently — this is the whole reason a large scaffold stays fast.
+        semaphore = asyncio.Semaphore(_BLOB_CONCURRENCY)
+
+        async def upload(seed_file: SeedFile) -> dict:
+            async with semaphore:
+                blob_sha = await self._create_blob(token, repo, seed_file.content)
+            return {
+                "path": seed_file.path,
+                "mode": "100755" if getattr(seed_file, "executable", False) else "100644",
+                "type": "blob",
+                "sha": blob_sha,
+            }
+
+        tree_entries = list(await asyncio.gather(*(upload(f) for f in files)))
+
+        tree_resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/git/trees",
+            token=token,
+            what=f"create_tree for {repo}",
+            json={"base_tree": base_tree, "tree": tree_entries},
+        )
+        if tree_resp.is_error:
+            raise GithubWriteError(
+                f"create_tree failed for {repo}: {tree_resp.status_code} {tree_resp.text}",
+                status_code=tree_resp.status_code,
+            )
+        tree_sha = tree_resp.json()["sha"]
+
+        commit_resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/git/commits",
+            token=token,
+            what=f"create_commit for {repo}",
+            json={"message": message, "tree": tree_sha, "parents": [base_sha]},
+        )
+        if commit_resp.is_error:
+            raise GithubWriteError(
+                f"create_commit failed for {repo}: {commit_resp.status_code} {commit_resp.text}",
+                status_code=commit_resp.status_code,
+            )
+        commit_sha = commit_resp.json()["sha"]
+
+        ref_resp = await _send(
+            "PATCH",
+            f"{GITHUB_API}/repos/{repo}/git/refs/heads/{branch}",
+            token=token,
+            what=f"update_ref for {repo}",
+            json={"sha": commit_sha, "force": False},
+        )
+        if ref_resp.is_error:
+            raise GithubWriteError(
+                f"update_ref failed for {repo}: {ref_resp.status_code} {ref_resp.text}",
+                status_code=ref_resp.status_code,
+            )
+        return commit_sha
+
+    async def _read_branch_head(self, token: str, repo: str, branch: str) -> tuple[str, str]:
+        """(commit sha, tree sha) at the tip of `branch`. Read immediately
+        before the write it parents, so a concurrent push is caught by the
+        non-forced ref update rather than silently overwritten."""
+        ref_resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/git/ref/heads/{branch}",
+            token=token,
+            what=f"read_ref for {repo}",
+        )
+        if ref_resp.is_error:
+            raise GithubWriteError(
+                f"read_ref failed for {repo}: {ref_resp.status_code} {ref_resp.text}",
+                status_code=ref_resp.status_code,
+            )
+        base_sha = ref_resp.json()["object"]["sha"]
+
+        commit_resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/git/commits/{base_sha}",
+            token=token,
+            what=f"read_commit for {repo}",
+        )
+        if commit_resp.is_error:
+            raise GithubWriteError(
+                f"read_commit failed for {repo}: {commit_resp.status_code} {commit_resp.text}",
+                status_code=commit_resp.status_code,
+            )
+        return base_sha, commit_resp.json()["tree"]["sha"]
+
+    async def _create_blob(self, token: str, repo: str, content: str) -> str:
+        """base64 rather than utf-8 encoding: a scaffold may carry a binary
+        asset or a file with a lone CR, and base64 is the only encoding the
+        blobs API accepts for both."""
+        resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/git/blobs",
+            token=token,
+            what=f"create_blob for {repo}",
+            json={
+                "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                "encoding": "base64",
+            },
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"create_blob failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        return resp.json()["sha"]
+
+    async def put_actions_secret(self, token: str, repo: str, name: str, value: str) -> None:
+        """Repository-level Actions secret. GitHub will not accept a
+        plaintext value: it must be a libsodium *sealed box* against the
+        repo's Actions public key, base64-encoded. That is why PyNaCl is a
+        dependency — the alternative is hand-rolling X25519 + XSalsa20-
+        Poly1305, which is not a thing to hand-roll.
+
+        Repo secrets rather than environment secrets, deliberately: an
+        environment secret needs the environment created first, which is one
+        more call and one more failure mode for no benefit while there is
+        exactly one environment (ADR 0021).
+        """
+        key_id, public_key = await self._actions_public_key(token, repo)
+        resp = await _send(
+            "PUT",
+            f"{GITHUB_API}/repos/{repo}/actions/secrets/{name}",
+            token=token,
+            what=f"put_actions_secret {name} for {repo}",
+            json={"encrypted_value": _seal_secret(public_key, value), "key_id": key_id},
+        )
+        if resp.is_error:
+            # Deliberately does not log `value` or the sealed box.
+            raise GithubWriteError(
+                f"put_actions_secret failed for {repo}/{name}: {resp.status_code}",
+                status_code=resp.status_code,
+            )
+
+    async def put_actions_variable(self, token: str, repo: str, name: str, value: str) -> None:
+        """Actions *variable* — plaintext, no sealing, and visible in the
+        repo's settings. Used for things a workflow needs that are not
+        secret (the project id, the web app's origin) precisely so they can
+        be corrected later with one API call and no commit."""
+        resp = await _send(
+            "PATCH",
+            f"{GITHUB_API}/repos/{repo}/actions/variables/{name}",
+            token=token,
+            what=f"update_actions_variable {name} for {repo}",
+            json={"name": name, "value": value},
+        )
+        # PATCH 404s for a variable that does not exist yet; POST creates it.
+        # Doing it in this order makes the call idempotent without a prior read.
+        if resp.status_code == 404:
+            resp = await _send(
+                "POST",
+                f"{GITHUB_API}/repos/{repo}/actions/variables",
+                token=token,
+                what=f"create_actions_variable {name} for {repo}",
+                json={"name": name, "value": value},
+            )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"put_actions_variable failed for {repo}/{name}: "
+                f"{resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+
+    async def _actions_public_key(self, token: str, repo: str) -> tuple[str, str]:
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/actions/secrets/public-key",
+            token=token,
+            what=f"actions_public_key for {repo}",
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"actions_public_key failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        data = resp.json()
+        return data["key_id"], data["key"]
+
+    async def list_repo_hooks(self, token: str, repo: str) -> list[dict]:
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/hooks",
+            token=token,
+            what=f"list_repo_hooks for {repo}",
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"list_repo_hooks failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    async def update_repo_hook(
+        self, token: str, repo: str, hook_id: int, events: list[str]
+    ) -> None:
+        """Widen an existing hook's event list, leaving `config` alone.
+
+        This exists because `create_repo_webhook` swallows 422 ("a hook with
+        this config already exists") as success — the behaviour that makes
+        repo-creation retries safe is exactly the behaviour that makes
+        re-registration a silent no-op. Repos created before ADR 0021 are
+        subscribed to `push` and `pull_request` only, and this is the sole
+        route by which they learn about deployments.
+
+        Sending only `events` matters: the stored signing secret lives in
+        `config`, and a PATCH that included `config` without it would rotate
+        the secret out from under `pz_repo_webhooks` and break verification
+        for every future delivery.
+        """
+        resp = await _send(
+            "PATCH",
+            f"{GITHUB_API}/repos/{repo}/hooks/{hook_id}",
+            token=token,
+            what=f"update_repo_hook {hook_id} for {repo}",
+            json={"events": list(events)},
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"update_repo_hook failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+
     async def _get_file_sha(self, token: str, repo: str, path: str, branch: str) -> str | None:
         """Blob sha of `path` on `branch`, or None when it doesn't exist.
         A permission failure also returns None — the PUT that follows is the
@@ -463,8 +890,24 @@ class FakeGithubClient:
         self.webhooks: list[dict] = []
         self.verified_tokens: list[tuple[str, str]] = []
         self.fetched_files: list[tuple[str, str, str]] = []
+        # ADR 0021. `commits` records whole-tree writes, one entry per commit,
+        # so a test can assert "exactly one seed commit" rather than counting
+        # files. Secret *values* are recorded because the fake never seals
+        # them — asserting on what a repo would receive is the point.
+        self.commits: list[dict] = []
+        self.secrets: dict[tuple[str, str], str] = {}
+        self.variables: dict[tuple[str, str], str] = {}
+        self.hooks_events: dict[str, list[str]] = {}
+        # Ordered log of externally observable calls. Ordering *is* the
+        # contract in create_repository (secrets and the hook must both
+        # precede the commit that triggers the first deploy), and only a
+        # shared log can assert across otherwise unrelated collections.
+        self.call_log: list[str] = []
         # Set-in-test knobs for exercising failure paths without a real API.
         self.fail_on_write_path: str | None = None
+        self.fail_on_commit = False
+        self.fail_on_secret_write: str | None = None
+        self.secret_failure_status: int | None = 403
         # Status the simulated write failure reports. Defaults to 500 ("GitHub
         # is unwell"); set 403/404 to exercise the token-scope path.
         self.write_failure_status: int | None = 500
@@ -494,7 +937,16 @@ class FakeGithubClient:
     async def create_repo_webhook(
         self, token: str, repo: str, callback_url: str, secret: str
     ) -> None:
-        self.webhooks.append({"repo": repo, "url": callback_url, "secret": secret})
+        self.call_log.append(f"webhook:{repo}")
+        self.webhooks.append(
+            {
+                "repo": repo,
+                "url": callback_url,
+                "secret": secret,
+                "events": list(WEBHOOK_EVENTS),
+            }
+        )
+        self.hooks_events.setdefault(repo, list(WEBHOOK_EVENTS))
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
         self.fetched_files.append((repo, path, sha))
@@ -512,6 +964,7 @@ class FakeGithubClient:
         full_name = f"{org}/{name}"
         if full_name in self.existing_repos:
             raise RepoAlreadyExistsError(f"repo {full_name} already exists")
+        self.call_log.append(f"create_repo:{full_name}")
         record = {
             "full_name": full_name,
             "html_url": f"https://github.com/{full_name}",
@@ -544,9 +997,73 @@ class FakeGithubClient:
                 f"fake write failure for {repo}/{path}",
                 status_code=self.write_failure_status,
             )
+        self.call_log.append(f"put:{path}")
         self.written_files[(repo, path)] = content
         # Also lands in `files` (keyed by a synthetic sha) so a follow-up
         # fetch_file_content sees the just-written content.
         fake_sha = f"fake-sha-{len(self.written_files)}"
         self.files[(repo, path, fake_sha)] = content
         return fake_sha
+
+    async def create_commit_with_files(
+        self,
+        token: str,
+        repo: str,
+        branch: str,
+        files: list[SeedFile],
+        message: str,
+    ) -> str:
+        if self.fail_on_commit:
+            raise GithubWriteError(
+                f"fake commit failure for {repo}", status_code=self.write_failure_status
+            )
+        if self.fail_on_write_path is not None and any(
+            f.path == self.fail_on_write_path for f in files
+        ):
+            raise GithubWriteError(
+                f"fake write failure for {repo}/{self.fail_on_write_path}",
+                status_code=self.write_failure_status,
+            )
+        self.call_log.append(f"commit:{repo}")
+        commit_sha = f"fake-commit-{len(self.commits) + 1}"
+        self.commits.append(
+            {
+                "repo": repo,
+                "branch": branch,
+                "message": message,
+                "sha": commit_sha,
+                "paths": [f.path for f in files],
+            }
+        )
+        # Mirror into the per-file collections so existing assertions about
+        # seeded content keep working across the switch to tree writes.
+        for seed_file in files:
+            self.written_files[(repo, seed_file.path)] = seed_file.content
+            self.files[(repo, seed_file.path, commit_sha)] = seed_file.content
+        return commit_sha
+
+    async def put_actions_secret(self, token: str, repo: str, name: str, value: str) -> None:
+        if self.fail_on_secret_write is not None and name == self.fail_on_secret_write:
+            raise GithubWriteError(
+                f"fake secret failure for {repo}/{name}",
+                status_code=self.secret_failure_status,
+            )
+        self.call_log.append(f"secret:{name}")
+        self.secrets[(repo, name)] = value
+
+    async def put_actions_variable(self, token: str, repo: str, name: str, value: str) -> None:
+        self.call_log.append(f"variable:{name}")
+        self.variables[(repo, name)] = value
+
+    async def list_repo_hooks(self, token: str, repo: str) -> list[dict]:
+        events = self.hooks_events.get(repo)
+        if events is None:
+            return []
+        url = next((h["url"] for h in reversed(self.webhooks) if h["repo"] == repo), "")
+        return [{"id": 1, "events": list(events), "config": {"url": url}}]
+
+    async def update_repo_hook(
+        self, token: str, repo: str, hook_id: int, events: list[str]
+    ) -> None:
+        self.call_log.append(f"hook_update:{repo}")
+        self.hooks_events[repo] = list(events)

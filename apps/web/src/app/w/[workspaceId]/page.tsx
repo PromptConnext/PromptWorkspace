@@ -173,21 +173,41 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         ) : (
           <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
             {projects?.map((p) => (
-              <li key={p.id}>
+              // The live link is a sibling of the row link, not nested
+              // inside it: an anchor inside an anchor is invalid, and this is
+              // the one place a business user can reach the running
+              // application without first knowing which project it is (ADR
+              // 0021).
+              <li key={p.id} className="flex items-center hover:bg-slate-50">
                 <Link
                   href={`/w/${workspaceId}/p/${p.id}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50"
+                  className="flex flex-1 items-center gap-3 px-4 py-3"
                 >
                   <ProjectIcon />
                   <span className="flex-1 font-medium text-slate-900">{p.name}</span>
-                  <span className="text-sm text-slate-500">
-                    {new Date(p.created_at).toLocaleDateString(undefined, {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
                 </Link>
+                {p.deployment_state?.state === "live" && p.deployment_state.url && (
+                  <a
+                    href={p.deployment_state.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open the live application"
+                    className="mr-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900 hover:border-emerald-300"
+                  >
+                    <span
+                      aria-hidden
+                      className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                    />
+                    Live
+                  </a>
+                )}
+                <span className="pr-4 text-sm text-slate-500">
+                  {new Date(p.created_at).toLocaleDateString(undefined, {
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
               </li>
             ))}
           </ul>
