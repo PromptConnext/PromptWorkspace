@@ -29,17 +29,28 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.registry import PREVIEW_ENVIRONMENT
+from app.deployments.registry import get_template as get_deployment_template
+from app.integrations.deploy_providers import (
+    PLATFORM_R2,
+    ProviderCredentialError,
+    ensure_platform_r2_credential,
+    platform_r2_preview_url,
+    resolve_provider_credential,
+)
 from app.integrations.github import (
     GithubWriteError,
     RepoAlreadyExistsError,
+    ensure_hook_events,
     new_webhook_secret,
 )
 from app.integrations.github_auth import resolve_token
-from app.integrations.repo_seed import build_seed_files
+from app.integrations.repo_seed import build_deployment_files, build_seed_files
 from app.models.schemas import (
     ENTITY_TYPES,
     ChangesHead,
     CreateRepositoryRequest,
+    DeploymentState,
     GraphUpsertRequest,
     GraphUpsertResponse,
     Project,
@@ -154,18 +165,38 @@ async def create_repository(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
-    """Creates the GitHub repo at the `tech_review -> repo_created` exit and
+    """Creates the GitHub repo at the `tech_review -> repo_created` exit,
     seeds it with AI context derived from the project's stage documents
-    (app/integrations/repo_seed.py). Repo creation is external and
-    non-transactional, so ordering is the correctness requirement here:
-    seed files are built *before* any GitHub call (cheap, fails fast), the
-    repo is created (or an existing one from a prior partial attempt is
-    adopted), every seed file is committed, and only once all of that
-    succeeds does the project's `repo_url` get persisted — followed by the
-    lifecycle flip to `repo_created`. That order means the worst crash
-    window leaves `repo_url` set with status still `tech_review`, which a
-    retry recognizes as adoptable; never the reverse, which would strand a
-    project as `repo_created` with no repo behind it."""
+    (app/integrations/repo_seed.py) and, when a deployment template is
+    selected, with that template's scaffold and CI pipeline (ADR 0021).
+
+    Repo creation is external and non-transactional, so ordering is the
+    correctness requirement here:
+
+      1. build every file — derived views *and* template scaffold. Pure,
+         local, and fails fast on nothing external.
+      2. resolve the GitHub token.
+      3. resolve the deployment provider credential. A missing one fails
+         here, before any external mutation, rather than after a repo exists.
+      4. create the repo (or adopt one from a prior partial attempt).
+      5. write the Actions secrets and variables. This MUST precede the seed
+         commit: that commit fires `on: push` immediately, and a workflow
+         that starts before its secrets exist fails its first run for nothing.
+      6. register the webhook and store its binding. This MUST also precede
+         the seed commit, for a sharper reason: the first `deployment_status`
+         can otherwise arrive before the binding row exists and be dropped as
+         an unknown repository — losing exactly the first deploy's URL.
+      7. commit everything as ONE commit (see
+         github.py::create_commit_with_files for why not N).
+      8. persist `repo_url` and the initial deployment state.
+      9. flip the lifecycle last.
+
+    That order means the worst crash window leaves `repo_url` set with status
+    still `tech_review`, which a retry recognizes as adoptable; never the
+    reverse, which would strand a project as `repo_created` with no repo
+    behind it. Steps 5 and 6 add one benign new partial state — secrets and a
+    hook on a repo with no workflow — which a retry overwrites.
+    """
     project = require_project(repo, project_id, user)
     if project.lifecycle_status == "repo_created":
         return project
@@ -190,6 +221,17 @@ async def create_repository(
         )
     }
     seed_files = build_seed_files(project, stage_docs)
+
+    # Step 3: the deployment provider, still before any external mutation.
+    # `deployment` is None for a project with no template selected, which is
+    # a fully supported case — the repo is created and seeded exactly as it
+    # was before this feature existed.
+    try:
+        deployment = await _resolve_deployment_provisioning(request.app, project, workspace)
+    except ProviderCredentialError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    if deployment is not None:
+        seed_files = seed_files + build_deployment_files(project, deployment["preview_url"])
 
     github_client = request.app.state.github_client
 
@@ -230,31 +272,28 @@ async def create_repository(
     full_name = created["full_name"]
     default_branch = created.get("default_branch") or "main"
 
-    try:
-        for seed_file in seed_files:
-            await github_client.put_file_content(
-                token,
-                full_name,
-                seed_file.path,
-                seed_file.content,
-                message=f"chore: seed {seed_file.path} from PromptZone",
-                branch=default_branch,
-            )
-    except GithubWriteError as exc:
-        # Do NOT advance the lifecycle — a partially seeded repo must leave
-        # repo_url unset so a retry re-enters at repo creation and adopts.
-        #
-        # Log the underlying GitHub response: the client puts status + body in
-        # the exception message, and without this the operator sees only the
-        # opaque `github_seed_failed` the browser shows.
-        logger.warning("seeding %s failed: %s", full_name, exc)
-        # A 403/404 writing into a repo GitHub just told us it created is not
-        # a transient fault — it means the token cannot see that repo. With a
-        # fine-grained PAT scoped to "Only select repositories", every new
-        # repo lands outside the grant, so "try again" would loop forever.
-        if getattr(exc, "status_code", None) in (403, 404):
-            raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
-        raise HTTPException(status_code=502, detail="github_seed_failed") from exc
+    # Step 5: Actions secrets and variables, BEFORE the commit that starts
+    # the first workflow run. Not best-effort — a pipeline seeded without its
+    # credentials is a repo whose every run fails, which is worse than a
+    # transition that stopped and can be retried.
+    if deployment is not None:
+        try:
+            for name, value in deployment["secrets"].items():
+                await github_client.put_actions_secret(token, full_name, name, value)
+            for name, value in deployment["variables"].items():
+                await github_client.put_actions_variable(token, full_name, name, value)
+        except GithubWriteError as exc:
+            logger.warning("writing Actions secrets for %s failed: %s", full_name, exc)
+            # A fine-grained PAT that can create a repo may still lack
+            # Secrets: write — a permission this feature added and that no
+            # existing workspace's token carries. There is no introspection
+            # endpoint to catch it earlier, so it has its own code rather
+            # than hiding inside the generic scope error.
+            if getattr(exc, "status_code", None) in (403, 404):
+                raise HTTPException(
+                    status_code=400, detail="github_secrets_not_in_token_scope"
+                ) from exc
+            raise HTTPException(status_code=502, detail="github_secrets_failed") from exc
 
     # Register this repo's webhook with its own freshly generated secret, so
     # PR/push indexing starts working without any further setup. Best-effort
@@ -262,16 +301,23 @@ async def create_repository(
     # the whole transition would strand a repo that is already created and
     # fully seeded. Skipped entirely when PUBLIC_API_URL is unset (local dev,
     # where GitHub cannot reach this service anyway).
+    #
+    # Step 6, and it runs BEFORE the seed commit on purpose: that commit
+    # triggers the first deploy, and a delivery arriving before the binding
+    # row exists is dropped as an unknown repository — silently losing the
+    # first deploy's URL, which is the one the Tech Lead is watching for.
     public_api_url = request.app.state.settings.public_api_url
     if public_api_url:
+        callback_url = f"{public_api_url.rstrip('/')}/api/webhooks/github"
         secret = new_webhook_secret()
         try:
-            await github_client.create_repo_webhook(
-                token,
-                full_name,
-                f"{public_api_url.rstrip('/')}/api/webhooks/github",
-                secret,
-            )
+            await github_client.create_repo_webhook(token, full_name, callback_url, secret)
+            # `create_repo_webhook` treats GitHub's 422 "already exists" as
+            # success, so on the adopt-a-repo retry path it may have changed
+            # nothing at all — including leaving an older hook subscribed to
+            # the pre-ADR-0021 event list. Widening is idempotent and cheap,
+            # so it runs unconditionally rather than only on the retry path.
+            await ensure_hook_events(github_client, token, full_name, callback_url)
         except GithubWriteError:
             logger.warning("webhook registration failed for %s; indexing will not start", full_name)
         else:
@@ -301,9 +347,139 @@ async def create_repository(
                     full_name,
                 )
 
-    # Step 6: repo-write first, lifecycle flip last — see docstring.
+    # Step 7: one commit, not one per file. See
+    # github.py::create_commit_with_files — this is what collapses the
+    # partial-seed window to a single atomic ref update, and it is also what
+    # keeps a forty-file scaffold inside one HTTP request.
+    try:
+        await github_client.create_commit_with_files(
+            token,
+            full_name,
+            default_branch,
+            seed_files,
+            "chore: seed project context from PromptZone",
+        )
+    except GithubWriteError as exc:
+        # Do NOT advance the lifecycle — an unseeded repo must leave
+        # repo_url unset so a retry re-enters at repo creation and adopts.
+        #
+        # Log the underlying GitHub response: the client puts status + body in
+        # the exception message, and without this the operator sees only the
+        # opaque `github_seed_failed` the browser shows.
+        logger.warning("seeding %s failed: %s", full_name, exc)
+        # A 403/404 writing into a repo GitHub just told us it created is not
+        # a transient fault — it means the token cannot see that repo. With a
+        # fine-grained PAT scoped to "Only select repositories", every new
+        # repo lands outside the grant, so "try again" would loop forever.
+        if getattr(exc, "status_code", None) in (403, 404):
+            raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
+        raise HTTPException(status_code=502, detail="github_seed_failed") from exc
+
+    # Step 8: repo-write first, lifecycle flip last — see docstring.
     repo.update_project_repo(project_id, created["html_url"], default_branch)
+    if deployment is not None:
+        # "awaiting_first_deploy", not "building": the commit above has landed
+        # but GitHub has not told us a run started, and every state this
+        # feature shows is one the server was actually told about.
+        repo.update_project_deployment_state(
+            project_id,
+            DeploymentState(
+                template_id=deployment["template"].id,
+                provider=deployment["template"].provider,
+                state="awaiting_first_deploy",
+                url=deployment["preview_url"],
+            ),
+        )
     return repo.update_project_lifecycle_status(project_id, "repo_created")
+
+
+async def _resolve_deployment_provisioning(app, project: Project, workspace) -> dict | None:
+    """Everything the seeded pipeline needs, resolved before any external
+    mutation: the template, the Actions secrets and variables, and the
+    preview URL.
+
+    Returns None when no template is selected — the supported "just a repo"
+    case. Raises `ProviderCredentialError` when a template *is* selected but
+    its provider cannot supply a credential, so `create_repository` can fail
+    with a 400 while nothing has been created yet.
+
+    The secret/variable split is the template's to declare (SecretSpec and
+    VarSpec in app/deployments/registry.py) and the provider's to fill, which
+    is what lets a new template land without touching this function.
+    """
+    config = project.deployment_config
+    if config is None:
+        return None
+    template = get_deployment_template(config.template_id)
+    if template is None:
+        return None
+
+    settings = app.state.settings
+    preview_url: str | None = None
+
+    if template.provider == PLATFORM_R2:
+        credential = await ensure_platform_r2_credential(app, workspace)
+        preview_url = platform_r2_preview_url(settings, project.id, template.health_path)
+    else:
+        resolved = resolve_provider_credential(app, workspace, template.provider)
+        if resolved is None:
+            raise ProviderCredentialError("deployment_provider_not_configured")
+        token, provider_config = resolved
+        credential = {**provider_config, "token": token}
+
+    # A platform-computed URL is the one thing the workflow cannot derive
+    # for itself, and reporting a deploy with no URL would leave a business
+    # user a "live" preview they cannot open. Its own code, so an operator
+    # sees which setting is missing rather than a generic "incomplete".
+    if template.url_kind == "platform" and not preview_url:
+        raise ProviderCredentialError("deployment_preview_url_not_configured")
+
+    secrets_out: dict[str, str] = {}
+    for spec in template.required_secrets:
+        # An unnamed `from_provider` means the credential's primary secret;
+        # a named one selects a field. Missing values are refused rather than
+        # written empty: an empty secret produces a workflow that fails at
+        # runtime with no explanation.
+        key = spec.from_provider or _default_secret_key(spec.name)
+        value = credential.get(key)
+        if not value:
+            raise ProviderCredentialError("deployment_provider_incomplete")
+        secrets_out[spec.name] = value
+
+    vars_out: dict[str, str] = {}
+    for spec in template.required_vars:
+        value = _resolve_var(spec.source, project, template, credential, settings, preview_url)
+        if value is None:
+            raise ProviderCredentialError("deployment_provider_incomplete")
+        vars_out[spec.name] = value
+
+    return {
+        "template": template,
+        "secrets": secrets_out,
+        "variables": vars_out,
+        "preview_url": preview_url,
+    }
+
+
+def _default_secret_key(secret_name: str) -> str:
+    """`PZ_R2_ACCESS_KEY_ID` -> `access_key_id`. Lets a template name the
+    Actions secret its workflow reads without the provider having to know
+    that name, and vice versa."""
+    return secret_name.removeprefix("PZ_").lower().removeprefix("r2_")
+
+
+def _resolve_var(source, project, template, credential, settings, preview_url) -> str | None:
+    if source.startswith("provider:"):
+        return credential.get(source.split(":", 1)[1])
+    if source.startswith("literal:"):
+        return source.split(":", 1)[1]
+    return {
+        "project_id": project.id,
+        "template_id": template.id,
+        "environment": PREVIEW_ENVIRONMENT,
+        "web_origin": settings.web_app_url,
+        "preview_url": preview_url,
+    }.get(source)
 
 
 @router.patch("/projects/{project_id}/tasks/{task_id}/assignment", response_model=Task)

@@ -3,6 +3,8 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
+  DeploymentStatus,
+  DeploymentTemplateOut,
   DocumentOut,
   IndexStatus,
   PolicyScope,
@@ -169,6 +171,34 @@ export function updatePolicyScope(
     method: "PATCH",
     body: JSON.stringify(scope),
   });
+}
+
+// Deployment templates offered to the Tech Lead (ADR 0021). Each row
+// carries its scaffold paths and full workflow text, so the picker previews
+// what a template will commit without a request per template — the same
+// reasoning as listPolicyTemplates above.
+export function listDeploymentTemplates(authHeaders: Record<string, string>) {
+  return apiFetch<DeploymentTemplateOut[]>("/deployment-templates", authHeaders);
+}
+
+// Admin-only on the server, and frozen once the repo exists (409
+// project_frozen) — the repo already carries the previous template's
+// scaffold, so the selection must not drift from what was committed.
+export function updateDeploymentConfig(
+  projectId: string,
+  templateId: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Project>(`/projects/${projectId}/deployment-config`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ template_id: templateId }),
+  });
+}
+
+// Membership-only read, deliberately: a business user finding the running
+// application is the reason the feature exists, so this is not admin-gated.
+export function getDeploymentStatus(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<DeploymentStatus>(`/projects/${projectId}/deployment`, authHeaders);
 }
 
 export function createRepository(

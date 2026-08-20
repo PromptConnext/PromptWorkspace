@@ -24,6 +24,9 @@ from app.models.schemas import (
     AssignedTask,
     CodeChunk,
     CodeChunkHit,
+    Deployment,
+    DeploymentConfig,
+    DeploymentState,
     Document,
     GenerationRun,
     GraphEntity,
@@ -158,6 +161,31 @@ class Repository(abc.ABC):
     def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
         """Replace the whole policy scope atomically (last-write-wins);
         `None` clears it. Bumps `updated_at`."""
+
+    @abc.abstractmethod
+    def update_project_deployment_config(
+        self, project_id: str, config: DeploymentConfig | None
+    ) -> Project:
+        """Replace the Tech Lead's deployment-template selection (ADR 0021);
+        `None` clears it. Frozen at `repo_created` by the router, not here."""
+
+    @abc.abstractmethod
+    def update_project_deployment_state(self, project_id: str, state: DeploymentState) -> Project:
+        """Replace the denormalized current deployment view. Written only by
+        the signed webhook path and by repo creation — never by a member."""
+
+    @abc.abstractmethod
+    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+        """Insert or update by `(project_id, external_key)`. One deploy emits
+        several deliveries, so this must update in place rather than append —
+        that key is exactly what makes the second delivery idempotent."""
+
+    @abc.abstractmethod
+    def list_deployments(self, project_id: str, limit: int = 10) -> list[Deployment]:
+        """Newest first."""
+
+    @abc.abstractmethod
+    def get_latest_deployment(self, project_id: str) -> Deployment | None: ...
 
     @abc.abstractmethod
     def update_project_repo(
@@ -460,6 +488,10 @@ class InMemoryRepository(Repository):
         # token -> Invitation
         self._invitations: dict[str, Invitation] = {}
         self._repo_webhooks: dict[str, RepoWebhook] = {}
+        # project_id -> external_key -> Deployment (ADR 0021). Keyed by the
+        # idempotency key so a repeated delivery updates rather than appends,
+        # mirroring the supabase table's unique (project_id, external_key).
+        self._deployments: dict[str, dict[str, Deployment]] = {}
         # (provider, external_key) -> TaskLink
         self._task_links: dict[tuple[str, str], TaskLink] = {}
         # workspace_id -> ModelConnection (M9)
@@ -611,6 +643,50 @@ class InMemoryRepository(Repository):
         updated = project.model_copy(update={"policy_scope": scope, "updated_at": utcnow()})
         self._projects[project_id] = updated
         return updated
+
+    def update_project_deployment_config(
+        self, project_id: str, config: DeploymentConfig | None
+    ) -> Project:
+        project = self._projects[project_id]
+        updated = project.model_copy(
+            update={"deployment_config": config, "updated_at": utcnow()}
+        )
+        self._projects[project_id] = updated
+        return updated
+
+    def update_project_deployment_state(self, project_id: str, state: DeploymentState) -> Project:
+        project = self._projects[project_id]
+        updated = project.model_copy(update={"deployment_state": state, "updated_at": utcnow()})
+        self._projects[project_id] = updated
+        return updated
+
+    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+        by_key = self._deployments.setdefault(deployment.project_id, {})
+        existing = by_key.get(deployment.external_key)
+        if existing is not None:
+            # Preserve the original id and creation time: this is the same
+            # deploy reporting again, not a new one.
+            deployment = deployment.model_copy(
+                update={
+                    "id": existing.id,
+                    "created_at": existing.created_at,
+                    "updated_at": utcnow(),
+                }
+            )
+        by_key[deployment.external_key] = deployment
+        return copy.deepcopy(deployment)
+
+    def list_deployments(self, project_id: str, limit: int = 10) -> list[Deployment]:
+        rows = sorted(
+            self._deployments.get(project_id, {}).values(),
+            key=lambda d: (d.created_at, d.id),
+            reverse=True,
+        )
+        return copy.deepcopy(rows[:limit])
+
+    def get_latest_deployment(self, project_id: str) -> Deployment | None:
+        rows = self.list_deployments(project_id, limit=1)
+        return rows[0] if rows else None
 
     def list_projects(self, user_id: str) -> list[Project]:
         member_ws = {

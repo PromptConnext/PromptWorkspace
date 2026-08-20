@@ -27,6 +27,9 @@ from app.models.schemas import (
     ArtifactKind,
     AssignedTask,
     CodeChunkHit,
+    Deployment,
+    DeploymentConfig,
+    DeploymentState,
     Document,
     GenerationRun,
     GraphEntity,
@@ -76,6 +79,7 @@ _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
 _STAGE_DOCUMENTS = "pz_stage_documents"
 _REPO_WEBHOOKS = "pz_repo_webhooks"
+_DEPLOYMENTS = "pz_deployments"
 
 
 class SupabaseRepository(Repository):
@@ -292,6 +296,75 @@ class SupabaseRepository(Repository):
         if project is None:
             raise KeyError("project_not_found")
         return project
+
+    def update_project_deployment_config(
+        self, project_id: str, config: DeploymentConfig | None
+    ) -> Project:
+        patch = {
+            "deployment_config": config.model_dump(mode="json") if config is not None else None,
+            "updated_at": utcnow().isoformat(),
+        }
+        self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError("project_not_found")
+        return project
+
+    def update_project_deployment_state(self, project_id: str, state: DeploymentState) -> Project:
+        patch = {
+            "deployment_state": state.model_dump(mode="json"),
+            "updated_at": utcnow().isoformat(),
+        }
+        self._client.table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError("project_not_found")
+        return project
+
+    def upsert_deployment(self, deployment: Deployment) -> Deployment:
+        """Upsert on the (project_id, external_key) unique constraint from
+        migration 0026 — one deploy reports several times, and each report
+        must land on the same row."""
+        existing = self._get_deployment(deployment.project_id, deployment.external_key)
+        if existing is not None:
+            deployment = deployment.model_copy(
+                update={
+                    "id": existing.id,
+                    "created_at": existing.created_at,
+                    "updated_at": utcnow(),
+                }
+            )
+        self._client.table(_DEPLOYMENTS).upsert(
+            _dump(deployment), on_conflict="project_id,external_key"
+        ).execute()
+        return deployment
+
+    def _get_deployment(self, project_id: str, external_key: str) -> Deployment | None:
+        res = (
+            self._client.table(_DEPLOYMENTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("external_key", external_key)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return Deployment(**rows[0]) if rows else None
+
+    def list_deployments(self, project_id: str, limit: int = 10) -> list[Deployment]:
+        res = (
+            self._client.table(_DEPLOYMENTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [Deployment(**row) for row in (res.data or [])]
+
+    def get_latest_deployment(self, project_id: str) -> Deployment | None:
+        rows = self.list_deployments(project_id, limit=1)
+        return rows[0] if rows else None
 
     def list_projects(self, user_id: str) -> list[Project]:
         mem = self._client.table(_MEMBERS).select("workspace_id").eq("user_id", user_id).execute()

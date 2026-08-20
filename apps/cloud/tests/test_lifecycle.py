@@ -13,6 +13,7 @@ from app.db.repository import Repository
 from app.dependencies import get_repository
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
+from app.models.schemas import DeploymentConfig
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -403,3 +404,135 @@ def test_create_repository_forbidden_for_non_member():
 
         res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=BOB)
         assert res.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# Deployment templates at repo creation (ADR 0021)
+# --------------------------------------------------------------------------- #
+def _with_template(client: TestClient, project_id: str, template_id: str = "static-r2") -> None:
+    client.app.state.repository.update_project_deployment_config(
+        project_id, DeploymentConfig(template_id=template_id)
+    )
+    # What a real deployment must also configure: the public base URL the
+    # platform-hosted template's preview is served from. Without it there is
+    # no URL to hand the workflow, and repo creation refuses.
+    client.app.state.settings.deploy_r2_public_base_url = "https://preview.test"
+
+
+def _create_repo(client: TestClient, project_id: str):
+    return client.post(
+        f"/projects/{project_id}/lifecycle/create-repository", json={}, headers=ALICE
+    )
+
+
+def test_seeding_is_a_single_commit_not_one_per_file():
+    """The change that makes a 40-file scaffold survivable: ADR 0017's
+    per-file loop would be N commits and N round-trips, with a partial-seed
+    window proportional to scaffold size."""
+    with _client() as client:
+        fake = _wire_github(client)
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        assert _create_repo(client, pid).status_code == 200
+        assert len(fake.commits) == 1
+        paths = fake.commits[0]["paths"]
+        assert "AGENTS.md" in paths
+        assert ".github/workflows/deploy.yml" in paths
+        assert "docs/deployment.md" in paths
+        assert "site/index.html" in paths
+
+
+def test_project_without_a_template_seeds_exactly_what_it_did_before():
+    """Backward compatibility, asserted rather than assumed: a project that
+    never chose a template must produce the same file set as before this
+    feature existed."""
+    with _client() as client:
+        fake = _wire_github(client)
+        _ws, pid = _project_in_tech_review(client)
+
+        assert _create_repo(client, pid).status_code == 200
+        paths = set(fake.commits[0]["paths"])
+        assert paths == {"AGENTS.md", "README.md", "docs/conventions.md"}
+        assert not fake.secrets
+        assert not fake.variables
+
+
+def test_secrets_and_webhook_are_written_before_the_seed_commit():
+    """Ordering is the contract. The seed commit fires `on: push`, so a
+    workflow starting before its secrets exist fails for nothing — and a
+    delivery arriving before the webhook binding exists is dropped as an
+    unknown repo, losing the first deploy's URL."""
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://api.test"
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        assert _create_repo(client, pid).status_code == 200
+        commit_at = fake.call_log.index("commit:acme/rocket-ship")
+        assert max(i for i, e in enumerate(fake.call_log) if e.startswith("secret:")) < commit_at
+        assert fake.call_log.index("webhook:acme/rocket-ship") < commit_at
+
+
+def test_deploy_credentials_reach_the_repo_as_secrets_and_variables():
+    with _client() as client:
+        fake = _wire_github(client)
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        assert _create_repo(client, pid).status_code == 200
+        repo_name = "acme/rocket-ship"
+        assert fake.secrets[(repo_name, "PZ_R2_ACCESS_KEY_ID")]
+        assert fake.secrets[(repo_name, "PZ_R2_SECRET_ACCESS_KEY")]
+        assert fake.variables[(repo_name, "PZ_PROJECT_ID")] == pid
+        assert fake.variables[(repo_name, "PZ_ENVIRONMENT")] == "preview"
+
+
+def test_deployment_state_starts_at_awaiting_first_deploy():
+    """Not "building": the commit has landed but GitHub has not told us a run
+    started, and every state this feature shows is one it was told about."""
+    with _client() as client:
+        _wire_github(client)
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        body = _create_repo(client, pid).json()
+        assert body["deployment_state"]["state"] == "awaiting_first_deploy"
+        assert body["deployment_state"]["template_id"] == "static-r2"
+
+
+def test_secret_write_403_reports_the_new_token_scope_and_leaves_lifecycle_untouched():
+    """Secrets: write is a permission this feature added, which no existing
+    workspace PAT carries and no introspection endpoint can reveal earlier."""
+    with _client() as client:
+        fake = _wire_github(client)
+        fake.fail_on_secret_write = "PZ_R2_ACCESS_KEY_ID"
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        res = _create_repo(client, pid)
+        assert res.status_code == 400
+        assert res.json()["detail"] == "github_secrets_not_in_token_scope"
+        assert not fake.commits, "nothing may be committed once provisioning failed"
+        project = client.get(f"/projects/{pid}", headers=ALICE).json()
+        assert project["lifecycle_status"] == "tech_review"
+
+
+def test_missing_platform_credential_fails_before_any_repo_is_created():
+    """Fail fast, step 3: a provider that cannot supply a credential must be
+    caught before GitHub is touched at all."""
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.deploy_r2_api_token = ""
+        client.app.state.settings.deploy_r2_allow_shared_key = False
+        client.app.state.r2_client = None  # would explode if it were reached
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid)
+
+        res = _create_repo(client, pid)
+        assert res.status_code == 400
+        assert res.json()["detail"] == "deployment_provider_not_configured"
+        assert not fake.created_repos
+        project = client.get(f"/projects/{pid}", headers=ALICE).json()
+        assert project["lifecycle_status"] == "tech_review"

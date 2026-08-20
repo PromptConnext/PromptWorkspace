@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api import (
     assistant,
+    deployments,
     desktop_auth,
     discussions,
     documents,
@@ -168,6 +169,24 @@ async def lifespan(app: FastAPI):
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
+    # Deployment templates (ADR 0021). The only place the platform's
+    # account-wide R2 token is used, and the only thing that mints the
+    # per-workspace credential a project repo is given. Same override seam as
+    # github_client above: tests substitute FakeR2Client.
+    from app.integrations.deploy_providers import CloudflareR2Client, FakeR2Client
+
+    if settings.deploy_r2_api_token:
+        app.state.r2_client = CloudflareR2Client()
+    elif settings.data_backend == "memory":
+        # Dev and tests only — the memory backend is already documented as
+        # non-production. A configured-looking platform template must not
+        # silently mint fake credentials against a real database.
+        app.state.r2_client = FakeR2Client()
+    else:
+        # Unconfigured in production: selecting the platform-hosted template
+        # then fails at repo creation with a clear code, rather than seeding a
+        # pipeline that could never succeed.
+        app.state.r2_client = None
     from app.invitations_email import build_invitation_mailer
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
@@ -230,6 +249,7 @@ def create_app() -> FastAPI:
     app.include_router(generation.router)
     app.include_router(stage_documents.router)
     app.include_router(policies.router)
+    app.include_router(deployments.router)
     app.include_router(desktop_auth.router)
 
     @app.get("/", tags=["health"])

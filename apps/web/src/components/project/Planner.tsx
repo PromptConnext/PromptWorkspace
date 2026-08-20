@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { DocumentUpload } from "./DocumentUpload";
 import { DocumentPreview } from "./DocumentPreview";
+import { DeploymentTemplatePanel } from "./DeploymentTemplatePanel";
 import { PolicyScopePanel } from "./PolicyScopePanel";
 import { useStageGeneration } from "./useStageGeneration";
 import { StageInputForm } from "./StageInputForm";
@@ -616,6 +617,20 @@ export function Planner({
             >
               Open the task board
             </button>
+          )}
+          {/* Beside CreateRepositoryPanel because it configures exactly
+              that act: the template is seeded by repo creation and frozen
+              afterwards, so choosing it anywhere later would be too late.
+              Rendered for the whole Tech Lead step rather than only in
+              `tech_review`, so a frozen project still shows what it deployed
+              with. */}
+          {tab.key === "plan" && (
+            <DeploymentTemplatePanel
+              project={project}
+              workspaceId={project.workspace_id}
+              readOnly={readOnly}
+              onChange={onChange}
+            />
           )}
           {/* Creating the repository is a technical act on technical
               artifacts, so it lives with the Tech Lead's own step rather than

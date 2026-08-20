@@ -374,6 +374,89 @@ class PolicyScopeUpdate(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Deployment templates (ADR 0021)
+# --------------------------------------------------------------------------- #
+# Three shapes, and the split between the first two is the load-bearing part.
+#
+# `DeploymentConfig` is the Tech Lead's INPUT: one template id, chosen during
+# tech review and frozen at `repo_created` exactly as PolicyScope is.
+#
+# `DeploymentState` is the server's CURRENT VIEW, written only by the signed
+# GitHub webhook and mutating for the life of the project. It duplicates the
+# newest pz_deployments row on purpose — the same trade `repo_url` already
+# makes — because GET /projects backs the workspace project list and the
+# engine roster, and neither can afford a join or an N+1 to answer "is this
+# project live, and where".
+#
+# Different lifetimes, different writers, different authorization. Keeping
+# them in one blob would mean a member PATCH and a webhook write racing for
+# the same column.
+class DeploymentConfig(BaseModel):
+    # Bare slug for a built-in (never contains ":"); a future workspace-owned
+    # template resolves through the same field as `ws:<uuid>`. See
+    # app/deployments/registry.py.
+    template_id: str
+
+
+class DeploymentConfigUpdate(BaseModel):
+    """PATCH /projects/{id}/deployment-config request body. Its own model so
+    the storage shape can gain server-only fields without moving the API."""
+
+    template_id: str
+
+
+class DeploymentState(BaseModel):
+    """Denormalized current deployment view on the project row.
+
+    `url` is LAST KNOWN GOOD and `state` is current — deliberately two
+    questions. A failed deploy must not blank a preview that is still
+    serving; the business user's link keeps working while the Tech Lead
+    fixes the build.
+    """
+
+    template_id: str | None = None
+    provider: str | None = None
+    # not_configured | awaiting_first_deploy | building | live | failed
+    state: str = "not_configured"
+    url: str | None = None
+    commit_sha: str | None = None
+    run_url: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Deployment(BaseModel):
+    """One row per deploy, in `pz_deployments`.
+
+    Plain BaseModel, not a GraphEntity: a deployment has exactly one author
+    (the webhook) and never participates in field-level merge, so it stays
+    out of ENTITY_TYPES/FIELD_AUTHORITY and out of the task-graph sync.
+    """
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str
+    project_id: str
+    provider: str
+    template_id: str
+    # Idempotency key. One deploy emits several deliveries (in_progress, then
+    # success/failure), so this is what makes the second write an update
+    # rather than a duplicate row: GitHub's deployment id for
+    # deployment_status, "run-<id>" for workflow_run.
+    external_key: str
+    state: str  # queued | building | live | failed | inactive
+    url: str | None = None
+    commit_sha: str | None = None
+    ref: str | None = None
+    run_url: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    # Measured server-side after a successful deploy: allow | deny | unknown.
+    # The browser cannot read a cross-origin response header; the backend can.
+    frame_policy: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
 # Project
 # --------------------------------------------------------------------------- #
 class ProjectCreate(BaseModel):
@@ -407,6 +490,12 @@ class Project(BaseModel):
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
+    # ADR 0021. Both nullable for the same backward-compatibility reason:
+    # `None` config = no template ever chosen, `None` state = nothing ever
+    # deployed. See the DeploymentConfig/DeploymentState note above for why
+    # these are two fields and not one.
+    deployment_config: DeploymentConfig | None = None
+    deployment_state: DeploymentState | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

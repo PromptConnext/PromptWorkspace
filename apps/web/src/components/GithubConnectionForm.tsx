@@ -108,11 +108,25 @@ export function GithubConnectionForm({ workspaceId }: { workspaceId: string }) {
         >
           fine-grained personal access token
         </a>{" "}
-        with <strong>Contents</strong>, <strong>Administration</strong> and{" "}
-        <strong>Webhooks</strong> write access for the organisation below. Set its repository access
-        to <strong>All repositories</strong> — each project gets a repository created after the
-        token is issued, and a token scoped to selected repositories cannot write to those.
+        with <strong>Contents</strong>, <strong>Administration</strong>, <strong>Webhooks</strong>,{" "}
+        <strong>Secrets</strong> and <strong>Variables</strong> write access for the organisation
+        below. Set its repository access to <strong>All repositories</strong> — each project gets a
+        repository created after the token is issued, and a token scoped to selected repositories
+        cannot write to those.
       </p>
+      {/* GitHub offers no way to read back a fine-grained token's own
+          permissions, so the connect step below cannot verify these two. A
+          token issued before deployment templates existed connects cleanly
+          and then fails at repository creation, which is late and confusing —
+          hence saying it here, where the token is issued. */}
+      {connected && (
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+          <strong>Secrets</strong> and <strong>Variables</strong> write access is newly required, for
+          handing deployment credentials to a project&apos;s pipeline. A token issued before this
+          will connect fine and then fail when a repository is created. If yours predates it, reissue
+          it with those permissions and replace it below.
+        </p>
+      )}
 
       {connected && (
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">

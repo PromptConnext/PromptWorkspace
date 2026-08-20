@@ -86,6 +86,12 @@ export type RosterProject = {
   lifecycle_status: string;
   repo_url: string | null;
   repo_default_branch: string | null;
+  // ADR 0021. The deployed preview's URL, so an editor can open the running
+  // application without a browser round-trip through the web app. Rides the
+  // roster because the roster is already cloud-authoritative and lives as
+  // JSON in app_state — no SQLite column, no migration, and nothing here
+  // participates in graph merge. null = nothing deployed (yet, or ever).
+  deployment_url: string | null;
 };
 
 export function storeRoster(workspaces: RosterWorkspace[], projects: RosterProject[]): void {

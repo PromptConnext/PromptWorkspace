@@ -47,7 +47,38 @@ export interface Project {
   repo_url: string | null;
   repo_default_branch: string | null;
   policy_scope?: PolicyScope | null;
+  // ADR 0021. `deployment_config` is the Tech Lead's frozen input;
+  // `deployment_state` is the server's current view, written only by the
+  // signed GitHub webhook. Two fields, not one, because they have different
+  // writers and different lifetimes.
+  deployment_config?: DeploymentConfig | null;
+  deployment_state?: DeploymentState | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface DeploymentConfig {
+  template_id: string;
+}
+
+// The denormalized current deployment view carried on every Project, so the
+// workspace project list can show a "Live" pill without an extra request per
+// project. `url` is LAST KNOWN GOOD while `state` is current — a failed
+// deploy must not blank a preview that is still serving.
+export interface DeploymentState {
+  template_id: string | null;
+  provider: string | null;
+  state:
+    | "not_configured"
+    | "awaiting_first_deploy"
+    | "queued"
+    | "building"
+    | "live"
+    | "failed"
+    | "inactive";
+  url: string | null;
+  commit_sha: string | null;
+  run_url: string | null;
   updated_at: string;
 }
 
@@ -324,6 +355,64 @@ export interface PolicyTemplateOut {
   name: string;
   description: string;
   body: string;
+}
+
+// A deployment template offered by the Tech Lead's picker
+// (GET /deployment-templates, apps/cloud/app/deployments/registry.py).
+// `workflow_preview` and `scaffold_paths` ship inline for the same reason
+// PolicyTemplateOut ships `body`: the picker previews exactly what will be
+// committed, with no second round trip per template.
+export interface DeploymentTemplateOut {
+  id: string;
+  name: string;
+  description: string;
+  stack: string;
+  provider: string;
+  provider_label: string;
+  provider_is_platform_owned: boolean;
+  embeddable: boolean;
+  required_secrets: string[];
+  required_vars: string[];
+  scaffold_paths: string[];
+  workflow_preview: string;
+}
+
+export interface DeploymentOut {
+  id: string;
+  state: string;
+  url: string | null;
+  commit_sha: string | null;
+  ref: string | null;
+  run_url: string | null;
+  frame_policy: "allow" | "deny" | "unknown" | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeploymentErrorOut {
+  code: string;
+  message: string;
+  run_url: string | null;
+  at: string;
+}
+
+// GET /projects/{id}/deployment. Shaped on IndexStatus below, and for the
+// same reason: `pending` is a server-measured count you poll while it is
+// above zero. There is no progress percentage here and there must not be
+// one — a deploy's duration is unknown to the server, so a bar would be
+// invented.
+export interface DeploymentStatus {
+  template_id: string | null;
+  template_name: string | null;
+  provider: string | null;
+  embeddable: boolean;
+  state: DeploymentState["state"];
+  url: string | null;
+  health_path: string;
+  pending: number;
+  last_deploy: DeploymentOut | null;
+  recent: DeploymentOut[];
+  last_error: DeploymentErrorOut | null;
 }
 
 // GET /projects/{id}/assistant/index-status (apps/cloud/app/api/assistant.py)

@@ -101,6 +101,32 @@ class Settings(BaseSettings):
     # cannot reach anyway.
     public_api_url: str = ""
 
+    # Deployment templates (ADR 0021). Every provider except this one is a
+    # per-workspace credential on the workspace row; the `static-r2` template
+    # is the exception, because for it the platform *is* the provider and
+    # there is no customer account to connect.
+    #
+    # `deploy_r2_api_token` is account-wide and MUST NOT be sealed into a
+    # customer repository. It is used only to mint a per-workspace,
+    # bucket-scoped credential at repo-creation time, and only that minted
+    # credential reaches a repo — so a leak from any one repository is bounded
+    # to that workspace's preview bucket rather than every tenant's.
+    #
+    # Unset disables the platform-hosted template: selecting it still works,
+    # and repo creation refuses with `deployment_provider_not_configured`
+    # rather than seeding a pipeline that could never succeed.
+    deploy_r2_account_id: str = ""
+    deploy_r2_api_token: str = ""
+    deploy_r2_endpoint: str = ""
+    deploy_r2_public_base_url: str = ""
+    # Local-dev escape hatch: seal the platform's own key straight into the
+    # repo instead of minting. Never enable this anywhere real — one leak
+    # would reach every workspace's preview storage.
+    deploy_r2_allow_shared_key: bool = False
+    deploy_r2_shared_access_key_id: str = ""
+    deploy_r2_shared_secret_access_key: str = ""
+    deploy_r2_shared_bucket: str = ""
+
     # Managed Thai-LLM tier (M2, plan 0007 / ADR 0013 Part B pilot): the free
     # opentyphoon.ai API as a platform-operated model source for workspaces
     # with no BYO connection. Chat only in the pilot — no managed embedding

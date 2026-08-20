@@ -142,6 +142,7 @@ async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; project
       lifecycle_status: string;
       repo_url: string | null;
       repo_default_branch: string | null;
+      deployment_state: { state: string; url: string | null } | null;
     }[]
   >("/projects");
   const workspaces: RosterWorkspace[] = rawWorkspaces.map((w) => ({ id: w.id, name: w.name }));
@@ -152,6 +153,11 @@ async function refreshRoster(): Promise<{ workspaces: RosterWorkspace[]; project
     lifecycle_status: p.lifecycle_status,
     repo_url: p.repo_url,
     repo_default_branch: p.repo_default_branch,
+    // Only a currently-live deploy gets a URL here. A project mid-build or
+    // with a failed newest deploy still has a last-known-good URL on the
+    // cloud side, but offering it from an editor with no state alongside it
+    // would be a link with no way to tell whether it is current.
+    deployment_url: p.deployment_state?.state === "live" ? p.deployment_state.url : null,
   }));
   storeRoster(workspaces, projects);
   // Members cache (ADR 0018 M4): small addition to the same roster refresh —
