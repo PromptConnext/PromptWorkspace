@@ -9,6 +9,7 @@
 
 import { isCloneableRepoUrl, sameRepo } from "../link/repoUrl.ts";
 import type { CloudProject, LifecycleStatus, Workspace } from "../cloud/types.ts";
+import type { ProjectCandidate } from "../link/projectLink.ts";
 
 /** `local` = on this machine · `remote-only` = clonable · `no-repo` = nothing
  *  to clone yet, either because the project is still being planned or because
@@ -138,4 +139,52 @@ export function buildRoster(input: RosterInput): WorkspaceRow[] {
   }
   rows.sort((a, b) => a.workspaceName.localeCompare(b.workspaceName));
   return rows;
+}
+
+/**
+ * A clone this extension started, recorded before `git.clone` runs.
+ *
+ * `git.clone` usually opens the result in a NEW WINDOW, which is a different
+ * extension host from the one that started it. This record is how the answer
+ * the user already gave — "yes, this folder is that project" — survives the
+ * jump. It lives in globalState because that is shared across windows;
+ * workspaceState is not.
+ */
+export interface PendingClone {
+  projectId: string;
+  repoUrl: string;
+  startedAt: number;
+}
+
+/** An abandoned clone must not silently link a folder days later, so the
+ *  record expires rather than waiting forever for a match. */
+export const PENDING_CLONE_TTL_MS = 60 * 60 * 1000;
+
+export function pendingCloneMatches(
+  pending: PendingClone | undefined,
+  remotes: string[],
+  now: number,
+): boolean {
+  if (!pending) return false;
+  if (now - pending.startedAt > PENDING_CLONE_TTL_MS) return false;
+  return remotes.some((remote) => sameRepo(remote, pending.repoUrl));
+}
+
+/** Every project the user could link a folder to. Projects with no usable
+ *  repository are excluded: there is nothing to match a remote against, so
+ *  offering them would be offering a guess. */
+export function linkCandidatesFrom(rows: WorkspaceRow[]): ProjectCandidate[] {
+  const out: ProjectCandidate[] = [];
+  for (const workspace of rows) {
+    for (const project of workspace.projects) {
+      if (!project.repoUrl) continue;
+      out.push({
+        projectId: project.projectId,
+        projectName: project.projectName,
+        workspaceName: project.workspaceName,
+        repoUrl: project.repoUrl,
+      });
+    }
+  }
+  return out;
 }

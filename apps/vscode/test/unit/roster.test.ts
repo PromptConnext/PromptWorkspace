@@ -9,7 +9,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildRoster, safeRepoUrl, type RosterInput } from "../../src/projects/roster.ts";
+import {
+  PENDING_CLONE_TTL_MS,
+  buildRoster,
+  linkCandidatesFrom,
+  pendingCloneMatches,
+  safeRepoUrl,
+  type RosterInput,
+} from "../../src/projects/roster.ts";
 
 const WS = { id: "w1", name: "Acme Corp" };
 
@@ -132,4 +139,48 @@ test("safeRepoUrl is the single gate: it returns null rather than throwing", () 
   assert.equal(safeRepoUrl("ext::sh -c 'x'"), null);
   assert.equal(safeRepoUrl(null), null);
   assert.equal(safeRepoUrl(undefined), null);
+});
+
+const NOW = 1_700_000_000_000;
+const pending = {
+  projectId: "p1",
+  repoUrl: "https://github.com/acme/checkout.git",
+  startedAt: NOW,
+};
+
+test("a clone we started links silently when the new folder's remote matches", () => {
+  assert.equal(pendingCloneMatches(pending, ["git@github.com:acme/checkout.git"], NOW + 5_000), true);
+});
+
+test("a pending clone older than the TTL is ignored", () => {
+  assert.equal(
+    pendingCloneMatches(pending, ["https://github.com/acme/checkout.git"], NOW + PENDING_CLONE_TTL_MS + 1),
+    false,
+  );
+});
+
+test("a folder matching no pending clone is not linked silently", () => {
+  assert.equal(pendingCloneMatches(pending, ["https://github.com/acme/other.git"], NOW), false);
+  assert.equal(pendingCloneMatches(undefined, ["https://github.com/acme/checkout.git"], NOW), false);
+  assert.equal(pendingCloneMatches(pending, [], NOW), false);
+});
+
+test("link candidates carry every project with a usable repo, not just assigned ones", () => {
+  const rows = buildRoster(
+    input({
+      entries: [
+        {
+          workspace: WS,
+          projects: [
+            project(),
+            project({ id: "p2", name: "Marketing", repo_url: null, lifecycle_status: "planning" }),
+          ],
+        },
+      ],
+    }),
+  );
+  const candidates = linkCandidatesFrom(rows);
+  assert.deepEqual(candidates.map((c) => c.projectId), ["p1"]);
+  assert.equal(candidates[0].projectName, "Checkout API");
+  assert.equal(candidates[0].workspaceName, "Acme Corp");
 });
