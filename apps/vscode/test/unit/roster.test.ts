@@ -82,10 +82,15 @@ test("mine first by count, then local, then remote-only, then no-repo, name brea
       workspace: WS,
       projects: [
         project({ id: "no-repo", name: "Marketing", repo_url: null, lifecycle_status: "planning" }),
-        project({ id: "remote", name: "Billing", repo_url: "https://github.com/acme/billing.git" }),
+        // Tie-breaker: two remote-only projects with taskCount 0, names out of order.
+        project({ id: "remote-tie1", name: "Zulu", repo_url: "https://github.com/acme/zulu.git" }),
+        project({ id: "remote-tie2", name: "Alpha", repo_url: "https://github.com/acme/alpha-remote.git" }),
         project({ id: "local", name: "Design", repo_url: "https://github.com/acme/design.git" }),
         project({ id: "mine1", name: "Zebra", repo_url: "https://github.com/acme/zebra.git" }),
         project({ id: "mine3", name: "Alpha", repo_url: "https://github.com/acme/alpha.git" }),
+        // Tie-breaker: two assigned projects with same taskCount, names out of order.
+        project({ id: "mine-tie2", name: "Yankee", repo_url: "https://github.com/acme/yankee.git" }),
+        project({ id: "mine-tie1", name: "Bravo", repo_url: "https://github.com/acme/bravo.git" }),
       ],
     },
   ];
@@ -93,12 +98,13 @@ test("mine first by count, then local, then remote-only, then no-repo, name brea
     input({
       entries,
       knownClones: { local: "/src/design" },
-      taskCounts: { mine1: 1, mine3: 3 },
+      taskCounts: { mine1: 1, mine3: 3, "mine-tie1": 2, "mine-tie2": 2 },
     }),
   );
   assert.deepEqual(
     ws.projects.map((p) => p.projectId),
-    ["mine3", "mine1", "local", "remote", "no-repo"],
+    // Order: assigned by count desc (3, 2, 2, 1), local (1), remote-only by name asc, no-repo
+    ["mine3", "mine-tie1", "mine-tie2", "mine1", "local", "remote-tie2", "remote-tie1", "no-repo"],
   );
 });
 
