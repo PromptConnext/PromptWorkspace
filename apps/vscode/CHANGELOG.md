@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Projects view** — browse the workspaces and projects you belong to, and clone a project's repository without leaving the editor. Projects with tasks assigned to you sort first.
+- Cloning a project links the resulting folder automatically; no confirmation prompt for a clone you started.
+
+### Changed
+- **My Tasks is now scoped to the project of the folder you have open**, rather than listing every assigned task across every project. Work waiting in another repository appears as a task count in the Projects view.
+
+### Fixed
+- Project Context rendered, watched and opened files from the first workspace folder in a multi-root window regardless of which repository the editor was in.
+
 ## 0.1.0 — unreleased
 
 First cut, implementing ADR 0019 against the cloud authority ADR 0020 establishes.

@@ -1,7 +1,14 @@
 // Which cloud project does this folder belong to?
 //
 // Answer: a resource-scoped `promptconnext.projectId` setting, discovered by
-// matching git remotes and written only after the user confirms.
+// matching git remotes against the workspace roster, and written only after the
+// user confirms — with one exception, `applyPendingClone`, where the user
+// already confirmed by clicking Clone and a second prompt would be asking the
+// same question twice.
+//
+// Candidates come from the roster rather than from assigned tasks, which is
+// what lets a folder be linked to a project that has no work assigned to this
+// developer yet.
 //
 // Rejected, so they are not re-proposed:
 //   * A `.promptconnext` dotfile — a second config system to teach, a gitignore
@@ -14,8 +21,10 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import type { AssignedTask } from "../cloud/types.ts";
+import type { StorageLike } from "../cloud/session.ts";
 import type { GitBridge } from "../git/gitBridge.ts";
+import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
+import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
 import { isCloneableRepoUrl, sameRepo } from "./repoUrl.ts";
 import type { OutputLogger } from "../util/log.ts";
 
@@ -31,13 +40,16 @@ export class ProjectLink {
 
   private readonly git: GitBridge;
   private readonly log: OutputLogger;
+  private readonly state: StorageLike;
 
   constructor(
     git: GitBridge,
     log: OutputLogger,
+    state: StorageLike,
   ) {
     this.git = git;
     this.log = log;
+    this.state = state;
   }
 
   /** The reverse lookup the git watcher needs. No link, no auto-close. */
@@ -47,32 +59,23 @@ export class ProjectLink {
   }
 
   /** Candidates whose repo_url matches this folder's remotes. */
-  candidatesFor(folder: vscode.Uri, tasks: AssignedTask[]): ProjectCandidate[] {
+  candidatesFor(folder: vscode.Uri, candidates: ProjectCandidate[]): ProjectCandidate[] {
+    const remotes = this.remotesFor(folder);
+    if (remotes.length === 0) return [];
+    return candidates.filter(
+      (candidate) =>
+        candidate.repoUrl != null &&
+        isCloneableRepoUrl(candidate.repoUrl) &&
+        remotes.some((remote) => sameRepo(remote, candidate.repoUrl)),
+    );
+  }
+
+  private remotesFor(folder: vscode.Uri): string[] {
     const repo = this.git.repositoryFor(folder);
     if (!repo) return [];
-    const remotes = repo.remotes
+    return repo.remotes
       .map((r) => r.fetchUrl ?? r.pushUrl)
       .filter((u): u is string => Boolean(u));
-    if (remotes.length === 0) return [];
-
-    const seen = new Set<string>();
-    const out: ProjectCandidate[] = [];
-    for (const entry of tasks) {
-      if (seen.has(entry.project_id)) continue;
-      // Anything the cloud hands us goes through the clone guard before it is
-      // normalised, compared or shown — a hostile repo_url must not reach git
-      // or the UI.
-      if (!entry.repo_url || !isCloneableRepoUrl(entry.repo_url)) continue;
-      if (!remotes.some((remote) => sameRepo(remote, entry.repo_url))) continue;
-      seen.add(entry.project_id);
-      out.push({
-        projectId: entry.project_id,
-        projectName: entry.project_name,
-        workspaceName: entry.workspace_name,
-        repoUrl: entry.repo_url,
-      });
-    }
-    return out;
   }
 
   /**
@@ -81,53 +84,79 @@ export class ProjectLink {
    * Never writes without confirmation, and never asks twice per session for
    * the same folder — a notification the user dismissed is an answer.
    */
-  async offerLinks(tasks: AssignedTask[]): Promise<void> {
+  async offerLinks(candidates: ProjectCandidate[]): Promise<void> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const key = folder.uri.toString();
       if (projectIdFor(folder.uri) || this.promptedFolders.has(key)) continue;
-      const candidates = this.candidatesFor(folder.uri, tasks);
-      if (candidates.length === 0) continue;
+      const matches = this.candidatesFor(folder.uri, candidates);
+      if (matches.length === 0) continue;
       this.promptedFolders.add(key);
 
-      if (candidates.length === 1) {
+      if (matches.length === 1) {
         const choice = await vscode.window.showInformationMessage(
-          `Link "${folder.name}" to the PromptConnext project "${candidates[0].projectName}"?`,
+          `Link "${folder.name}" to the PromptConnext project "${matches[0].projectName}"?`,
           "Link",
           "Not now",
         );
-        if (choice === "Link") await this.link(folder, candidates[0]);
+        if (choice === "Link") await this.link(folder, matches[0], this.state);
         continue;
       }
-      await this.pick(folder, candidates);
+      await this.pick(folder, matches, this.state);
     }
   }
 
-  /** The explicit command: pick from every project the user has tasks in. */
-  async linkInteractively(tasks: AssignedTask[]): Promise<void> {
+  /** The explicit command: pick from every project in the roster. */
+  async linkInteractively(candidates: ProjectCandidate[]): Promise<void> {
     const folder = await pickFolder();
     if (!folder) return;
-    const seen = new Map<string, ProjectCandidate>();
-    for (const entry of tasks) {
-      if (seen.has(entry.project_id)) continue;
-      seen.set(entry.project_id, {
-        projectId: entry.project_id,
-        projectName: entry.project_name,
-        workspaceName: entry.workspace_name,
-        repoUrl: entry.repo_url,
-      });
-    }
-    if (seen.size === 0) {
+    if (candidates.length === 0) {
       void vscode.window.showInformationMessage(
-        "No PromptConnext projects to link — you have no assigned tasks.",
+        "No PromptConnext projects with a repository to link to.",
       );
       return;
     }
-    await this.pick(folder, [...seen.values()]);
+    await this.pick(folder, candidates, this.state);
+  }
+
+  /**
+   * Link a folder this extension just cloned, without asking again.
+   *
+   * The prompt `offerLinks` shows is the right default for a folder we merely
+   * recognise. It is the wrong one here: the user clicked Clone on a named
+   * project seconds ago, and asking "is this that project?" invites the answer
+   * "why are you asking?". The record expires so an abandoned clone cannot
+   * make this silent write happen days later.
+   */
+  async applyPendingClone(
+    state: StorageLike,
+    candidates: ProjectCandidate[],
+  ): Promise<void> {
+    const pending: PendingClone | undefined = readPendingClone(state);
+    if (!pending) return;
+    const now = Date.now();
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (projectIdFor(folder.uri)) continue;
+      if (!pendingCloneMatches(pending, this.remotesFor(folder.uri), now)) continue;
+      const candidate = candidates.find((c) => c.projectId === pending.projectId);
+      await setProjectId(folder, pending.projectId);
+      await rememberClone(state, pending.projectId, folder.uri.fsPath);
+      await writePendingClone(state, undefined);
+      this.promptedFolders.add(folder.uri.toString());
+      const name = candidate?.projectName ?? "the project you cloned";
+      this.log.info(`pending clone linked ${folder.name} -> ${pending.projectId}`);
+      void vscode.window.showInformationMessage(`Linked "${folder.name}" to ${name}.`);
+      return;
+    }
+    // Expired records are dropped on sight so they cannot fire later.
+    if (now - pending.startedAt > PENDING_CLONE_TTL_MS) {
+      await writePendingClone(state, undefined);
+    }
   }
 
   private async pick(
     folder: vscode.WorkspaceFolder,
     candidates: ProjectCandidate[],
+    state?: StorageLike,
   ): Promise<void> {
     const picked = await vscode.window.showQuickPick(
       candidates.map((c) => ({
@@ -138,14 +167,16 @@ export class ProjectLink {
       })),
       { title: `Link "${folder.name}" to a PromptConnext project` },
     );
-    if (picked) await this.link(folder, picked.candidate);
+    if (picked) await this.link(folder, picked.candidate, state);
   }
 
   private async link(
     folder: vscode.WorkspaceFolder,
     candidate: ProjectCandidate,
+    state?: StorageLike,
   ): Promise<void> {
     await setProjectId(folder, candidate.projectId);
+    if (state) await rememberClone(state, candidate.projectId, folder.uri.fsPath);
     this.log.info(`linked ${folder.name} -> ${candidate.projectId}`);
     void vscode.window.showInformationMessage(
       `Linked "${folder.name}" to ${candidate.projectName}.`,

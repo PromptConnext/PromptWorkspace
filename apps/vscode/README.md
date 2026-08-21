@@ -9,9 +9,19 @@ run, and marks the task implemented when you commit.
 
 ## What it does
 
-**My Tasks** — every task assigned to you, across every workspace you belong to, grouped by
-project. Tick the checkbox to mark one implemented, or use *PromptConnext: Set Task Status…*
-for the full set of states.
+**Projects view** — every workspace and project you belong to, with each project's local state:
+`cloned`, `not cloned`, or `no repo yet`. Click **Clone Repository** on a project you have not
+cloned and VS Code's own Git extension takes it from there — folder picker, progress, and the
+"open the result?" prompt are all VS Code's, not ours. Say **Open** and the new window links
+itself to that project automatically, with no confirmation prompt: you already answered that
+question when you clicked Clone. A project already cloned offers **Open Project Folder** instead.
+This is also where work waiting in a repository you don't currently have open shows up — as a
+task count on that project's row — since My Tasks itself only shows one project at a time.
+
+**My Tasks** — the tasks assigned to you **in the project of the folder you currently have
+open**, not every assigned task across every workspace. Switch folders (or windows) and the list
+follows. Tick the checkbox to mark one implemented, or use *PromptConnext: Set Task Status…* for
+the full set of states.
 
 **Project Context** — `AGENTS.md`, `docs/conventions.md` and `.specify/memory/constitution.md`,
 read from your clone. These are the same files your coding agent reads, and they are yours to
@@ -31,9 +41,21 @@ re-close anything. Turn it off with `promptconnext.closeTasksFromCommits`.
 1. **PromptConnext: Sign In** — signs you in through your browser. If the redirect never comes
    back (common on Linux, where the URL scheme is often unregistered), choose *Paste code
    instead*.
-2. Open a clone of a project's repository. The extension offers to link the folder when a git
-   remote matches one of your projects, and writes `promptconnext.projectId` into
-   `.vscode/settings.json`. A project id is not a secret — commit it so your team shares it.
+2. Open the **Projects** view. It lists every workspace you belong to; expand one to see its
+   projects.
+3. **Clone** a project you don't have on this machine yet, or **Open Project Folder** for one you
+   do. Cloning hands off to VS Code's own Git extension, and the folder it produces links itself
+   to that project the moment its window activates — no prompt, because clicking Clone already
+   answered the question.
+4. From here, **My Tasks** and **Project Context** follow whichever folder's window you're in.
+   Opening a folder some other way (not through Clone or Open Project Folder) still works: the
+   extension offers to link it the first time it sees a git remote matching one of your projects,
+   and writes `promptconnext.projectId` into `.vscode/settings.json`. A project id is not a
+   secret — commit it so your team shares it.
+
+Work assigned to you in a project you have not opened does not vanish — it shows up as a task
+count on that project's row in the Projects view, since My Tasks only ever shows the one project
+your current folder belongs to.
 
 ### Settings
 

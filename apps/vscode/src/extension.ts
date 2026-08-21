@@ -21,7 +21,9 @@ import { createGitBridge } from "./git/gitBridge.ts";
 import { GitWatcher } from "./git/gitWatcher.ts";
 import { activeProject, type ActiveProject } from "./link/activeProject.ts";
 import { ProjectLink } from "./link/projectLink.ts";
+import { cloneProject } from "./projects/cloneProject.ts";
 import { clearCloneState } from "./projects/knownClones.ts";
+import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "./storage/cache.ts";
@@ -76,7 +78,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const docs = new RepoDocs(client, log);
   const git = await createGitBridge(log);
-  const link = new ProjectLink(git, log);
+  const link = new ProjectLink(git, log, context.globalState);
   const tree = new TaskTreeProvider(store, activeProject);
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
@@ -149,16 +151,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       : who;
   };
 
+  // Candidates come from the roster, not the task list: a project with no
+  // work assigned to this developer still needs to be linkable.
+  const candidates = () => linkCandidatesFrom(rosterTree.rows());
+
   context.subscriptions.push(
     store.onDidChange(() => {
       tree.refresh();
       rosterTree.refresh();
       showTitle();
-      void link.offerLinks(store.all());
     }),
     roster.onDidChange(() => {
       rosterTree.refresh();
       projectsView.description = describeRoster();
+      void link.offerLinks(candidates());
     }),
     git.onDidChangeRepositoryState(() => rosterTree.refresh()),
     session.onDidChange((current) => {
@@ -341,7 +347,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand("promptconnext.linkProject", () =>
-      link.linkInteractively(store.all()),
+      link.linkInteractively(candidates()),
     ),
     vscode.commands.registerCommand("promptconnext.showLog", () => log.show()),
     vscode.commands.registerCommand("promptconnext.refreshProjects", async () => {
@@ -358,6 +364,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       if (choice === "Show Log") log.show();
     }),
+    vscode.commands.registerCommand(
+      "promptconnext.cloneProject",
+      async (node?: RosterNode) => {
+        if (!(node instanceof ProjectTreeNode)) return;
+        await cloneProject(node.row, context.globalState, log);
+      },
+    ),
     vscode.commands.registerCommand(
       "promptconnext.openProjectFolder",
       async (node?: RosterNode) => {
@@ -387,6 +400,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   refreshStatusBar();
   await store.loadFromCache();
   await roster.loadFromCache();
+  // Off the cache, not the refresh: this is what makes a freshly cloned
+  // window link itself before it has ever reached the network.
+  await link.applyPendingClone(context.globalState, candidates());
   projectsView.description = describeRoster();
 
   const watcher = new GitWatcher(
