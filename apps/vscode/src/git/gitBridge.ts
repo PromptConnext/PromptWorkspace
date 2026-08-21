@@ -35,6 +35,14 @@ export interface GitBridge {
   repositoryFor(uri: vscode.Uri): RepoRef | undefined;
   log(root: vscode.Uri, opts: { maxEntries: number }): Promise<CommitRef[]>;
   onDidChangeRepositoryState(cb: (repo: RepoRef) => void): vscode.Disposable;
+  /** Fires once per repository as `vscode.git` discovers it — including the
+   *  cold-start case, where discovery is still running when `getAPI(1)`
+   *  returns (see the comment on `activate()` below). A freshly cloned
+   *  window's repository is not necessarily present yet when this bridge
+   *  finishes constructing; callers that need to act on "this folder has a
+   *  repository now" (not just "state changed on a repository we already
+   *  knew about") need this rather than `onDidChangeRepositoryState`. */
+  onDidOpenRepository(cb: (repo: RepoRef) => void): vscode.Disposable;
   dispose(): void;
 }
 
@@ -55,6 +63,7 @@ class VscodeGitBridge implements GitBridge {
   private readonly logger: LoggerLike;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly stateListeners = new Set<(repo: RepoRef) => void>();
+  private readonly openListeners = new Set<(repo: RepoRef) => void>();
 
   constructor(logger: LoggerLike) {
     this.logger = logger;
@@ -120,17 +129,29 @@ class VscodeGitBridge implements GitBridge {
     return new vscode.Disposable(() => this.stateListeners.delete(cb));
   }
 
+  onDidOpenRepository(cb: (repo: RepoRef) => void): vscode.Disposable {
+    this.openListeners.add(cb);
+    return new vscode.Disposable(() => this.openListeners.delete(cb));
+  }
+
   dispose(): void {
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.stateListeners.clear();
+    this.openListeners.clear();
   }
 
   private watch(repo: Repository): void {
+    // Every code path that finds a repository — already open at cold start,
+    // discovered later by `onDidOpenRepository`, or backfilled once the API
+    // reports "initialized" — funnels through here, so this is the one place
+    // that needs to fire the "opened" notification for all three.
+    const ref = toRepoRef(repo);
+    for (const listener of this.openListeners) listener(ref);
     this.disposables.push(
       repo.state.onDidChange(() => {
-        const ref = toRepoRef(repo);
-        for (const listener of this.stateListeners) listener(ref);
+        const changed = toRepoRef(repo);
+        for (const listener of this.stateListeners) listener(changed);
       }),
     );
   }
@@ -150,6 +171,9 @@ class NoopGitBridge implements GitBridge {
     return [];
   }
   onDidChangeRepositoryState(): vscode.Disposable {
+    return new vscode.Disposable(() => undefined);
+  }
+  onDidOpenRepository(): vscode.Disposable {
     return new vscode.Disposable(() => undefined);
   }
   dispose(): void {

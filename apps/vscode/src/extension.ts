@@ -22,7 +22,7 @@ import { GitWatcher } from "./git/gitWatcher.ts";
 import { activeProject, type ActiveProject } from "./link/activeProject.ts";
 import { ProjectLink } from "./link/projectLink.ts";
 import { cloneProject } from "./projects/cloneProject.ts";
-import { clearCloneState } from "./projects/knownClones.ts";
+import { clearCloneState, readPendingClone } from "./projects/knownClones.ts";
 import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
@@ -167,6 +167,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void link.offerLinks(candidates());
     }),
     git.onDidChangeRepositoryState(() => rosterTree.refresh()),
+    // A freshly cloned window can activate before vscode.git has finished
+    // discovering the repository `git.clone` just created (getAPI(1) returns
+    // ahead of discovery — see gitBridge.ts). The activation-time call to
+    // applyPendingClone below can therefore find no remotes to match against
+    // at all. This retries once a repository actually shows up, guarded by a
+    // Memento read so the common case — no clone in flight — costs nothing
+    // more than that.
+    git.onDidOpenRepository(() => {
+      if (!readPendingClone(context.globalState)) return;
+      void link.applyPendingClone(candidates());
+    }),
     session.onDidChange((current) => {
       void setSignedInContext(current !== null);
       showTitle();
@@ -401,8 +412,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await store.loadFromCache();
   await roster.loadFromCache();
   // Off the cache, not the refresh: this is what makes a freshly cloned
-  // window link itself before it has ever reached the network.
-  await link.applyPendingClone(context.globalState, candidates());
+  // window link itself before it has ever reached the network. The fast
+  // path — repository discovery already finished by the time we get here.
+  // The `onDidOpenRepository` subscription above covers the slow path.
+  await link.applyPendingClone(candidates());
   projectsView.description = describeRoster();
 
   const watcher = new GitWatcher(

@@ -98,10 +98,10 @@ export class ProjectLink {
           "Link",
           "Not now",
         );
-        if (choice === "Link") await this.link(folder, matches[0], this.state);
+        if (choice === "Link") await this.link(folder, matches[0]);
         continue;
       }
-      await this.pick(folder, matches, this.state);
+      await this.pick(folder, matches);
     }
   }
 
@@ -115,7 +115,7 @@ export class ProjectLink {
       );
       return;
     }
-    await this.pick(folder, candidates, this.state);
+    await this.pick(folder, candidates);
   }
 
   /**
@@ -126,22 +126,23 @@ export class ProjectLink {
    * project seconds ago, and asking "is this that project?" invites the answer
    * "why are you asking?". The record expires so an abandoned clone cannot
    * make this silent write happen days later.
+   *
+   * Idempotent by construction, which matters because this is no longer a
+   * one-shot call (see the caller in extension.ts): a folder that already has
+   * a `projectId` is skipped, and the pending record is cleared the moment it
+   * is consumed, so a second call with nothing left to do is just a Memento
+   * read and a no-op loop.
    */
-  async applyPendingClone(
-    state: StorageLike,
-    candidates: ProjectCandidate[],
-  ): Promise<void> {
-    const pending: PendingClone | undefined = readPendingClone(state);
+  async applyPendingClone(candidates: ProjectCandidate[]): Promise<void> {
+    const pending: PendingClone | undefined = readPendingClone(this.state);
     if (!pending) return;
     const now = Date.now();
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       if (projectIdFor(folder.uri)) continue;
       if (!pendingCloneMatches(pending, this.remotesFor(folder.uri), now)) continue;
       const candidate = candidates.find((c) => c.projectId === pending.projectId);
-      await setProjectId(folder, pending.projectId);
-      await rememberClone(state, pending.projectId, folder.uri.fsPath);
-      await writePendingClone(state, undefined);
-      this.promptedFolders.add(folder.uri.toString());
+      await this.persist(folder, pending.projectId);
+      await writePendingClone(this.state, undefined);
       const name = candidate?.projectName ?? "the project you cloned";
       this.log.info(`pending clone linked ${folder.name} -> ${pending.projectId}`);
       void vscode.window.showInformationMessage(`Linked "${folder.name}" to ${name}.`);
@@ -149,14 +150,13 @@ export class ProjectLink {
     }
     // Expired records are dropped on sight so they cannot fire later.
     if (now - pending.startedAt > PENDING_CLONE_TTL_MS) {
-      await writePendingClone(state, undefined);
+      await writePendingClone(this.state, undefined);
     }
   }
 
   private async pick(
     folder: vscode.WorkspaceFolder,
     candidates: ProjectCandidate[],
-    state?: StorageLike,
   ): Promise<void> {
     const picked = await vscode.window.showQuickPick(
       candidates.map((c) => ({
@@ -167,20 +167,28 @@ export class ProjectLink {
       })),
       { title: `Link "${folder.name}" to a PromptConnext project` },
     );
-    if (picked) await this.link(folder, picked.candidate, state);
+    if (picked) await this.link(folder, picked.candidate);
   }
 
   private async link(
     folder: vscode.WorkspaceFolder,
     candidate: ProjectCandidate,
-    state?: StorageLike,
   ): Promise<void> {
-    await setProjectId(folder, candidate.projectId);
-    if (state) await rememberClone(state, candidate.projectId, folder.uri.fsPath);
+    await this.persist(folder, candidate.projectId);
     this.log.info(`linked ${folder.name} -> ${candidate.projectId}`);
     void vscode.window.showInformationMessage(
       `Linked "${folder.name}" to ${candidate.projectName}.`,
     );
+  }
+
+  /** The write both the confirmed path and the silent path share: set the
+   *  setting, and remember the folder so a future window (or this one, after
+   *  the git repository closes) can still tell the project is cloned here.
+   *  Notification is deliberately not part of this helper — the two callers
+   *  say different things, and one of them says nothing at all. */
+  private async persist(folder: vscode.WorkspaceFolder, projectId: string): Promise<void> {
+    await setProjectId(folder, projectId);
+    await rememberClone(this.state, projectId, folder.uri.fsPath);
   }
 }
 
