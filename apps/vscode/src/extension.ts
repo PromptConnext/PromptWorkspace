@@ -12,7 +12,6 @@ import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
   isClosed,
-  type AssignedTask,
   type TaskStatus,
 } from "./cloud/types.ts";
 import { projectIdFor, readConfig } from "./config.ts";
@@ -20,6 +19,7 @@ import { ContextViewProvider } from "./context/contextView.ts";
 import { RepoDocs } from "./context/repoDocs.ts";
 import { createGitBridge } from "./git/gitBridge.ts";
 import { GitWatcher } from "./git/gitWatcher.ts";
+import { activeProject, type ActiveProject } from "./link/activeProject.ts";
 import { ProjectLink } from "./link/projectLink.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "./storage/cache.ts";
 import { copyTaskContext } from "./tasks/copyContext.ts";
@@ -74,8 +74,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const docs = new RepoDocs(client, log);
   const git = await createGitBridge(log);
   const link = new ProjectLink(git, log);
-  const tree = new TaskTreeProvider(store);
-  const contextView = new ContextViewProvider(context.extensionUri, docs);
+  const tree = new TaskTreeProvider(store, activeProject);
+  const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
 
   const treeView = vscode.window.createTreeView("promptconnext.tasks", {
@@ -96,27 +96,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const setSignedInContext = (signedIn: boolean) =>
     vscode.commands.executeCommand("setContext", "promptconnext.signedIn", signedIn);
 
-  // The view title carries the two things the tree itself cannot say when it is
-  // empty: *who* this is (so "Sign Out" reads as yours, not a stray command)
-  // and *when* the list was last confirmed against the cloud. Without the
-  // second, a Refresh that legitimately returns no tasks looks like a dead
-  // button. email is a display-only claim (see session.ts), never an auth
-  // decision.
+  const setActiveProjectContext = (active: ActiveProject | undefined) =>
+    vscode.commands.executeCommand(
+      "setContext",
+      "promptconnext.hasActiveProject",
+      active !== undefined,
+    );
+
+  // The view title names the active project rather than the signed-in account
+  // — an empty tree that does not say *which* project it is empty for is the
+  // failure this prevents. Who is signed in moves to the Projects view in a
+  // later task; sign-out stays reachable from the view title menu regardless.
   const showTitle = () => {
     const current = session.read();
     if (!current) {
       treeView.description = undefined;
       return;
     }
-    const who = current.email ?? current.userId;
+    const active = activeProject();
+    const project = active
+      ? store.forProject(active.projectId)[0]?.project_name ?? "this project"
+      : undefined;
     if (store.lastRefreshError) {
-      treeView.description = `${who} · offline`;
+      treeView.description = project ? `${project} · offline` : "offline";
       return;
     }
     const at = store.refreshedAt;
-    treeView.description = at
-      ? `${who} · updated ${new Date(at).toLocaleTimeString()}`
-      : who;
+    const when = at ? `updated ${new Date(at).toLocaleTimeString()}` : undefined;
+    treeView.description = [project, when].filter(Boolean).join(" · ") || undefined;
   };
 
   context.subscriptions.push(
@@ -152,6 +159,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.window.registerUriHandler({
       handleUri: (uri) => signIn.handleCallback(uri),
+    }),
+    // Switching which folder's editor is focused switches which project both
+    // views are scoped to — the whole point of following the editor instead
+    // of a stored selection (see activeProject.ts).
+    vscode.window.onDidChangeActiveTextEditor(async () => {
+      const active = activeProject();
+      await setActiveProjectContext(active);
+      tree.refresh();
+      showTitle();
+      await contextView.render();
     }),
   );
 
@@ -246,33 +263,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
       },
     ),
-    // Project-level counterpart to openTaskInWeb. Reachable three ways, because
-    // the case that most needs it — an empty tree — has no node to right-click:
-    // from a project row, from the welcome view, and from the palette. With
-    // nothing known locally it opens the web app root, which is the workspace
-    // list, rather than failing.
-    vscode.commands.registerCommand(
-      "promptconnext.openProjectInWeb",
-      async (node?: TreeNode) => {
-        const { webUrl } = readConfig();
-        if (!webUrl) {
-          void vscode.window.showErrorMessage(
-            "Set promptconnext.cloudWebUrl before opening the web app.",
-          );
-          return;
-        }
-        const target = nodeTarget(node) ?? (await pickProject(store.all()));
-        // `undefined` is a dismissed picker — opening anything would be a
-        // browser window the user just declined. `null` is "nothing linked
-        // yet", which the root handles.
-        if (target === undefined) return;
-        await vscode.env.openExternal(
-          vscode.Uri.parse(
-            target === null ? webUrl : `${webUrl}/w/${target.workspaceId}/p/${target.projectId}`,
-          ),
+    // Project-level counterpart to openTaskInWeb. Reads the active project
+    // rather than a node, which is also what makes it correct from the
+    // welcome view, where there was never a node to right-click.
+    vscode.commands.registerCommand("promptconnext.openProjectInWeb", async () => {
+      const { webUrl } = readConfig();
+      if (!webUrl) {
+        void vscode.window.showErrorMessage(
+          "Set promptconnext.cloudWebUrl before opening the web app.",
         );
-      },
-    ),
+        return;
+      }
+      const active = activeProject();
+      const entry = active ? store.forProject(active.projectId)[0] : undefined;
+      // With no project in view, the web root is the workspace list, which is
+      // a useful answer rather than a failure.
+      const path = entry ? `/w/${entry.workspace_id}/p/${entry.project_id}` : "";
+      await vscode.env.openExternal(vscode.Uri.parse(`${webUrl}${path}`));
+    }),
     vscode.commands.registerCommand("promptconnext.linkProject", () =>
       link.linkInteractively(store.all()),
     ),
@@ -282,6 +290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ------------------------------------------------------------- start-up
 
   await setSignedInContext(session.read() !== null);
+  await setActiveProjectContext(activeProject());
   showTitle();
   refreshStatusBar();
   await store.loadFromCache();
@@ -312,45 +321,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       projectIdFor(f.uri),
     ).length})`,
   );
-}
-
-interface WebTarget {
-  workspaceId: string;
-  projectId: string;
-}
-
-function nodeTarget(node?: TreeNode): WebTarget | undefined {
-  if (node?.kind === "project") {
-    return { workspaceId: node.workspaceId, projectId: node.projectId };
-  }
-  if (node?.kind === "task") {
-    return {
-      workspaceId: node.entry.workspace_id,
-      projectId: node.entry.project_id,
-    };
-  }
-  return undefined;
-}
-
-/** `null` when nothing is known locally (caller falls back to the web root);
- *  `undefined` when the user dismissed the picker. */
-async function pickProject(tasks: AssignedTask[]): Promise<WebTarget | null | undefined> {
-  const projects = new Map<string, { label: string; description: string } & WebTarget>();
-  for (const entry of tasks) {
-    if (projects.has(entry.project_id)) continue;
-    projects.set(entry.project_id, {
-      label: entry.project_name,
-      description: entry.workspace_name,
-      workspaceId: entry.workspace_id,
-      projectId: entry.project_id,
-    });
-  }
-  const options = [...projects.values()];
-  if (options.length === 0) return null;
-  if (options.length === 1) return options[0];
-  return vscode.window.showQuickPick(options, {
-    title: "Open in the PromptConnext web app",
-  });
 }
 
 export function deactivate(): void {

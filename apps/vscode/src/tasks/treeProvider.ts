@@ -1,36 +1,19 @@
-// The task tree: project nodes over task nodes, with a checkbox per task.
+// The task tree: the active project's tasks, with a checkbox per task.
+//
+// It used to group by project, because it rendered every assigned task across
+// every project. It no longer does: the tree is scoped to the project the
+// editor is in, so a project node would be a permanent single-child parent —
+// a click to open something that is already open. The project's identity moved
+// to the view description, where it is visible without expanding anything.
 //
 // TreeItem.checkboxState is stable since VS Code 1.80 and is the natural
-// affordance for "done" — which is why engines.vscode floors at 1.85 rather
-// than something older.
+// affordance for "done", which is why engines.vscode floors at 1.85.
 
 import * as vscode from "vscode";
 import type { AssignedTask } from "../cloud/types.ts";
 import { TASK_STATUS_LABELS, isClosed } from "../cloud/types.ts";
+import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
-
-export class ProjectNode {
-  readonly kind = "project";
-  readonly projectId: string;
-  readonly projectName: string;
-  // Carried even though nothing renders it: the web app has no bare
-  // /p/{projectId} route, so opening a project in the browser needs the
-  // workspace that owns it (apps/web routes: /w/[workspaceId]/p/[projectId]).
-  readonly workspaceId: string;
-  readonly workspaceName: string;
-
-  constructor(
-    projectId: string,
-    projectName: string,
-    workspaceId: string,
-    workspaceName: string,
-  ) {
-    this.projectId = projectId;
-    this.projectName = projectName;
-    this.workspaceId = workspaceId;
-    this.workspaceName = workspaceName;
-  }
-}
 
 export class TaskNode {
   readonly kind = "task";
@@ -41,16 +24,18 @@ export class TaskNode {
   }
 }
 
-export type TreeNode = ProjectNode | TaskNode;
+export type TreeNode = TaskNode;
 
 export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
 
   private readonly store: TaskStore;
+  private readonly active: () => ActiveProject | undefined;
 
-  constructor(store: TaskStore) {
+  constructor(store: TaskStore, active: () => ActiveProject | undefined) {
     this.store = store;
+    this.active = active;
   }
 
   refresh(): void {
@@ -58,17 +43,6 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   getTreeItem(node: TreeNode): vscode.TreeItem {
-    if (node.kind === "project") {
-      const item = new vscode.TreeItem(
-        node.projectName,
-        vscode.TreeItemCollapsibleState.Expanded,
-      );
-      item.description = node.workspaceName;
-      item.contextValue = "promptconnext.project";
-      item.iconPath = new vscode.ThemeIcon("repo");
-      return item;
-    }
-
     const { task } = node.entry;
     const item = new vscode.TreeItem(task.title, vscode.TreeItemCollapsibleState.None);
     item.id = `task:${task.id}`;
@@ -89,28 +63,10 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   getChildren(node?: TreeNode): TreeNode[] {
-    const all = this.store.all();
-    if (!node) {
-      const seen = new Map<string, ProjectNode>();
-      for (const entry of all) {
-        if (!seen.has(entry.project_id)) {
-          seen.set(
-            entry.project_id,
-            new ProjectNode(
-              entry.project_id,
-              entry.project_name,
-              entry.workspace_id,
-              entry.workspace_name,
-            ),
-          );
-        }
-      }
-      return [...seen.values()];
-    }
-    if (node.kind === "project") {
-      return this.store.forProject(node.projectId).map((e) => new TaskNode(e));
-    }
-    return [];
+    if (node) return [];
+    const current = this.active();
+    if (!current) return [];
+    return this.store.forProject(current.projectId).map((entry) => new TaskNode(entry));
   }
 
   private tooltip(entry: AssignedTask): vscode.MarkdownString {

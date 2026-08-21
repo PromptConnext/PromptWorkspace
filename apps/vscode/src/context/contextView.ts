@@ -7,7 +7,7 @@
 
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { projectIdFor } from "../config.ts";
+import type { ActiveProject } from "../link/activeProject.ts";
 import type { RepoDocs, RepoDocContents } from "./repoDocs.ts";
 
 export class ContextViewProvider implements vscode.WebviewViewProvider {
@@ -18,13 +18,16 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
   private readonly extensionUri: vscode.Uri;
   private readonly docs: RepoDocs;
+  private readonly active: () => ActiveProject | undefined;
 
   constructor(
     extensionUri: vscode.Uri,
     docs: RepoDocs,
+    active: () => ActiveProject | undefined,
   ) {
     this.extensionUri = extensionUri;
     this.docs = docs;
+    this.active = active;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -35,10 +38,10 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
     };
     view.webview.onDidReceiveMessage(async (msg: { type: string; path?: string }) => {
       if (msg.type === "open" && msg.path) {
-        const folder = vscode.workspace.workspaceFolders?.[0];
-        if (!folder) return;
+        const current = this.active();
+        if (!current) return;
         const doc = await vscode.workspace.openTextDocument(
-          vscode.Uri.joinPath(folder.uri, msg.path),
+          vscode.Uri.joinPath(current.folder.uri, msg.path),
         );
         await vscode.window.showTextDocument(doc, { preview: true });
       }
@@ -50,20 +53,18 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
   async render(): Promise<void> {
     if (!this.view) return;
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) {
+    const current = this.active();
+    if (!current) {
       this.view.webview.html = this.page(
         "<p class='empty'>Open a project folder to see its coding rules.</p>",
       );
       return;
     }
-    const docs = await this.docs.readAll(folder.uri);
-    const projectId = projectIdFor(folder.uri);
-    const drifted = projectId
-      ? await this.docs.constitutionDrifted(projectId, folder.uri)
-      : undefined;
+    const folder = current.folder.uri;
+    const docs = await this.docs.readAll(folder);
+    const drifted = await this.docs.constitutionDrifted(current.projectId, folder);
     this.view.webview.html = this.page(this.body(docs, drifted));
-    this.watch(folder);
+    this.watch(current.folder);
   }
 
   private body(docs: RepoDocContents[], drifted: boolean | undefined): string {
