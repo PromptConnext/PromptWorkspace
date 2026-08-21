@@ -21,6 +21,7 @@ export class RosterStore {
   private lastError: string | null = null;
   private refreshing: Promise<void> | null = null;
   private readonly listeners = new Set<() => void>();
+  private generation = 0;
 
   private readonly client: CloudClient;
   private readonly cache: JsonCache;
@@ -71,6 +72,7 @@ export class RosterStore {
   }
 
   async clear(): Promise<void> {
+    this.generation += 1;
     this.entries = [];
     this.lastRefreshedAt = 0;
     this.lastError = null;
@@ -79,11 +81,12 @@ export class RosterStore {
   }
 
   private async doRefresh(): Promise<void> {
+    const gen = this.generation;
     try {
       const workspaces = await this.client.listWorkspaces();
       // allSettled, not all: `require_workspace` answers 403 for a membership
       // revoked mid-session, and that is one workspace disappearing — not the
-      // roster failing. A rejected member is dropped and logged.
+      // roster failing. A rejected workspace is dropped and logged.
       const settled = await Promise.allSettled(
         workspaces.map(async (workspace) => ({
           workspace,
@@ -100,12 +103,18 @@ export class RosterStore {
           );
         }
       });
+      // If clear() was called while this refresh was in flight, drop the result
+      // silently. A stale result must not repopulate the cache with the previous
+      // user's workspace and project names after sign-out.
+      if (gen !== this.generation) return;
       this.entries = entries;
       this.lastRefreshedAt = Date.now();
       this.lastError = null;
       await this.cache.write(CACHE_FILES.roster, this.entries);
       this.emit();
     } catch (err) {
+      // If clear() was called, drop the error silently too.
+      if (gen !== this.generation) return;
       this.lastError = err instanceof Error ? err.message : String(err);
       this.log.info(`roster refresh failed, keeping cache: ${String(err)}`);
       this.emit();

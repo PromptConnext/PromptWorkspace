@@ -139,3 +139,36 @@ test("concurrent refreshes are coalesced into one round of requests", async () =
 
   assert.equal(calls, 1);
 });
+
+test("sign-out during in-flight refresh scrubs the cache (does not repopulate after clear)", async () => {
+  const { store, files } = memoryStore();
+  // Create a roster with initial data.
+  const roster = new RosterStore(fakeClient(), new JsonCache(store), silentLog);
+  await roster.refresh();
+  assert.ok(files.has(CACHE_FILES.roster), "cache written after first refresh");
+  assert.equal(roster.all().length, 1, "roster has data");
+
+  // Start a refresh that will stall mid-flight. We use a delayed listWorkspaces
+  // so the refresh hangs before it completes and commits its result.
+  const slowClient = fakeClient({
+    listWorkspaces: async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return [{ id: "w1", name: "Acme" }];
+    },
+  });
+  const slowRoster = new RosterStore(slowClient, new JsonCache(store), silentLog);
+  const refreshing = slowRoster.refresh();
+
+  // Let the refresh start and block on the network.
+  await new Promise((r) => setTimeout(r, 10));
+  // While it is still fetching, call clear() to sign out.
+  await slowRoster.clear();
+
+  // Wait for the in-flight refresh to complete its network call and commit.
+  await refreshing;
+
+  // Even though the refresh completed, the in-flight result must have been
+  // discarded because it arrived after sign-out. Memory and file must be empty.
+  assert.deepEqual(slowRoster.all(), [], "roster memory is empty after sign-out");
+  assert.equal(files.has(CACHE_FILES.roster), false, "cache file was not repopulated after sign-out");
+});
