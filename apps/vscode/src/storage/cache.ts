@@ -71,6 +71,7 @@ export const CACHE_FILES = {
   tasks: "tasks.json",
   queue: "queue.json",
   gitState: "git-state.json",
+  roster: "roster.json",
 } as const;
 
 export const ALL_CACHE_FILES = Object.values(CACHE_FILES);
