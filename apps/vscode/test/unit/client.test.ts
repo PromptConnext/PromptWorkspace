@@ -304,3 +304,43 @@ test("a 5xx from the auth server does NOT sign the user out", async () => {
     },
   );
 });
+
+test("reads the workspace roster from the two membership-gated routes", async () => {
+  const calls: string[] = [];
+  await withServer(
+    (req, res) => {
+      calls.push(req.url ?? "");
+      const body = (req.url ?? "").endsWith("/workspaces")
+        ? [{ id: "w1", name: "Acme Corp" }]
+        : [{ id: "p1", name: "Checkout API", workspace_id: "w1", repo_url: null, lifecycle_status: "planning" }];
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    },
+    async (base) => {
+      const { client } = makeClient(base);
+      await client.signInStub("alice");
+
+      assert.deepEqual(await client.listWorkspaces(), [{ id: "w1", name: "Acme Corp" }]);
+      const projects = await client.listWorkspaceProjects("w1");
+      assert.equal(projects[0].name, "Checkout API");
+      assert.deepEqual(calls, ["/workspaces", "/workspaces/w1/projects"]);
+    },
+  );
+});
+
+test("a workspace id is escaped into the projects path", async () => {
+  const calls: string[] = [];
+  await withServer(
+    (req, res) => {
+      calls.push(req.url ?? "");
+      res.setHeader("content-type", "application/json");
+      res.end("[]");
+    },
+    async (base) => {
+      const { client } = makeClient(base);
+      await client.signInStub("alice");
+      await client.listWorkspaceProjects("a b/c");
+      assert.deepEqual(calls, ["/workspaces/a%20b%2Fc/projects"]);
+    },
+  );
+});

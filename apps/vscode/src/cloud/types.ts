@@ -50,6 +50,33 @@ export interface AssignedTask {
   repo_url?: string | null;
 }
 
+/** The cloud Planner's project lifecycle. Only `repo_created` guarantees a
+ *  `repo_url`; every earlier state is a project that exists but has nothing to
+ *  clone yet, which the Projects view has to render rather than hide. */
+export type LifecycleStatus =
+  | "planning"
+  | "pending_tech_review"
+  | "tech_review"
+  | "repo_created";
+
+/** Just enough of apps/cloud's Workspace to name it in a tree. */
+export interface Workspace {
+  id: string;
+  name: string;
+}
+
+/** Deliberately a subset of apps/cloud's `Project`. The cloud row also carries
+ *  stage state, policy scope and deployment config; none of that is rendered
+ *  here, and naming a field we do not use is an invitation to start using it. */
+export interface CloudProject {
+  id: string;
+  name: string;
+  workspace_id: string;
+  repo_url?: string | null;
+  repo_default_branch?: string | null;
+  lifecycle_status: LifecycleStatus;
+}
+
 export type ArtifactKind = "code" | "pr" | "doc";
 
 export interface StatusArtifact {

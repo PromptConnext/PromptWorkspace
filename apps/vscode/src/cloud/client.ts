@@ -10,7 +10,7 @@
 import { CloudHttpError, CloudNotConfiguredError, CloudNotLoggedInError, CloudRefreshInvalidError } from "./errors.ts";
 import type { CloudSession, SessionStore } from "./session.ts";
 import { emailFromAccessToken } from "./session.ts";
-import type { AssignedTask, ProjectGraph, StageDocument, Task, TaskStatus, TaskStatusUpdate } from "./types.ts";
+import type { AssignedTask, CloudProject, ProjectGraph, StageDocument, Task, TaskStatus, TaskStatusUpdate, Workspace } from "./types.ts";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -214,6 +214,21 @@ export class CloudClient {
     if (query.limit) params.set("limit", String(query.limit));
     const qs = params.toString();
     return this.cloudFetch<AssignedTask[]>(`/me/tasks${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Every workspace the caller is a member of. The cloud auto-provisions a
+   *  personal workspace on a first resolve with zero memberships (ADR 0015),
+   *  so an empty array here means a real failure, not a new account. */
+  listWorkspaces(): Promise<Workspace[]> {
+    return this.cloudFetch<Workspace[]>("/workspaces");
+  }
+
+  /** Membership-gated on the cloud side by `require_workspace`, so a 403 here
+   *  is a revoked membership and must drop that one workspace, never the tree. */
+  listWorkspaceProjects(workspaceId: string): Promise<CloudProject[]> {
+    return this.cloudFetch<CloudProject[]>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+    );
   }
 
   getProjectGraph(projectId: string, since?: string): Promise<ProjectGraph> {
