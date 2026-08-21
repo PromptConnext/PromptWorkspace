@@ -49,6 +49,10 @@
     "views": {
       "promptconnext": [
         {
+          "id": "promptconnext.projects",
+          "name": "Projects"
+        },
+        {
           "id": "promptconnext.tasks",
           "name": "My Tasks"
         },
@@ -61,14 +65,29 @@
     },
     "viewsWelcome": [
       {
+        "view": "promptconnext.projects",
+        "when": "!promptconnext.signedIn",
+        "contents": "Sign in to see your workspaces and projects.\n[Sign in](command:promptconnext.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptconnext.signInWithCode)"
+      },
+      {
+        "view": "promptconnext.projects",
+        "when": "promptconnext.signedIn",
+        "contents": "No workspaces yet.\n[Refresh](command:promptconnext.refreshProjects)\n\nWorkspaces and projects are created in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)"
+      },
+      {
         "view": "promptconnext.tasks",
         "when": "!promptconnext.signedIn",
         "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptconnext.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptconnext.signInWithCode)"
       },
       {
         "view": "promptconnext.tasks",
-        "when": "promptconnext.signedIn",
-        "contents": "No tasks are assigned to you right now.\n[Refresh](command:promptconnext.refreshTasks)\n\nPlan and assign work in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)\n\nSigned in as the account in the view title.\n[Sign out](command:promptconnext.signOut)"
+        "when": "promptconnext.signedIn && !promptconnext.hasActiveProject",
+        "contents": "This folder is not linked to a PromptConnext project yet.\n\nPick a project to clone or open in the Projects view above, or link the folder you already have.\n[Link This Folder to a Project…](command:promptconnext.linkProject)"
+      },
+      {
+        "view": "promptconnext.tasks",
+        "when": "promptconnext.signedIn && promptconnext.hasActiveProject",
+        "contents": "No tasks are assigned to you in this project.\n[Refresh](command:promptconnext.refreshTasks)\n\nPlan and assign work in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)"
       }
     ],
     "commands": [
@@ -130,6 +149,24 @@
         "command": "promptconnext.showLog",
         "title": "Show Log",
         "category": "PromptConnext"
+      },
+      {
+        "command": "promptconnext.refreshProjects",
+        "title": "Refresh Projects",
+        "category": "PromptConnext",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "promptconnext.cloneProject",
+        "title": "Clone Repository",
+        "category": "PromptConnext",
+        "icon": "$(repo-clone)"
+      },
+      {
+        "command": "promptconnext.openProjectFolder",
+        "title": "Open Project Folder",
+        "category": "PromptConnext",
+        "icon": "$(folder-opened)"
       }
     ],
     "menus": {
@@ -168,17 +205,53 @@
           "command": "promptconnext.showLog",
           "when": "view == promptconnext.tasks",
           "group": "9_diagnostics@1"
+        },
+        {
+          "command": "promptconnext.refreshProjects",
+          "when": "view == promptconnext.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "promptconnext.signIn",
+          "when": "view == promptconnext.projects && !promptconnext.signedIn",
+          "group": "1_account@1"
+        },
+        {
+          "command": "promptconnext.signOut",
+          "when": "view == promptconnext.projects && promptconnext.signedIn",
+          "group": "1_account@1"
+        },
+        {
+          "command": "promptconnext.showLog",
+          "when": "view == promptconnext.projects",
+          "group": "9_diagnostics@1"
         }
       ],
       "view/item/context": [
         {
-          "command": "promptconnext.openProjectInWeb",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.project",
+          "command": "promptconnext.cloneProject",
+          "when": "view == promptconnext.projects && viewItem == promptconnext.project.remote-only",
+          "group": "inline"
+        },
+        {
+          "command": "promptconnext.openProjectFolder",
+          "when": "view == promptconnext.projects && viewItem == promptconnext.project.local",
           "group": "inline"
         },
         {
           "command": "promptconnext.openProjectInWeb",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.project"
+          "when": "view == promptconnext.projects && viewItem =~ /^promptconnext\\.project\\./",
+          "group": "inline"
+        },
+        {
+          "command": "promptconnext.openProjectInWeb",
+          "when": "view == promptconnext.projects && viewItem =~ /^promptconnext\\.project\\./",
+          "group": "1_open@1"
+        },
+        {
+          "command": "promptconnext.linkProject",
+          "when": "view == promptconnext.projects && viewItem == promptconnext.project.remote-only",
+          "group": "1_open@2"
         },
         {
           "command": "promptconnext.copyTaskContext",
@@ -221,6 +294,18 @@
         },
         {
           "command": "promptconnext.openProjectInWeb",
+          "when": "promptconnext.signedIn"
+        },
+        {
+          "command": "promptconnext.cloneProject",
+          "when": "false"
+        },
+        {
+          "command": "promptconnext.openProjectFolder",
+          "when": "false"
+        },
+        {
+          "command": "promptconnext.refreshProjects",
           "when": "promptconnext.signedIn"
         }
       ]

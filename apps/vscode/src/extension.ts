@@ -21,6 +21,9 @@ import { createGitBridge } from "./git/gitBridge.ts";
 import { GitWatcher } from "./git/gitWatcher.ts";
 import { activeProject, type ActiveProject } from "./link/activeProject.ts";
 import { ProjectLink } from "./link/projectLink.ts";
+import { clearCloneState } from "./projects/knownClones.ts";
+import { RosterStore } from "./projects/rosterStore.ts";
+import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "./storage/cache.ts";
 import { copyTaskContext } from "./tasks/copyContext.ts";
 import { StatusQueue, type QueueEntry } from "./tasks/queue.ts";
@@ -81,8 +84,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeView = vscode.window.createTreeView("promptconnext.tasks", {
     treeDataProvider: tree,
   });
+  const roster = new RosterStore(client, cache, log);
+  const rosterTree = new RosterTreeProvider(roster, store, git, context.globalState);
+  const projectsView = vscode.window.createTreeView("promptconnext.projects", {
+    treeDataProvider: rosterTree,
+  });
   context.subscriptions.push(
     treeView,
+    projectsView,
+    rosterTree,
     statusBar,
     store,
     tree,
@@ -126,19 +136,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeView.description = [project, when].filter(Boolean).join(" · ") || undefined;
   };
 
+  // The Projects view carries the account, now that the task view's description
+  // carries the project instead. Both also have to say when they last reached
+  // the cloud, or a refresh that legitimately changes nothing looks broken.
+  const describeRoster = () => {
+    const current = session.read();
+    if (!current) return undefined;
+    const who = current.email ?? current.userId;
+    if (roster.lastRefreshError) return `${who} · offline`;
+    return roster.refreshedAt
+      ? `${who} · updated ${new Date(roster.refreshedAt).toLocaleTimeString()}`
+      : who;
+  };
+
   context.subscriptions.push(
     store.onDidChange(() => {
       tree.refresh();
+      rosterTree.refresh();
       showTitle();
       void link.offerLinks(store.all());
     }),
+    roster.onDidChange(() => {
+      rosterTree.refresh();
+      projectsView.description = describeRoster();
+    }),
+    git.onDidChangeRepositoryState(() => rosterTree.refresh()),
     session.onDidChange((current) => {
       void setSignedInContext(current !== null);
       showTitle();
       if (current) {
         void store.refresh().then(() => writer.flush());
+        void roster.refresh();
       } else {
         void store.clear();
+        void roster.clear();
+        void clearCloneState(context.globalState);
         void queue.clear().then(refreshStatusBar);
       }
     }),
@@ -155,6 +187,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidChangeWindowState(async (state) => {
       if (!state.focused) return;
       await store.refreshOnFocus();
+      await roster.refreshOnFocus();
       await writer.flush();
     }),
     vscode.window.registerUriHandler({
@@ -167,6 +200,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const active = activeProject();
       await setActiveProjectContext(active);
       tree.refresh();
+      rosterTree.refresh();
+      showTitle();
+      await contextView.render();
+    }),
+    // Linking a folder to a project writes `promptconnext.projectId` straight
+    // to configuration — no editor event fires for that, so without this the
+    // task tree, the view titles and the context webview would all sit stale
+    // until the user happened to switch files afterward. Same reaction as an
+    // editor switch, because the underlying question — "which project is this
+    // folder now" — is identical either way.
+    vscode.workspace.onDidChangeConfiguration(async (event) => {
+      if (!event.affectsConfiguration("promptconnext.projectId")) return;
+      const active = activeProject();
+      await setActiveProjectContext(active);
+      tree.refresh();
+      rosterTree.refresh();
       showTitle();
       await contextView.render();
     }),
@@ -263,28 +312,71 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
       },
     ),
-    // Project-level counterpart to openTaskInWeb. Reads the active project
-    // rather than a node, which is also what makes it correct from the
-    // welcome view, where there was never a node to right-click.
-    vscode.commands.registerCommand("promptconnext.openProjectInWeb", async () => {
-      const { webUrl } = readConfig();
-      if (!webUrl) {
-        void vscode.window.showErrorMessage(
-          "Set promptconnext.cloudWebUrl before opening the web app.",
-        );
-        return;
-      }
-      const active = activeProject();
-      const entry = active ? store.forProject(active.projectId)[0] : undefined;
-      // With no project in view, the web root is the workspace list, which is
-      // a useful answer rather than a failure.
-      const path = entry ? `/w/${entry.workspace_id}/p/${entry.project_id}` : "";
-      await vscode.env.openExternal(vscode.Uri.parse(`${webUrl}${path}`));
-    }),
+    // Task 6 reduced this to the active project because there was no node to
+    // receive. Now the Projects view has one, so a right-click on a project row
+    // opens *that* project, not whichever one the editor happens to be in; with
+    // no node (the view title menu, the welcome view) it falls back to the
+    // active project exactly as before.
+    vscode.commands.registerCommand(
+      "promptconnext.openProjectInWeb",
+      async (node?: RosterNode) => {
+        const { webUrl } = readConfig();
+        if (!webUrl) {
+          void vscode.window.showErrorMessage(
+            "Set promptconnext.cloudWebUrl before opening the web app.",
+          );
+          return;
+        }
+        let path = "";
+        if (node instanceof ProjectTreeNode) {
+          path = `/w/${node.row.workspaceId}/p/${node.row.projectId}`;
+        } else {
+          const active = activeProject();
+          const entry = active ? store.forProject(active.projectId)[0] : undefined;
+          if (entry) path = `/w/${entry.workspace_id}/p/${entry.project_id}`;
+        }
+        // With no project in view, the web root is the workspace list, which is
+        // a useful answer rather than a failure.
+        await vscode.env.openExternal(vscode.Uri.parse(`${webUrl}${path}`));
+      },
+    ),
     vscode.commands.registerCommand("promptconnext.linkProject", () =>
       link.linkInteractively(store.all()),
     ),
     vscode.commands.registerCommand("promptconnext.showLog", () => log.show()),
+    vscode.commands.registerCommand("promptconnext.refreshProjects", async () => {
+      await vscode.window.withProgress(
+        { location: { viewId: "promptconnext.projects" } },
+        () => roster.refresh(),
+      );
+      projectsView.description = describeRoster();
+      const failure = roster.lastRefreshError;
+      if (!failure) return;
+      const choice = await vscode.window.showWarningMessage(
+        `PromptConnext could not reach the cloud: ${failure}. Showing the projects it had.`,
+        "Show Log",
+      );
+      if (choice === "Show Log") log.show();
+    }),
+    vscode.commands.registerCommand(
+      "promptconnext.openProjectFolder",
+      async (node?: RosterNode) => {
+        if (!(node instanceof ProjectTreeNode) || !node.row.localPath) return;
+        const uri = vscode.Uri.file(node.row.localPath);
+        // Already open in this window: reveal rather than reopen, which would
+        // throw away the user's editor layout to show them what they can see.
+        const alreadyOpen = (vscode.workspace.workspaceFolders ?? []).some(
+          (f) => f.uri.fsPath === uri.fsPath,
+        );
+        if (alreadyOpen) {
+          await vscode.commands.executeCommand("revealInExplorer", uri);
+          return;
+        }
+        await vscode.commands.executeCommand("vscode.openFolder", uri, {
+          forceNewWindow: true,
+        });
+      },
+    ),
   );
 
   // ------------------------------------------------------------- start-up
@@ -294,6 +386,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   showTitle();
   refreshStatusBar();
   await store.loadFromCache();
+  await roster.loadFromCache();
+  projectsView.description = describeRoster();
 
   const watcher = new GitWatcher(
     git,
@@ -310,6 +404,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   if (session.read()) {
     await store.refresh();
+    await roster.refresh();
     await writer.flush();
     refreshStatusBar();
   }
