@@ -237,6 +237,11 @@ function LoginForm() {
         ) : (
           <p className="text-sm text-slate-500">Preparing handoff…</p>
         )}
+        <AuthLinks>
+          <p>
+            <AuthLink href="/">Back to the web app</AuthLink>
+          </p>
+        </AuthLinks>
       </AuthCard>
     );
   }
