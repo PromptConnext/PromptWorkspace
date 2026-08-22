@@ -2,7 +2,7 @@
   "name": "promptconnext-vscode",
   "displayName": "PromptConnext",
   "description": "Your assigned PromptConnext tasks, project context and AI coding rules, inside the editor.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "promptconnext",
   "private": true,
   "license": "UNLICENSED",
