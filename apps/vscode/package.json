@@ -249,11 +249,6 @@
           "group": "1_open@1"
         },
         {
-          "command": "promptconnext.linkProject",
-          "when": "view == promptconnext.projects && viewItem == promptconnext.project.remote-only",
-          "group": "1_open@2"
-        },
-        {
           "command": "promptconnext.copyTaskContext",
           "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
           "group": "inline"

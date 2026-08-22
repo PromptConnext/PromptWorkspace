@@ -14,6 +14,7 @@ import { buildRoster, type ProjectRow, type WorkspaceRow } from "./roster.ts";
 import { readKnownClones } from "./knownClones.ts";
 import type { StorageLike } from "../cloud/session.ts";
 import type { RosterStore } from "./rosterStore.ts";
+import { escapeMarkdown } from "../util/markdown.ts";
 
 export class WorkspaceTreeNode {
   readonly kind = "workspace";
@@ -139,7 +140,11 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
 
   private tooltip(row: ProjectRow): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${row.projectName}**\n\n${row.workspaceName}\n\n`);
+    // projectName and workspaceName are cloud-supplied; escaped so a name
+    // like `[click](https://evil)` renders as literal text, not a live link.
+    md.appendMarkdown(
+      `**${escapeMarkdown(row.projectName)}**\n\n${escapeMarkdown(row.workspaceName)}\n\n`,
+    );
     if (row.localPath) md.appendMarkdown(`Cloned to \`${row.localPath}\`\n\n`);
     // Rendered as code, never as a link: this string came from the cloud and
     // markdown link syntax in a name is not something to hand a click to.

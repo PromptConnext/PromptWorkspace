@@ -19,6 +19,14 @@ export class TaskStore {
   private lastRefreshedAt = 0;
   private lastError: string | null = null;
   private refreshing: Promise<void> | null = null;
+  // Mirrors rosterStore.ts's fix for the identical bug: `clear()` (sign-out)
+  // did not guard against a `doRefresh()` already awaiting the network, so
+  // that refresh would land afterwards and rewrite tasks.json with the
+  // previous user's task titles and project names. Incremented in `clear()`,
+  // captured at the top of `doRefresh()`, and checked before every commit —
+  // including the `catch` branch, because a stale *failure* writing
+  // `lastError` after sign-out is the same bug.
+  private generation = 0;
   private readonly emitter = new vscode.EventEmitter<void>();
 
   readonly onDidChange = this.emitter.event;
@@ -97,25 +105,35 @@ export class TaskStore {
   }
 
   async clear(): Promise<void> {
+    this.generation += 1;
     this.tasks = [];
     this.lastRefreshedAt = 0;
+    this.lastError = null;
     await this.cache.clear([CACHE_FILES.tasks]);
     this.emitter.fire();
   }
 
   private async doRefresh(): Promise<void> {
+    const gen = this.generation;
     try {
       // All four states: the tree shows what is assigned, including work
       // already reported done — a developer wants to see that their commit
       // landed, not watch the row vanish.
-      this.tasks = await this.client.listAssignedTasks({
+      const tasks = await this.client.listAssignedTasks({
         statuses: ["todo", "in_progress", "implemented", "verified"],
       });
+      // If clear() was called while this refresh was in flight, drop the
+      // result silently. A stale result must not repopulate the cache with
+      // the previous user's task titles and project names after sign-out.
+      if (gen !== this.generation) return;
+      this.tasks = tasks;
       this.lastRefreshedAt = Date.now();
       this.lastError = null;
       await this.cache.write(CACHE_FILES.tasks, this.tasks);
       this.emitter.fire();
     } catch (err) {
+      // If clear() was called, drop the error silently too.
+      if (gen !== this.generation) return;
       // Offline is the normal case here, not an error state: the cache is
       // already rendered and the queue holds anything unsent. Recorded rather
       // than thrown so background refreshes stay quiet and the explicit command

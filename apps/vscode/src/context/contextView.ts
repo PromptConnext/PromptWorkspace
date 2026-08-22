@@ -15,6 +15,13 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private watchers: vscode.FileSystemWatcher[] = [];
+  // What the webview currently shows: `projectId:folderUri`, or undefined for
+  // the "no active project" placeholder. `render()` compares against this to
+  // skip the `constitutionDrifted()` cloud round trip (and the watcher
+  // teardown/recreate) on every editor-focus and config-change reaction when
+  // neither actually changed which project is active — see the `force`
+  // parameter below for the paths that must still re-render regardless.
+  private lastRenderKey: string | undefined;
 
   private readonly extensionUri: vscode.Uri;
   private readonly docs: RepoDocs;
@@ -45,15 +52,38 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
         );
         await vscode.window.showTextDocument(doc, { preview: true });
       }
-      if (msg.type === "refresh") void this.render();
+      if (msg.type === "refresh") void this.render(true);
     });
-    view.onDidDispose(() => this.disposeWatchers());
-    void this.render();
+    view.onDidDispose(() => {
+      // Without clearing this, `render()`'s `if (!this.view) return` guard
+      // passes for a disposed view, and the assignment to
+      // `this.view.webview.html` below throws "Webview is disposed" — now
+      // reachable from async handlers (editor switch, config change,
+      // workspace-folder change) where the throw becomes an unhandled
+      // rejection instead of a visible error.
+      this.view = undefined;
+      this.disposeWatchers();
+    });
+    void this.render(true);
   }
 
-  async render(): Promise<void> {
+  /**
+   * @param force Re-render even if the active project id and folder have not
+   *   changed since the last successful render. The explicit Refresh command
+   *   and the coding-rules file watchers need this — they exist specifically
+   *   to show content that changed *without* the active project changing.
+   *   Every other caller (editor-focus, config-change, workspace-folder
+   *   reactions) leaves this false, because those fire on events that do not
+   *   necessarily mean "which project is active" changed, and each render
+   *   otherwise costs an authenticated `constitutionDrifted()` cloud request
+   *   plus tearing down and recreating three file watchers.
+   */
+  async render(force = false): Promise<void> {
     if (!this.view) return;
     const current = this.active();
+    const key = current ? `${current.projectId}:${current.folder.uri.toString()}` : undefined;
+    if (!force && key === this.lastRenderKey) return;
+    this.lastRenderKey = key;
     if (!current) {
       this.view.webview.html = this.page(
         "<p class='empty'>Open a project folder to see its coding rules.</p>",
@@ -134,7 +164,11 @@ ${body}
       const watcher = vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(folder, pattern),
       );
-      const rerender = () => void this.render();
+      // Forced: the active project has not changed, only a file inside it —
+      // the whole reason this watcher exists is to reflect that content
+      // change, so the id/folder cache key comparison in `render()` must not
+      // suppress it.
+      const rerender = () => void this.render(true);
       watcher.onDidChange(rerender);
       watcher.onDidCreate(rerender);
       watcher.onDidDelete(rerender);

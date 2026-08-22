@@ -115,6 +115,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       active !== undefined,
     );
 
+  // The task list only knows a project's name if that project has tasks
+  // assigned to this developer; the roster knows every project's name
+  // regardless. Falling back to the roster before the literal placeholder is
+  // what lets an assignment-less active project still show its real name.
+  const projectNameFor = (projectId: string): string => {
+    const assigned = store.forProject(projectId)[0]?.project_name;
+    if (assigned) return assigned;
+    for (const workspace of rosterTree.rows()) {
+      const row = workspace.projects.find((p) => p.projectId === projectId);
+      if (row) return row.projectName;
+    }
+    return "this project";
+  };
+
   // The view title names the active project rather than the signed-in account
   // — an empty tree that does not say *which* project it is empty for is the
   // failure this prevents. Who is signed in moves to the Projects view in a
@@ -126,9 +140,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     const active = activeProject();
-    const project = active
-      ? store.forProject(active.projectId)[0]?.project_name ?? "this project"
-      : undefined;
+    const project = active ? projectNameFor(active.projectId) : undefined;
     if (store.lastRefreshError) {
       treeView.description = project ? `${project} · offline` : "offline";
       return;
@@ -154,6 +166,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Candidates come from the roster, not the task list: a project with no
   // work assigned to this developer still needs to be linkable.
   const candidates = () => linkCandidatesFrom(rosterTree.rows());
+
+  // Shared by every event that can change the answer to "which project is
+  // the active one": switching the focused editor, editing
+  // `promptconnext.projectId` directly, and adding or removing a workspace
+  // folder — including `git.clone`'s own "Add to Workspace" answer, which
+  // changes `workspaceFolders` with no editor event and no config event of
+  // its own. The three reactions used to duplicate this body verbatim; this
+  // is the one copy.
+  //
+  // No `rosterTree.refresh()` here: `rosterTree.rows()` does not read the
+  // active project at all, so refreshing it in reaction to "which project is
+  // active changed" was always a no-op — one that forces a full tree rebuild
+  // (a synchronous `existsSync` per known clone) for nothing. It is kept
+  // current by `store.onDidChange`, `roster.onDidChange` and
+  // `git.onDidChangeRepositoryState` instead, which are the events that
+  // actually affect its rows.
+  const reactToActiveProjectChange = async () => {
+    const active = activeProject();
+    await setActiveProjectContext(active);
+    tree.refresh();
+    showTitle();
+    await contextView.render();
+  };
 
   context.subscriptions.push(
     store.onDidChange(() => {
@@ -189,6 +224,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void roster.clear();
         void clearCloneState(context.globalState);
         void queue.clear().then(refreshStatusBar);
+        // Otherwise a folder user A declined to link stays declined for user
+        // B in the same window session — `promptedFolders` has no other way
+        // to learn the account changed.
+        link.clearPromptedFolders();
       }
     }),
     treeView.onDidChangeCheckboxState(async (e) => {
@@ -213,14 +252,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Switching which folder's editor is focused switches which project both
     // views are scoped to — the whole point of following the editor instead
     // of a stored selection (see activeProject.ts).
-    vscode.window.onDidChangeActiveTextEditor(async () => {
-      const active = activeProject();
-      await setActiveProjectContext(active);
-      tree.refresh();
-      rosterTree.refresh();
-      showTitle();
-      await contextView.render();
-    }),
+    vscode.window.onDidChangeActiveTextEditor(() => reactToActiveProjectChange()),
     // Linking a folder to a project writes `promptconnext.projectId` straight
     // to configuration — no editor event fires for that, so without this the
     // task tree, the view titles and the context webview would all sit stale
@@ -229,13 +261,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // folder now" — is identical either way.
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (!event.affectsConfiguration("promptconnext.projectId")) return;
-      const active = activeProject();
-      await setActiveProjectContext(active);
-      tree.refresh();
-      rosterTree.refresh();
-      showTitle();
-      await contextView.render();
+      await reactToActiveProjectChange();
     }),
+    // Adding or removing a workspace folder changes "which project am I in"
+    // exactly as much as switching the active editor does, but neither the
+    // editor-change nor the config-change reaction above fires for it. This
+    // is the gap that let `git.clone`'s own "Add to Workspace" answer — one
+    // of the three buttons this extension's own clone flow presents — leave
+    // `promptconnext.hasActiveProject`, the task tree, the view descriptions
+    // and the context webview all showing the previous folder's project.
+    vscode.workspace.onDidChangeWorkspaceFolders(() => reactToActiveProjectChange()),
   );
 
   // -------------------------------------------------------------- commands
@@ -270,7 +305,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         async () => {
           await store.refresh();
           await writer.flush();
-          await contextView.render();
+          // Forced: the user explicitly asked for a refresh, and the active
+          // project id/folder have not changed, so the unforced comparison in
+          // contextView.render() would otherwise skip it.
+          await contextView.render(true);
         },
       );
       showTitle();

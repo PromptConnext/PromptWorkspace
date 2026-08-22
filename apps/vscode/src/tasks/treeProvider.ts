@@ -14,6 +14,7 @@ import type { AssignedTask } from "../cloud/types.ts";
 import { TASK_STATUS_LABELS, isClosed } from "../cloud/types.ts";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
+import { escapeMarkdown } from "../util/markdown.ts";
 
 export class TaskNode {
   readonly kind = "task";
@@ -71,15 +72,20 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   private tooltip(entry: AssignedTask): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${entry.task.title}**\n\n`);
-    md.appendMarkdown(`${entry.project_name} · ${entry.workspace_name}\n\n`);
+    // task title, project name, workspace name and acceptance-criterion text
+    // are all cloud-supplied; escaped so e.g. `![](https://tracker/x.png)` in
+    // a title cannot render as a loaded image inside a hover tooltip.
+    md.appendMarkdown(`**${escapeMarkdown(entry.task.title)}**\n\n`);
+    md.appendMarkdown(
+      `${escapeMarkdown(entry.project_name)} · ${escapeMarkdown(entry.workspace_name)}\n\n`,
+    );
     md.appendMarkdown(`Status: ${TASK_STATUS_LABELS[entry.task.status]}\n\n`);
     // `criterion.text` — the shape apps/cloud stores and warns against
     // flattening. Read the field; never assume a bare string.
     if (entry.task.acceptance_criteria.length > 0) {
       md.appendMarkdown("Acceptance criteria:\n");
       for (const criterion of entry.task.acceptance_criteria) {
-        md.appendMarkdown(`- ${criterion.text}\n`);
+        md.appendMarkdown(`- ${escapeMarkdown(criterion.text)}\n`);
       }
     }
     return md;

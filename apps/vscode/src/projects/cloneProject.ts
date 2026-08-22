@@ -43,6 +43,16 @@ export async function cloneProject(
 
   // Written BEFORE the command runs: `git.clone` usually opens the result in a
   // new window, and once it does, this window may never see the folder at all.
+  //
+  // Known, accepted consequence: if the user cancels `git.clone`'s folder
+  // picker, this record is never cleared from here — the clone (if it
+  // happens at all) lands in a different window, so only that window's own
+  // `applyPendingClone` can consume or expire it, and this window has no
+  // further say. Until it expires (PENDING_CLONE_TTL_MS) or gets consumed,
+  // any folder opened anywhere with a matching remote links silently. That is
+  // accepted rather than worked around: a folder whose remote matches *is*
+  // the project the user clicked Clone on, so linking it is the right answer
+  // even though the picker cancellation is not the trigger that did it.
   await writePendingClone(state, {
     projectId: row.projectId,
     repoUrl: url,

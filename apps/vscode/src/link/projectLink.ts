@@ -37,6 +37,13 @@ export interface ProjectCandidate {
 
 export class ProjectLink {
   private readonly promptedFolders = new Set<string>();
+  // Several repositories can open close together (git.clone discovery races
+  // the extension's own bootstrap call), and `applyPendingClone` reads the
+  // pending record before it clears it — so two overlapping invocations can
+  // both read the same still-present record, both persist it, and both show
+  // a "Linked …" notification. This flag makes the method itself the guard,
+  // independent of gitBridge.ts's own dedup of the events that trigger it.
+  private applying = false;
 
   private readonly git: GitBridge;
   private readonly log: OutputLogger;
@@ -134,24 +141,43 @@ export class ProjectLink {
    * read and a no-op loop.
    */
   async applyPendingClone(candidates: ProjectCandidate[]): Promise<void> {
-    const pending: PendingClone | undefined = readPendingClone(this.state);
-    if (!pending) return;
-    const now = Date.now();
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      if (projectIdFor(folder.uri)) continue;
-      if (!pendingCloneMatches(pending, this.remotesFor(folder.uri), now)) continue;
-      const candidate = candidates.find((c) => c.projectId === pending.projectId);
-      await this.persist(folder, pending.projectId);
-      await writePendingClone(this.state, undefined);
-      const name = candidate?.projectName ?? "the project you cloned";
-      this.log.info(`pending clone linked ${folder.name} -> ${pending.projectId}`);
-      void vscode.window.showInformationMessage(`Linked "${folder.name}" to ${name}.`);
-      return;
+    // Overlapping callers (gitBridge.ts's own dedup narrows this but cannot
+    // eliminate it — see its comment) must not both read the pending record
+    // before either clears it. A later call finding nothing to do here is a
+    // Memento read and a no-op, which is cheap enough to make "just skip if
+    // busy" the right trade rather than queuing.
+    if (this.applying) return;
+    this.applying = true;
+    try {
+      const pending: PendingClone | undefined = readPendingClone(this.state);
+      if (!pending) return;
+      const now = Date.now();
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        if (projectIdFor(folder.uri)) continue;
+        if (!pendingCloneMatches(pending, this.remotesFor(folder.uri), now)) continue;
+        const candidate = candidates.find((c) => c.projectId === pending.projectId);
+        await this.persist(folder, pending.projectId);
+        await writePendingClone(this.state, undefined);
+        const name = candidate?.projectName ?? "the project you cloned";
+        this.log.info(`pending clone linked ${folder.name} -> ${pending.projectId}`);
+        void vscode.window.showInformationMessage(`Linked "${folder.name}" to ${name}.`);
+        return;
+      }
+      // Expired records are dropped on sight so they cannot fire later.
+      if (now - pending.startedAt > PENDING_CLONE_TTL_MS) {
+        await writePendingClone(this.state, undefined);
+      }
+    } finally {
+      this.applying = false;
     }
-    // Expired records are dropped on sight so they cannot fire later.
-    if (now - pending.startedAt > PENDING_CLONE_TTL_MS) {
-      await writePendingClone(this.state, undefined);
-    }
+  }
+
+  /** Sign-out: a folder user A declined to link stays declined for user B in
+   *  the same window session unless this runs. `promptedFolders` only ever
+   *  grows otherwise, so without this a folder opened under a second account
+   *  in the same session would silently never be offered again. */
+  clearPromptedFolders(): void {
+    this.promptedFolders.clear();
   }
 
   private async pick(

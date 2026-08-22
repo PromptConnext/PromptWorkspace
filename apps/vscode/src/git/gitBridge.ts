@@ -36,12 +36,15 @@ export interface GitBridge {
   log(root: vscode.Uri, opts: { maxEntries: number }): Promise<CommitRef[]>;
   onDidChangeRepositoryState(cb: (repo: RepoRef) => void): vscode.Disposable;
   /** Fires once per repository as `vscode.git` discovers it — including the
-   *  cold-start case, where discovery is still running when `getAPI(1)`
-   *  returns (see the comment on `activate()` below). A freshly cloned
-   *  window's repository is not necessarily present yet when this bridge
-   *  finishes constructing; callers that need to act on "this folder has a
-   *  repository now" (not just "state changed on a repository we already
-   *  knew about") need this rather than `onDidChangeRepositoryState`. */
+   *  cold-start backfill (`onDidChangeState("initialized")`), where discovery
+   *  is still running when `getAPI(1)` returns (see the comment on
+   *  `activate()` below). It does NOT fire for a repository already present
+   *  in `api.repositories` at the moment a listener is registered here — the
+   *  listener set is still empty when `activate()` walks that array, so that
+   *  case never reaches a callback. Callers that need "this folder has a
+   *  repository, right now, even one discovered before I subscribed" (as
+   *  `extension.ts` does at activation, for `applyPendingClone`) must check
+   *  `repositories()` directly rather than relying on this event alone. */
   onDidOpenRepository(cb: (repo: RepoRef) => void): vscode.Disposable;
   dispose(): void;
 }
@@ -64,6 +67,16 @@ class VscodeGitBridge implements GitBridge {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly stateListeners = new Set<(repo: RepoRef) => void>();
   private readonly openListeners = new Set<(repo: RepoRef) => void>();
+  // `activate()` reaches `watch(repo)` from three paths — the
+  // `onDidOpenRepository` subscription, the `onDidChangeState("initialized")`
+  // backfill, and the initial `for (const repo of this.api.repositories)`
+  // loop — and on a normal cold start the backfill and the initial loop walk
+  // the same array. Without this guard the second call would re-register a
+  // `repo.state.onDidChange` listener (merely wasteful) AND fire
+  // `openListeners` a second time for the same repository, which is what
+  // made `extension.ts` invoke `applyPendingClone()` twice concurrently with
+  // the same pending record (see projectLink.ts's reentrancy guard).
+  private readonly watched = new Set<string>();
 
   constructor(logger: LoggerLike) {
     this.logger = logger;
@@ -139,13 +152,20 @@ class VscodeGitBridge implements GitBridge {
     this.disposables.length = 0;
     this.stateListeners.clear();
     this.openListeners.clear();
+    this.watched.clear();
   }
 
   private watch(repo: Repository): void {
     // Every code path that finds a repository — already open at cold start,
     // discovered later by `onDidOpenRepository`, or backfilled once the API
     // reports "initialized" — funnels through here, so this is the one place
-    // that needs to fire the "opened" notification for all three.
+    // that needs to fire the "opened" notification for all three. Two of
+    // those three paths can name the same repository on one cold start (the
+    // backfill loop and the initial loop both walk `api.repositories`), so
+    // this has to be idempotent per repository rather than per call.
+    const key = repo.rootUri.toString();
+    if (this.watched.has(key)) return;
+    this.watched.add(key);
     const ref = toRepoRef(repo);
     for (const listener of this.openListeners) listener(ref);
     this.disposables.push(
