@@ -218,7 +218,7 @@ function LoginForm() {
               copy this code and paste it into the app&apos;s sign-in screen instead:
             </p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm">
+              <code className="min-w-0 flex-1 truncate rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm">
                 {handoffCode}
               </code>
               <button
