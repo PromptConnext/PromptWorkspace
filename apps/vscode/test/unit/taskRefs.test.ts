@@ -8,8 +8,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  branchNameForTask,
   collidingRefs,
+  isRevertSubject,
   normalizeTaskRef,
+  refsForCommit,
+  taskRefFromBranch,
   taskRefFromFeatureTag,
   taskRefsInSubject,
 } from "../../src/git/taskRefs.ts";
@@ -59,4 +63,54 @@ test("reports refs two distinct tasks would collide on", () => {
 
 test("no collision when tags are distinct", () => {
   assert.equal(collidingRefs(["T001", "T002", null]).size, 0);
+});
+
+// --------------------------------------------------------------- ADR 0022
+
+test("a branch ref must be a whole segment, not a substring", () => {
+  assert.equal(taskRefFromBranch("T12-add-retry"), "T12");
+  assert.equal(taskRefFromBranch("feature/T012_retry"), "T12");
+  assert.equal(taskRefFromBranch("T12"), "T12");
+  // Lowercase is the same ref spelled differently, not a second vocabulary.
+  assert.equal(taskRefFromBranch("t12-add-retry"), "T12");
+  // The failures that matter: none of these name a task.
+  assert.equal(taskRefFromBranch("TEST-12"), null);
+  assert.equal(taskRefFromBranch("release/v1.2"), null);
+  assert.equal(taskRefFromBranch("T12abc"), null);
+  assert.equal(taskRefFromBranch("sprint12"), null);
+  assert.equal(taskRefFromBranch(undefined), null);
+});
+
+test("the subject wins over the branch, and a branch alone still counts", () => {
+  assert.deepEqual(refsForCommit("T5: unrelated fix", "T12"), ["T5"]);
+  assert.deepEqual(refsForCommit("tidy up imports", "T12"), ["T12"]);
+  assert.deepEqual(refsForCommit("tidy up imports", null), []);
+  // A subject naming several tasks keeps naming several.
+  assert.deepEqual(refsForCommit("T1 and T2: split", "T12"), ["T1", "T2"]);
+});
+
+test("a revert closes nothing, including on the task's own branch", () => {
+  // The branch fallback is exactly where this could have regressed: a revert
+  // made while sitting on T12's branch must not re-close T12.
+  assert.deepEqual(refsForCommit('Revert "T12: add retry"', "T12"), []);
+  assert.equal(isRevertSubject('Revert "T12: add retry"'), true);
+  assert.equal(isRevertSubject("T12: add retry"), false);
+});
+
+test("the offered branch name is a legal ref and keeps the task number", () => {
+  assert.equal(
+    branchNameForTask("T12", "Add a retry to the uploader"),
+    "T12-add-a-retry-to-the-uploader",
+  );
+  // Punctuation collapses rather than producing `..`, a trailing dot, or any
+  // of the other sequences git rejects.
+  assert.equal(branchNameForTask("T3", "Fix: the  parser... again!"), "T3-fix-the-parser-again");
+  // A title that survives none of that still leaves a usable branch.
+  assert.equal(branchNameForTask("T7", "！？"), "T7");
+  // Long titles are cut without leaving a trailing separator.
+  const long = branchNameForTask("T1", "a".repeat(80));
+  assert.ok(long.length <= 44, long);
+  assert.ok(!long.endsWith("-"), long);
+  // And the round trip holds: what startTask writes, the watcher reads back.
+  assert.equal(taskRefFromBranch(branchNameForTask("T012", "Add retry")), "T12");
 });

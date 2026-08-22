@@ -9,17 +9,28 @@ import * as vscode from "vscode";
 
 export const SECTION = "promptconnext";
 
+/** When a commit becomes a status write. `push` holds the close until the
+ *  commit reaches the remote (ADR 0022); `commit` is the pre-0.3 behaviour,
+ *  and is also what a repository with no upstream falls back to. */
+export type CloseTasksOn = "commit" | "push";
+
 export interface ExtensionConfig {
   apiUrl: string;
   webUrl: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
   closeTasksFromCommits: boolean;
+  closeTasksOn: CloseTasksOn;
   commitScanLimit: number;
 }
 
 function trimSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function readCloseTasksOn(cfg: vscode.WorkspaceConfiguration): CloseTasksOn {
+  const raw = cfg.get<string>("closeTasksOn", "push");
+  return raw === "commit" ? "commit" : "push";
 }
 
 export function readConfig(): ExtensionConfig {
@@ -29,7 +40,12 @@ export function readConfig(): ExtensionConfig {
     webUrl: trimSlash(cfg.get<string>("cloudWebUrl", "")),
     supabaseUrl: trimSlash(cfg.get<string>("supabaseUrl", "")),
     supabaseAnonKey: cfg.get<string>("supabaseAnonKey", ""),
+    // Superseded by `closeTasksOn` but still read: someone who turned the
+    // watcher off must not have it turned back on by an upgrade. Only the
+    // explicit `false` survives — the default `true` says nothing about
+    // which trigger they want.
     closeTasksFromCommits: cfg.get<boolean>("closeTasksFromCommits", true),
+    closeTasksOn: readCloseTasksOn(cfg),
     commitScanLimit: cfg.get<number>("commitScanLimit", 1000),
   };
 }

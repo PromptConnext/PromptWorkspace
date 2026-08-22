@@ -17,9 +17,21 @@ export interface RemoteRef {
   pushUrl?: string;
 }
 
+/** The branch fields ADR 0022's publication gate reads. `upstream` is the
+ *  only one that decides anything on its own: without it there is no remote
+ *  to be ahead of, and `ahead` means nothing. */
+export interface HeadRef {
+  name?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+}
+
 export interface RepoRef {
   root: vscode.Uri;
   headSha?: string;
+  /** Undefined on a detached HEAD, and on a repository with no commits. */
+  head?: HeadRef;
   remotes: RemoteRef[];
 }
 
@@ -34,6 +46,13 @@ export interface GitBridge {
   repositories(): RepoRef[];
   repositoryFor(uri: vscode.Uri): RepoRef | undefined;
   log(root: vscode.Uri, opts: { maxEntries: number }): Promise<CommitRef[]>;
+  /** Create and check out a branch. Resolves false when the repository is
+   *  gone or git refuses (a name already taken, an unborn HEAD); the caller
+   *  reports it, because only the caller knows what the user asked for. */
+  createBranch(root: vscode.Uri, name: string): Promise<boolean>;
+  /** Pre-fill the Source Control commit message box. Best-effort and silent:
+   *  a message the user cannot see us fail to write is not worth a dialog. */
+  setCommitMessage(root: vscode.Uri, message: string): void;
   onDidChangeRepositoryState(cb: (repo: RepoRef) => void): vscode.Disposable;
   /** Fires once per repository as `vscode.git` discovers it — including the
    *  cold-start backfill (`onDidChangeState("initialized")`), where discovery
@@ -50,9 +69,24 @@ export interface GitBridge {
 }
 
 function toRepoRef(repo: Repository): RepoRef {
+  const head = repo.state.HEAD;
   return {
     root: repo.rootUri,
-    headSha: repo.state.HEAD?.commit,
+    headSha: head?.commit,
+    // `name` is absent on a detached HEAD, which is also exactly when there
+    // is no branch to carry a task ref — so a detached HEAD produces a
+    // `head` with no name rather than no `head` at all, and the publication
+    // gate reads `upstream: undefined` from it and falls back correctly.
+    head: head
+      ? {
+          name: head.name,
+          upstream: head.upstream
+            ? `${head.upstream.remote}/${head.upstream.name}`
+            : undefined,
+          ahead: head.ahead,
+          behind: head.behind,
+        }
+      : undefined,
     remotes: repo.state.remotes.map((r) => ({
       name: r.name,
       fetchUrl: r.fetchUrl,
@@ -137,6 +171,28 @@ class VscodeGitBridge implements GitBridge {
     }));
   }
 
+  async createBranch(root: vscode.Uri, name: string): Promise<boolean> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return false;
+    try {
+      await repo.createBranch(name, true);
+      return true;
+    } catch (err) {
+      // The common failure is a name already in use, which is not an error
+      // worth a stack trace — the caller turns it into a question.
+      this.logger.info(`createBranch(${name}) refused: ${String(err)}`);
+      return false;
+    }
+  }
+
+  setCommitMessage(root: vscode.Uri, message: string): void {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return;
+    // Never clobber a message the developer is already writing.
+    if (repo.inputBox.value.trim().length > 0) return;
+    repo.inputBox.value = message;
+  }
+
   onDidChangeRepositoryState(cb: (repo: RepoRef) => void): vscode.Disposable {
     this.stateListeners.add(cb);
     return new vscode.Disposable(() => this.stateListeners.delete(cb));
@@ -189,6 +245,12 @@ class NoopGitBridge implements GitBridge {
   }
   async log(): Promise<CommitRef[]> {
     return [];
+  }
+  async createBranch(): Promise<boolean> {
+    return false;
+  }
+  setCommitMessage(): void {
+    /* no git extension, no commit box */
   }
   onDidChangeRepositoryState(): vscode.Disposable {
     return new vscode.Disposable(() => undefined);

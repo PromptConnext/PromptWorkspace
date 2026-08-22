@@ -29,6 +29,7 @@ import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "./storage/cache.ts";
 import { copyTaskContext } from "./tasks/copyContext.ts";
 import { StatusQueue, type QueueEntry } from "./tasks/queue.ts";
+import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
 import { TaskStore } from "./tasks/taskStore.ts";
 import { TaskTreeProvider, type TreeNode } from "./tasks/treeProvider.ts";
@@ -79,7 +80,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const docs = new RepoDocs(client, log);
   const git = await createGitBridge(log);
   const link = new ProjectLink(git, log, context.globalState);
-  const tree = new TaskTreeProvider(store, activeProject);
+  // The watcher is constructed after the views (it needs the roster to answer
+  // "what is this project's default branch"), so the tree reaches it through
+  // a holder rather than the other way round. Before it exists, nothing is
+  // pending — which is true, not a placeholder.
+  let watcher: GitWatcher | undefined;
+  const tree = new TaskTreeProvider(store, activeProject, (projectId) =>
+    watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING,
+  );
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
 
@@ -127,6 +135,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (row) return row.projectName;
     }
     return "this project";
+  };
+
+  // ADR 0022 forbids hardcoding `main`: the cloud knows each project's default
+  // branch and the roster already carries it. Null when the roster has never
+  // reached the cloud, which the watcher handles by assuming the usual names.
+  const defaultBranchFor = (projectId: string): string | null => {
+    for (const workspace of rosterTree.rows()) {
+      const row = workspace.projects.find((p) => p.projectId === projectId);
+      if (row) return row.defaultBranch;
+    }
+    return null;
   };
 
   // The view title names the active project rather than the signed-in account
@@ -334,6 +353,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand(
+      "promptconnext.startTask",
+      async (node?: TreeNode) => {
+        const entry = taskFromNode(node);
+        if (!entry) return;
+        await startTask(entry, {
+          assign: (projectId, taskId, userId) =>
+            client.assignTask(projectId, taskId, userId),
+          writer,
+          git,
+          link,
+          currentUserId: () => session.read()?.userId,
+          log,
+        });
+        await store.refresh();
+      },
+    ),
+    vscode.commands.registerCommand(
       "promptconnext.setTaskStatus",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
@@ -456,7 +492,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await link.applyPendingClone(candidates());
   projectsView.description = describeRoster();
 
-  const watcher = new GitWatcher(
+  watcher = new GitWatcher(
     git,
     store,
     writer,
@@ -465,8 +501,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log,
     () => readConfig().closeTasksFromCommits,
     () => readConfig().commitScanLimit,
+    () => readConfig().closeTasksOn,
+    defaultBranchFor,
   );
-  context.subscriptions.push(watcher);
+  context.subscriptions.push(watcher, watcher.onDidChangePending(() => tree.refresh()));
   watcher.start();
 
   if (session.read()) {
@@ -515,5 +553,7 @@ function createFileStore(root: vscode.Uri): FileStoreLike {
     },
   };
 }
+
+const EMPTY_PENDING: ReadonlySet<string> = new Set();
 
 export { ALL_CACHE_FILES };

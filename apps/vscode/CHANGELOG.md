@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+The whole loop, in the editor. **Start Task** claims a task, moves it to *In progress*, and offers
+to carry its number into git for you — as a branch name, as a prefilled commit message, or neither.
+Auto-close then waits for the push.
+
+### Added
+- **Start Task** on any task in My Tasks (ADR 0022). Claims the task, sets it to *In progress*, and
+  offers a `T12-<title>` branch and/or a `T12: <title>` commit message so the task number never has
+  to be retyped. Both git steps are declinable.
+- A task's number is now read from the **branch name** as well as the commit subject, so every
+  commit on `T12-add-retry` counts toward T12 however its message is worded. Never on the project's
+  default branch, and never for a `Revert "…"` commit.
+- Tasks holding a committed-but-unpushed commit show as **"commit not pushed"** in My Tasks — the
+  signal that your task number parsed, available before the push rather than after it.
+
+### Changed
+- **A task now closes when its commit is pushed, not when it is written** (ADR 0022). A commit only
+  your machine has is not evidence the work is done, and until now it closed the task for the whole
+  team. Nothing is sent to the cloud between commit and push, so an afternoon of amending and
+  rebasing produces one status write instead of a sequence of them.
+- New setting `promptconnext.closeTasksOn` (`push` by default, `commit` for the old behaviour). A
+  repository with no upstream branch falls back to `commit` and says so in the log.
+  `promptconnext.closeTasksFromCommits` still turns the feature off entirely.
+- A commit that is amended or rebased away no longer closes anything; its replacement is picked up
+  on its own terms.
+
 ## 0.2.0 — Unreleased
 
 The path from a cloud project to a local clone. Until now the extension could only name projects

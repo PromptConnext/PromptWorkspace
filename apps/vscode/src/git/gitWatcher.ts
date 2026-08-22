@@ -1,9 +1,10 @@
-// Commit -> task status. The headline feature, and the reason ADR 0019 exists
-// in the shape it does: a developer writes "T3: add retry", pushes, and the
-// task closes in the cloud with no context switch at all.
+// Commit -> pending -> push -> task status. The headline feature, and the
+// reason ADR 0019 exists in the shape it does: a developer writes "T3: add
+// retry", pushes, and the task closes in the cloud with no context switch at
+// all.
 //
 // The engine did this as a scan-on-read: `git log -n 300` re-parsed on every
-// graph fetch (apps/engine/src/routes/projects.ts:751). Two things change here.
+// graph fetch (apps/engine/src/routes/projects.ts:751). Three things change.
 //
 // TRIGGER — repository state-change events, debounced, instead of a scan
 // whenever someone happened to open a view.
@@ -15,25 +16,63 @@
 // the edges is safe because the cloud makes artifact writes idempotent on
 // (task_id, commit_sha) — a replay after a cache loss costs one request and
 // creates nothing.
+//
+// PUBLICATION — ADR 0022. A commit is not evidence of implementation until the
+// team can fetch it, so a matched commit enters a local pending list and stays
+// there, with no cloud write of any kind, until the branch reports it pushed.
+// A push changes `ahead` without changing HEAD, so the early return has to
+// watch both or a push would look like nothing happened.
 
 import * as vscode from "vscode";
 import type { AssignedTask } from "../cloud/types.ts";
 import { isClosed } from "../cloud/types.ts";
+import type { CloseTasksOn } from "../config.ts";
 import type { ProjectLink } from "../link/projectLink.ts";
 import { CACHE_FILES, type JsonCache } from "../storage/cache.ts";
 import type { StatusWriter } from "../tasks/statusWriter.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import type { OutputLogger } from "../util/log.ts";
-import type { GitBridge, RepoRef } from "./gitBridge.ts";
-import { collidingRefs, taskRefFromFeatureTag, taskRefsInSubject } from "./taskRefs.ts";
+import type { CommitRef, GitBridge, RepoRef } from "./gitBridge.ts";
+import { aheadOf, partitionByPublication } from "./publication.ts";
+import {
+  collidingRefs,
+  refsForCommit,
+  taskRefFromBranch,
+  taskRefFromFeatureTag,
+} from "./taskRefs.ts";
 
 const DEBOUNCE_MS = 1_500;
 const PAGE_SIZE = 100;
 const SEEN_RING = 5_000;
 
+// A developer with two hundred unpushed commits carrying task refs has a
+// bigger problem than this cache. Bounding it keeps one runaway repository
+// from growing the state file without limit.
+const PENDING_CAP = 200;
+
+// Used only when the roster has no answer for a project's default branch —
+// an unlinked-but-known repo, or a roster that has never reached the cloud.
+// Attributing every commit on `main` to a task called "T1" is worse than
+// missing an attribution, so this errs toward missing one.
+const ASSUMED_DEFAULT_BRANCHES = new Set(["main", "master"]);
+
+/** A matched commit waiting to be published. Refs are resolved at discovery
+ *  time, not at close time: the branch that gives a commit its ref is the one
+ *  HEAD was on when the commit appeared, and the developer may have moved on
+ *  by the time it reaches the remote. */
+interface PendingCommit {
+  sha: string;
+  subject: string;
+  refs: string[];
+}
+
 interface RepoState {
   lastScannedHeadSha?: string;
+  /** null means "no upstream", which is distinct from "not yet scanned".
+   *  Written as null rather than left undefined so it survives JSON. */
+  lastAhead?: number | null;
   seenShas: string[];
+  pending?: PendingCommit[];
 }
 
 type GitStateFile = Record<string, RepoState>;
@@ -43,6 +82,12 @@ export class GitWatcher {
   private loaded = false;
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly disposables: vscode.Disposable[] = [];
+  /** projectId -> task refs with a committed-but-unpushed commit. Rebuilt on
+   *  every scan rather than persisted: it is a projection of `state.pending`,
+   *  and a second copy on disk could only ever disagree with the first. */
+  private readonly pendingByProject = new Map<string, Set<string>>();
+  private readonly pendingEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangePending = this.pendingEmitter.event;
 
   private readonly git: GitBridge;
   private readonly store: TaskStore;
@@ -52,6 +97,8 @@ export class GitWatcher {
   private readonly log: OutputLogger;
   private readonly enabled: () => boolean;
   private readonly scanLimit: () => number;
+  private readonly closeOn: () => CloseTasksOn;
+  private readonly defaultBranchFor: (projectId: string) => string | null;
 
   constructor(
     git: GitBridge,
@@ -62,6 +109,8 @@ export class GitWatcher {
     log: OutputLogger,
     enabled: () => boolean,
     scanLimit: () => number,
+    closeOn: () => CloseTasksOn,
+    defaultBranchFor: (projectId: string) => string | null,
   ) {
     this.git = git;
     this.store = store;
@@ -71,6 +120,8 @@ export class GitWatcher {
     this.log = log;
     this.enabled = enabled;
     this.scanLimit = scanLimit;
+    this.closeOn = closeOn;
+    this.defaultBranchFor = defaultBranchFor;
   }
 
   start(): void {
@@ -82,6 +133,13 @@ export class GitWatcher {
 
   async scanAll(): Promise<void> {
     for (const repo of this.git.repositories()) await this.scan(repo);
+  }
+
+  /** Task refs in this project holding a commit that has not been pushed.
+   *  Read by the task tree, which is the only feedback a developer gets that
+   *  their reference parsed at all before the push lands. */
+  pendingRefsFor(projectId: string): ReadonlySet<string> {
+    return this.pendingByProject.get(projectId) ?? EMPTY_REFS;
   }
 
   private schedule(repo: RepoRef): void {
@@ -110,39 +168,131 @@ export class GitWatcher {
       return;
     }
 
-    const state = this.state[key] ?? { seenShas: [] };
-    if (repo.headSha && state.lastScannedHeadSha === repo.headSha) return;
+    const state = this.state[key] ?? { seenShas: [], pending: [] };
 
-    const seen = new Set(state.seenShas);
-    const firstRun = state.seenShas.length === 0;
-    let commits = await this.git.log(repo.root, {
-      maxEntries: firstRun ? this.scanLimit() : PAGE_SIZE,
-    });
-
-    // Everything on the first page is new: history was rewritten, or the
-    // developer committed a great deal between windows. Widen once.
-    if (!firstRun && commits.length > 0 && commits.every((c) => !seen.has(c.sha))) {
-      commits = await this.git.log(repo.root, { maxEntries: this.scanLimit() });
+    // In `commit` mode there is no gate at all, which reduces the partition
+    // below to "everything is published" — the pre-0.3 behaviour, expressed
+    // as a configuration of the new path rather than a second code path.
+    const gated = this.closeOn() === "push";
+    const ahead = gated ? aheadOf(repo.head) : undefined;
+    if (gated && ahead === undefined) {
+      this.logOnce(
+        `${key}:no-upstream`,
+        `${repo.root.fsPath} has no upstream branch; closing tasks at commit ` +
+          "time until one is set",
+      );
     }
 
-    const fresh = [];
-    for (const commit of commits) {
-      if (seen.has(commit.sha)) break;
-      fresh.push(commit);
+    const aheadKey = ahead ?? null;
+    const headUnchanged =
+      repo.headSha !== undefined && state.lastScannedHeadSha === repo.headSha;
+    const aheadUnchanged = (state.lastAhead ?? null) === aheadKey;
+    // Both, not either: a push moves `ahead` and leaves HEAD alone, and an
+    // amend moves HEAD and leaves `ahead` alone.
+    if (headUnchanged && aheadUnchanged) return;
+
+    let commits: CommitRef[] = [];
+    let fresh: CommitRef[] = [];
+
+    if (!headUnchanged) {
+      const seen = new Set(state.seenShas);
+      const firstRun = state.seenShas.length === 0;
+      commits = await this.git.log(repo.root, {
+        maxEntries: firstRun ? this.scanLimit() : PAGE_SIZE,
+      });
+
+      // Everything on the first page is new: history was rewritten, or the
+      // developer committed a great deal between windows. Widen once.
+      if (!firstRun && commits.length > 0 && commits.every((c) => !seen.has(c.sha))) {
+        commits = await this.git.log(repo.root, { maxEntries: this.scanLimit() });
+      }
+
+      for (const commit of commits) {
+        if (seen.has(commit.sha)) break;
+        fresh.push(commit);
+      }
+    } else if (ahead !== undefined && ahead > 0) {
+      // A partial push, or a fetch that moved the upstream. HEAD is where we
+      // left it, so nothing is newly matched, but the partition needs the log
+      // to know which shas are still in the ahead window.
+      commits = await this.git.log(repo.root, { maxEntries: PAGE_SIZE });
     }
 
-    if (fresh.length > 0) await this.closeFrom(projectId, fresh);
+    const branchRef = this.branchRefFor(repo, projectId);
+    const pending = [...(state.pending ?? [])];
+    const known = new Set(pending.map((p) => p.sha));
+    // Oldest first, matching the order tasks were worked in.
+    for (const commit of [...fresh].reverse()) {
+      if (known.has(commit.sha)) continue;
+      const refs = refsForCommit(commit.subject, branchRef);
+      if (refs.length === 0) continue;
+      pending.push({ sha: commit.sha, subject: commit.subject, refs });
+      known.add(commit.sha);
+    }
 
+    // With commits ahead of the upstream but no log to read, there is no way
+    // to tell a published commit from a rewritten one — and both wrong answers
+    // are damaging. Hold everything until a scan that can see the history.
+    if (ahead !== undefined && ahead > 0 && commits.length === 0) {
+      this.log.warn(`${repo.root.fsPath}: no git log available; holding ${pending.length} pending`);
+      return;
+    }
+
+    const { published, unpublished, dropped } = partitionByPublication(
+      pending,
+      commits,
+      ahead,
+    );
+    for (const gone of dropped) {
+      // An amend or a rebase replaced this commit. Its successor arrives as a
+      // fresh commit in its own right, so forgetting this one loses nothing —
+      // but doing it silently would make an unexplained missing close.
+      this.log.info(
+        `${gone.refs.join(", ")} dropped: ${gone.sha.slice(0, 8)} is no longer in the history`,
+      );
+    }
+    if (published.length > 0) await this.closePublished(projectId, published);
+
+    const kept = unpublished.slice(-PENDING_CAP);
     this.state[key] = {
       lastScannedHeadSha: repo.headSha,
-      seenShas: [...commits.map((c) => c.sha), ...state.seenShas].slice(0, SEEN_RING),
+      lastAhead: aheadKey,
+      seenShas:
+        commits.length > 0
+          ? [...commits.map((c) => c.sha), ...state.seenShas].slice(0, SEEN_RING)
+          : state.seenShas,
+      pending: kept,
     };
     await this.cache.write(CACHE_FILES.gitState, this.state);
+    this.republishPending(projectId, kept);
   }
 
-  private async closeFrom(
+  /** The branch's own task ref, or null when it must not be used: a detached
+   *  HEAD, a branch with no ref in its name, or the project's default branch,
+   *  where a long-lived shared branch would otherwise attribute every commit
+   *  anyone makes to one task. */
+  private branchRefFor(repo: RepoRef, projectId: string): string | null {
+    const name = repo.head?.name;
+    if (!name) return null;
+    const declared = this.defaultBranchFor(projectId);
+    if (declared ? name === declared : ASSUMED_DEFAULT_BRANCHES.has(name)) return null;
+    return taskRefFromBranch(name);
+  }
+
+  private republishPending(projectId: string, pending: PendingCommit[]): void {
+    const refs = new Set<string>();
+    for (const entry of pending) for (const ref of entry.refs) refs.add(ref);
+    const before = this.pendingByProject.get(projectId);
+    if (before && before.size === refs.size && [...refs].every((r) => before.has(r))) {
+      return;
+    }
+    this.pendingByProject.set(projectId, refs);
+    this.pendingEmitter.fire();
+  }
+
+  private async closePublished(
     projectId: string,
-    commits: { sha: string; subject: string }[],
+    entries: PendingCommit[],
   ): Promise<void> {
     const tasks = this.store.forProject(projectId);
     if (tasks.length === 0) return;
@@ -157,8 +307,8 @@ export class GitWatcher {
       if (ref && !collisions.has(ref)) byRef.set(ref, entry);
     }
 
-    for (const commit of [...commits].reverse()) {
-      for (const ref of taskRefsInSubject(commit.subject)) {
+    for (const commit of entries) {
+      for (const ref of commit.refs) {
         if (collisions.has(ref)) {
           this.log.warn(
             `${ref} matches more than one task in this project; not closing either`,
@@ -182,7 +332,8 @@ export class GitWatcher {
         await this.writer.setStatus({
           projectId,
           taskId: entry.task.id,
-          // A commit is evidence of implementation, not of verification.
+          // A published commit is evidence of implementation, not of
+          // verification.
           status: "implemented",
           artifact: {
             commit_sha: commit.sha,
@@ -222,5 +373,8 @@ export class GitWatcher {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const d of this.disposables) d.dispose();
+    this.pendingEmitter.dispose();
   }
 }
+
+const EMPTY_REFS: ReadonlySet<string> = new Set();

@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import type { AssignedTask } from "../cloud/types.ts";
 import { TASK_STATUS_LABELS, isClosed } from "../cloud/types.ts";
+import { taskRefFromFeatureTag } from "../git/taskRefs.ts";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
@@ -33,10 +34,20 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   private readonly store: TaskStore;
   private readonly active: () => ActiveProject | undefined;
+  private readonly pendingRefs: (projectId: string) => ReadonlySet<string>;
 
-  constructor(store: TaskStore, active: () => ActiveProject | undefined) {
+  constructor(
+    store: TaskStore,
+    active: () => ActiveProject | undefined,
+    // ADR 0022: between commit and push nothing is written to the cloud, so
+    // this decoration is the only signal a developer gets that their task
+    // number parsed. Injected rather than read, so the tree keeps no state
+    // that could disagree with the watcher's.
+    pendingRefs: (projectId: string) => ReadonlySet<string>,
+  ) {
     this.store = store;
     this.active = active;
+    this.pendingRefs = pendingRefs;
   }
 
   refresh(): void {
@@ -47,9 +58,17 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     const { task } = node.entry;
     const item = new vscode.TreeItem(task.title, vscode.TreeItemCollapsibleState.None);
     item.id = `task:${task.id}`;
-    item.description = [task.feature_tag, TASK_STATUS_LABELS[task.status]]
+    const ref = taskRefFromFeatureTag(task.feature_tag);
+    const pending =
+      ref !== null && this.pendingRefs(node.entry.project_id).has(ref);
+    item.description = [
+      task.feature_tag,
+      TASK_STATUS_LABELS[task.status],
+      pending ? "commit not pushed" : undefined,
+    ]
       .filter(Boolean)
       .join(" · ");
+    if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
     item.contextValue = "promptconnext.task";
     item.checkboxState = isClosed(task.status)
       ? vscode.TreeItemCheckboxState.Checked
