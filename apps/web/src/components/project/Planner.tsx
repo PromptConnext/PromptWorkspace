@@ -101,7 +101,14 @@ const STAGE_ORDER: StageMeta[] = [
 // its own document server-side (.specify/memory/constitution.md, its own
 // generate call) but it is the Tech Lead's to write, so it sits inside their
 // step rather than as a step of its own a business user has to step past.
-type TabMeta = { key: string; label: string; stages: StageKind[]; techLeadOnly?: boolean };
+//
+// Every tab is shown to every project member. The Plan step used to be hidden
+// from non-admins entirely, which read as a missing step ("0, 1, 3") and left
+// Tasks as a dead end: it is not admin-only server-side, so a business user
+// could press Generate and get the cloud's `spec_document_required` with no
+// visible way to fix it. Authorship, not visibility, is what the role gates
+// (ADMIN_ONLY_STAGES below) — matching the cloud, which lets anyone read.
+type TabMeta = { key: string; label: string; stages: StageKind[] };
 
 const TABS: TabMeta[] = [
   // Planning *inputs* — the PRD upload and the policy scope — live one step
@@ -109,13 +116,21 @@ const TABS: TabMeta[] = [
   // order the work actually happens in.
   { key: "foundation", label: "0 · Foundation", stages: [] },
   { key: "specify", label: "1 · Specify", stages: ["specify"] },
-  { key: "plan", label: "2 · Plan", stages: ["constitution", "plan"], techLeadOnly: true },
+  { key: "plan", label: "2 · Plan", stages: ["constitution", "plan"] },
   { key: "tasks", label: "3 · Tasks", stages: ["tasks"] },
 ];
 
 const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
   STAGE_ORDER.map((meta) => [meta.stage, meta]),
 );
+
+// Mirrors apps/cloud/app/api/_guards.py::ADMIN_ONLY_STAGES. Reading is never
+// gated there — a business user can open these, they just can't author them —
+// so this only turns the section read-only rather than hiding it.
+const ADMIN_ONLY_STAGES: StageKind[] = ["constitution", "plan"];
+
+const TECH_LEAD_NOTE =
+  "Your Tech Lead writes this step. You can read it here once they generate it.";
 
 // The cloud's own ordering errors (app/api/generation.py), which arrive as raw
 // detail codes.
@@ -138,6 +153,7 @@ function StageSection({
   buttonLabel,
   blurb,
   blockedBy,
+  note,
   onDocPresence,
   readOnly = false,
 }: {
@@ -147,6 +163,10 @@ function StageSection({
   buttonLabel: string;
   blurb: string;
   blockedBy?: string;
+  /** Why this section is read-only, when it is read-only for a reason the
+   *  viewer can't act on (a stage that belongs to someone else's role).
+   *  Without it a non-author sees an unexplained empty editor. */
+  note?: string;
   onDocPresence?: (stage: StageKind, present: boolean) => void;
   readOnly?: boolean;
 }) {
@@ -244,6 +264,7 @@ function StageSection({
     <div className="rounded-lg border border-slate-200 p-4">
       <h3 className="text-sm font-medium text-slate-900">{label}</h3>
       <p className="mb-3 mt-1 text-xs text-slate-500">{blurb}</p>
+      {note && <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{note}</p>}
       {!readOnly && (
         <>
           {blockedBy && (
@@ -464,9 +485,12 @@ export function Planner({
   // schema (app/models/schemas.py's Role is admin | member), and the cloud
   // enforces the same rule on every plan-authoring endpoint
   // (app/api/_guards.py::require_stage_access).
-  const { data: members, loading: membersLoading } = useCloudGet<WorkspaceMember[]>(
-    `/workspaces/${project.workspace_id}/members`,
-  );
+  const {
+    data: members,
+    loading: membersLoading,
+    error: membersError,
+    refetch: refetchMembers,
+  } = useCloudGet<WorkspaceMember[]>(`/workspaces/${project.workspace_id}/members`);
   const isTechLead = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 
   // Which stages already have a saved document. Each stage reports its own
@@ -512,12 +536,14 @@ export function Planner({
   function blockedBy(meta: StageMeta): string | undefined {
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
-    return `Waiting on ${previous?.label ?? meta.requires} — generate that document first.`;
+    const label = previous?.label ?? meta.requires;
+    // Telling a business user to "generate that document first" points them at
+    // a stage only a Tech Lead may author, so name who does it instead.
+    if (ADMIN_ONLY_STAGES.includes(meta.requires) && !isTechLead) {
+      return `Waiting on ${label} — your Tech Lead generates it.`;
+    }
+    return `Waiting on ${label} — generate that document first.`;
   }
-
-  // Every stage stays mounted so a half-typed intake form survives switching
-  // tabs; the inactive ones are hidden rather than unmounted.
-  const visible = TABS.filter((tab) => !tab.techLeadOnly || isTechLead);
 
   return (
     <div className="space-y-4">
@@ -550,18 +576,38 @@ export function Planner({
         </div>
       )}
 
-      {/* Which tabs exist depends on the caller's role, so the strip waits for
-          the membership fetch rather than rendering the non-admin set and
-          growing a Plan tab a moment later. One placeholder of the same height
-          keeps the panel below from jumping. */}
-      {membersLoading ? (
+      {/* The strip is the same for every member, but what the panels below it
+          allow is not, so it still waits for the membership fetch rather than
+          offering an authorable Plan step and locking it a moment later. The
+          `!user` arm covers useCloudGet's early return while the session is
+          still resolving, which otherwise reports a real admin as a member.
+          One placeholder of the same height keeps the panel from jumping. */}
+      {/* A roster that never arrived is not the same as "you are not an admin",
+          but `isTechLead` collapses both to false. Say so rather than silently
+          serving the reduced surface. */}
+      {membersError && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>
+            Couldn&apos;t load the workspace members, so Tech Lead controls are unavailable here.
+          </p>
+          <button
+            type="button"
+            onClick={refetchMembers}
+            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {membersLoading || (!user && !membersError) ? (
         <div
           aria-hidden
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
         />
       ) : (
       <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 border-b border-slate-200">
-        {visible.map((tab) => (
+        {TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
@@ -580,7 +626,9 @@ export function Planner({
       </div>
       )}
 
-      {visible.map((tab) => (
+      {/* Every stage stays mounted so a half-typed intake form survives
+          switching tabs; the inactive ones are hidden rather than unmounted. */}
+      {TABS.map((tab) => (
         <div key={tab.key} hidden={active !== tab.key} className="space-y-4">
           {tab.key === "foundation" && (
             <>
@@ -590,6 +638,8 @@ export function Planner({
           )}
           {tab.stages.map((stage) => {
             const meta = STAGE_META[stage];
+            const authorGated = ADMIN_ONLY_STAGES.includes(stage) && !isTechLead;
+            const stageReadOnly = readOnly || authorGated;
             return (
               <StageSection
                 key={stage}
@@ -598,9 +648,10 @@ export function Planner({
                 label={meta.label}
                 buttonLabel={meta.buttonLabel}
                 blurb={meta.blurb}
-                blockedBy={readOnly ? undefined : blockedBy(meta)}
+                blockedBy={stageReadOnly ? undefined : blockedBy(meta)}
+                note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
-                readOnly={readOnly}
+                readOnly={stageReadOnly}
               />
             );
           })}
@@ -624,7 +675,7 @@ export function Planner({
               Rendered for the whole Tech Lead step rather than only in
               `tech_review`, so a frozen project still shows what it deployed
               with. */}
-          {tab.key === "plan" && (
+          {tab.key === "plan" && isTechLead && (
             <DeploymentTemplatePanel
               project={project}
               workspaceId={project.workspace_id}
@@ -635,7 +686,7 @@ export function Planner({
           {/* Creating the repository is a technical act on technical
               artifacts, so it lives with the Tech Lead's own step rather than
               at the bottom of a page a business user also reads. */}
-          {tab.key === "plan" && lifecycle === "tech_review" && (
+          {tab.key === "plan" && isTechLead && lifecycle === "tech_review" && (
             <CreateRepositoryPanel
               projectId={projectId}
               projectName={project.name}

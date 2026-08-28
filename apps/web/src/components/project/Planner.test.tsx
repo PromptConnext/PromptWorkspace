@@ -202,7 +202,7 @@ describe("Planner", () => {
     expect(screen.queryByRole("button", { name: /send to tech lead/i })).not.toBeInTheDocument();
   });
 
-  it("withholds the tab strip until it knows whether the Plan tab belongs there", async () => {
+  it("withholds the tab strip until it knows what the viewer may author", async () => {
     // Membership never resolves here — the point is what renders meanwhile.
     global.fetch = vi.fn((url: RequestInfo | URL) => {
       const href = url.toString();
@@ -212,17 +212,74 @@ describe("Planner", () => {
 
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
 
-    // Showing Specify and Tasks now and growing a Plan tab a moment later
+    // Offering an authorable Plan step now and locking it a moment later
     // reads as the page changing its mind.
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
-  it("hides the Plan tab from a member who is not a workspace admin", async () => {
+  it("shows the Plan tab read-only to a member who is not a workspace admin", async () => {
+    // Hiding it made the strip read "0, 1, 3" and left the member with no way
+    // to see what the Tech Lead wrote. The cloud gates authoring, not reading.
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("tab", { name: /plan/i })).toBeInTheDocument();
+    openTab(/plan/i);
+    // Both stages in the tab are the Tech Lead's: the rules and the plan.
+    expect(screen.getAllByText(/your tech lead writes this step/i)).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /generate rules/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create repository/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/deployment template/i)).not.toBeInTheDocument();
+    // The document is readable, just not writable.
+    const plan = within(
+      screen.getByRole("heading", { name: /plan$/i }).closest("div") as HTMLElement,
+    );
+    for (const box of plan.getAllByRole("textbox")) {
+      expect(box).toHaveAttribute("readonly");
+    }
+  });
+
+  it("blocks Generate tasks for a member until the plan exists, instead of 409-ing", async () => {
+    // The regression: with the Plan tab filtered out, its StageSection never
+    // mounted, docPresent.plan stayed undefined, the button stayed enabled and
+    // the cloud answered `spec_document_required` with nothing to act on.
     members = [{ ...ADMIN_MEMBER, role: "member" }];
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
 
-    expect(await screen.findByRole("tab", { name: /specify/i })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: /plan/i })).not.toBeInTheDocument();
+    await screen.findByRole("tab", { name: /tasks/i });
+    openTab(/tasks/i);
+    const generate = screen.getByRole("button", { name: /generate tasks/i });
+    await waitFor(() => expect(generate).toBeDisabled());
+    expect(screen.getByText(/your tech lead generates it/i)).toBeInTheDocument();
+  });
+
+  it("says the roster failed to load rather than silently demoting the viewer", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/couldn't load the workspace members/i)).toBeInTheDocument();
+    openTab(/plan/i);
+    expect(screen.queryByRole("button", { name: /create repository/i })).not.toBeInTheDocument();
   });
 
   it("shows editable stage docs and the create-repository panel when tech_review", async () => {
