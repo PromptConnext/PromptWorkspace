@@ -188,6 +188,18 @@ class Repository(abc.ABC):
     def get_latest_deployment(self, project_id: str) -> Deployment | None: ...
 
     @abc.abstractmethod
+    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
+        """Replace this build's frozen task set, order preserved.
+
+        Replace rather than append: the resolver runs once per terminal state
+        and may run again after a reconciliation pass, and two passes must not
+        double the list."""
+
+    @abc.abstractmethod
+    def list_deployment_tasks(self, deployment_id: str) -> list[str]:
+        """The frozen task ids for one build, in the order they were stored."""
+
+    @abc.abstractmethod
     def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
         """Non-terminal deployments last touched before `older_than`, oldest
         first, across every project.
@@ -500,6 +512,7 @@ class InMemoryRepository(Repository):
         # idempotency key so a repeated delivery updates rather than appends,
         # mirroring the supabase table's unique (project_id, external_key).
         self._deployments: dict[str, dict[str, Deployment]] = {}
+        self._deployment_tasks: dict[str, list[str]] = {}
         # (provider, external_key) -> TaskLink
         self._task_links: dict[tuple[str, str], TaskLink] = {}
         # workspace_id -> ModelConnection (M9)
@@ -695,6 +708,12 @@ class InMemoryRepository(Repository):
     def get_latest_deployment(self, project_id: str) -> Deployment | None:
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
+
+    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
+        self._deployment_tasks[deployment_id] = list(task_ids)
+
+    def list_deployment_tasks(self, deployment_id: str) -> list[str]:
+        return list(self._deployment_tasks.get(deployment_id, []))
 
     def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
         rows = [

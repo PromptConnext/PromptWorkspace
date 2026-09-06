@@ -80,6 +80,7 @@ _GENERATION_RUNS = "pz_generation_runs"
 _STAGE_DOCUMENTS = "pz_stage_documents"
 _REPO_WEBHOOKS = "pz_repo_webhooks"
 _DEPLOYMENTS = "pz_deployments"
+_DEPLOYMENT_TASKS = "pz_deployment_tasks"
 
 
 class SupabaseRepository(Repository):
@@ -365,6 +366,27 @@ class SupabaseRepository(Repository):
     def get_latest_deployment(self, project_id: str) -> Deployment | None:
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
+
+    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
+        self._client.table(_DEPLOYMENT_TASKS).delete().eq("deployment_id", deployment_id).execute()
+        if not task_ids:
+            return
+        self._client.table(_DEPLOYMENT_TASKS).insert(
+            [
+                {"deployment_id": deployment_id, "task_id": task_id, "position": index}
+                for index, task_id in enumerate(task_ids)
+            ]
+        ).execute()
+
+    def list_deployment_tasks(self, deployment_id: str) -> list[str]:
+        res = (
+            self._client.table(_DEPLOYMENT_TASKS)
+            .select("task_id,position")
+            .eq("deployment_id", deployment_id)
+            .order("position")
+            .execute()
+        )
+        return [row["task_id"] for row in (res.data or [])]
 
     def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
         res = (
