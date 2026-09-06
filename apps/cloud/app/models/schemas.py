@@ -396,6 +396,13 @@ class DeploymentConfig(BaseModel):
     # template resolves through the same field as `ws:<uuid>`. See
     # app/deployments/registry.py.
     template_id: str
+    # Provider identifiers that name a resource THIS project deploys to — a
+    # Fly app, a Vercel project (ADR 0025). Keyed by CredentialField.name, and
+    # only ever keys the provider declares `scope="project"`; the token and the
+    # account identifiers stay on the workspace credential. Frozen with
+    # template_id at repo_created, because they are part of what the seeded
+    # pipeline was built against.
+    provider_values: dict[str, str] = Field(default_factory=dict)
 
 
 class DeploymentConfigUpdate(BaseModel):
@@ -403,6 +410,7 @@ class DeploymentConfigUpdate(BaseModel):
     the storage shape can gain server-only fields without moving the API."""
 
     template_id: str
+    provider_values: dict[str, str] = Field(default_factory=dict)
 
 
 class DeploymentState(BaseModel):

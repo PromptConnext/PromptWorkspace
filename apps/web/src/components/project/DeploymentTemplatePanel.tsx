@@ -21,6 +21,17 @@ function describeError(message: string): string {
   if (message === "admin_required") {
     return "Only a Tech Lead (workspace admin) can choose the deployment template.";
   }
+  // The provider verifies what was typed before it is stored (ADR 0025), so
+  // these two are answers about the provider, not about this form.
+  if (message === "deploy_project_not_found") {
+    return "No project with that ID exists under the connected account. Create it with the provider first, then paste its ID here.";
+  }
+  if (message === "deploy_token_rejected") {
+    return "The connected account's token was rejected. Reconnect the provider in workspace settings.";
+  }
+  if (message === "deployment_provider_unreachable") {
+    return "Could not reach the provider just now. Try saving again in a moment.";
+  }
   return message || "Failed to save the deployment template.";
 }
 
@@ -48,6 +59,13 @@ export function DeploymentTemplatePanel({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  // The provider-side project this project deploys to (ADR 0025). Unlike the
+  // template radio, this is typed rather than clicked, and the server verifies
+  // it against the provider — so it saves on an explicit action, not on every
+  // keystroke.
+  const [values, setValues] = useState<Record<string, string>>(
+    project.deployment_config?.provider_values ?? {},
+  );
 
   // Same guard as PolicyScopePanel: a parent refetch landing in
   // `project.deployment_config` must not overwrite a selection that is still
@@ -59,20 +77,16 @@ export function DeploymentTemplatePanel({
     if (dirtyRef.current) return;
     const templateId = project.deployment_config?.template_id ?? null;
     setSelected(templateId);
+    setValues(project.deployment_config?.provider_values ?? {});
     lastSavedRef.current = templateId;
   }, [project.deployment_config]);
 
-  // Single-select, so there is no debounce to manage: a click is the whole
-  // edit, and saving immediately is what makes the absence of a Save button
-  // honest.
-  async function choose(templateId: string) {
-    if (readOnly || templateId === lastSavedRef.current) return;
+  async function save(templateId: string, providerValues: Record<string, string>) {
     dirtyRef.current = true;
-    setSelected(templateId);
     setStatus("saving");
     setErrorDetail(null);
     try {
-      await updateDeploymentConfig(project.id, templateId, authHeaders());
+      await updateDeploymentConfig(project.id, templateId, providerValues, authHeaders());
       lastSavedRef.current = templateId;
       dirtyRef.current = false;
       setStatus("saved");
@@ -80,14 +94,32 @@ export function DeploymentTemplatePanel({
     } catch (err) {
       dirtyRef.current = false;
       // Roll back to what the server actually holds, rather than leaving the
-      // radio showing a choice that was refused.
+      // form showing a choice that was refused.
       setSelected(lastSavedRef.current);
+      setValues(project.deployment_config?.provider_values ?? {});
       setStatus("error");
       setErrorDetail(describeError((err as Error).message));
     }
   }
 
+  // Single-select, so there is no debounce to manage: a click is the whole
+  // edit. Switching template clears the provider values with it — they name a
+  // resource belonging to the template's provider, so carrying them across
+  // would keep a Vercel project id on a Fly deployment.
+  async function choose(templateId: string) {
+    if (readOnly || templateId === lastSavedRef.current) return;
+    setSelected(templateId);
+    setValues({});
+    await save(templateId, {});
+  }
+
   const chosen = templates?.find((t) => t.id === selected) ?? null;
+  const projectFields = chosen?.provider_project_fields ?? [];
+  const savedValues = project.deployment_config?.provider_values ?? {};
+  const valuesDirty = projectFields.some(
+    (f) => (values[f.name] ?? "").trim() !== (savedValues[f.name] ?? ""),
+  );
+  const valuesComplete = projectFields.every((f) => (values[f.name] ?? "").trim());
 
   return (
     <section className="rounded-lg border border-slate-200 p-4">
@@ -175,6 +207,54 @@ export function DeploymentTemplatePanel({
         </p>
       )}
 
+      {/* ADR 0025: the provider-side project a build goes to belongs here, not
+          in workspace settings. One Vercel project holds one production
+          deployment, so a workspace-level id made every project in a workspace
+          deploy over the top of the last one. */}
+      {!readOnly && projectFields.length > 0 && (
+        <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-2 text-xs text-slate-600">
+            This project deploys to its own {chosen?.provider_label} project. Create it with{" "}
+            {chosen?.provider_label} once, then name it here — each PromptConnext project needs
+            its own.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            {projectFields.map((field) => (
+              <label
+                key={field.name}
+                className="flex min-w-[12rem] flex-1 flex-col gap-1 text-xs"
+              >
+                <span className="text-slate-500">{field.label}</span>
+                <input
+                  type={field.secret ? "password" : "text"}
+                  value={values[field.name] ?? ""}
+                  onChange={(e) =>
+                    setValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                  autoComplete="off"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+                />
+              </label>
+            ))}
+            <button
+              type="button"
+              disabled={!valuesDirty || !valuesComplete || status === "saving"}
+              onClick={() =>
+                save(
+                  selected as string,
+                  Object.fromEntries(
+                    projectFields.map((f) => [f.name, (values[f.name] ?? "").trim()]),
+                  ),
+                )
+              }
+              className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
       {status === "saving" && <p className="mt-2 text-xs text-slate-500">Saving…</p>}
       {status === "saved" && <p className="mt-2 text-xs text-slate-500">Saved</p>}
       {status === "error" && errorDetail && (
@@ -193,10 +273,13 @@ export function DeploymentTemplatePanel({
           belongs at repository creation, where it can be specific. */}
       {!readOnly && chosen && !chosen.provider_is_platform_owned && (
         <p className="mt-3 text-xs text-amber-700">
-          {chosen.provider_label} must be connected in{" "}
+          The workspace&apos;s {chosen.provider_label} account must be connected in{" "}
           <Link href={`/w/${workspaceId}/settings`} className="underline">
             workspace settings
-          </Link>{" "}
+          </Link>
+          {projectFields.length > 0 && !valuesComplete
+            ? ", and this project needs its own project named above,"
+            : ""}{" "}
           before the repository can be created.
         </p>
       )}

@@ -20,6 +20,9 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider: "platform-r2",
     provider_label: "PromptZone hosting",
     provider_is_platform_owned: true,
+    // Nothing to name per project: the platform already minted the bucket and
+    // this project is a prefix inside it.
+    provider_project_fields: [],
     embeddable: true,
     required_secrets: ["PZ_R2_ACCESS_KEY_ID"],
     required_vars: ["PZ_PROJECT_ID"],
@@ -35,6 +38,9 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider: "vercel",
     provider_label: "Vercel",
     provider_is_platform_owned: false,
+    provider_project_fields: [
+      { name: "project_id", label: "Vercel project ID", secret: false, scope: "project" },
+    ],
     embeddable: true,
     required_secrets: ["PZ_VERCEL_TOKEN"],
     required_vars: ["PZ_PROJECT_ID"],
@@ -124,9 +130,96 @@ describe("DeploymentTemplatePanel", () => {
     await screen.findByText("Static site → PromptZone hosting");
     fireEvent.click(screen.getAllByRole("radio")[0]);
 
-    await waitFor(() => expect(posted).toEqual([{ template_id: "static-r2" }]));
+    await waitFor(() =>
+      expect(posted).toEqual([{ template_id: "static-r2", provider_values: {} }]),
+    );
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  // ADR 0025: the provider-side project belongs to the project, not to the
+  // workspace credential every project in the workspace shares.
+  it("asks for the provider's project id here, not in workspace settings", async () => {
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "nextjs-vercel" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Vercel project ID")).toBeInTheDocument();
+  });
+
+  it("asks for nothing per project when the platform owns the provider", async () => {
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "static-r2" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Static site → PromptZone hosting");
+    expect(screen.queryByLabelText("Vercel project ID")).not.toBeInTheDocument();
+  });
+
+  it("saves the provider's project id on an explicit action, not per keystroke", async () => {
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "nextjs-vercel" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+    const input = await screen.findByLabelText("Vercel project ID");
+
+    fireEvent.change(input, { target: { value: " prj_mine " } });
+    expect(posted).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(posted).toEqual([
+        { template_id: "nextjs-vercel", provider_values: { project_id: "prj_mine" } },
+      ]),
+    );
+  });
+
+  it("will not save a half-filled provider project", async () => {
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "nextjs-vercel" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+    await screen.findByLabelText("Vercel project ID");
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("explains a provider project that does not exist, not the raw code", async () => {
+    mockFetch({ patchFailure: { status: 400, detail: "deploy_project_not_found" } });
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "nextjs-vercel" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+    const input = await screen.findByLabelText("Vercel project ID");
+
+    fireEvent.change(input, { target: { value: "nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(
+      await screen.findByText(/No project with that ID exists under the connected account/i),
+    ).toBeInTheDocument();
   });
 
   it("rolls the selection back and explains when the server refuses", async () => {

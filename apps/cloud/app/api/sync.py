@@ -36,8 +36,10 @@ from app.integrations.deploy_providers import (
     ProviderCredentialError,
     ensure_platform_r2_credential,
     platform_r2_preview_url,
+    project_fields,
     resolve_provider_credential,
 )
+from app.integrations.deploy_providers import get_provider as get_deploy_provider
 from app.integrations.github import (
     GithubWriteError,
     RepoAlreadyExistsError,
@@ -425,7 +427,26 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
         if resolved is None:
             raise ProviderCredentialError("deployment_provider_not_configured")
         token, provider_config = resolved
-        credential = {**provider_config, "token": token}
+
+        # The project's own provider identifiers (its Fly app, its Vercel
+        # project) layered over the workspace credential, so everything below
+        # resolves `provider:<key>` without caring which half a value came
+        # from. Restricted to keys the provider declares `scope="project"`:
+        # this dict decides what is written into repository secrets, so an
+        # unfiltered merge would let a stored project value shadow `token`.
+        provider = get_deploy_provider(template.provider)
+        declared = project_fields(provider) if provider else ()
+        project_values = {
+            f.name: (config.provider_values or {}).get(f.name, "").strip() for f in declared
+        }
+        missing = [name for name, value in project_values.items() if not value]
+        if missing:
+            # Its own code rather than `deployment_provider_incomplete`: this
+            # one is fixed on the project's deployment template, by a Tech
+            # Lead, not by reconnecting the workspace credential.
+            raise ProviderCredentialError("deployment_project_values_missing")
+
+        credential = {**provider_config, **project_values, "token": token}
 
     # A platform-computed URL is the one thing the workflow cannot derive
     # for itself, and reporting a deploy with no URL would leave a business

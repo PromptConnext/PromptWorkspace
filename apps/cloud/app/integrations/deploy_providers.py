@@ -57,6 +57,17 @@ class CredentialField:
     name: str
     label: str
     secret: bool = False
+    # "workspace" — belongs to the account the token belongs to, typed once in
+    # workspace settings (a Fly organisation, a Vercel team).
+    # "project" — names the provider-side resource ONE PromptConnext project
+    # deploys to (a Fly app, a Vercel project), so it is chosen per project in
+    # the Planner and frozen into DeploymentConfig at repo creation.
+    #
+    # The distinction exists because a workspace has many projects and a
+    # provider-side project holds exactly one deployment: storing it on the
+    # workspace credential made every project in a workspace deploy over the
+    # top of the previous one. See ADR 0025.
+    scope: str = "workspace"
 
 
 @dataclass(frozen=True)
@@ -68,8 +79,23 @@ class DeployProvider:
     # True when the platform owns the credential and there is nothing for a
     # workspace admin to connect.
     platform_owned: bool = False
+    # Verifies the WORKSPACE half — the token and the account it can reach.
     verify: Callable[[Any, dict], Awaitable[dict]] | None = None
+    # Verifies the PROJECT half — that the provider-side project a Tech Lead
+    # named actually exists under that token. Separate from `verify` because
+    # the two are supplied at different times by different people, and an
+    # error about a missing project is only actionable where the project was
+    # named. Receives the merged {token, **workspace values, **project values}.
+    verify_project: Callable[[Any, dict], Awaitable[dict]] | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+def workspace_fields(provider: DeployProvider) -> tuple[CredentialField, ...]:
+    return tuple(f for f in provider.fields if f.scope != "project")
+
+
+def project_fields(provider: DeployProvider) -> tuple[CredentialField, ...]:
+    return tuple(f for f in provider.fields if f.scope == "project")
 
 
 async def verify_fly_token(app, config: dict) -> dict:
@@ -99,32 +125,54 @@ async def verify_fly_token(app, config: dict) -> dict:
     return {}
 
 
-async def verify_vercel_token(app, config: dict) -> dict:
-    """Confirm a Vercel token can see the named project before we store it.
+def _vercel_team_params(config: dict) -> dict:
+    # Omitted entirely rather than sent blank: a personal-account request
+    # rejects an empty teamId.
+    return {"teamId": config["org_id"]} if config.get("org_id") else {}
 
-    Checks the project rather than just the token (`/v2/user` would do the
-    latter) because both failures land in the same place — a tech-review exit
-    that fails in front of a Tech Lead who cannot tell why — and one request
-    can rule out both. A 404 here means the token is fine but the project does
-    not exist yet, which is the mistake this template invites: unlike Fly's
-    `apps create`, nothing in the pipeline creates the Vercel project.
-    """
+
+async def _vercel_get(config: dict, path: str, params: dict):
     import httpx
 
-    token = config.get("token") or ""
-    project_id = config.get("project_id") or ""
-    params = {}
-    if config.get("org_id"):
-        params["teamId"] = config["org_id"]
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(
-                f"https://api.vercel.com/v9/projects/{project_id}",
+            return await client.get(
+                f"https://api.vercel.com{path}",
                 params=params,
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {config.get('token') or ''}"},
             )
     except Exception as exc:  # noqa: BLE001 - transport failures included
         raise ProviderCredentialError("deployment_provider_unreachable") from exc
+
+
+async def verify_vercel_token(app, config: dict) -> dict:
+    """Confirm the token can reach the team, before we store it.
+
+    Deliberately does NOT check a project: which Vercel project a build goes
+    to is chosen per PromptConnext project, not per workspace (ADR 0025), so
+    at connect time there is no project to check yet. Listing under the team
+    is the most this half can honestly assert.
+    """
+    resp = await _vercel_get(config, "/v9/projects", {**_vercel_team_params(config), "limit": "1"})
+    if resp.status_code in (401, 403):
+        raise ProviderCredentialError("deploy_token_rejected")
+    if resp.is_error:
+        raise ProviderCredentialError("deployment_provider_unreachable")
+    return {}
+
+
+async def verify_vercel_project(app, config: dict) -> dict:
+    """Confirm the named Vercel project exists under the stored token.
+
+    Run where the Tech Lead names it, which is the only place the answer is
+    actionable: nothing in the pipeline creates a Vercel project, so a valid
+    token aimed at a project that does not exist is otherwise indistinguishable
+    from a bad token, and only surfaces at repository creation.
+    """
+    project_id = config.get("project_id") or ""
+    resp = await _vercel_get(
+        config, f"/v9/projects/{project_id}", _vercel_team_params(config)
+    )
     if resp.status_code in (401, 403):
         raise ProviderCredentialError("deploy_token_rejected")
     if resp.status_code == 404:
@@ -148,34 +196,40 @@ PROVIDERS: dict[str, DeployProvider] = {
         id=FLY,
         label="Fly.io",
         fields=(
-            CredentialField("app_name", "Fly application name"),
+            # One Fly app holds one deployment, so it belongs to the project,
+            # not to the workspace the token belongs to.
+            CredentialField("app_name", "Fly application name", scope="project"),
             CredentialField("org_slug", "Fly organisation"),
         ),
         verify=verify_fly_token,
         notes=(
             "Create a deploy token in the Fly dashboard (Tokens → Deploy token) "
-            "scoped to this application, not an account-wide personal token.",
-            "The application must exist before the first deploy: run "
-            "`flyctl apps create <name>` once.",
+            "for this organisation.",
+            "Each project needs its own Fly application, created once with "
+            "`flyctl apps create <name>` and named on the project's deployment "
+            "template.",
         ),
     ),
     VERCEL: DeployProvider(
         id=VERCEL,
         label="Vercel",
         fields=(
-            CredentialField("project_id", "Vercel project ID"),
+            # One Vercel project holds one production deployment, so each
+            # PromptConnext project names its own.
+            CredentialField("project_id", "Vercel project ID", scope="project"),
             CredentialField("org_id", "Vercel team or personal account ID"),
         ),
         verify=verify_vercel_token,
+        verify_project=verify_vercel_project,
         notes=(
-            "Create the project in the Vercel dashboard first, then copy its "
-            "Project ID and Team ID from the project's Settings page.",
-            "Deployment Protection must be off for the project's production "
-            "domain, or the preview will show a Vercel sign-in page instead of "
+            "Create a token under Account Settings → Tokens, scoped to the team "
+            "below.",
+            "Each project needs its own Vercel project, created once in the "
+            "dashboard; its Project ID is named on the project's deployment "
+            "template, not here.",
+            "Deployment Protection must be off for a project's production "
+            "domain, or its preview will show a Vercel sign-in page instead of "
             "the application.",
-            "Like every other deploy provider here, this credential is stored "
-            "per workspace, so every project in this workspace deploys to the "
-            "same Vercel project.",
         ),
     ),
 }

@@ -188,11 +188,12 @@ export function listDeploymentTemplates(authHeaders: Record<string, string>) {
 export function updateDeploymentConfig(
   projectId: string,
   templateId: string,
+  providerValues: Record<string, string>,
   authHeaders: Record<string, string>,
 ) {
   return apiFetch<Project>(`/projects/${projectId}/deployment-config`, authHeaders, {
     method: "PATCH",
-    body: JSON.stringify({ template_id: templateId }),
+    body: JSON.stringify({ template_id: templateId, provider_values: providerValues }),
   });
 }
 

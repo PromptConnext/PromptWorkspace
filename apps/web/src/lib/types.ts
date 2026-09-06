@@ -59,6 +59,11 @@ export interface Project {
 
 export interface DeploymentConfig {
   template_id: string;
+  // ADR 0025. Provider identifiers naming the resource THIS project deploys
+  // to — a Fly app, a Vercel project. Keyed by CredentialField name, and only
+  // ever fields the provider declares `scope: "project"`; the token and the
+  // account identifiers stay on the workspace credential.
+  provider_values?: Record<string, string>;
 }
 
 // The denormalized current deployment view carried on every Project, so the
@@ -377,6 +382,9 @@ export interface DeploymentTemplateOut {
   provider: string;
   provider_label: string;
   provider_is_platform_owned: boolean;
+  // ADR 0025. Identifiers this template needs PER PROJECT, asked for here
+  // rather than in workspace settings. Empty for a platform-owned provider.
+  provider_project_fields: { name: string; label: string; secret: boolean; scope: string }[];
   embeddable: boolean;
   required_secrets: string[];
   required_vars: string[];

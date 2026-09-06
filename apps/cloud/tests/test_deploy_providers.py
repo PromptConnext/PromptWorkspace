@@ -66,7 +66,19 @@ def test_an_admin_connects_a_provider(client, accepting_fly):
     )
     assert res.status_code == 200
     assert res.json()["connected"] is True
-    assert accepting_fly == [{"token": "fly-token", "app_name": "rocket", "org_slug": "acme"}]
+    # `app_name` is project-scoped (ADR 0025) and is dropped here even though
+    # the client sent it: one Fly app holds one deployment, so it belongs to a
+    # project's deployment template, not to the workspace credential every
+    # project in the workspace shares.
+    assert accepting_fly == [{"token": "fly-token", "org_slug": "acme"}]
+
+
+def test_the_connection_never_offers_a_project_scoped_field(client, accepting_fly):
+    ws = _workspace(client)
+    body = client.get(f"/workspaces/{ws}/integrations/deploy/fly", headers=ALICE).json()
+    names = {f["name"] for f in body["fields"]}
+    assert names == {"org_slug"}
+    assert all(f["scope"] == "workspace" for f in body["fields"])
 
 
 def test_the_token_is_never_returned_and_never_stored_in_the_clear(client, accepting_fly):
@@ -189,20 +201,34 @@ def _verify_vercel(config: dict):
     return asyncio.run(deploy_providers.verify_vercel_token(None, config))
 
 
-def test_vercel_verification_checks_the_named_project_not_just_the_token(vercel_api):
+def _verify_vercel_project(config: dict):
+    return asyncio.run(deploy_providers.verify_vercel_project(None, config))
+
+
+def test_connecting_vercel_checks_the_team_and_not_a_project(vercel_api):
     _state, calls = vercel_api
-    assert _verify_vercel({"token": "tok", "project_id": "prj_1", "org_id": "team_1"}) == {}
-    assert calls[0]["url"] == "https://api.vercel.com/v9/projects/prj_1"
-    assert calls[0]["params"] == {"teamId": "team_1"}
+    # Which Vercel project a build goes to is chosen per PromptConnext project
+    # (ADR 0025), so at connect time there is no project to check — listing
+    # under the team is the most this half can honestly assert.
+    assert _verify_vercel({"token": "tok", "org_id": "team_1"}) == {}
+    assert calls[0]["url"] == "https://api.vercel.com/v9/projects"
+    assert calls[0]["params"] == {"teamId": "team_1", "limit": "1"}
     assert calls[0]["headers"]["Authorization"] == "Bearer tok"
 
 
 def test_vercel_verification_omits_the_team_for_a_personal_account(vercel_api):
     _state, calls = vercel_api
-    _verify_vercel({"token": "tok", "project_id": "prj_1"})
-    # A personal-account project 400s if teamId is sent as an empty string, so
+    _verify_vercel({"token": "tok"})
+    # A personal-account request 400s if teamId is sent as an empty string, so
     # the parameter is left out entirely rather than sent blank.
-    assert calls[0]["params"] == {}
+    assert calls[0]["params"] == {"limit": "1"}
+
+
+def test_naming_a_vercel_project_checks_that_exact_project(vercel_api):
+    _state, calls = vercel_api
+    assert _verify_vercel_project({"token": "tok", "project_id": "prj_1", "org_id": "t"}) == {}
+    assert calls[0]["url"] == "https://api.vercel.com/v9/projects/prj_1"
+    assert calls[0]["params"] == {"teamId": "t"}
 
 
 @pytest.mark.parametrize(
@@ -210,19 +236,25 @@ def test_vercel_verification_omits_the_team_for_a_personal_account(vercel_api):
     [
         (401, "deploy_token_rejected"),
         (403, "deploy_token_rejected"),
-        # The mistake this template invites: nothing in the pipeline creates
-        # the Vercel project, so a valid token pointed at a project that does
-        # not exist has to say so distinctly.
-        (404, "deploy_project_not_found"),
         (500, "deployment_provider_unreachable"),
     ],
 )
-def test_vercel_verification_maps_each_failure_to_its_own_code(vercel_api, status, detail):
+def test_vercel_connect_maps_each_failure_to_its_own_code(vercel_api, status, detail):
     state, _calls = vercel_api
     state["status"] = status
     with pytest.raises(deploy_providers.ProviderCredentialError) as err:
-        _verify_vercel({"token": "tok", "project_id": "prj_1", "org_id": "team_1"})
+        _verify_vercel({"token": "tok", "org_id": "team_1"})
     assert err.value.detail == detail
+
+
+def test_a_vercel_project_that_does_not_exist_is_its_own_error(vercel_api):
+    state, _calls = vercel_api
+    state["status"] = 404
+    # Nothing in the pipeline creates a Vercel project, so a good token aimed
+    # at a project that does not exist must not read as a bad token.
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_vercel_project({"token": "tok", "project_id": "nope", "org_id": "t"})
+    assert err.value.detail == "deploy_project_not_found"
 
 
 def test_vercel_verification_treats_a_transport_failure_as_unreachable(monkeypatch):
@@ -231,5 +263,5 @@ def test_vercel_verification_treats_a_transport_failure_as_unreachable(monkeypat
 
     monkeypatch.setattr(httpx, "AsyncClient", boom)
     with pytest.raises(deploy_providers.ProviderCredentialError) as err:
-        _verify_vercel({"token": "tok", "project_id": "prj_1"})
+        _verify_vercel({"token": "tok"})
     assert err.value.detail == "deployment_provider_unreachable"

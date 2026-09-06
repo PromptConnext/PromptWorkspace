@@ -32,7 +32,10 @@ from app.deployments.registry import BUILTIN_TEMPLATES, get_template, template_f
 from app.integrations.deploy_providers import (
     ProviderCredentialError,
     get_provider,
+    project_fields,
     provider_config,
+    resolve_provider_credential,
+    workspace_fields,
 )
 from app.integrations.github import GithubWriteError, ensure_hook_events
 from app.integrations.github_auth import resolve_token
@@ -53,6 +56,15 @@ router = APIRouter(tags=["deployments"])
 _TERMINAL_STATES = frozenset({"live", "failed", "inactive"})
 
 
+class CredentialFieldOut(BaseModel):
+    name: str
+    label: str
+    secret: bool
+    # "workspace" | "project" — see CredentialField in deploy_providers.py.
+    # The web app uses it to decide which surface asks for the value.
+    scope: str = "workspace"
+
+
 class DeploymentTemplateOut(BaseModel):
     id: str
     name: str
@@ -65,6 +77,10 @@ class DeploymentTemplateOut(BaseModel):
     # True when the platform owns the credential, so the picker can say "no
     # account needed" instead of sending the Tech Lead to workspace settings.
     provider_is_platform_owned: bool
+    # Identifiers this template needs PER PROJECT — the provider-side project
+    # a build goes to (ADR 0025). Rendered by the picker beside the template,
+    # and stored in DeploymentConfig.provider_values, not on the workspace.
+    provider_project_fields: list[CredentialFieldOut]
     embeddable: bool
     required_secrets: list[str]
     required_vars: list[str]
@@ -186,6 +202,12 @@ def list_deployment_templates(
                 provider=template.provider,
                 provider_label=provider.label if provider else template.provider,
                 provider_is_platform_owned=bool(provider and provider.platform_owned),
+                provider_project_fields=[
+                    CredentialFieldOut(
+                        name=f.name, label=f.label, secret=f.secret, scope=f.scope
+                    )
+                    for f in (project_fields(provider) if provider else ())
+                ],
                 embeddable=template.embeddable,
                 required_secrets=[s.name for s in template.required_secrets],
                 required_vars=[v.name for v in template.required_vars],
@@ -197,9 +219,10 @@ def list_deployment_templates(
 
 
 @router.patch("/projects/{project_id}/deployment-config", response_model=Project)
-def update_deployment_config(
+async def update_deployment_config(
     project_id: str,
     body: DeploymentConfigUpdate,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
@@ -215,10 +238,45 @@ def update_deployment_config(
     require_admin(repo, project.workspace_id, user)
     if project.lifecycle_status == "repo_created":
         raise HTTPException(status_code=409, detail="project_frozen")
-    if get_template(body.template_id) is None:
+    template = get_template(body.template_id)
+    if template is None:
         raise HTTPException(status_code=422, detail="unknown_deployment_template")
+
+    # Only keys the provider declares `scope="project"` are kept. Anything else
+    # the client sends is dropped rather than rejected, which matters more than
+    # it looks: these values are merged over the resolved credential when the
+    # pipeline is seeded, so an unfiltered dict would let a project admin
+    # overwrite `token` and choose what gets written into a repository secret.
+    provider = get_provider(template.provider)
+    declared = project_fields(provider) if provider else ()
+    values = {
+        f.name: (body.provider_values.get(f.name) or "").strip()
+        for f in declared
+        if (body.provider_values.get(f.name) or "").strip()
+    }
+
+    # Verified here rather than at repository creation because this is where a
+    # human named it, and an error about a provider-side project is only
+    # actionable next to the field that holds its id. Skipped when the
+    # workspace has no credential yet — selecting a template before connecting
+    # the provider is a legitimate order of operations, and repo creation is
+    # the hard gate either way.
+    if values and provider is not None and provider.verify_project is not None:
+        resolved = resolve_provider_credential(
+            request.app, repo.get_workspace(project.workspace_id), provider.id
+        )
+        if resolved is not None:
+            token, workspace_config = resolved
+            try:
+                await provider.verify_project(
+                    request.app, {**workspace_config, **values, "token": token}
+                )
+            except ProviderCredentialError as exc:
+                raise HTTPException(status_code=400, detail=exc.detail) from exc
+
     return repo.update_project_deployment_config(
-        project_id, DeploymentConfig(template_id=body.template_id)
+        project_id,
+        DeploymentConfig(template_id=body.template_id, provider_values=values),
     )
 
 
@@ -333,12 +391,6 @@ async def repair_webhook(
     return {"repaired": repaired}
 
 
-class CredentialFieldOut(BaseModel):
-    name: str
-    label: str
-    secret: bool
-
-
 class DeployConnectionOut(BaseModel):
     """Non-secret connection status. The token is never echoed — the only
     readable proof it exists is `connected`."""
@@ -358,15 +410,21 @@ class DeployConnectRequest(BaseModel):
 
 
 def _deploy_connection_out(provider, config: dict | None) -> DeployConnectionOut:
+    # Workspace-scoped fields only. A project-scoped identifier (the Fly app,
+    # the Vercel project) is named per project in the Planner and lives in
+    # DeploymentConfig — asking for it here is what made a whole workspace
+    # share one provider-side project (ADR 0025).
+    declared = workspace_fields(provider)
     fields = [
-        CredentialFieldOut(name=f.name, label=f.label, secret=f.secret) for f in provider.fields
+        CredentialFieldOut(name=f.name, label=f.label, secret=f.secret, scope=f.scope)
+        for f in declared
     ]
     return DeployConnectionOut(
         connected=config is not None,
         provider=provider.id,
         label=provider.label,
         fields=fields,
-        values={f.name: (config or {}).get(f.name, "") for f in provider.fields},
+        values={f.name: (config or {}).get(f.name, "") for f in declared},
         connected_at=(config or {}).get("connected_at"),
     )
 
@@ -425,7 +483,7 @@ async def connect_deploy_provider(
     if not token:
         raise HTTPException(status_code=422, detail="token_required")
 
-    values = {f.name: (body.values.get(f.name) or "").strip() for f in provider.fields}
+    values = {f.name: (body.values.get(f.name) or "").strip() for f in workspace_fields(provider)}
     missing = [name for name, value in values.items() if not value]
     if missing:
         raise HTTPException(status_code=422, detail="provider_fields_required")

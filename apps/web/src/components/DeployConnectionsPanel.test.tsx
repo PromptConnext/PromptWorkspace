@@ -20,6 +20,7 @@ function template(over: Partial<DeploymentTemplateOut>): DeploymentTemplateOut {
     provider: "p",
     provider_label: "P",
     provider_is_platform_owned: false,
+    provider_project_fields: [],
     embeddable: true,
     required_secrets: [],
     required_vars: [],

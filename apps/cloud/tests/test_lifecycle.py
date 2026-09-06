@@ -519,6 +519,59 @@ def test_secret_write_403_reports_the_new_token_scope_and_leaves_lifecycle_untou
         assert project["lifecycle_status"] == "tech_review"
 
 
+def _connect_vercel(client: TestClient, workspace_id: str) -> None:
+    """The workspace half of a Vercel connection: the token and the team it
+    can reach. Deliberately no project id — that is the project's (ADR 0025)."""
+    ws = client.app.state.repository.get_workspace(workspace_id)
+    merged = dict(ws.integration_config or {})
+    merged["vercel"] = {
+        "org_id": "team_1",
+        "secret_ref": client.app.state.secret_store.encrypt("vercel-token"),
+        "connected_by": "alice",
+    }
+    client.app.state.repository.update_workspace(workspace_id, integration_config=merged)
+
+
+def test_a_project_without_its_provider_project_id_fails_before_any_repo_is_created():
+    """ADR 0025. The workspace credential is connected and valid; what is
+    missing is the Vercel project THIS project deploys to, which is fixed on
+    the project's template rather than by reconnecting the workspace."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        _connect_vercel(client, ws["id"])
+        client.app.state.repository.update_project_deployment_config(
+            pid, DeploymentConfig(template_id="next-vercel")
+        )
+
+        res = _create_repo(client, pid)
+        assert res.status_code == 400
+        assert res.json()["detail"] == "deployment_project_values_missing"
+        assert not fake.created_repos
+
+
+def test_the_projects_own_provider_id_reaches_the_pipeline_it_seeds():
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        _connect_vercel(client, ws["id"])
+        client.app.state.repository.update_project_deployment_config(
+            pid,
+            DeploymentConfig(
+                template_id="next-vercel", provider_values={"project_id": "prj_mine"}
+            ),
+        )
+
+        assert _create_repo(client, pid).status_code == 200, "provisioning should succeed"
+        repo_name = "acme/rocket-ship"
+        # The whole point: the variable the workflow reads carries THIS
+        # project's Vercel project, while the team still comes from the
+        # workspace credential every project shares.
+        assert fake.variables[(repo_name, "VERCEL_PROJECT_ID")] == "prj_mine"
+        assert fake.variables[(repo_name, "VERCEL_ORG_ID")] == "team_1"
+        assert fake.secrets[(repo_name, "VERCEL_TOKEN")] == "vercel-token"
+
+
 def test_missing_platform_credential_fails_before_any_repo_is_created():
     """Fail fast, step 3: a provider that cannot supply a credential must be
     caught before GitHub is touched at all."""

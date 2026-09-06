@@ -310,6 +310,53 @@ def test_unknown_template_is_rejected(client):
     assert res.json()["detail"] == "unknown_deployment_template"
 
 
+def test_a_project_names_its_own_provider_side_project(client):
+    """ADR 0025. Two projects in one workspace must be able to deploy to two
+    different Vercel projects; before this the identifier lived on the shared
+    workspace credential and the second project overwrote the first."""
+    ws, pid = _project(client, with_template=False)
+    res = client.patch(
+        f"/projects/{pid}/deployment-config",
+        json={"template_id": "next-vercel", "provider_values": {"project_id": " prj_a "}},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["deployment_config"]["provider_values"] == {"project_id": "prj_a"}
+
+
+def test_only_project_scoped_keys_are_stored(client):
+    """These values are merged over the resolved credential when the pipeline
+    is seeded, so an unfiltered dict would let a project admin overwrite the
+    token that gets written into a repository secret."""
+    ws, pid = _project(client, with_template=False)
+    res = client.patch(
+        f"/projects/{pid}/deployment-config",
+        json={
+            "template_id": "next-vercel",
+            "provider_values": {
+                "project_id": "prj_a",
+                "token": "stolen",
+                "org_id": "not-yours",
+                "secret_ref": "x",
+            },
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["deployment_config"]["provider_values"] == {"project_id": "prj_a"}
+
+
+def test_the_picker_is_told_which_identifiers_a_template_needs_per_project(client):
+    templates = {t["id"]: t for t in client.get("/deployment-templates", headers=ALICE).json()}
+    assert [f["name"] for f in templates["next-vercel"]["provider_project_fields"]] == [
+        "project_id"
+    ]
+    assert [f["name"] for f in templates["fly-node"]["provider_project_fields"]] == ["app_name"]
+    # The platform-owned template asks for nothing: there is no provider-side
+    # project, only a prefix in a bucket the platform already minted.
+    assert templates["static-r2"]["provider_project_fields"] == []
+
+
 def test_template_is_frozen_once_the_repo_exists(client):
     ws, pid = _project(client, with_template=True)
     client.app.state.repository.update_project_lifecycle_status(pid, "repo_created")
