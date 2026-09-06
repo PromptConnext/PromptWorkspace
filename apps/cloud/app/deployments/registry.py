@@ -176,6 +176,44 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             "production traffic.",
         ),
     ),
+    DeploymentTemplate(
+        id="fly-node",
+        name="Node service → Fly.io",
+        description=(
+            "A containerised Node service deployed to your own Fly.io account. "
+            "Bring a Fly deploy token; the pipeline builds the image and "
+            "publishes it on every push to the default branch."
+        ),
+        stack="node",
+        provider="fly",
+        # Customer-owned, unlike static-r2: this is the path that proves a
+        # template can carry a credential the platform does not mint.
+        provider_credential_kind="fly",
+        scaffold_dir="fly-node",
+        delivery_kind="embedded_url",
+        required_secrets=(
+            SecretSpec("FLY_API_TOKEN", "Fly.io deploy token", from_provider="token"),
+        ),
+        required_vars=(
+            VarSpec("FLY_APP", "Fly application name", "provider:app_name"),
+            # The seeded server sends `frame-ancestors <origin>`; a variable
+            # rather than a baked-in file so a web-app origin change is one API
+            # call, not a commit to every repository ever created.
+            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
+            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
+            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+        ),
+        embeddable=True,
+        health_path="/",
+        # Fly mints the hostname, so the URL arrives with the deployment_status
+        # delivery rather than being computed by the platform up front.
+        url_kind="provider",
+        notes=(
+            "Create the Fly application once with `flyctl apps create <name>`; "
+            "the pipeline deploys to it but does not create it.",
+            "Fly bills this application to your own account.",
+        ),
+    ),
 ]
 
 _BY_ID: dict[str, DeploymentTemplate] = {t.id: t for t in BUILTIN_TEMPLATES}

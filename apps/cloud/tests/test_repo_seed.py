@@ -4,6 +4,8 @@ seeded into a project's repo at the tech_review -> repo_created transition.
 
 from __future__ import annotations
 
+from app.deployments.registry import get_template, template_files
+from app.integrations.deploy_providers import PROVIDERS
 from app.integrations.repo_seed import build_deployment_files, build_seed_files
 from app.models.schemas import DeploymentConfig, PolicyScope, Project
 
@@ -182,3 +184,34 @@ def test_deployment_files_do_not_collide_with_the_derived_documents():
     derived = {f.path for f in build_seed_files(project, {})}
     deployment = {f.path for f in build_deployment_files(project, None)}
     assert derived.isdisjoint(deployment)
+
+
+def test_fly_node_is_a_customer_owned_provider_template():
+    template = get_template("fly-node")
+    assert template is not None
+    # The point of the second template: it exercises the paths static-r2 never
+    # touches — a customer credential and a provider-minted URL.
+    assert template.provider_credential_kind == "fly"
+    assert template.url_kind == "provider"
+    assert template.provider in PROVIDERS
+
+
+def test_fly_node_seeds_a_dockerfile_and_the_fixed_workflow_path():
+    paths = {path for path, _, _ in template_files("fly-node")}
+    assert "Dockerfile" in paths
+    assert ".github/workflows/deploy.yml" in paths
+    assert "fly.toml" in paths
+
+
+def test_fly_node_reports_its_own_url_and_opens_a_deployment_first():
+    workflow = next(
+        content
+        for path, content, _ in template_files("fly-node")
+        if path == ".github/workflows/deploy.yml"
+    )
+    # Opening the deployment before the build is what lets the Preview tab show
+    # "building" immediately instead of nothing until the deploy finishes.
+    assert workflow.index("Open deployment") < workflow.index("flyctl deploy")
+    assert "environment_url" in workflow
+    # A pull request must never reach the deploy credential.
+    assert "pull_request_target" not in workflow

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Your application</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 40rem">
+    <h1>Your application is running.</h1>
+    <p>
+      This is the placeholder PromptZone seeded. Every push to the default branch
+      rebuilds this container and republishes it, and the project's Preview tab
+      shows whatever is here.
+    </p>
+    <script>
+      // Positive proof to the PromptZone Preview tab that this page rendered
+      // inside the frame. Without it the tab cannot distinguish an embedded
+      // page from a blocked one, and falls back to a link card.
+      if (window.parent !== window) window.parent.postMessage({ pz: "preview-ready" }, "*");
+    </script>
+  </body>
+</html>
