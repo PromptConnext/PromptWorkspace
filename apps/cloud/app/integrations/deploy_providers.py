@@ -39,6 +39,7 @@ logger = logging.getLogger("promptconnext.deploy")
 
 PLATFORM_R2 = "platform-r2"
 FLY = "fly"
+VERCEL = "vercel"
 
 
 class ProviderCredentialError(RuntimeError):
@@ -98,6 +99,41 @@ async def verify_fly_token(app, config: dict) -> dict:
     return {}
 
 
+async def verify_vercel_token(app, config: dict) -> dict:
+    """Confirm a Vercel token can see the named project before we store it.
+
+    Checks the project rather than just the token (`/v2/user` would do the
+    latter) because both failures land in the same place — a tech-review exit
+    that fails in front of a Tech Lead who cannot tell why — and one request
+    can rule out both. A 404 here means the token is fine but the project does
+    not exist yet, which is the mistake this template invites: unlike Fly's
+    `apps create`, nothing in the pipeline creates the Vercel project.
+    """
+    import httpx
+
+    token = config.get("token") or ""
+    project_id = config.get("project_id") or ""
+    params = {}
+    if config.get("org_id"):
+        params["teamId"] = config["org_id"]
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"https://api.vercel.com/v9/projects/{project_id}",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as exc:  # noqa: BLE001 - transport failures included
+        raise ProviderCredentialError("deployment_provider_unreachable") from exc
+    if resp.status_code in (401, 403):
+        raise ProviderCredentialError("deploy_token_rejected")
+    if resp.status_code == 404:
+        raise ProviderCredentialError("deploy_project_not_found")
+    if resp.is_error:
+        raise ProviderCredentialError("deployment_provider_unreachable")
+    return {}
+
+
 PROVIDERS: dict[str, DeployProvider] = {
     PLATFORM_R2: DeployProvider(
         id=PLATFORM_R2,
@@ -121,6 +157,25 @@ PROVIDERS: dict[str, DeployProvider] = {
             "scoped to this application, not an account-wide personal token.",
             "The application must exist before the first deploy: run "
             "`flyctl apps create <name>` once.",
+        ),
+    ),
+    VERCEL: DeployProvider(
+        id=VERCEL,
+        label="Vercel",
+        fields=(
+            CredentialField("project_id", "Vercel project ID"),
+            CredentialField("org_id", "Vercel team or personal account ID"),
+        ),
+        verify=verify_vercel_token,
+        notes=(
+            "Create the project in the Vercel dashboard first, then copy its "
+            "Project ID and Team ID from the project's Settings page.",
+            "Deployment Protection must be off for the project's production "
+            "domain, or the preview will show a Vercel sign-in page instead of "
+            "the application.",
+            "Like every other deploy provider here, this credential is stored "
+            "per workspace, so every project in this workspace deploys to the "
+            "same Vercel project.",
         ),
     ),
 }

@@ -7,6 +7,9 @@ GitHub PAT (app/api/github.py::connect_github).
 
 from __future__ import annotations
 
+import asyncio
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -137,3 +140,96 @@ def test_an_unknown_provider_is_404(client):
     ws = _workspace(client)
     res = client.get(f"/workspaces/{ws}/integrations/deploy/nope", headers=ALICE)
     assert res.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Vercel verification
+#
+# The verifier is what turns "this workspace looks connected" into "this
+# workspace can actually provision", so each status code it can meet is pinned
+# to the error the Tech Lead will see.
+# --------------------------------------------------------------------------- #
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.is_error = status_code >= 400
+
+
+class _FakeAsyncClient:
+    def __init__(self, response: _FakeResponse, calls: list[dict]) -> None:
+        self._response = response
+        self._calls = calls
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, url: str, params=None, headers=None) -> _FakeResponse:
+        self._calls.append({"url": url, "params": params, "headers": headers})
+        return self._response
+
+
+@pytest.fixture
+def vercel_api(monkeypatch):
+    """Network-free stand-in for the one request `verify_vercel_token` makes."""
+    state = {"status": 200}
+    calls: list[dict] = []
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *a, **kw: _FakeAsyncClient(_FakeResponse(state["status"]), calls),
+    )
+    return state, calls
+
+
+def _verify_vercel(config: dict):
+    return asyncio.run(deploy_providers.verify_vercel_token(None, config))
+
+
+def test_vercel_verification_checks_the_named_project_not_just_the_token(vercel_api):
+    _state, calls = vercel_api
+    assert _verify_vercel({"token": "tok", "project_id": "prj_1", "org_id": "team_1"}) == {}
+    assert calls[0]["url"] == "https://api.vercel.com/v9/projects/prj_1"
+    assert calls[0]["params"] == {"teamId": "team_1"}
+    assert calls[0]["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_vercel_verification_omits_the_team_for_a_personal_account(vercel_api):
+    _state, calls = vercel_api
+    _verify_vercel({"token": "tok", "project_id": "prj_1"})
+    # A personal-account project 400s if teamId is sent as an empty string, so
+    # the parameter is left out entirely rather than sent blank.
+    assert calls[0]["params"] == {}
+
+
+@pytest.mark.parametrize(
+    ("status", "detail"),
+    [
+        (401, "deploy_token_rejected"),
+        (403, "deploy_token_rejected"),
+        # The mistake this template invites: nothing in the pipeline creates
+        # the Vercel project, so a valid token pointed at a project that does
+        # not exist has to say so distinctly.
+        (404, "deploy_project_not_found"),
+        (500, "deployment_provider_unreachable"),
+    ],
+)
+def test_vercel_verification_maps_each_failure_to_its_own_code(vercel_api, status, detail):
+    state, _calls = vercel_api
+    state["status"] = status
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_vercel({"token": "tok", "project_id": "prj_1", "org_id": "team_1"})
+    assert err.value.detail == detail
+
+
+def test_vercel_verification_treats_a_transport_failure_as_unreachable(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("dns")
+
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_vercel({"token": "tok", "project_id": "prj_1"})
+    assert err.value.detail == "deployment_provider_unreachable"

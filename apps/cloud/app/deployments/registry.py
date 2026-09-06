@@ -214,6 +214,54 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             "Fly bills this application to your own account.",
         ),
     ),
+    DeploymentTemplate(
+        id="next-vercel",
+        name="Next.js app → Vercel",
+        description=(
+            "A Next.js App Router application deployed to your own Vercel "
+            "project. Bring a Vercel access token; the pipeline builds the app "
+            "and publishes it on every push to the default branch."
+        ),
+        stack="next",
+        provider="vercel",
+        provider_credential_kind="vercel",
+        scaffold_dir="next-vercel",
+        delivery_kind="embedded_url",
+        required_secrets=(
+            SecretSpec("VERCEL_TOKEN", "Vercel access token", from_provider="token"),
+        ),
+        required_vars=(
+            VarSpec("VERCEL_ORG_ID", "Vercel team/personal account id", "provider:org_id"),
+            VarSpec("VERCEL_PROJECT_ID", "Vercel project id", "provider:project_id"),
+            # Read by next.config.mjs at BUILD time, on the runner, so the
+            # frame-ancestors header is baked into the routes manifest. A
+            # variable rather than a baked-in file for the same reason fly-node
+            # uses one: a web-app origin change is then one API call, not a
+            # commit to every repository ever created.
+            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
+            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
+            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+        ),
+        # Stronger than static-r2's claim: this template controls its own
+        # response headers and names the web app as a frame ancestor, rather
+        # than embedding because the host happens to send no framing header.
+        embeddable=True,
+        health_path="/",
+        # Vercel mints the hostname, so the URL arrives with the
+        # deployment_status delivery rather than being computed up front.
+        url_kind="provider",
+        notes=(
+            "Create the Vercel project once in the Vercel dashboard; the "
+            "pipeline deploys to it but does not create it.",
+            "The workflow deploys to production, not to a Vercel preview "
+            "deployment, because Vercel's Deployment Protection gates preview "
+            "deployments behind a Vercel login by default and a login wall "
+            "cannot be reviewed. If the Preview tab shows a Vercel sign-in "
+            "page, turn Deployment Protection off for this project's "
+            "production domain.",
+            "Vercel bills this project to your own account.",
+        ),
+    ),
 ]
 
 _BY_ID: dict[str, DeploymentTemplate] = {t.id: t for t in BUILTIN_TEMPLATES}

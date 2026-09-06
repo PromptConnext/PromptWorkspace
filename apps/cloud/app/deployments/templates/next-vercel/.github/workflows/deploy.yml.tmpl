@@ -1,0 +1,165 @@
+# Builds this Next.js application and deploys it to your Vercel project, then
+# reports the result back as a GitHub Deployment. PromptZone reads that
+# deployment over this repository's webhook and shows the running app in the
+# project's Preview tab.
+#
+# This file belongs to you. Edit it freely — PromptZone seeded it once at
+# repository creation and does not overwrite it.
+
+name: Deploy preview
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build-only check for pull requests, with NO access to the deploy
+  # credentials: this job never references `secrets.`. Never switch it to the
+  # privileged pull-request trigger that runs a fork's code against the base
+  # repository's secrets — that would hand the deploy token to anyone who can
+  # open a PR.
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: 24
+      # `npm install`, not `npm ci`: the seeded scaffold ships no lockfile, and
+      # the first implementation task is expected to commit one.
+      - name: Build the application
+        run: |
+          npm install
+          npm run build
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: 24
+
+      # Opened first so the Preview tab can show "building" while the app
+      # builds, instead of showing nothing until the deploy finishes.
+      - name: Open deployment
+        id: open
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          PROJECT_ID: ${{ vars.PZ_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          deployment_id=$(gh api "repos/$REPO/deployments" \
+            -f ref="$SHA" \
+            -f environment="$ENVIRONMENT" \
+            -f description="PromptZone preview for project $PROJECT_ID" \
+            -F auto_merge=false \
+            -F transient_environment=false \
+            -f 'required_contexts[]' \
+            --jq '.id')
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          gh api "repos/$REPO/deployments/$deployment_id/statuses" \
+            -f state=in_progress \
+            -f description="Building and deploying" >/dev/null
+
+      - name: Install the Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull the Vercel project configuration
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      # PZ_WEB_ORIGIN is read by next.config.mjs at build time, which is why it
+      # is set on THIS step: `vercel build` runs the Next.js build here on the
+      # runner, so the frame-ancestors header is baked into the routes manifest
+      # and no Vercel project environment variable has to exist for it.
+      - name: Build
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PZ_WEB_ORIGIN: ${{ vars.PZ_WEB_ORIGIN }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      # Deployed to production rather than to a Vercel preview deployment, on
+      # purpose. Vercel's Deployment Protection gates preview deployments (and
+      # the generated production deployment URL) behind Vercel authentication by
+      # default; a production DOMAIN alias is not gated. Framing a login wall
+      # would defeat the whole feature. This also matches the other templates:
+      # there is one always-on preview instance tracking the default branch, not
+      # one per commit.
+      - name: Deploy
+        id: vercel
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)
+
+          # Prefer the project's production domain alias over the generated
+          # deployment URL the command above prints, because the generated URL
+          # is what Standard Protection covers. Falls back to the generated URL
+          # when the project exposes no production alias, which still gives the
+          # Preview tab a working link even if it prompts for a Vercel login.
+          alias_domain=$(
+            curl -sS --fail-with-body \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
+              | jq -r '[.alias[]? | select(.target == "PRODUCTION") | .domain] | first // empty'
+          ) || alias_domain=""
+
+          if [ -n "$alias_domain" ]; then
+            echo "url=https://$alias_domain/" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=${deployment_url%/}/" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `always()` so a failed deploy still reports a terminal state. Without
+      # it a broken build looks like a preview that is forever building.
+      - name: Report deployment result
+        if: always() && steps.open.outputs.id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEPLOYMENT_ID: ${{ steps.open.outputs.id }}
+          PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ]; then
+            state=success
+            description="Preview deployed"
+          else
+            state=failure
+            description="Preview deploy failed"
+          fi
+          gh api "repos/$REPO/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state="$state" \
+            -f environment="$ENVIRONMENT" \
+            -f environment_url="$PREVIEW_URL" \
+            -f log_url="$RUN_URL" \
+            -f description="$description" >/dev/null

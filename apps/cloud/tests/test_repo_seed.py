@@ -215,3 +215,64 @@ def test_fly_node_reports_its_own_url_and_opens_a_deployment_first():
     assert "environment_url" in workflow
     # A pull request must never reach the deploy credential.
     assert "pull_request_target" not in workflow
+
+
+def test_next_vercel_is_a_customer_owned_provider_template():
+    template = get_template("next-vercel")
+    assert template is not None
+    assert template.provider_credential_kind == "vercel"
+    # Vercel mints the hostname, so the URL arrives with the delivery rather
+    # than being computed by the platform up front.
+    assert template.url_kind == "provider"
+    assert template.provider in PROVIDERS
+
+
+def test_next_vercel_seeds_a_next_app_and_the_fixed_workflow_path():
+    paths = {path for path, _, _ in template_files("next-vercel")}
+    assert ".github/workflows/deploy.yml" in paths
+    assert "next.config.mjs" in paths
+    assert "app/page.tsx" in paths
+    # Stored as `<name>.tmpl` so they never take effect inside this repository;
+    # they must arrive in the customer's repo under their real names.
+    assert {"package.json", "tsconfig.json", ".gitignore"} <= paths
+
+
+def test_next_vercel_bakes_the_frame_ancestor_at_build_time():
+    files = dict((path, content) for path, content, _ in template_files("next-vercel"))
+    # The header is what makes `embeddable=True` earned rather than lucky: the
+    # Preview tab frames this app because the app names it, not because Vercel
+    # happens to send no framing header.
+    assert "frame-ancestors" in files["next.config.mjs"]
+    assert "PZ_WEB_ORIGIN" in files["next.config.mjs"]
+    workflow = files[".github/workflows/deploy.yml"]
+    # `vercel build` runs the Next.js build on the runner, so PZ_WEB_ORIGIN has
+    # to be in THAT step's environment. Setting it only on the deploy step
+    # would produce a preview that silently refuses to frame.
+    build = workflow.index("vercel build")
+    assert workflow.rindex("PZ_WEB_ORIGIN", 0, build) > workflow.index("Build")
+
+
+def test_next_vercel_reports_its_own_url_and_opens_a_deployment_first():
+    workflow = next(
+        content
+        for path, content, _ in template_files("next-vercel")
+        if path == ".github/workflows/deploy.yml"
+    )
+    assert workflow.index("Open deployment") < workflow.index("vercel deploy")
+    assert "environment_url" in workflow
+    assert "pull_request_target" not in workflow
+    # Production, not a Vercel preview deployment: Deployment Protection gates
+    # preview deployments behind a Vercel login by default, and a login wall
+    # cannot be reviewed by a stakeholder.
+    assert "--prod" in workflow
+
+
+def test_next_vercels_pull_request_check_cannot_reach_the_deploy_token():
+    workflow = next(
+        content
+        for path, content, _ in template_files("next-vercel")
+        if path == ".github/workflows/deploy.yml"
+    )
+    check = workflow.index("  check:")
+    deploy = workflow.index("  deploy:")
+    assert "secrets." not in workflow[check:deploy]
