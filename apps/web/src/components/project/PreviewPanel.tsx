@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth";
 import type { DeploymentStatus } from "@/lib/types";
 import { useIsWorkspaceAdmin } from "@/lib/workspace";
 import { BuildHistory } from "./BuildHistory";
+import { BuildTasks } from "./BuildTasks";
 import {
   buildVersions,
   isPreviewReadyMessage,
@@ -208,6 +209,8 @@ export function PreviewPanel({
           <p className="text-xs text-slate-500">{status.template_name}</p>
         )}
       </header>
+
+      {status && <BuildTasks status={status} />}
 
       {view.mode === "failed" && status?.last_error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3">
