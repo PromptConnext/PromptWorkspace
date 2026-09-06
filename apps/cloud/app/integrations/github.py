@@ -39,7 +39,6 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import re
 import secrets
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -67,15 +66,6 @@ WEBHOOK_EVENTS = ["push", "pull_request", "workflow_run", "deployment_status"]
 # instead of 40 serial round-trips; kept modest to stay well inside GitHub's
 # secondary rate limits for concurrent writes.
 _BLOB_CONCURRENCY = 8
-
-# Same convention apps/engine/src/routes/projects.ts's syncTasksFromGit uses
-# to mark tasks done from commit subjects (ADR 0007/0009) — kept identical
-# so a PR title/body and a commit subject resolve to the same task.
-_TASK_REF_RE = re.compile(r"\bT\d{3}\b")
-
-
-def extract_task_refs(text: str) -> set[str]:
-    return set(_TASK_REF_RE.findall(text or ""))
 
 
 def verify_signature(body: bytes, signature: str | None, secret: str) -> bool:

@@ -33,7 +33,6 @@ from app.integrations.deploy_providers import platform_r2_preview_url
 from app.integrations.github import (
     GithubAuthError,
     GithubWriteError,
-    extract_task_refs,
     parse_deployment_status_event,
     parse_pull_request_event,
     parse_push_event,
@@ -41,6 +40,7 @@ from app.integrations.github import (
     verify_signature,
 )
 from app.integrations.github_auth import github_config
+from app.integrations.task_refs import refs_for_commit, tasks_by_ref
 from app.models.schemas import (
     Artifact,
     ArtifactKind,
@@ -475,15 +475,14 @@ def _handle_pull_request(
     if event is None:
         return
 
-    # Task linkage via the same T-ref commit convention syncTasksFromGit uses
-    # (apps/engine/src/routes/projects.ts) — a PR with no matching task is
-    # skipped entirely, same as that function's `if (!task) continue`.
-    refs = extract_task_refs(f"{event.title}\n{event.body}")
+    # Task linkage through the ported ref rule (ADR 0023 decision 3). The old
+    # textual `feature_tag.split(" ")[0] in refs` compare could not match "T12"
+    # against a stored "T012", so a project numbering its tasks that way got no
+    # PR linkage at all while the editor closed its tasks correctly.
     graph = repo.get_graph(project_id)
-    task_id = next(
-        (t.id for t in graph.tasks if t.feature_tag and t.feature_tag.split(" ")[0] in refs),
-        None,
-    )
+    by_ref = tasks_by_ref(graph.tasks)
+    refs = refs_for_commit(event.title, None) or refs_for_commit(event.body, None)
+    task_id = next((by_ref[ref] for ref in refs if ref in by_ref), None)
     if task_id is None:
         return
 

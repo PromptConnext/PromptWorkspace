@@ -301,3 +301,29 @@ def test_push_removing_a_file_deletes_its_code_chunks(
 
     zero_vector = [0.0] * 32
     assert repo.code_vector_search(ws_id, pid, zero_vector, top_k=10) == []
+
+
+def test_a_two_digit_task_ref_now_links_a_pull_request(
+    client: TestClient, workspace_project_task: tuple[str, str, str]
+):
+    """The defect ADR 0023 names: the editor closed T1 and the server linked
+    nothing, because "T001".split(" ")[0] never equalled "T1" — and the old
+    \\bT\\d{3}\\b could not even see a two-digit ref."""
+    _ws_id, pid, task_id = workspace_project_task
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 7,
+            "title": "feat: add a retry T1",
+            "body": "",
+            "html_url": "https://github.com/acme/rocket/pull/7",
+            "merged": False,
+            "head": {"sha": "deadbeef"},
+        },
+        "repository": {"full_name": REPO},
+    }
+    assert _post_webhook(client, "pull_request", payload).status_code == 200
+
+    graph = client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()
+    prs = [a for a in graph["artifacts"] if a["kind"] == "pr"]
+    assert [a["task_id"] for a in prs] == [task_id]
