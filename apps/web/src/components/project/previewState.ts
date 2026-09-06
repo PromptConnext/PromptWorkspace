@@ -15,7 +15,7 @@
 // postMessage handshake (positive proof the frame actually rendered) — and
 // the absence of either is treated as "not confirmed", never as "refused".
 
-import type { DeploymentStatus } from "@/lib/types";
+import type { DeploymentOut, DeploymentStatus } from "@/lib/types";
 
 export type PreviewMode =
   | "empty" // no template chosen — nothing will ever deploy
@@ -134,4 +134,55 @@ export function isPreviewReadyMessage(data: unknown, origin: string, url: string
 /** Short, human commit reference for the status line. */
 export function shortSha(sha: string | null | undefined): string | null {
   return sha ? sha.slice(0, 7) : null;
+}
+
+/** One entry in the version list a business user reads. */
+export interface BuildVersion {
+  id: string;
+  /** Counts from the oldest known deploy, so a version never renumbers. */
+  ordinal: number;
+  label: string;
+  state: string;
+  at: string;
+  deploy: DeploymentOut;
+}
+
+/**
+ * The deploy history as versions, newest first.
+ *
+ * The ordinal counts from the oldest row the server returned rather than from
+ * the newest, so "Version 3" keeps meaning the same build as more deploys
+ * land. `recent[]` is capped server-side, so an ordinal is only stable within
+ * that window — which is exactly the window this list renders.
+ */
+export function buildVersions(status: DeploymentStatus | null): BuildVersion[] {
+  const rows = status?.recent ?? [];
+  const total = rows.length;
+  return rows.map((deploy, index) => {
+    const ordinal = total - index;
+    return {
+      id: deploy.id,
+      ordinal,
+      label: `Version ${ordinal}`,
+      state: deploy.state,
+      at: deploy.created_at,
+      deploy,
+    };
+  });
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** "2 minutes ago". A business user reads time, not a timestamp. */
+export function relativeTime(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const delta = now.getTime() - then;
+  if (delta < MINUTE) return "just now";
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  if (delta < HOUR) return plural(Math.floor(delta / MINUTE), "minute");
+  if (delta < DAY) return plural(Math.floor(delta / HOUR), "hour");
+  return plural(Math.floor(delta / DAY), "day");
 }

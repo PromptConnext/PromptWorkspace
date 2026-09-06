@@ -91,7 +91,9 @@ function ProjectWorkspace({ workspaceId, projectId }: { workspaceId: string; pro
                 onPosted={refetch}
               />
             )}
-            {tab === "Preview" && <PreviewPanel projectId={projectId} />}
+            {tab === "Preview" && (
+              <PreviewPanel projectId={projectId} workspaceId={workspaceId} />
+            )}
           </>
         )}
       </main>

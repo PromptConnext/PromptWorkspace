@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isPreviewReadyMessage, resolvePreview, safeWebUrl, shortSha } from "./previewState";
-import type { DeploymentStatus } from "@/lib/types";
+import {
+  buildVersions,
+  isPreviewReadyMessage,
+  relativeTime,
+  resolvePreview,
+  safeWebUrl,
+  shortSha,
+} from "./previewState";
+import type { DeploymentOut, DeploymentStatus } from "@/lib/types";
 
 function status(overrides: Partial<DeploymentStatus> = {}): DeploymentStatus {
   return {
@@ -167,5 +174,58 @@ describe("resolvePreview url safety", () => {
   it("does not claim to embed a url it had to reject", () => {
     const view = resolvePreview(status({ url: "javascript:alert(1)" }), "confirmed");
     expect(view.mode).toBe("waiting");
+  });
+});
+
+// ADR 0023: the version list a business user reads.
+function deployRow(over: Partial<DeploymentOut> = {}): DeploymentOut {
+  return {
+    id: "d1",
+    state: "live",
+    url: "https://preview.test/p/index.html",
+    commit_sha: "abc1234def",
+    ref: "main",
+    run_url: "https://github.com/acme/rocket/actions/runs/1",
+    frame_policy: "allow",
+    created_at: "2026-09-01T10:00:00Z",
+    updated_at: "2026-09-01T10:00:00Z",
+    ...over,
+  };
+}
+
+function statusWithHistory(recent: DeploymentOut[]): DeploymentStatus {
+  return status({ url: recent[0]?.url ?? null, last_deploy: recent[0] ?? null, recent });
+}
+
+describe("buildVersions", () => {
+  it("numbers oldest-first so version 1 never changes number", () => {
+    const versions = buildVersions(
+      statusWithHistory([
+        deployRow({ id: "d3", created_at: "2026-09-01T12:00:00Z" }),
+        deployRow({ id: "d2", created_at: "2026-09-01T11:00:00Z" }),
+        deployRow({ id: "d1", created_at: "2026-09-01T10:00:00Z" }),
+      ]),
+    );
+    // Newest first for display, but the ordinal counts from the oldest row.
+    expect(versions.map((v) => [v.id, v.ordinal])).toEqual([
+      ["d3", 3],
+      ["d2", 2],
+      ["d1", 1],
+    ]);
+    expect(versions[0].label).toBe("Version 3");
+  });
+
+  it("is empty when nothing has ever deployed", () => {
+    expect(buildVersions(null)).toEqual([]);
+  });
+});
+
+describe("relativeTime", () => {
+  const now = new Date("2026-09-01T12:00:00Z");
+  it("reads as plain English, never as a timestamp", () => {
+    expect(relativeTime("2026-09-01T11:58:00Z", now)).toBe("2 minutes ago");
+    expect(relativeTime("2026-09-01T09:00:00Z", now)).toBe("3 hours ago");
+    expect(relativeTime("2026-08-30T12:00:00Z", now)).toBe("2 days ago");
+    expect(relativeTime("2026-09-01T11:59:50Z", now)).toBe("just now");
   });
 });

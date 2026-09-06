@@ -10,7 +10,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getDeploymentStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DeploymentStatus } from "@/lib/types";
-import { isPreviewReadyMessage, resolvePreview, shortSha } from "./previewState";
+import { useIsWorkspaceAdmin } from "@/lib/workspace";
+import { BuildHistory } from "./BuildHistory";
+import {
+  buildVersions,
+  isPreviewReadyMessage,
+  relativeTime,
+  resolvePreview,
+  shortSha,
+} from "./previewState";
 
 const POLL_MS = 3000;
 // Bounds "stuck", not "slow" — the effect below resets this whenever the
@@ -37,12 +45,15 @@ function LinkCard({
   url,
   status,
   reason,
+  isAdmin,
 }: {
   url: string;
   status: DeploymentStatus;
   reason: string | null;
+  isAdmin: boolean;
 }) {
   const sha = shortSha(status.last_deploy?.commit_sha);
+  const at = status.last_deploy?.created_at;
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <p className="text-sm font-medium text-slate-900">The live application is ready.</p>
@@ -56,7 +67,11 @@ function LinkCard({
         Open in a new tab
       </a>
       <p className="mt-3 break-all text-xs text-slate-500">{url}</p>
-      {sha && (
+      {at && <p className="mt-1 text-xs text-slate-500">Published {relativeTime(at)}</p>}
+      {/* ADR 0023 decision 6: a commit and a run link are a Tech Lead's tools,
+          not a business user's. The moment a member has to understand a merge
+          to read the preview, the feature has failed its stated purpose. */}
+      {isAdmin && sha && (
         <p className="mt-1 text-xs text-slate-500">
           Built from commit <code>{sha}</code>
           {status.last_deploy?.run_url && (
@@ -78,7 +93,14 @@ function LinkCard({
   );
 }
 
-export function PreviewPanel({ projectId }: { projectId: string }) {
+export function PreviewPanel({
+  projectId,
+  workspaceId,
+}: {
+  projectId: string;
+  workspaceId: string;
+}) {
+  const isAdmin = useIsWorkspaceAdmin(workspaceId);
   const { authHeaders } = useAuth();
   const [status, setStatus] = useState<DeploymentStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,7 +212,7 @@ export function PreviewPanel({ projectId }: { projectId: string }) {
       {view.mode === "failed" && status?.last_error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3">
           <p className="text-sm text-red-700">{status.last_error.message}</p>
-          {status.last_error.run_url && (
+          {isAdmin && status.last_error.run_url && (
             <a
               href={status.last_error.run_url}
               target="_blank"
@@ -221,7 +243,7 @@ export function PreviewPanel({ projectId }: { projectId: string }) {
               detail.
             </p>
           )}
-          {status?.last_deploy?.run_url && (
+          {isAdmin && status?.last_deploy?.run_url && (
             <a
               href={status.last_deploy.run_url}
               target="_blank"
@@ -260,8 +282,10 @@ export function PreviewPanel({ projectId }: { projectId: string }) {
       )}
 
       {url && (view.mode === "link" || view.mode === "failed") && status && (
-        <LinkCard url={url} status={status} reason={view.fallbackReason} />
+        <LinkCard url={url} status={status} reason={view.fallbackReason} isAdmin={isAdmin} />
       )}
+
+      <BuildHistory versions={buildVersions(status)} isAdmin={isAdmin} />
     </section>
   );
 }

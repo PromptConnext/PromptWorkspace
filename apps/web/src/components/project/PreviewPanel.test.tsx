@@ -8,6 +8,10 @@ vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), user: { id: "u1" } }),
 }));
 
+// ADR 0023 decision 6: the git vocabulary is behind the workspace-admin gate.
+let mockIsAdmin = false;
+vi.mock("@/lib/workspace", () => ({ useIsWorkspaceAdmin: () => mockIsAdmin }));
+
 const originalFetch = global.fetch;
 const URL_LIVE = "https://preview.test/previews/p1/index.html";
 
@@ -35,6 +39,7 @@ function mockStatus(body: DeploymentStatus) {
 }
 
 beforeEach(() => {
+  mockIsAdmin = false;
   mockStatus(status());
 });
 
@@ -48,13 +53,13 @@ afterEach(() => {
 describe("PreviewPanel", () => {
   it("explains the empty state instead of showing a broken frame", async () => {
     mockStatus(status({ state: "not_configured", url: null, template_id: null }));
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
     expect(await screen.findByText("No live preview yet")).toBeInTheDocument();
     expect(document.querySelector("iframe")).toBeNull();
   });
 
   it("embeds a live, embeddable deploy and still offers a way out", async () => {
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
     await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
 
     const frame = document.querySelector("iframe")!;
@@ -69,6 +74,9 @@ describe("PreviewPanel", () => {
   });
 
   it("shows a link card and no iframe when the server measured a framing refusal", async () => {
+    // Admin: ADR 0023 decision 6 keeps the commit off a plain member's view,
+    // and this case is about the framing fallback, not about who may read it.
+    mockIsAdmin = true;
     mockStatus(
       status({
         embeddable: false,
@@ -85,7 +93,7 @@ describe("PreviewPanel", () => {
         },
       }),
     );
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
 
     expect(await screen.findByText("The live application is ready.")).toBeInTheDocument();
     expect(document.querySelector("iframe")).toBeNull();
@@ -94,7 +102,7 @@ describe("PreviewPanel", () => {
 
   it("falls back to the link card when the handshake never arrives", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
     await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
 
     await vi.advanceTimersByTimeAsync(5000);
@@ -106,7 +114,7 @@ describe("PreviewPanel", () => {
   it("keeps polling while a deploy is in flight, and stops once it lands", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mockStatus(status({ state: "building", pending: 1, url: null }));
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
 
     expect(await screen.findByText("Building the preview")).toBeInTheDocument();
     const afterFirstLoad = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -126,6 +134,9 @@ describe("PreviewPanel", () => {
   });
 
   it("reports a failure but keeps the last known good url reachable", async () => {
+    // Admin: the build-log link is gated by ADR 0023 decision 6; the
+    // last-known-good url below is what a member still sees.
+    mockIsAdmin = true;
     mockStatus(
       status({
         state: "failed",
@@ -138,7 +149,7 @@ describe("PreviewPanel", () => {
         },
       }),
     );
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
 
     expect(await screen.findByText("The latest deploy failed")).toBeInTheDocument();
     expect(screen.getByText("workflow run failure")).toBeInTheDocument();
@@ -155,11 +166,45 @@ describe("PreviewPanel", () => {
 
   it("never renders a progress bar while building", async () => {
     mockStatus(status({ state: "building", pending: 1, url: null }));
-    render(<PreviewPanel projectId="p1" />);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
     await screen.findByText("Building the preview");
     // A deploy's duration is unknown to the server, so any percentage would
     // be invented. ReindexPanel's rule, inherited deliberately.
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();
+  });
+});
+
+describe("git vocabulary (ADR 0023 decision 6)", () => {
+  const DENIED = status({
+    last_deploy: {
+      id: "d1",
+      state: "live",
+      url: URL_LIVE,
+      commit_sha: "abc1234def",
+      ref: "main",
+      run_url: "https://github.com/acme/rocket/actions/runs/1",
+      frame_policy: "deny",
+      created_at: "2026-09-01T10:00:00Z",
+      updated_at: "2026-09-01T10:00:00Z",
+    },
+    recent: [],
+  });
+
+  it("shows a member a version and a time, never a commit or a run link", async () => {
+    mockIsAdmin = false;
+    mockStatus(DENIED);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
+    await waitFor(() => expect(screen.getByText(/Open in a new tab/)).toBeInTheDocument());
+    expect(screen.queryByText(/abc1234/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/build log/i)).not.toBeInTheDocument();
+  });
+
+  it("shows an admin the commit and the build log", async () => {
+    mockIsAdmin = true;
+    mockStatus(DENIED);
+    render(<PreviewPanel projectId="p1" workspaceId="w1" />);
+    await waitFor(() => expect(screen.getByText(/build log/i)).toBeInTheDocument());
+    expect(screen.getByText(/abc1234/)).toBeInTheDocument();
   });
 });
