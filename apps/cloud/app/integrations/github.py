@@ -390,6 +390,10 @@ class GithubClient(Protocol):
         self, token: str, repo: str, hook_id: int, events: list[str]
     ) -> None: ...
 
+    async def get_deployment(self, token: str, repo: str, deployment_id: str) -> dict | None: ...
+
+    async def get_workflow_run(self, token: str, repo: str, run_id: str) -> dict | None: ...
+
 
 async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> httpx.Response:
     """One GitHub request, with transport failures (DNS, connect refused,
@@ -557,6 +561,41 @@ class HttpGithubClient:
             "html_url": data["html_url"],
             "default_branch": data.get("default_branch", "main"),
         }
+
+    async def get_deployment(self, token: str, repo: str, deployment_id: str) -> dict | None:
+        """The newest status for one deployment, or None when GitHub has no
+        such deployment (deleted, or never created by the run we recorded)."""
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/deployments/{deployment_id}/statuses?per_page=1",
+            token=token,
+            what="read a deployment's statuses",
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.is_error:
+            raise GithubWriteError(
+                f"reading a deployment's statuses failed for {repo}: {resp.status_code}",
+                status_code=resp.status_code,
+            )
+        rows = resp.json() or []
+        return rows[0] if rows else None
+
+    async def get_workflow_run(self, token: str, repo: str, run_id: str) -> dict | None:
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/actions/runs/{run_id}",
+            token=token,
+            what="read a workflow run",
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.is_error:
+            raise GithubWriteError(
+                f"reading a workflow run failed for {repo}: {resp.status_code}",
+                status_code=resp.status_code,
+            )
+        return resp.json()
 
     async def put_file_content(
         self,
@@ -915,6 +954,10 @@ class FakeGithubClient:
         # Status `get_repo` fails with, for the adopt-on-retry path. None =
         # answer normally (the repo, or None when unknown).
         self.get_repo_failure_status: int | None = None
+        # ADR 0023 reconciliation. Keyed (repo, id); an unregistered key is
+        # GitHub answering 404, which is exactly the abandoned-deploy case.
+        self.deployment_states: dict[tuple[str, str], dict] = {}
+        self.workflow_runs: dict[tuple[str, str], dict] = {}
         self.reject_token = False
         self.token_owner_unreachable = False
         self.token_expires_at: str | None = None
@@ -922,6 +965,12 @@ class FakeGithubClient:
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
+
+    async def get_deployment(self, token: str, repo: str, deployment_id: str) -> dict | None:
+        return self.deployment_states.get((repo, deployment_id))
+
+    async def get_workflow_run(self, token: str, repo: str, run_id: str) -> dict | None:
+        return self.workflow_runs.get((repo, run_id))
 
     async def verify_token(self, token: str, owner: str) -> TokenIdentity:
         self.verified_tokens.append((token, owner))

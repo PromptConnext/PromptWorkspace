@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     deploy_r2_shared_secret_access_key: str = ""
     deploy_r2_shared_bucket: str = ""
 
+    # ADR 0023 decision 7. The sweep is an outbound poll that closes out
+    # deployments a lost webhook delivery left in flight. `stale_after` is
+    # generous on purpose: a mobile build legitimately takes twenty minutes,
+    # and closing one out early would be worse than closing it out late.
+    deployment_reconcile_interval_seconds: int = 300
+    deployment_stale_after_seconds: int = 1800
+
     # Managed Thai-LLM tier (M2, plan 0007 / ADR 0013 Part B pilot): the free
     # opentyphoon.ai API as a platform-operated model source for workspaces
     # with no BYO connection. Chat only in the pilot — no managed embedding

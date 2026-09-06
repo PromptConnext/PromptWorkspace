@@ -195,17 +195,23 @@ async def lifespan(app: FastAPI):
         __version__,
         app.state.repository.backend_name,
     )
+    from app.deployments.reconcile import reconcile_loop
+
     gc_task = asyncio.create_task(_tombstone_gc_loop(app, settings))
     embed_task = asyncio.create_task(embed_worker_loop(app))
+    reconcile_task = asyncio.create_task(reconcile_loop(app, settings))
     try:
         yield
     finally:
         gc_task.cancel()
         embed_task.cancel()
+        reconcile_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await gc_task
         with contextlib.suppress(asyncio.CancelledError):
             await embed_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await reconcile_task
 
 
 def create_app() -> FastAPI:

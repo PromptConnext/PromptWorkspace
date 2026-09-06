@@ -366,6 +366,18 @@ class SupabaseRepository(Repository):
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
 
+    def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
+        res = (
+            self._client.table(_DEPLOYMENTS)
+            .select("*")
+            .not_.in_("state", ["live", "failed", "inactive"])
+            .lt("updated_at", older_than.isoformat())
+            .order("updated_at")
+            .limit(limit)
+            .execute()
+        )
+        return [Deployment(**row) for row in (res.data or [])]
+
     def list_projects(self, user_id: str) -> list[Project]:
         mem = self._client.table(_MEMBERS).select("workspace_id").eq("user_id", user_id).execute()
         ids = [m["workspace_id"] for m in (mem.data or [])]

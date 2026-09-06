@@ -27,6 +27,8 @@ from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.registry import PREVIEW_ENVIRONMENT, WORKFLOW_PATH
 from app.deployments.registry import get_template as get_deployment_template
+from app.deployments.state import DEPLOY_STATE_BY_GITHUB as _DEPLOY_STATE_BY_GITHUB
+from app.deployments.state import refresh_deployment_state as _refresh_deployment_state
 from app.integrations.deploy_providers import platform_r2_preview_url
 from app.integrations.github import (
     GithubAuthError,
@@ -43,7 +45,6 @@ from app.models.schemas import (
     Artifact,
     ArtifactKind,
     Deployment,
-    DeploymentState,
     GithubConnectionOut,
     GithubConnectRequest,
     GraphUpsertRequest,
@@ -358,48 +359,6 @@ def _handle_workflow_run(repo: Repository, project, payload: dict) -> None:
         )
     )
     _refresh_deployment_state(repo, project)
-
-
-# GitHub's deployment states, mapped onto the five this feature shows. Both
-# `error` and `failure` are failures to a business user; `inactive` means a
-# newer deploy superseded this one.
-_DEPLOY_STATE_BY_GITHUB = {
-    "queued": "queued",
-    "pending": "queued",
-    "in_progress": "building",
-    "success": "live",
-    "failure": "failed",
-    "error": "failed",
-    "inactive": "inactive",
-}
-
-
-def _refresh_deployment_state(repo: Repository, project) -> None:
-    """Recompute the project's denormalized current view from its rows.
-
-    `url` is deliberately last-known-good while `state` is current: a failed
-    deploy must not blank a preview that is still serving. The business
-    user's link keeps working while the Tech Lead fixes the build, which is
-    the whole point of showing them a preview in the first place.
-    """
-    rows = repo.list_deployments(project.id, limit=10)
-    if not rows:
-        return
-    latest = rows[0]
-    last_good_url = next((r.url for r in rows if r.state == "live" and r.url), None)
-    config = project.deployment_config
-    template = get_deployment_template(config.template_id) if config else None
-    repo.update_project_deployment_state(
-        project.id,
-        DeploymentState(
-            template_id=config.template_id if config else None,
-            provider=template.provider if template else None,
-            state=latest.state,
-            url=last_good_url,
-            commit_sha=latest.commit_sha,
-            run_url=latest.run_url,
-        ),
-    )
 
 
 # The probe below fetches a URL that arrived in a webhook payload. The

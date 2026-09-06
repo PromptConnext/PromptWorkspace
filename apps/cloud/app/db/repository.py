@@ -188,6 +188,14 @@ class Repository(abc.ABC):
     def get_latest_deployment(self, project_id: str) -> Deployment | None: ...
 
     @abc.abstractmethod
+    def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
+        """Non-terminal deployments last touched before `older_than`, oldest
+        first, across every project.
+
+        Cross-project on purpose: this backs a periodic sweep, not a request,
+        and asking per project would mean walking every project every pass."""
+
+    @abc.abstractmethod
     def update_project_repo(
         self, project_id: str, repo_url: str, default_branch: str
     ) -> Project:
@@ -687,6 +695,16 @@ class InMemoryRepository(Repository):
     def get_latest_deployment(self, project_id: str) -> Deployment | None:
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
+
+    def list_stale_deployments(self, older_than: datetime, limit: int = 50) -> list[Deployment]:
+        rows = [
+            row
+            for by_key in self._deployments.values()
+            for row in by_key.values()
+            if row.state not in ("live", "failed", "inactive") and row.updated_at < older_than
+        ]
+        rows.sort(key=lambda d: (d.updated_at, d.id))
+        return copy.deepcopy(rows[:limit])
 
     def list_projects(self, user_id: str) -> list[Project]:
         member_ws = {
