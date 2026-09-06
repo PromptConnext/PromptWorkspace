@@ -572,6 +572,66 @@ def test_the_projects_own_provider_id_reaches_the_pipeline_it_seeds():
         assert fake.secrets[(repo_name, "VERCEL_TOKEN")] == "vercel-token"
 
 
+def _connect_docker_host(client: TestClient, workspace_id: str) -> None:
+    """The workspace half of a Docker host connection: the key, the address,
+    the user and the host key. No app name, port or URL — those are the
+    project's (ADR 0025), because one host runs many projects."""
+    ws = client.app.state.repository.get_workspace(workspace_id)
+    merged = dict(ws.integration_config or {})
+    merged["ssh-docker"] = {
+        "host": "box.example.com",
+        "ssh_user": "deploy",
+        "known_hosts": "box.example.com ssh-ed25519 AAAA",
+        "secret_ref": client.app.state.secret_store.encrypt("PRIVATE KEY"),
+        "connected_by": "alice",
+    }
+    client.app.state.repository.update_workspace(workspace_id, integration_config=merged)
+
+
+def test_a_docker_compose_project_seeds_the_runtime_its_plan_describes():
+    """ADR 0026. The plan decides which hand-written scaffold is committed;
+    the Tech Lead decides where it runs."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        client.app.state.repository.upsert_stage_document(
+            pid, ws["id"], "plan", "# Architecture\n\nA FastAPI service in Python.", "alice"
+        )
+        _connect_docker_host(client, ws["id"])
+        client.app.state.repository.update_project_deployment_config(
+            pid,
+            DeploymentConfig(
+                template_id="docker-compose",
+                provider_values={
+                    "app_slug": "rocket",
+                    "host_port": "8081",
+                    "public_url": "https://rocket.example.com",
+                },
+            ),
+        )
+
+        assert _create_repo(client, pid).status_code == 200, "provisioning should succeed"
+        repo_name = "acme/rocket-ship"
+
+        # This project's placement on the shared host, not the workspace's.
+        assert fake.variables[(repo_name, "PZ_APP_SLUG")] == "rocket"
+        assert fake.variables[(repo_name, "PZ_HOST_PORT")] == "8081"
+        assert fake.variables[(repo_name, "PZ_SSH_HOST")] == "box.example.com"
+        assert fake.secrets[(repo_name, "PZ_SSH_KEY")] == "PRIVATE KEY"
+
+        # Nobody mints the URL of a customer's own server, so the one the Tech
+        # Lead named is what the workflow health-checks and what the Preview
+        # tab opens — the same value on both sides.
+        assert fake.variables[(repo_name, "PZ_PREVIEW_URL")] == "https://rocket.example.com"
+        state = client.app.state.repository.get_project(pid).deployment_state
+        assert state.url == "https://rocket.example.com"
+        assert state.state == "awaiting_first_deploy"
+
+        paths = set(fake.commits[0]["paths"])
+        assert {"Dockerfile", "compose.yaml", "main.py"} <= paths
+        assert "server.js" not in paths
+
+
 def test_missing_platform_credential_fails_before_any_repo_is_created():
     """Fail fast, step 3: a provider that cannot supply a credential must be
     caught before GitHub is touched at all."""

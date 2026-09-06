@@ -1,14 +1,14 @@
 // Minimal Node service. Replace it with your application — the pipeline around
-// it (Dockerfile, fly.toml, .github/workflows/deploy.yml) is what PromptZone
-// seeded, and it does not care what this file grows into.
+// it (Dockerfile, compose.yaml, .github/workflows/deploy.yml) is what
+// PromptZone seeded, and it does not care what this file grows into.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 
 const PORT = process.env.PORT || 8080;
-// Set as a Fly secret by the deploy workflow. Naming the PromptZone web origin
-// as a frame ancestor is what lets the project's Preview tab embed this app
-// instead of falling back to a link card.
+// Passed in by compose from the deploy workflow. Naming the PromptZone web
+// origin as a frame ancestor is what lets the project's Preview tab embed this
+// app instead of falling back to a link card.
 const WEB_ORIGIN = process.env.PZ_WEB_ORIGIN || "";
 
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript" };

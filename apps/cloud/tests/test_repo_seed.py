@@ -186,35 +186,43 @@ def test_deployment_files_do_not_collide_with_the_derived_documents():
     assert derived.isdisjoint(deployment)
 
 
-def test_fly_node_is_a_customer_owned_provider_template():
-    template = get_template("fly-node")
+def test_docker_compose_is_a_customer_owned_provider_template():
+    template = get_template("docker-compose")
     assert template is not None
-    # The point of the second template: it exercises the paths static-r2 never
-    # touches — a customer credential and a provider-minted URL.
-    assert template.provider_credential_kind == "fly"
-    assert template.url_kind == "provider"
+    assert template.provider_credential_kind == "ssh-docker"
+    # Nobody mints the URL of a server the customer administers, so a human
+    # names it and both sides read the same stored value.
+    assert template.url_kind == "platform"
+    assert template.preview_url_from == "public_url"
     assert template.provider in PROVIDERS
 
 
-def test_fly_node_seeds_a_dockerfile_and_the_fixed_workflow_path():
-    paths = {path for path, _, _ in template_files("fly-node")}
+def test_docker_compose_seeds_a_dockerfile_a_compose_file_and_the_fixed_workflow():
+    paths = {path for path, _, _ in template_files("docker-compose")}
     assert "Dockerfile" in paths
+    assert "compose.yaml" in paths
     assert ".github/workflows/deploy.yml" in paths
-    assert "fly.toml" in paths
+    # The layout directories are an implementation detail of the composed
+    # scaffold and must never reach a customer's repository.
+    assert not any(p.startswith(("base/", "runtimes/", "services/")) for p in paths)
 
 
-def test_fly_node_reports_its_own_url_and_opens_a_deployment_first():
+def test_docker_compose_opens_a_deployment_first_and_never_weakens_host_checking():
     workflow = next(
         content
-        for path, content, _ in template_files("fly-node")
+        for path, content, _ in template_files("docker-compose")
         if path == ".github/workflows/deploy.yml"
     )
     # Opening the deployment before the build is what lets the Preview tab show
     # "building" immediately instead of nothing until the deploy finishes.
-    assert workflow.index("Open deployment") < workflow.index("flyctl deploy")
+    assert workflow.index("Open deployment") < workflow.index("Build the image")
     assert "environment_url" in workflow
-    # A pull request must never reach the deploy credential.
+    # A pull request must never reach the deploy credential — and here that
+    # credential is shell access to the customer's host.
     assert "pull_request_target" not in workflow
+    # The key travels to whichever machine the admin's own host key names.
+    assert "StrictHostKeyChecking yes" in workflow
+    assert "StrictHostKeyChecking=no" not in workflow
 
 
 def test_next_vercel_is_a_customer_owned_provider_template():

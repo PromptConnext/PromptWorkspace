@@ -35,8 +35,11 @@ def _workspace(client: TestClient, *, member: str | None = None) -> str:
     return ws["id"]
 
 
+HOST_VALUES = {"host": "box.example.com", "ssh_user": "deploy", "known_hosts": "box ssh-ed25519 A"}
+
+
 @pytest.fixture
-def accepting_fly(monkeypatch):
+def accepting_host(monkeypatch):
     """Network-free verifier, the same seam FakeGithubClient gives the PAT."""
     calls: list[dict] = []
 
@@ -46,52 +49,52 @@ def accepting_fly(monkeypatch):
 
     monkeypatch.setitem(
         deploy_providers.PROVIDERS,
-        "fly",
-        deploy_providers.PROVIDERS["fly"].__class__(
-            id="fly",
-            label="Fly.io",
-            fields=deploy_providers.PROVIDERS["fly"].fields,
+        "ssh-docker",
+        deploy_providers.PROVIDERS["ssh-docker"].__class__(
+            id="ssh-docker",
+            label="Docker host over SSH",
+            fields=deploy_providers.PROVIDERS["ssh-docker"].fields,
             verify=verify,
         ),
     )
     return calls
 
 
-def test_an_admin_connects_a_provider(client, accepting_fly):
+def test_an_admin_connects_a_provider(client, accepting_host):
     ws = _workspace(client)
     res = client.put(
-        f"/workspaces/{ws}/integrations/deploy/fly",
-        json={"token": "fly-token", "values": {"app_name": "rocket", "org_slug": "acme"}},
+        f"/workspaces/{ws}/integrations/deploy/ssh-docker",
+        json={"token": "private-key-material", "values": {**HOST_VALUES, "app_slug": "rocket"}},
         headers=ALICE,
     )
     assert res.status_code == 200
     assert res.json()["connected"] is True
-    # `app_name` is project-scoped (ADR 0025) and is dropped here even though
-    # the client sent it: one Fly app holds one deployment, so it belongs to a
-    # project's deployment template, not to the workspace credential every
-    # project in the workspace shares.
-    assert accepting_fly == [{"token": "fly-token", "org_slug": "acme"}]
+    # `app_slug` is project-scoped (ADR 0025) and is dropped here even though
+    # the client sent it: one host runs many projects, so the name a project
+    # takes on it belongs to that project's deployment template, not to the
+    # workspace credential every project in the workspace shares.
+    assert accepting_host == [{"token": "private-key-material", **HOST_VALUES}]
 
 
-def test_the_connection_never_offers_a_project_scoped_field(client, accepting_fly):
+def test_the_connection_never_offers_a_project_scoped_field(client, accepting_host):
     ws = _workspace(client)
-    body = client.get(f"/workspaces/{ws}/integrations/deploy/fly", headers=ALICE).json()
+    body = client.get(f"/workspaces/{ws}/integrations/deploy/ssh-docker", headers=ALICE).json()
     names = {f["name"] for f in body["fields"]}
-    assert names == {"org_slug"}
+    assert names == {"host", "ssh_user", "known_hosts"}
     assert all(f["scope"] == "workspace" for f in body["fields"])
 
 
-def test_the_token_is_never_returned_and_never_stored_in_the_clear(client, accepting_fly):
+def test_the_token_is_never_returned_and_never_stored_in_the_clear(client, accepting_host):
     ws = _workspace(client)
     client.put(
-        f"/workspaces/{ws}/integrations/deploy/fly",
-        json={"token": "fly-token", "values": {"app_name": "rocket", "org_slug": "acme"}},
+        f"/workspaces/{ws}/integrations/deploy/ssh-docker",
+        json={"token": "private-key-material", "values": HOST_VALUES},
         headers=ALICE,
     )
-    body = client.get(f"/workspaces/{ws}/integrations/deploy/fly", headers=ALICE).json()
-    assert "fly-token" not in str(body)
-    stored = client.app.state.repository.get_workspace(ws).integration_config["fly"]
-    assert "fly-token" not in str(stored)
+    body = client.get(f"/workspaces/{ws}/integrations/deploy/ssh-docker", headers=ALICE).json()
+    assert "private-key-material" not in str(body)
+    stored = client.app.state.repository.get_workspace(ws).integration_config["ssh-docker"]
+    assert "private-key-material" not in str(stored)
     assert stored["secret_ref"]
 
 
@@ -101,38 +104,41 @@ def test_a_rejected_token_is_not_stored(client, monkeypatch):
 
     monkeypatch.setitem(
         deploy_providers.PROVIDERS,
-        "fly",
-        deploy_providers.PROVIDERS["fly"].__class__(id="fly", label="Fly.io", verify=verify),
+        "ssh-docker",
+        deploy_providers.PROVIDERS["ssh-docker"].__class__(
+            id="ssh-docker", label="Docker host over SSH", verify=verify
+        ),
     )
     ws = _workspace(client)
     res = client.put(
-        f"/workspaces/{ws}/integrations/deploy/fly",
+        f"/workspaces/{ws}/integrations/deploy/ssh-docker",
         json={"token": "bad", "values": {}},
         headers=ALICE,
     )
     assert res.status_code == 400
     assert res.json()["detail"] == "deploy_token_rejected"
-    assert "fly" not in (client.app.state.repository.get_workspace(ws).integration_config or {})
+    stored = client.app.state.repository.get_workspace(ws).integration_config or {}
+    assert "ssh-docker" not in stored
 
 
-def test_a_plain_member_cannot_connect(client, accepting_fly):
+def test_a_plain_member_cannot_connect(client, accepting_host):
     ws = _workspace(client, member="bob")
     res = client.put(
-        f"/workspaces/{ws}/integrations/deploy/fly",
+        f"/workspaces/{ws}/integrations/deploy/ssh-docker",
         json={"token": "t", "values": {}},
         headers=BOB,
     )
     assert res.status_code == 403
 
 
-def test_disconnect_clears_the_block(client, accepting_fly):
+def test_disconnect_clears_the_block(client, accepting_host):
     ws = _workspace(client)
     client.put(
-        f"/workspaces/{ws}/integrations/deploy/fly",
-        json={"token": "t", "values": {"app_name": "rocket", "org_slug": "acme"}},
+        f"/workspaces/{ws}/integrations/deploy/ssh-docker",
+        json={"token": "t", "values": HOST_VALUES},
         headers=ALICE,
     )
-    res = client.delete(f"/workspaces/{ws}/integrations/deploy/fly", headers=ALICE)
+    res = client.delete(f"/workspaces/{ws}/integrations/deploy/ssh-docker", headers=ALICE)
     assert res.status_code == 200
     assert res.json()["connected"] is False
 
@@ -265,3 +271,89 @@ def test_vercel_verification_treats_a_transport_failure_as_unreachable(monkeypat
     with pytest.raises(deploy_providers.ProviderCredentialError) as err:
         _verify_vercel({"token": "tok"})
     assert err.value.detail == "deployment_provider_unreachable"
+
+
+# --------------------------------------------------------------------------- #
+# Docker host over SSH (ADR 0026)
+#
+# The workspace half can only check shapes and reachability — proving the key
+# is authorized would mean speaking SSH from this service. The project half is
+# entirely local, and each of its three checks exists because the value it
+# guards reaches either a shell on the customer's host or a browser frame.
+# --------------------------------------------------------------------------- #
+PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----"
+
+
+@pytest.fixture
+def reachable_host(monkeypatch):
+    """Stand-in for the one TCP connection `verify_ssh_docker_host` opens."""
+
+    class _Writer:
+        def close(self) -> None:
+            self.closed = True
+
+    async def open_connection(host, port):
+        return object(), _Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+
+
+def _verify_host(config: dict):
+    return asyncio.run(deploy_providers.verify_ssh_docker_host(None, config))
+
+
+def _verify_placement(config: dict):
+    return asyncio.run(deploy_providers.verify_ssh_docker_project(None, config))
+
+
+def test_connecting_a_docker_host_checks_the_key_shape_and_reachability(reachable_host):
+    assert _verify_host({"token": PRIVATE_KEY, **HOST_VALUES}) == {}
+
+
+def test_a_public_key_pasted_as_the_private_key_is_rejected(reachable_host):
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_host({"token": "ssh-ed25519 AAAAC3 deploy@box", **HOST_VALUES})
+    assert err.value.detail == "deploy_token_rejected"
+
+
+def test_a_missing_host_key_is_its_own_error(reachable_host):
+    # The seeded workflow keeps StrictHostKeyChecking on, so a workspace that
+    # connected without a usable host key would fail every deploy.
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_host({"token": PRIVATE_KEY, **HOST_VALUES, "known_hosts": "not a host key"})
+    assert err.value.detail == "deploy_host_key_invalid"
+
+
+def test_an_unreachable_docker_host_is_not_stored(monkeypatch):
+    async def refuse(host, port):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", refuse)
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_host({"token": PRIVATE_KEY, **HOST_VALUES})
+    assert err.value.detail == "deployment_provider_unreachable"
+
+
+PLACEMENT = {"app_slug": "acme-app", "host_port": "8081", "public_url": "https://app.example.com"}
+
+
+def test_a_well_formed_placement_passes():
+    assert _verify_placement(PLACEMENT) == {}
+
+
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        ({"app_slug": "Acme App"}, "deploy_app_slug_invalid"),
+        ({"app_slug": "a; rm -rf /"}, "deploy_app_slug_invalid"),
+        ({"host_port": "eighty"}, "deploy_host_port_invalid"),
+        ({"host_port": "99999"}, "deploy_host_port_invalid"),
+        # An http:// preview is empty for every viewer: the Preview tab is an
+        # HTTPS page and a browser will not frame plaintext inside it.
+        ({"public_url": "http://app.example.com"}, "deploy_public_url_must_be_https"),
+    ],
+)
+def test_each_bad_placement_value_names_itself(override, detail):
+    with pytest.raises(deploy_providers.ProviderCredentialError) as err:
+        _verify_placement({**PLACEMENT, **override})
+    assert err.value.detail == detail

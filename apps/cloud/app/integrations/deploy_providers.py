@@ -28,6 +28,7 @@ what goes in them. Adding a provider is one entry in PROVIDERS.
 from __future__ import annotations
 
 import logging
+import re
 import secrets as _secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -38,8 +39,8 @@ from app.models.schemas import Workspace
 logger = logging.getLogger("promptconnext.deploy")
 
 PLATFORM_R2 = "platform-r2"
-FLY = "fly"
 VERCEL = "vercel"
+SSH_DOCKER = "ssh-docker"
 
 
 class ProviderCredentialError(RuntimeError):
@@ -79,6 +80,12 @@ class DeployProvider:
     # True when the platform owns the credential and there is nothing for a
     # workspace admin to connect.
     platform_owned: bool = False
+    # What the provider's primary secret is called, and whether it spans more
+    # than one line. Both exist so the connection form stays generic: an SSH
+    # private key pasted into a single-line input loses its newlines and is
+    # then rejected on the first deploy, far from where it was typed.
+    token_label: str = "Deploy token"
+    token_multiline: bool = False
     # Verifies the WORKSPACE half — the token and the account it can reach.
     verify: Callable[[Any, dict], Awaitable[dict]] | None = None
     # Verifies the PROJECT half — that the provider-side project a Tech Lead
@@ -96,33 +103,6 @@ def workspace_fields(provider: DeployProvider) -> tuple[CredentialField, ...]:
 
 def project_fields(provider: DeployProvider) -> tuple[CredentialField, ...]:
     return tuple(f for f in provider.fields if f.scope == "project")
-
-
-async def verify_fly_token(app, config: dict) -> dict:
-    """Confirm a Fly.io deploy token can see the organisation before we store it.
-
-    Same reasoning as `connect_github`'s verification: a token that cannot
-    reach the org produces a workspace that looks connected in settings and
-    fails at tech-review exit, in front of a Tech Lead who cannot tell why.
-    """
-    import httpx
-
-    token = config.get("token") or ""
-    org = config.get("org_slug") or "personal"
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(
-                "https://api.machines.dev/v1/apps",
-                params={"org_slug": org},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except Exception as exc:  # noqa: BLE001 - transport failures included
-        raise ProviderCredentialError("deployment_provider_unreachable") from exc
-    if resp.status_code in (401, 403):
-        raise ProviderCredentialError("deploy_token_rejected")
-    if resp.is_error:
-        raise ProviderCredentialError("deployment_provider_unreachable")
-    return {}
 
 
 def _vercel_team_params(config: dict) -> dict:
@@ -182,6 +162,75 @@ async def verify_vercel_project(app, config: dict) -> dict:
     return {}
 
 
+_PRIVATE_KEY_HEADER = "-----BEGIN "
+_SSH_KEY_TYPES = ("ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-")
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}$")
+
+
+async def verify_ssh_docker_host(app, config: dict) -> dict:
+    """Confirm the Docker host is reachable and the admin gave us a usable key
+    and host key, before we store any of it.
+
+    Deliberately weaker than the other providers' verification, and worth
+    being explicit about: this opens a TCP connection and checks the shapes of
+    two pasted strings. It does **not** prove the key is authorized on that
+    host, because doing so would mean speaking SSH from this service — a new
+    dependency and an outbound shell session from the cloud, which is a much
+    larger thing than this check is worth. The honest guarantee is "the
+    address answers and these two values are the right kind of thing"; a key
+    the host rejects still surfaces on the project's first deploy, in the run
+    log, where the failure names itself.
+    """
+    import asyncio
+
+    key = (config.get("token") or "").strip()
+    if _PRIVATE_KEY_HEADER not in key:
+        # A public key pasted into the private-key field is the mistake this
+        # catches, and it is a common one.
+        raise ProviderCredentialError("deploy_token_rejected")
+
+    known_hosts = (config.get("known_hosts") or "").strip()
+    if not any(key_type in known_hosts for key_type in _SSH_KEY_TYPES):
+        raise ProviderCredentialError("deploy_host_key_invalid")
+
+    host = (config.get("host") or "").strip()
+    try:
+        _reader, writer = await asyncio.wait_for(asyncio.open_connection(host, 22), timeout=10)
+    except Exception as exc:  # noqa: BLE001 - DNS, refusal and timeout alike
+        raise ProviderCredentialError("deployment_provider_unreachable") from exc
+    writer.close()
+    return {}
+
+
+async def verify_ssh_docker_project(app, config: dict) -> dict:
+    """Confirm this project's placement on the host is well formed.
+
+    Entirely local — there is nothing to ask the provider, because the
+    provider is a machine the customer administers. It runs at all because
+    these three values reach a shell on that host through the seeded workflow,
+    and because a bad preview URL is invisible until a stakeholder opens an
+    empty Preview tab.
+    """
+    slug = (config.get("app_slug") or "").strip()
+    if not _SLUG_RE.match(slug):
+        # Also what keeps the value safe to interpolate into the seeded
+        # workflow's `ssh` command line and into a Compose project name, which
+        # is itself restricted to lowercase.
+        raise ProviderCredentialError("deploy_app_slug_invalid")
+
+    port = (config.get("host_port") or "").strip()
+    if not port.isdigit() or not (1 <= int(port) <= 65535):
+        raise ProviderCredentialError("deploy_host_port_invalid")
+
+    url = (config.get("public_url") or "").strip()
+    # HTTPS only, and this is not pedantry: the Preview tab is an HTTPS page,
+    # and a browser refuses to frame an http:// application inside it. An
+    # http:// URL here produces a preview that is empty for every viewer.
+    if not url.startswith("https://") or len(url) <= len("https://"):
+        raise ProviderCredentialError("deploy_public_url_must_be_https")
+    return {}
+
+
 PROVIDERS: dict[str, DeployProvider] = {
     PLATFORM_R2: DeployProvider(
         id=PLATFORM_R2,
@@ -190,24 +239,6 @@ PROVIDERS: dict[str, DeployProvider] = {
         notes=(
             "Managed by PromptZone — nothing to connect, and no third-party "
             "account required.",
-        ),
-    ),
-    FLY: DeployProvider(
-        id=FLY,
-        label="Fly.io",
-        fields=(
-            # One Fly app holds one deployment, so it belongs to the project,
-            # not to the workspace the token belongs to.
-            CredentialField("app_name", "Fly application name", scope="project"),
-            CredentialField("org_slug", "Fly organisation"),
-        ),
-        verify=verify_fly_token,
-        notes=(
-            "Create a deploy token in the Fly dashboard (Tokens → Deploy token) "
-            "for this organisation.",
-            "Each project needs its own Fly application, created once with "
-            "`flyctl apps create <name>` and named on the project's deployment "
-            "template.",
         ),
     ),
     VERCEL: DeployProvider(
@@ -230,6 +261,46 @@ PROVIDERS: dict[str, DeployProvider] = {
             "Deployment Protection must be off for a project's production "
             "domain, or its preview will show a Vercel sign-in page instead of "
             "the application.",
+        ),
+    ),
+    SSH_DOCKER: DeployProvider(
+        id=SSH_DOCKER,
+        label="Docker host over SSH",
+        token_label="SSH private key",
+        token_multiline=True,
+        fields=(
+            CredentialField("host", "Docker host address"),
+            CredentialField("ssh_user", "SSH user"),
+            # Pasted rather than discovered on purpose. The seeded workflow
+            # keeps StrictHostKeyChecking on, which is only worth anything if
+            # the expected host key came from somewhere other than the
+            # connection being checked — so it comes from a person who ran
+            # `ssh-keyscan` against the machine they mean.
+            CredentialField("known_hosts", "Host key line from `ssh-keyscan <host>`"),
+            # One published port and one URL per project, because one host
+            # runs several. Naming them on the workspace would make every
+            # project in it fight over the same port — the defect ADR 0025
+            # was written about, in a different provider's clothes.
+            CredentialField("app_slug", "Application name on the host", scope="project"),
+            CredentialField("host_port", "Published port on the host", scope="project"),
+            CredentialField("public_url", "Public HTTPS URL for this project", scope="project"),
+        ),
+        verify=verify_ssh_docker_host,
+        verify_project=verify_ssh_docker_project,
+        notes=(
+            "The key below is sealed into every repository this workspace "
+            "deploys, and a repository secret is readable by anyone who can "
+            "push. Treat it as shell access to this host: give it a dedicated, "
+            "unprivileged user that can use Docker and nothing else, on a "
+            "machine that runs previews only.",
+            "The host must already run Docker Engine with the Compose plugin. "
+            "Nothing here installs it.",
+            "Get the host key line with `ssh-keyscan <host>` and paste one "
+            "line of the output.",
+            "Each project names its own port and URL on its deployment "
+            "template, not here. Point them at whichever reverse proxy or "
+            "certificate the host already uses — nothing in the pipeline "
+            "issues one.",
         ),
     ),
 }

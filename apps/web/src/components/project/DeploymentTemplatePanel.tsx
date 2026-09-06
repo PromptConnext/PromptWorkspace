@@ -29,6 +29,18 @@ function describeError(message: string): string {
   if (message === "deploy_token_rejected") {
     return "The connected account's token was rejected. Reconnect the provider in workspace settings.";
   }
+  // The Docker host template's three placement checks. Each guards a value
+  // that reaches either a shell on the customer's host or a browser frame, so
+  // each names the field it is about.
+  if (message === "deploy_app_slug_invalid") {
+    return "Use lowercase letters, numbers and hyphens for the application name — it becomes a directory and a Compose project on the host.";
+  }
+  if (message === "deploy_host_port_invalid") {
+    return "The published port must be a number between 1 and 65535, and unused by other projects on that host.";
+  }
+  if (message === "deploy_public_url_must_be_https") {
+    return "The preview URL must start with https://. The Preview tab is an HTTPS page, and a browser will not show an http:// application inside it.";
+  }
   if (message === "deployment_provider_unreachable") {
     return "Could not reach the provider just now. Try saving again in a moment.";
   }
@@ -105,7 +117,7 @@ export function DeploymentTemplatePanel({
   // Single-select, so there is no debounce to manage: a click is the whole
   // edit. Switching template clears the provider values with it — they name a
   // resource belonging to the template's provider, so carrying them across
-  // would keep a Vercel project id on a Fly deployment.
+  // would keep a Vercel project id on a Docker host deployment.
   async function choose(templateId: string) {
     if (readOnly || templateId === lastSavedRef.current) return;
     setSelected(templateId);
@@ -214,9 +226,9 @@ export function DeploymentTemplatePanel({
       {!readOnly && projectFields.length > 0 && (
         <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3">
           <p className="mb-2 text-xs text-slate-600">
-            This project deploys to its own {chosen?.provider_label} project. Create it with{" "}
-            {chosen?.provider_label} once, then name it here — each PromptConnext project needs
-            its own.
+            This project needs its own place on {chosen?.provider_label} — a workspace has many
+            projects, and two of them sharing one would deploy over the top of each other. Set it
+            up with {chosen?.provider_label} once, then name it here.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             {projectFields.map((field) => (

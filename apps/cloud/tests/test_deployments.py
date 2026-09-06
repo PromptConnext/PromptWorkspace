@@ -351,7 +351,11 @@ def test_the_picker_is_told_which_identifiers_a_template_needs_per_project(clien
     assert [f["name"] for f in templates["next-vercel"]["provider_project_fields"]] == [
         "project_id"
     ]
-    assert [f["name"] for f in templates["fly-node"]["provider_project_fields"]] == ["app_name"]
+    assert [f["name"] for f in templates["docker-compose"]["provider_project_fields"]] == [
+        "app_slug",
+        "host_port",
+        "public_url",
+    ]
     # The platform-owned template asks for nothing: there is no provider-side
     # project, only a prefix in a bucket the platform already minted.
     assert templates["static-r2"]["provider_project_fields"] == []

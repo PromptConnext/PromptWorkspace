@@ -1,0 +1,12 @@
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # Not published to the host, for the same reason Postgres is not: only
+    # `app` needs it. Persistence is off — this is a preview cache, and a
+    # cache that survives a redeploy would hide bugs rather than reveal them.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

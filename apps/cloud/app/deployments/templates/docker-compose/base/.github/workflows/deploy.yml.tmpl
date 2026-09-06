@@ -1,0 +1,209 @@
+# Builds this repository's container, ships it to your Docker host over SSH,
+# brings it up with Docker Compose, and reports the result back as a GitHub
+# Deployment. PromptZone reads that deployment over this repository's webhook
+# and shows the running application in the project's Preview tab.
+#
+# This file belongs to you. Edit it freely — PromptZone seeded it once at
+# repository creation and does not overwrite it.
+
+name: Deploy preview
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build-only check for pull requests, with NO access to the deploy
+  # credentials: this job never references `secrets.`. Never switch it to the
+  # privileged pull-request trigger that runs a fork's code against the base
+  # repository's secrets — that would hand the SSH key to anyone who can open
+  # a PR, and this key is shell access to the Docker host.
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the container
+        run: docker build -t preview-check .
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      APP_SLUG: ${{ vars.PZ_APP_SLUG }}
+      HOST_PORT: ${{ vars.PZ_HOST_PORT }}
+      SSH_HOST: ${{ vars.PZ_SSH_HOST }}
+      SSH_USER: ${{ vars.PZ_SSH_USER }}
+      WEB_ORIGIN: ${{ vars.PZ_WEB_ORIGIN }}
+      PREVIEW_URL: ${{ vars.PZ_PREVIEW_URL }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Opened first so the Preview tab can show "building" while the image
+      # builds, instead of showing nothing until the deploy finishes.
+      - name: Open deployment
+        id: open
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          PROJECT_ID: ${{ vars.PZ_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          deployment_id=$(gh api "repos/$REPO/deployments" \
+            -f ref="$SHA" \
+            -f environment="$ENVIRONMENT" \
+            -f description="PromptZone preview for project $PROJECT_ID" \
+            -F auto_merge=false \
+            -F transient_environment=false \
+            -f 'required_contexts[]' \
+            --jq '.id')
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          gh api "repos/$REPO/deployments/$deployment_id/statuses" \
+            -f state=in_progress \
+            -f description="Building and deploying" >/dev/null
+
+      - name: Build the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t "$APP_SLUG:${{ github.sha }}" -t "$APP_SLUG:current" .
+
+      # Host key checking stays ON. PZ_SSH_KNOWN_HOSTS is the `ssh-keyscan`
+      # line the workspace admin supplied when connecting the Docker host, so
+      # this job talks to the machine they named and not to whatever answers
+      # on that address today. Do not replace it by scanning for the host key
+      # inside this run, and do not turn strict host key checking off: this
+      # connection carries a key that is shell access to the host.
+      - name: Authorize the Docker host
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.PZ_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.PZ_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName $SSH_HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+      # Streamed over the SSH connection this job already has, rather than
+      # pushed through a container registry. A registry would mean a second
+      # credential on the host for a private package, for no gain: the image
+      # is built once here and needed in exactly one place.
+      - name: Ship the image to the Docker host
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save "$APP_SLUG:current" | gzip | \
+            ssh deploy-target 'gunzip | docker load'
+
+      - name: Ship the compose file
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh deploy-target "mkdir -p ~/pz/$APP_SLUG"
+          scp compose.yaml "deploy-target:~/pz/$APP_SLUG/compose.yaml"
+
+      - name: Bring the stack up
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh deploy-target 'bash -s' -- \
+            "$APP_SLUG" "$HOST_PORT" "$WEB_ORIGIN" <<'REMOTE'
+          set -euo pipefail
+          slug="$1"; host_port="$2"; web_origin="$3"
+          cd "$HOME/pz/$slug"
+
+          # The database password is generated once and kept, so the Postgres
+          # data directory stays readable across deploys. Rewriting it every
+          # run would leave a volume nobody can open.
+          db_password=""
+          if [ -f .env ]; then
+            db_password=$(grep -E '^PZ_DB_PASSWORD=' .env | cut -d= -f2- || true)
+          fi
+          if [ -z "$db_password" ]; then
+            db_password=$(openssl rand -hex 24)
+          fi
+
+          umask 077
+          cat > .env <<EOF
+          PZ_APP_SLUG=$slug
+          PZ_IMAGE=$slug:current
+          PZ_HOST_PORT=$host_port
+          PZ_WEB_ORIGIN=$web_origin
+          PZ_DB_PASSWORD=$db_password
+          EOF
+
+          docker compose up -d --remove-orphans
+          # Untagged layers from previous deploys, and nothing else: a blanket
+          # `docker system prune` on a shared host would take other projects'
+          # images with it.
+          docker image prune -f --filter "dangling=true" >/dev/null
+          REMOTE
+
+      # The check a reviewer actually cares about: the application answering on
+      # the URL the Preview tab will open, not a container that started.
+      - name: Wait for the preview to answer
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 10 "${PREVIEW_URL%/}/healthz" >/dev/null; then
+              echo "preview is answering"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "the preview did not answer at ${PREVIEW_URL%/}/healthz" >&2
+          exit 1
+
+      # `always()` so a failed deploy still reports a terminal state. Without
+      # it a broken build looks like a preview that is forever building.
+      - name: Report deployment result
+        if: always() && steps.open.outputs.id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEPLOYMENT_ID: ${{ steps.open.outputs.id }}
+          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ]; then
+            state=success
+            description="Preview deployed"
+          else
+            state=failure
+            description="Preview deploy failed"
+          fi
+          gh api "repos/$REPO/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state="$state" \
+            -f environment="$ENVIRONMENT" \
+            -f environment_url="$PREVIEW_URL" \
+            -f log_url="$RUN_URL" \
+            -f description="$description" >/dev/null

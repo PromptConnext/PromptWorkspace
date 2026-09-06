@@ -1,0 +1,24 @@
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      # Generated on the Docker host at the first deploy and preserved across
+      # later ones, so the data directory below stays readable. It is never
+      # sent to PromptZone and never committed here.
+      POSTGRES_PASSWORD: ${PZ_DB_PASSWORD}
+    # Deliberately not published to the host: only `app` needs it, and a
+    # preview database reachable from the internet is a data-loss incident
+    # waiting for a port scan.
+    #
+    # A bind mount rather than a named volume, so that every service fragment
+    # this template can seed stays a single indented block under `services:`
+    # and the order they are appended in can never matter.
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

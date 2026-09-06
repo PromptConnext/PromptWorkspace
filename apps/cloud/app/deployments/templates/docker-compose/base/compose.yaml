@@ -1,0 +1,38 @@
+# Docker Compose file for this project's preview environment.
+#
+# PromptZone seeded it once at repository creation, choosing the services below
+# from the project's technical plan. It belongs to you now — edit it freely; it
+# is never overwritten.
+#
+# Values in `${...}` come from the `.env` file the deploy workflow writes next
+# to this file on the Docker host. Nothing secret is committed here.
+
+name: ${PZ_APP_SLUG}
+
+services:
+  app:
+    image: ${PZ_IMAGE}
+    restart: unless-stopped
+    # Published on the host port this project was given, so several projects can
+    # share one Docker host without colliding. The container always listens on
+    # 8080 — every runtime scaffold in this template does.
+    ports:
+      - "${PZ_HOST_PORT}:8080"
+    environment:
+      PORT: "8080"
+      # Naming the PromptZone web origin as a frame ancestor is what lets the
+      # project's Preview tab embed this app instead of falling back to a link
+      # card. Supplied as a repository variable, so a web-origin change is one
+      # API call rather than a commit to every repository.
+      PZ_WEB_ORIGIN: ${PZ_WEB_ORIGIN}
+      # These resolve to something usable only when the matching service was
+      # seeded below — the plan decided that. Left declared either way so an
+      # application that later adds Postgres or Redis needs no compose edit
+      # beyond adding the service.
+      DATABASE_URL: postgres://app:${PZ_DB_PASSWORD:-}@postgres:5432/app
+      REDIS_URL: redis://redis:6379/0
+    # No container healthcheck on purpose: it would have to assume a specific
+    # HTTP client exists inside whatever image this project's Dockerfile grows
+    # into. The deploy workflow checks `/healthz` over the public URL instead,
+    # which is the thing a reviewer actually cares about.
+  # pz:services

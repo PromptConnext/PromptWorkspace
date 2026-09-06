@@ -37,7 +37,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider_label: "PromptZone hosting",
     provider_is_platform_owned: true,
   }),
-  template({ id: "fly-node", provider: "fly", provider_label: "Fly.io" }),
+  template({ id: "docker-compose", provider: "ssh-docker", provider_label: "Docker host over SSH" }),
   template({ id: "next-vercel", provider: "vercel", provider_label: "Vercel" }),
 ];
 
@@ -45,6 +45,8 @@ const VERCEL_DISCONNECTED: DeployConnection = {
   connected: false,
   provider: "vercel",
   label: "Vercel",
+  token_label: "Deploy token",
+  token_multiline: false,
   fields: [
     { name: "project_id", label: "Vercel project ID", secret: false },
     { name: "org_id", label: "Vercel team or personal account ID", secret: false },
@@ -53,15 +55,17 @@ const VERCEL_DISCONNECTED: DeployConnection = {
   connected_at: null,
 };
 
-const FLY_DISCONNECTED: DeployConnection = {
+const HOST_DISCONNECTED: DeployConnection = {
   connected: false,
-  provider: "fly",
-  label: "Fly.io",
+  provider: "ssh-docker",
+  label: "Docker host over SSH",
+  token_label: "SSH private key",
+  token_multiline: true,
   fields: [
-    { name: "app_name", label: "Fly application name", secret: false },
-    { name: "org_slug", label: "Fly organisation", secret: false },
+    { name: "host", label: "Docker host address", secret: false },
+    { name: "ssh_user", label: "SSH user", secret: false },
   ],
-  values: { app_name: "", org_slug: "" },
+  values: { host: "", ssh_user: "" },
   connected_at: null,
 };
 
@@ -90,8 +94,8 @@ function mockFetch(options: { vercel?: DeployConnection; putFailure?: string } =
     if (href.includes("/integrations/deploy/vercel")) {
       return Promise.resolve({ ok: true, status: 200, json: async () => vercel });
     }
-    if (href.includes("/integrations/deploy/fly")) {
-      return Promise.resolve({ ok: true, status: 200, json: async () => FLY_DISCONNECTED });
+    if (href.includes("/integrations/deploy/ssh-docker")) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => HOST_DISCONNECTED });
     }
     if (href.includes("/deployment-templates")) {
       return Promise.resolve({ ok: true, status: 200, json: async () => TEMPLATES });
@@ -102,7 +106,7 @@ function mockFetch(options: { vercel?: DeployConnection; putFailure?: string } =
 
 // Scoped by the provider's own named region rather than by index: every
 // provider renders an identically labelled "Deploy token" input, and the
-// templates list puts Fly before Vercel, so an index would silently drive the
+// templates list puts the Docker host before Vercel, so an index would silently drive the
 // wrong form.
 async function vercelForm() {
   return within(await screen.findByRole("region", { name: "Vercel" }));
@@ -134,7 +138,9 @@ describe("DeployConnectionsPanel", () => {
     render(<DeployConnectionsPanel workspaceId="ws-1" />);
 
     expect(await screen.findByRole("heading", { name: "Vercel" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Fly.io" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Docker host over SSH" }),
+    ).toBeInTheDocument();
   });
 
   it("omits the platform-owned provider, which has nothing to connect", async () => {
@@ -153,7 +159,19 @@ describe("DeployConnectionsPanel", () => {
 
     expect(await screen.findByLabelText("Vercel project ID")).toBeInTheDocument();
     expect(screen.getByLabelText("Vercel team or personal account ID")).toBeInTheDocument();
-    expect(screen.getByLabelText("Fly application name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Docker host address")).toBeInTheDocument();
+  });
+
+  it("names the provider's own secret, and gives a multi-line one room", async () => {
+    mockFetch();
+    render(<DeployConnectionsPanel workspaceId="ws-1" />);
+
+    // A private key pasted into a single-line input loses its newlines, and
+    // the failure then surfaces on a deploy rather than in this form.
+    const key = await screen.findByLabelText("SSH private key");
+    expect(key.tagName).toBe("TEXTAREA");
+    // A single-line secret still renders as one, and still says what it is.
+    expect(screen.getByLabelText("Deploy token").tagName).toBe("INPUT");
   });
 
   it("sends the token and the field values on connect", async () => {
@@ -200,8 +218,12 @@ describe("DeployConnectionsPanel", () => {
     render(<DeployConnectionsPanel workspaceId="ws-1" />);
 
     // Reconnecting to rotate a token must not make the admin retype these.
-    expect(await screen.findByLabelText("Vercel project ID")).toHaveValue("prj_live");
-    expect(screen.getByRole("button", { name: "Replace token" })).toBeInTheDocument();
+    // Waited for rather than asserted on the first render that has the input:
+    // the stored values arrive from the server and land one effect later, so
+    // asserting immediately is a race the test would sometimes lose.
+    const projectId = await screen.findByLabelText("Vercel project ID");
+    await waitFor(() => expect(projectId).toHaveValue("prj_live"));
+    expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
   });
 

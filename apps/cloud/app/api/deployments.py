@@ -398,6 +398,11 @@ class DeployConnectionOut(BaseModel):
     connected: bool
     provider: str
     label: str
+    # What this provider's primary secret is called and whether it is
+    # multi-line, so the connection form can render an SSH key without
+    # learning what SSH is.
+    token_label: str
+    token_multiline: bool
     fields: list[CredentialFieldOut]
     # The non-secret identifiers the admin supplied (app name, org slug).
     values: dict[str, str]
@@ -423,6 +428,8 @@ def _deploy_connection_out(provider, config: dict | None) -> DeployConnectionOut
         connected=config is not None,
         provider=provider.id,
         label=provider.label,
+        token_label=provider.token_label,
+        token_multiline=provider.token_multiline,
         fields=fields,
         values={f.name: (config or {}).get(f.name, "") for f in declared},
         connected_at=(config or {}).get("connected_at"),

@@ -233,7 +233,9 @@ async def create_repository(
     except ProviderCredentialError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
     if deployment is not None:
-        seed_files = seed_files + build_deployment_files(project, deployment["preview_url"])
+        seed_files = seed_files + build_deployment_files(
+            project, deployment["preview_url"], stage_docs.get("plan")
+        )
 
     github_client = request.app.state.github_client
 
@@ -447,6 +449,12 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
             raise ProviderCredentialError("deployment_project_values_missing")
 
         credential = {**provider_config, **project_values, "token": token}
+
+        # A URL nobody can mint: a self-hosted Docker host answers wherever
+        # its owner points a proxy, so the Tech Lead named it and both the
+        # workflow and this service read the same stored value.
+        if template.preview_url_from:
+            preview_url = credential.get(template.preview_url_from) or None
 
     # A platform-computed URL is the one thing the workflow cannot derive
     # for itself, and reporting a deploy with no URL would leave a business

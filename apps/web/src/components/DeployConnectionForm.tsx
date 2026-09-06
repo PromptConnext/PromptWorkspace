@@ -13,7 +13,7 @@ import type { DeployConnection } from "@/lib/types";
 // server returns for the provider, so adding a provider stays "one PROVIDERS
 // entry" and never reaches this file. That is the same seam SecretSpec/VarSpec
 // give the templates — the provider decides what it needs, nothing here knows
-// what Fly or Vercel are.
+// what Vercel or a Docker host are.
 
 export function DeployConnectionForm({
   workspaceId,
@@ -125,22 +125,40 @@ export function DeployConnectionForm({
           </label>
         ))}
         <label className="flex min-w-[14rem] flex-1 flex-col gap-1 text-sm">
-          <span className="text-slate-500">Deploy token</span>
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            autoComplete="off"
-            className="rounded-lg border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
-            required
-          />
+          <span className="text-slate-500">{connection?.token_label ?? "Deploy token"}</span>
+          {/* A textarea when the provider says its secret spans lines: an SSH
+              private key pasted into a single-line input loses its newlines,
+              and the failure then surfaces on a deploy rather than here. */}
+          {connection?.token_multiline ? (
+            <textarea
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              autoComplete="off"
+              className="rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              required
+            />
+          ) : (
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              autoComplete="off"
+              className="rounded-lg border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              required
+            />
+          )}
         </label>
         <button
           type="submit"
           disabled={pending}
           className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
         >
-          {pending ? "Verifying…" : connected ? "Replace token" : "Connect"}
+          {/* Just "Replace" once connected: the field above already names the
+              secret, and casing a provider-supplied label into a sentence
+              reads badly for both "Deploy token" and "SSH private key". */}
+          {pending ? "Verifying…" : connected ? "Replace" : "Connect"}
         </button>
         {connected && (
           <button
@@ -173,6 +191,11 @@ function messageFor(err: unknown, providerLabel: string): string {
   }
   if (detail.includes("deployment_provider_unreachable")) {
     return `Could not reach ${providerLabel} just now. Try again in a moment.`;
+  }
+  // The Docker host's two shape checks. Both are mistakes made while pasting,
+  // and both would otherwise surface as a failed deploy days later.
+  if (detail.includes("deploy_host_key_invalid")) {
+    return "That does not look like a host key. Run `ssh-keyscan <host>` and paste one line of its output.";
   }
   if (detail.includes("provider_fields_required")) {
     return "Fill in every field above before connecting.";

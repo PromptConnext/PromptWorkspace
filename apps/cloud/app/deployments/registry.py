@@ -14,6 +14,22 @@ engine's own Spec Kit templates (app/generation/prompts.py:1-7), and not
 are executable scaffolds committed verbatim into a customer repository, which
 is a third thing again.
 
+A template's scaffold directory has one of two layouts, and the second is a
+convention rather than a per-template branch (ADR 0026):
+
+  Flat. Every file under `templates/<id>/` is seeded verbatim. This is what
+  `static-r2` and `next-vercel` use, and it is the layout to reach for.
+
+  Composed. A `base/` subdirectory means the scaffold varies with the
+  project's technical plan. `base/` is always seeded; `runtimes/<name>/`
+  holds mutually exclusive variants of which exactly one is seeded, chosen by
+  `plan_profile.derive_stack_profile`; `services/<name>.yaml` holds fragments
+  appended in place of the `# pz:services` marker line in whichever seeded
+  file carries it. Selection only — nothing here rewrites a file's content,
+  and every candidate is hand-written in this repository, which is what keeps
+  the plan (free text a business user wrote) from authoring a pipeline. See
+  ADR 0024 decision 1 for why that boundary is where it is.
+
 Future org-owned custom templates (deferred, designed-for) resolve through
 this same module, exactly as app/policies/registry.py describes for policy
 templates: built-in IDs are bare slugs that never contain ":", and namespaced
@@ -39,7 +55,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.deployments.plan_profile import DEFAULT_PROFILE, StackProfile
+
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+# The line a composed scaffold's service fragments replace. A comment, so the
+# unfragmented file on disk is still a valid document a developer can read.
+_FRAGMENT_MARKER = "# pz:services"
 
 # Repo-relative path every template's workflow is seeded to. Fixed rather than
 # per-template so the inbound workflow_run handler can tell "our pipeline" from
@@ -130,6 +152,13 @@ class DeploymentTemplate:
     # deployment_status delivery. "platform" = the cloud computes it up front
     # and hands it to the workflow as a variable, so both sides agree.
     url_kind: str = "provider"
+    # For `url_kind="platform"` templates whose URL is neither minted by a
+    # provider nor computed from platform settings, but *named by a human*:
+    # the credential key holding it. A self-hosted Docker host is the case —
+    # nothing in the pipeline can discover the address a customer's own box
+    # answers on, so the Tech Lead supplies it and both sides read the same
+    # value. Empty for every other template.
+    preview_url_from: str = ""
     workflow_path: str = WORKFLOW_PATH
     docs_path: str = "docs/deployment.md"
     # Extra per-template context for docs rendering. Never used for dispatch.
@@ -177,44 +206,6 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         ),
     ),
     DeploymentTemplate(
-        id="fly-node",
-        name="Node service → Fly.io",
-        description=(
-            "A containerised Node service deployed to your own Fly.io account. "
-            "Bring a Fly deploy token; the pipeline builds the image and "
-            "publishes it on every push to the default branch."
-        ),
-        stack="node",
-        provider="fly",
-        # Customer-owned, unlike static-r2: this is the path that proves a
-        # template can carry a credential the platform does not mint.
-        provider_credential_kind="fly",
-        scaffold_dir="fly-node",
-        delivery_kind="embedded_url",
-        required_secrets=(
-            SecretSpec("FLY_API_TOKEN", "Fly.io deploy token", from_provider="token"),
-        ),
-        required_vars=(
-            VarSpec("FLY_APP", "Fly application name", "provider:app_name"),
-            # The seeded server sends `frame-ancestors <origin>`; a variable
-            # rather than a baked-in file so a web-app origin change is one API
-            # call, not a commit to every repository ever created.
-            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
-            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
-            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
-        ),
-        embeddable=True,
-        health_path="/",
-        # Fly mints the hostname, so the URL arrives with the deployment_status
-        # delivery rather than being computed by the platform up front.
-        url_kind="provider",
-        notes=(
-            "Create the Fly application once with `flyctl apps create <name>`; "
-            "the pipeline deploys to it but does not create it.",
-            "Fly bills this application to your own account.",
-        ),
-    ),
-    DeploymentTemplate(
         id="next-vercel",
         name="Next.js app → Vercel",
         description=(
@@ -235,9 +226,9 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             VarSpec("VERCEL_PROJECT_ID", "Vercel project id", "provider:project_id"),
             # Read by next.config.mjs at BUILD time, on the runner, so the
             # frame-ancestors header is baked into the routes manifest. A
-            # variable rather than a baked-in file for the same reason fly-node
-            # uses one: a web-app origin change is then one API call, not a
-            # commit to every repository ever created.
+            # variable rather than a baked-in file for the same reason the
+            # docker-compose template uses one: a web-app origin change is
+            # then one API call, not a commit to every repository ever created.
             VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
             VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
             VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
@@ -262,6 +253,74 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             "Vercel bills this project to your own account.",
         ),
     ),
+    # Last in the list on purpose: it is the most capable and the most
+    # demanding. It runs anywhere, but it asks for a machine you administer
+    # and a key that opens it, which is a bigger commitment than a hosted
+    # provider's token.
+    DeploymentTemplate(
+        id="docker-compose",
+        name="Docker + Docker Compose → your own server",
+        description=(
+            "A containerised application deployed with Docker Compose to a "
+            "Linux server you own. The Dockerfile and the compose services are "
+            "chosen from this project's technical plan, so a Python project "
+            "with a database gets a Python image and a Postgres service. Bring "
+            "a host and an SSH key."
+        ),
+        stack="container",
+        provider="ssh-docker",
+        provider_credential_kind="ssh-docker",
+        scaffold_dir="docker-compose",
+        delivery_kind="embedded_url",
+        required_secrets=(
+            SecretSpec("PZ_SSH_KEY", "SSH private key for the Docker host", from_provider="token"),
+        ),
+        required_vars=(
+            VarSpec("PZ_SSH_HOST", "Docker host address", "provider:host"),
+            VarSpec("PZ_SSH_USER", "SSH user", "provider:ssh_user"),
+            # Host key checking stays on in the seeded workflow, so the run
+            # talks to the machine the admin named rather than to whatever
+            # answers on that address at deploy time.
+            VarSpec("PZ_SSH_KNOWN_HOSTS", "Docker host SSH host key", "provider:known_hosts"),
+            VarSpec("PZ_APP_SLUG", "Compose project name", "provider:app_slug"),
+            VarSpec("PZ_HOST_PORT", "Published port on the host", "provider:host_port"),
+            # This template's workflow needs the URL it is deploying to — it
+            # health-checks it before reporting success, and nothing on the
+            # runner could otherwise derive the address of a customer's box.
+            VarSpec("PZ_PREVIEW_URL", "Public preview URL", "preview_url"),
+            # The seeded server sends `frame-ancestors <origin>`; a variable
+            # rather than a baked-in file so a web-app origin change is one API
+            # call, not a commit to every repository ever created.
+            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
+            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
+            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+        ),
+        # Every runtime scaffold here sets frame-ancestors from PZ_WEB_ORIGIN,
+        # so this is the same strong claim next-vercel makes. Whether it holds
+        # is still narrowed by the server-side header probe: a reverse proxy
+        # in front of the host can add a framing header we never see here.
+        embeddable=True,
+        health_path="/healthz",
+        # Named by a human rather than minted: the address a customer's own
+        # server answers on is not discoverable from either side.
+        url_kind="platform",
+        preview_url_from="public_url",
+        notes=(
+            "The host must already run Docker Engine with the Compose plugin, "
+            "and the SSH user must be able to use it.",
+            "Each project needs its own published port and its own URL on that "
+            "host; both are named on this project's deployment template, not on "
+            "the workspace connection.",
+            "Serve the preview URL over HTTPS. The Preview tab is an HTTPS page, "
+            "and a browser will not frame an http:// application inside it.",
+            "The image is built by GitHub Actions and streamed to the host over "
+            "the same SSH connection — there is no container registry to "
+            "configure and no second credential on the host.",
+            "The SSH key sealed into this repository is shell access to that "
+            "host for anyone who can push here. Give it a dedicated, "
+            "unprivileged user, and use a host that runs previews only.",
+        ),
+    ),
 ]
 
 _BY_ID: dict[str, DeploymentTemplate] = {t.id: t for t in BUILTIN_TEMPLATES}
@@ -271,23 +330,25 @@ def get_template(template_id: str) -> DeploymentTemplate | None:
     return _BY_ID.get(template_id)
 
 
-def template_files(template_id: str) -> list[tuple[str, str, bool]]:
-    """Every file in a template's scaffold, as (repo path, content,
-    executable), sorted for a deterministic commit.
-
-    Paths are resolved and re-checked against the template root before being
-    read. A scaffold is committed verbatim into a customer's repository, so a
-    `..` escaping the template directory would be a file-disclosure bug, not
-    a cosmetic one — and this stays correct even if template directories
-    later come from somewhere less trusted than the package itself.
-    """
+def is_composed_scaffold(template_id: str) -> bool:
+    """True when this template's scaffold varies with the project's plan — the
+    `base/` layout described in the module docstring."""
     template = get_template(template_id)
     if template is None:
-        return []
-    root = (_TEMPLATES_DIR / template.scaffold_dir).resolve()
-    if not root.is_dir():
-        return []
+        return False
+    return (_TEMPLATES_DIR / template.scaffold_dir / "base").is_dir()
 
+
+def _files_under(root: Path) -> list[tuple[str, str, bool]]:
+    """Every file below `root`, as (repo path relative to `root`, content,
+    executable).
+
+    Paths are resolved and re-checked against `root` before being read. A
+    scaffold is committed verbatim into a customer's repository, so a `..`
+    escaping the template directory would be a file-disclosure bug, not a
+    cosmetic one — and this stays correct even if template directories later
+    come from somewhere less trusted than the package itself.
+    """
     files: list[tuple[str, str, bool]] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -302,11 +363,83 @@ def template_files(template_id: str) -> list[tuple[str, str, bool]]:
         # be a live workflow here.
         parts = list(rel.parts)
         parts[-1] = parts[-1][: -len(".tmpl")] if parts[-1].endswith(".tmpl") else parts[-1]
-        repo_path = "/".join(parts)
         files.append(
-            (repo_path, resolved.read_text(encoding="utf-8"), resolved.stat().st_mode & 0o100 != 0)
+            (
+                "/".join(parts),
+                resolved.read_text(encoding="utf-8"),
+                resolved.stat().st_mode & 0o100 != 0,
+            )
         )
     return files
+
+
+def _apply_fragments(content: str, fragments: list[str]) -> str:
+    """Replace the marker line with `fragments`, or drop the marker line when
+    there are none.
+
+    Line-oriented and whitespace-preserving: the marker's own indentation is
+    not reused, because each fragment is a hand-written block that already
+    carries the indentation its position requires.
+    """
+    out: list[str] = []
+    for line in content.splitlines():
+        if line.strip() == _FRAGMENT_MARKER:
+            for fragment in fragments:
+                out.extend(fragment.rstrip("\n").splitlines())
+            continue
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def template_files(
+    template_id: str, profile: StackProfile | None = None
+) -> list[tuple[str, str, bool]]:
+    """Every file in a template's scaffold, as (repo path, content,
+    executable), sorted for a deterministic commit.
+
+    `profile` selects among a composed scaffold's variants and fragments (see
+    the module docstring). It is ignored by a flat template, and defaults to
+    `plan_profile.DEFAULT_PROFILE` — which is what the templates *listing*
+    passes, so the picker previews a real scaffold without needing a project.
+
+    Deterministic in both layouts: the same template and the same profile
+    produce the same tree, byte for byte, which is what makes a seeded
+    pipeline reviewable and a template bug reproducible.
+    """
+    template = get_template(template_id)
+    if template is None:
+        return []
+    root = (_TEMPLATES_DIR / template.scaffold_dir).resolve()
+    if not root.is_dir():
+        return []
+
+    base = root / "base"
+    if not base.is_dir():
+        return _files_under(root)
+
+    profile = profile or DEFAULT_PROFILE
+    files = _files_under(base)
+
+    # Exactly one runtime variant, and silently none when the profile names a
+    # runtime this template has no scaffold for. A composed template must not
+    # fail repository creation over a plan that mentioned an unsupported
+    # language — the same contract `build_seed_files` keeps for a partially
+    # planned project.
+    variant = (root / "runtimes" / profile.runtime).resolve()
+    if variant.is_relative_to(root) and variant.is_dir():
+        files += _files_under(variant)
+
+    fragments: list[str] = []
+    for service in profile.services:
+        fragment = (root / "services" / f"{service}.yaml").resolve()
+        if fragment.is_relative_to(root) and fragment.is_file():
+            fragments.append(fragment.read_text(encoding="utf-8"))
+
+    files = [
+        (path, _apply_fragments(content, fragments) if _FRAGMENT_MARKER in content else content, ex)
+        for path, content, ex in files
+    ]
+    return sorted(files)
 
 
 def render_deployment_doc(
@@ -314,6 +447,7 @@ def render_deployment_doc(
     *,
     project_name: str,
     preview_url: str | None,
+    profile: StackProfile | None = None,
 ) -> str:
     """`docs/deployment.md` — the durable, self-contained explanation of how
     this repository ships, committed alongside the pipeline it describes.
@@ -346,6 +480,24 @@ def render_deployment_doc(
     ]
     if preview_url:
         lines += ["## Live preview", "", f"<{preview_url}>", ""]
+
+    if profile is not None:
+        services = ", ".join(profile.services) if profile.services else "none"
+        lines += [
+            "## What this project's plan decided",
+            "",
+            "This template ships more than one hand-written scaffold and picks "
+            "between them by reading the project's technical plan. For this "
+            f"repository it seeded the **{profile.runtime}** runtime, with "
+            f"these backing services: **{services}**.",
+            "",
+            "That reading is a keyword scan, not a judgement, and it only ever "
+            "chose among files written by hand — nothing here was generated. "
+            "If it guessed wrong, change the `Dockerfile` and `compose.yaml`: "
+            "they are yours now, and re-selecting the template would not "
+            "revisit them.",
+            "",
+        ]
 
     if template.required_secrets:
         lines += [

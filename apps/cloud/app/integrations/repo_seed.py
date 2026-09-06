@@ -29,8 +29,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.deployments.plan_profile import derive_stack_profile
 from app.deployments.registry import get_template as get_deployment_template
-from app.deployments.registry import render_deployment_doc, template_files
+from app.deployments.registry import (
+    is_composed_scaffold,
+    render_deployment_doc,
+    template_files,
+)
 from app.models.schemas import Project
 from app.policies.registry import render_policy_scope_doc
 
@@ -158,9 +163,18 @@ def build_seed_files(project: Project, stage_docs: dict[str, str | None]) -> lis
     return files
 
 
-def build_deployment_files(project: Project, preview_url: str | None) -> list[SeedFile]:
+def build_deployment_files(
+    project: Project, preview_url: str | None, plan_text: str | None = None
+) -> list[SeedFile]:
     """The deployment template's scaffold, workflow and `docs/deployment.md`
     (ADR 0021), or an empty list when no template was selected.
+
+    `plan_text` is the project's `plan` stage document, and it only matters to
+    a template with a composed scaffold (ADR 0026): the runtime and the
+    backing services are read off it by a keyword scan, which then *selects*
+    among hand-written files. Nothing here generates a file, so this function
+    stays as pure and as deterministic as it was — the same plan text seeds
+    the same tree.
 
     Kept separate from `build_seed_files` rather than folded into it, for two
     reasons. These files are *verbatim scaffold* rather than derived views
@@ -184,15 +198,22 @@ def build_deployment_files(project: Project, preview_url: str | None) -> list[Se
         # transition: the repo and its AI context are still worth having.
         return []
 
+    profile = derive_stack_profile(plan_text)
     files = [
         SeedFile(path, content, executable=executable)
-        for path, content, executable in template_files(template.id)
+        for path, content, executable in template_files(template.id, profile)
     ]
     files.append(
         SeedFile(
             template.docs_path,
             render_deployment_doc(
-                template, project_name=project.name, preview_url=preview_url
+                template,
+                project_name=project.name,
+                preview_url=preview_url,
+                # Only a composed scaffold's document says what the plan
+                # decided; for a flat template there is nothing to report and
+                # the section would be noise.
+                profile=profile if is_composed_scaffold(template.id) else None,
             )
             + _footer(project),
         )

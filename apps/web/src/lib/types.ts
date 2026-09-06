@@ -60,7 +60,8 @@ export interface Project {
 export interface DeploymentConfig {
   template_id: string;
   // ADR 0025. Provider identifiers naming the resource THIS project deploys
-  // to — a Fly app, a Vercel project. Keyed by CredentialField name, and only
+  // to — a Vercel project, a name and port on a Docker host. Keyed by
+  // CredentialField name, and only
   // ever fields the provider declares `scope: "project"`; the token and the
   // account identifiers stay on the workspace credential.
   provider_values?: Record<string, string>;
@@ -398,6 +399,10 @@ export interface DeployConnection {
   connected: boolean;
   provider: string;
   label: string;
+  // What this provider's primary secret is called, and whether it spans more
+  // than one line — an SSH private key does, an API token does not.
+  token_label: string;
+  token_multiline: boolean;
   fields: { name: string; label: string; secret: boolean }[];
   values: Record<string, string>;
   connected_at: string | null;

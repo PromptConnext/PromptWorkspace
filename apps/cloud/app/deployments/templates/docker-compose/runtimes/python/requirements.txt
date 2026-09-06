@@ -1,0 +1,2 @@
+# The seeded placeholder needs nothing beyond the standard library. Add this
+# project's real dependencies here — the Dockerfile already installs them.
