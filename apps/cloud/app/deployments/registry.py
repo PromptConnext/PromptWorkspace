@@ -132,8 +132,10 @@ class DeploymentTemplate:
     stack: str
     provider: str
     # Key into Workspace.integration_config for this provider's credential.
-    # None = platform-owned (the cloud is the provider, and mints a scoped
-    # credential per workspace rather than sealing its own into a repo).
+    # None = there is no workspace credential at all, which happens for two
+    # different reasons — the platform mints one per workspace, or the git
+    # host supplies an ephemeral one to the workflow itself. The provider's
+    # `credential_owner` is what distinguishes them.
     provider_credential_kind: str | None
     scaffold_dir: str
     # ADR 0023. Defaults to embedded_url so every template written before this
@@ -152,13 +154,19 @@ class DeploymentTemplate:
     # deployment_status delivery. "platform" = the cloud computes it up front
     # and hands it to the workflow as a variable, so both sides agree.
     url_kind: str = "provider"
-    # For `url_kind="platform"` templates whose URL is neither minted by a
-    # provider nor computed from platform settings, but *named by a human*:
-    # the credential key holding it. A self-hosted Docker host is the case —
-    # nothing in the pipeline can discover the address a customer's own box
-    # answers on, so the Tech Lead supplies it and both sides read the same
-    # value. Empty for every other template.
-    preview_url_from: str = ""
+    # How a `url_kind="platform"` template's URL is computed, resolved in
+    # app/deployments/preview_url.py and nowhere else:
+    #
+    #   platform_r2            from the platform's own storage settings
+    #   project_value:<key>    named by a human, from DeploymentConfig
+    #   github_pages           derived from the repository the cloud created
+    #
+    # Empty for a provider-minted URL, which has no expected value to check a
+    # report against. Declarative rather than a branch per template, for the
+    # reason ADR 0023's amendment gives: computing this by calling one
+    # provider's URL helper directly is what silently pinned every other
+    # platform-URL template against a prefix it could never match.
+    platform_url_source: str = ""
     workflow_path: str = WORKFLOW_PATH
     docs_path: str = "docs/deployment.md"
     # Extra per-template context for docs rendering. Never used for dispatch.
@@ -198,11 +206,65 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         embeddable=True,
         health_path="/index.html",
         url_kind="platform",
+        platform_url_source="platform_r2",
         notes=(
             "Preview storage is managed by PromptZone; there is no account to "
             "create and no bill to pay for it.",
             "Public preview URLs are rate-limited and intended for review, not "
             "production traffic.",
+        ),
+    ),
+    DeploymentTemplate(
+        id="github-pages",
+        name="Static site → GitHub Pages",
+        description=(
+            "A plain HTML/CSS/JS site published to GitHub Pages, out of the "
+            "repository PromptZone already created for this project. Nothing "
+            "to connect and nothing to pay for — but the repository must be "
+            "public unless your GitHub plan allows Pages on private ones."
+        ),
+        stack="static",
+        provider="github-pages",
+        # Host-owned: the credential is the workflow's own GITHUB_TOKEN, so
+        # there is no workspace block to key into and nothing for an admin to
+        # connect. See `credential_owner` on the provider.
+        provider_credential_kind=None,
+        scaffold_dir="github-pages",
+        delivery_kind="embedded_url",
+        # Nothing at all. Deploying needs only the ephemeral token GitHub
+        # already gives the run, which is the whole point of this template.
+        required_secrets=(),
+        required_vars=(
+            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
+            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+        ),
+        # Measured rather than assumed (ADR 0023's amendment): Pages-hosted
+        # sites return neither X-Frame-Options nor a CSP, so the frame probe
+        # reads `allow`. Like static-r2 this is the absence of a restriction —
+        # Pages serves no custom headers, so we could not set one here — and
+        # the probe still decides.
+        embeddable=True,
+        health_path="/",
+        # Predictable, so it is pinned: a reported URL outside
+        # `https://<owner>.github.io/<repo>/` is not the preview we
+        # provisioned. Unlike every other platform URL, it cannot be computed
+        # until the repository exists.
+        url_kind="platform",
+        platform_url_source="github_pages",
+        notes=(
+            "There is no account to create and no credential to connect — the "
+            "deploy runs on the token GitHub gives this repository's own "
+            "workflow.",
+            "The repository must be public for Pages to serve it, unless the "
+            "organisation's GitHub plan includes Pages on private "
+            "repositories. A public repository exposes the source, this "
+            "document, and every commit subject — choose the PromptZone "
+            "hosting template instead if that is not acceptable.",
+            "The workflow enables Pages itself on its first run and sets the "
+            "source to GitHub Actions; nobody has to switch it on in the "
+            "repository's settings.",
+            "The site is served under a `/<repository>/` path, so links and "
+            "asset URLs in `site/` must stay relative.",
         ),
     ),
     DeploymentTemplate(
@@ -304,7 +366,7 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         # Named by a human rather than minted: the address a customer's own
         # server answers on is not discoverable from either side.
         url_kind="platform",
-        preview_url_from="public_url",
+        platform_url_source="project_value:public_url",
         notes=(
             "The host must already run Docker Engine with the Compose plugin, "
             "and the SSH user must be able to use it.",

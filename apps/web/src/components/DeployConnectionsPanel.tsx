@@ -6,10 +6,13 @@ import { DeployConnectionForm } from "./DeployConnectionForm";
 
 // Which providers a workspace can connect is derived from the templates that
 // exist, rather than from a providers endpoint of its own: /deployment-templates
-// already carries `provider`, `provider_label` and `provider_is_platform_owned`,
-// and a provider no template uses is a provider nobody can select. This also
-// means the platform-owned provider excludes itself — there is nothing for an
-// admin to connect, and the server refuses the attempt.
+// already carries `provider`, `provider_label` and `provider_credential_owner`,
+// and a provider no template uses is a provider nobody can select.
+//
+// Only `customer` providers appear. The other two have nothing to connect and
+// the server refuses the attempt: `platform` is minted by PromptConnext per
+// workspace, and `host` is the ephemeral token the git host hands each
+// workflow run.
 
 export function DeployConnectionsPanel({ workspaceId }: { workspaceId: string }) {
   const { data: templates, loading } = useCloudGet<DeploymentTemplateOut[]>(
@@ -19,7 +22,7 @@ export function DeployConnectionsPanel({ workspaceId }: { workspaceId: string })
   const providers = Array.from(
     new Map(
       (templates ?? [])
-        .filter((t) => !t.provider_is_platform_owned)
+        .filter((t) => t.provider_credential_owner === "customer")
         .map((t) => [t.provider, t.provider_label] as const),
     ),
   );

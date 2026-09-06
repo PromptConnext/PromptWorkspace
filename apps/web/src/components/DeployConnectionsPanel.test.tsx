@@ -20,12 +20,14 @@ function template(over: Partial<DeploymentTemplateOut>): DeploymentTemplateOut {
     provider: "p",
     provider_label: "P",
     provider_is_platform_owned: false,
+    provider_credential_owner: "customer",
     provider_project_fields: [],
     embeddable: true,
     required_secrets: [],
     required_vars: [],
     scaffold_paths: [],
     workflow_preview: "",
+    notes: [],
     ...over,
   };
 }
@@ -36,6 +38,15 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider: "platform-r2",
     provider_label: "PromptZone hosting",
     provider_is_platform_owned: true,
+    provider_credential_owner: "platform",
+  }),
+  // Host-owned: nothing to connect either, but for a different reason — the
+  // git host gives the workflow its own token. It must not get a form.
+  template({
+    id: "github-pages",
+    provider: "github-pages",
+    provider_label: "GitHub Pages",
+    provider_credential_owner: "host",
   }),
   template({ id: "docker-compose", provider: "ssh-docker", provider_label: "Docker host over SSH" }),
   template({ id: "next-vercel", provider: "vercel", provider_label: "Vercel" }),
@@ -143,14 +154,18 @@ describe("DeployConnectionsPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("omits the platform-owned provider, which has nothing to connect", async () => {
+  it("omits every provider that has nothing to connect", async () => {
     mockFetch();
     render(<DeployConnectionsPanel workspaceId="ws-1" />);
 
     await screen.findByRole("heading", { name: "Vercel" });
+    // Platform-owned: PromptConnext mints it per workspace.
     expect(
       screen.queryByRole("heading", { name: "PromptZone hosting" }),
     ).not.toBeInTheDocument();
+    // Host-owned: the git host hands the workflow its own token, and the
+    // server refuses this connection with `provider_is_host_owned`.
+    expect(screen.queryByRole("heading", { name: "GitHub Pages" })).not.toBeInTheDocument();
   });
 
   it("renders one input per field the server declares, so a provider needs no code here", async () => {

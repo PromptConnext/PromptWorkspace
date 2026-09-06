@@ -383,6 +383,10 @@ export interface DeploymentTemplateOut {
   provider: string;
   provider_label: string;
   provider_is_platform_owned: boolean;
+  // Who owns the deploy credential. "customer" is the only one an admin can
+  // connect; "platform" is minted by PromptConnext, "host" is the ephemeral
+  // token the git host gives each workflow run (GitHub Pages).
+  provider_credential_owner: "customer" | "platform" | "host";
   // ADR 0025. Identifiers this template needs PER PROJECT, asked for here
   // rather than in workspace settings. Empty for a platform-owned provider.
   provider_project_fields: { name: string; label: string; secret: boolean; scope: string }[];
@@ -391,6 +395,9 @@ export interface DeploymentTemplateOut {
   required_vars: string[];
   scaffold_paths: string[];
   workflow_preview: string;
+  // The template's own caveats — what it costs and what it assumes — shown at
+  // selection time, not only in the repository it later writes.
+  notes: string[];
 }
 
 // A deployment provider a workspace admin connects (ADR 0023). The token is

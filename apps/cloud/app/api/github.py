@@ -26,11 +26,11 @@ from app.api._guards import require_admin
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.attribution import TERMINAL_STATES, freeze_build_tasks
+from app.deployments.preview_url import platform_preview_url
 from app.deployments.registry import PREVIEW_ENVIRONMENT, WORKFLOW_PATH
 from app.deployments.registry import get_template as get_deployment_template
 from app.deployments.state import DEPLOY_STATE_BY_GITHUB as _DEPLOY_STATE_BY_GITHUB
 from app.deployments.state import refresh_deployment_state as _refresh_deployment_state
-from app.integrations.deploy_providers import platform_r2_preview_url
 from app.integrations.github import (
     GithubAuthError,
     GithubWriteError,
@@ -244,13 +244,18 @@ def _trusted_environment_url(app, project, template, reported: str | None) -> st
     Is it even a web URL? Anything that is not absolute http(s) is refused
     outright, whatever the template — see `_is_web_url`.
 
-    Is it *our* preview? For a template whose URL the platform mints we know
-    what it should be, so a reported URL outside that prefix is not a preview
-    we provisioned, and recording it would let a repo pusher choose what the
-    workspace's Preview tab embeds and what its project list links to.
-    Providers that mint their own URLs (Vercel, Pages, Northflank) have no
-    such expected value, so beyond the scheme check their reports are taken
-    as given.
+    Is it *our* preview? For a template whose URL the platform can compute we
+    know what it should be, so a reported URL outside that prefix is not a
+    preview we provisioned, and recording it would let a repo pusher choose
+    what the workspace's Preview tab embeds and what its project list links
+    to. Providers that mint their own URLs (Vercel) have no such expected
+    value, so beyond the scheme check their reports are taken as given.
+
+    The expected value comes from `preview_url.platform_preview_url`, which
+    reads the template's declared source. It used to call the R2 helper
+    directly, which meant every *other* platform-URL template was pinned
+    against a prefix it could never match and had its reported URL silently
+    discarded.
     """
     if not reported or template is None:
         reported = reported or None
@@ -267,9 +272,12 @@ def _trusted_environment_url(app, project, template, reported: str | None) -> st
     if template.url_kind != "platform":
         return reported
 
-    expected = platform_r2_preview_url(app.state.settings, project.id, template.health_path)
+    expected = platform_preview_url(template, project=project, settings=app.state.settings)
     if not expected:
         return None
+    # The directory the expected URL sits in, so a template whose health path
+    # names a file (`/index.html`) still accepts a report of the directory
+    # itself, and vice versa.
     base = expected.rsplit("/", 1)[0] + "/"
     if not reported.startswith(base):
         logger.warning(

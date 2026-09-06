@@ -193,7 +193,7 @@ def test_docker_compose_is_a_customer_owned_provider_template():
     # Nobody mints the URL of a server the customer administers, so a human
     # names it and both sides read the same stored value.
     assert template.url_kind == "platform"
-    assert template.preview_url_from == "public_url"
+    assert template.platform_url_source == "project_value:public_url"
     assert template.provider in PROVIDERS
 
 

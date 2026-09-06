@@ -20,6 +20,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider: "platform-r2",
     provider_label: "PromptZone hosting",
     provider_is_platform_owned: true,
+    provider_credential_owner: "platform",
     // Nothing to name per project: the platform already minted the bucket and
     // this project is a prefix inside it.
     provider_project_fields: [],
@@ -28,6 +29,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     required_vars: ["PZ_PROJECT_ID"],
     scaffold_paths: [".github/workflows/deploy.yml", "site/index.html"],
     workflow_preview: "name: Deploy preview\non:\n  push:\n",
+    notes: [],
   },
   {
     id: "nextjs-vercel",
@@ -38,6 +40,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     provider: "vercel",
     provider_label: "Vercel",
     provider_is_platform_owned: false,
+    provider_credential_owner: "customer",
     provider_project_fields: [
       { name: "project_id", label: "Vercel project ID", secret: false, scope: "project" },
     ],
@@ -46,6 +49,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     required_vars: ["PZ_PROJECT_ID"],
     scaffold_paths: [".github/workflows/deploy.yml", "app/page.tsx"],
     workflow_preview: "name: Deploy preview\n",
+    notes: ["Vercel bills this project to your own account."],
   },
 ];
 
@@ -67,7 +71,12 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 
 const posted: unknown[] = [];
 
-function mockFetch(opts: { patchFailure?: { status: number; detail: string } } = {}) {
+function mockFetch(
+  opts: {
+    patchFailure?: { status: number; detail: string };
+    templates?: DeploymentTemplateOut[];
+  } = {},
+) {
   global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
     const href = url.toString();
     if (href.includes("/deployment-config") && init?.method === "PATCH") {
@@ -82,7 +91,11 @@ function mockFetch(opts: { patchFailure?: { status: number; detail: string } } =
       return Promise.resolve({ ok: true, status: 200, json: async () => makeProject() } as Response);
     }
     if (href.includes("/deployment-templates")) {
-      return Promise.resolve({ ok: true, status: 200, json: async () => TEMPLATES } as Response);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => opts.templates ?? TEMPLATES,
+      } as Response);
     }
     return Promise.resolve({ ok: true, status: 200, json: async () => ({}) } as Response);
   }) as unknown as typeof fetch;
@@ -291,6 +304,44 @@ describe("DeploymentTemplatePanel", () => {
     expect(await screen.findByText(/must be connected in/i)).toBeInTheDocument();
     // Still selectable — the hard failure belongs at repository creation.
     expect(screen.getAllByRole("radio")[1]).not.toBeDisabled();
+  });
+
+  it("does not send anyone to workspace settings for a provider nobody connects", async () => {
+    // Host-owned (GitHub Pages): the git host gives the workflow its own
+    // token, so there is no connect form to point at.
+    const templates = [
+      TEMPLATES[0],
+      {
+        ...TEMPLATES[1],
+        id: "github-pages",
+        provider: "github-pages",
+        provider_label: "GitHub Pages",
+        provider_credential_owner: "host" as const,
+        provider_project_fields: [],
+        notes: ["The repository must be public for Pages to serve it."],
+      },
+    ];
+    mockFetch({ templates });
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject({ deployment_config: { template_id: "github-pages" } })}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={() => {}}
+      />,
+    );
+
+    // The cost of this template is stated where the choice is made, not only
+    // in the repository it later writes.
+    expect(
+      await screen.findByText(/repository must be public/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/must be connected in/i)).not.toBeInTheDocument();
+    // "No account needed" is true of the platform-owned template too, so the
+    // half that matters is the half that says who is actually hosting it.
+    expect(
+      screen.getByText(/deploys from this project's own repository/i),
+    ).toBeInTheDocument();
   });
 
   it("shows a frozen project what it deployed with, and offers no controls", async () => {

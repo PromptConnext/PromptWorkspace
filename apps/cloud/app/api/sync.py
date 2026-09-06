@@ -29,13 +29,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.preview_url import platform_preview_url, resolves_before_repo
 from app.deployments.registry import PREVIEW_ENVIRONMENT
 from app.deployments.registry import get_template as get_deployment_template
 from app.integrations.deploy_providers import (
     PLATFORM_R2,
     ProviderCredentialError,
     ensure_platform_r2_credential,
-    platform_r2_preview_url,
     project_fields,
     resolve_provider_credential,
 )
@@ -382,16 +382,27 @@ async def create_repository(
     # Step 8: repo-write first, lifecycle flip last — see docstring.
     repo.update_project_repo(project_id, created["html_url"], default_branch)
     if deployment is not None:
+        template = deployment["template"]
+        # Resolved a second time for a template whose URL is derived from the
+        # repository (GitHub Pages): the first resolution ran before the repo
+        # existed and could only return None. Every other template's value is
+        # unchanged by this call.
+        preview_url = deployment["preview_url"] or platform_preview_url(
+            template,
+            project=project,
+            settings=request.app.state.settings,
+            repo_full_name=full_name,
+        )
         # "awaiting_first_deploy", not "building": the commit above has landed
         # but GitHub has not told us a run started, and every state this
         # feature shows is one the server was actually told about.
         repo.update_project_deployment_state(
             project_id,
             DeploymentState(
-                template_id=deployment["template"].id,
-                provider=deployment["template"].provider,
+                template_id=template.id,
+                provider=template.provider,
                 state="awaiting_first_deploy",
-                url=deployment["preview_url"],
+                url=preview_url,
             ),
         )
     return repo.update_project_lifecycle_status(project_id, "repo_created")
@@ -419,11 +430,16 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
         return None
 
     settings = app.state.settings
-    preview_url: str | None = None
+    provider = get_deploy_provider(template.provider)
+    credential: dict = {}
 
     if template.provider == PLATFORM_R2:
         credential = await ensure_platform_r2_credential(app, workspace)
-        preview_url = platform_r2_preview_url(settings, project.id, template.health_path)
+    elif provider is not None and provider.credential_owner == "host":
+        # Nothing to resolve: the git host hands the workflow its own
+        # ephemeral token at run time, so this template seeds no secret and
+        # there is no workspace connection that could be missing.
+        pass
     else:
         resolved = resolve_provider_credential(app, workspace, template.provider)
         if resolved is None:
@@ -436,7 +452,6 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
         # from. Restricted to keys the provider declares `scope="project"`:
         # this dict decides what is written into repository secrets, so an
         # unfiltered merge would let a stored project value shadow `token`.
-        provider = get_deploy_provider(template.provider)
         declared = project_fields(provider) if provider else ()
         project_values = {
             f.name: (config.provider_values or {}).get(f.name, "").strip() for f in declared
@@ -450,17 +465,20 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
 
         credential = {**provider_config, **project_values, "token": token}
 
-        # A URL nobody can mint: a self-hosted Docker host answers wherever
-        # its owner points a proxy, so the Tech Lead named it and both the
-        # workflow and this service read the same stored value.
-        if template.preview_url_from:
-            preview_url = credential.get(template.preview_url_from) or None
+    # Resolved through one declarative table rather than by calling one
+    # provider's URL helper, so every platform-URL template gets the value the
+    # webhook will later pin its report against. See
+    # app/deployments/preview_url.py.
+    preview_url = platform_preview_url(template, project=project, settings=settings)
 
     # A platform-computed URL is the one thing the workflow cannot derive
     # for itself, and reporting a deploy with no URL would leave a business
     # user a "live" preview they cannot open. Its own code, so an operator
     # sees which setting is missing rather than a generic "incomplete".
-    if template.url_kind == "platform" and not preview_url:
+    # Skipped for a URL that is derived from the repository, which does not
+    # exist yet at this point — `create_repository` resolves that one after it
+    # has created the repo.
+    if template.url_kind == "platform" and not preview_url and resolves_before_repo(template):
         raise ProviderCredentialError("deployment_preview_url_not_configured")
 
     secrets_out: dict[str, str] = {}

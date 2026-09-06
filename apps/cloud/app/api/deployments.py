@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.api._guards import require_admin, require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.preview_url import repo_full_name_from_url
 from app.deployments.registry import BUILTIN_TEMPLATES, get_template, template_files
 from app.integrations.deploy_providers import (
     ProviderCredentialError,
@@ -77,6 +78,11 @@ class DeploymentTemplateOut(BaseModel):
     # True when the platform owns the credential, so the picker can say "no
     # account needed" instead of sending the Tech Lead to workspace settings.
     provider_is_platform_owned: bool
+    # "customer" | "platform" | "host". The boolean above answers "is there
+    # anything to connect"; this answers "who is hosting the result", which
+    # the picker has to say differently for PromptZone storage and for a git
+    # host. See DeployProvider.credential_owner.
+    provider_credential_owner: str
     # Identifiers this template needs PER PROJECT — the provider-side project
     # a build goes to (ADR 0025). Rendered by the picker beside the template,
     # and stored in DeploymentConfig.provider_values, not on the workspace.
@@ -90,6 +96,11 @@ class DeploymentTemplateOut(BaseModel):
     # app/api/policies.py records for policy bodies.
     scaffold_paths: list[str]
     workflow_preview: str
+    # The template's own caveats, in the picker rather than only in the
+    # `docs/deployment.md` the repository gets later. ADR 0023's amendment
+    # requires this for GitHub Pages specifically — a template whose cost is a
+    # public repository must say so where the choice is made, not after it.
+    notes: list[str]
 
 
 class BuildTaskOut(BaseModel):
@@ -201,7 +212,12 @@ def list_deployment_templates(
                 delivery_kind=template.delivery_kind,
                 provider=template.provider,
                 provider_label=provider.label if provider else template.provider,
-                provider_is_platform_owned=bool(provider and provider.platform_owned),
+                provider_is_platform_owned=bool(
+                    provider and provider.credential_owner == "platform"
+                ),
+                provider_credential_owner=(
+                    provider.credential_owner if provider else "customer"
+                ),
                 provider_project_fields=[
                     CredentialFieldOut(
                         name=f.name, label=f.label, secret=f.secret, scope=f.scope
@@ -213,6 +229,7 @@ def list_deployment_templates(
                 required_vars=[v.name for v in template.required_vars],
                 scaffold_paths=sorted(path for path, _, _ in files),
                 workflow_preview=workflow,
+                notes=list(template.notes),
             )
         )
     return out
@@ -440,10 +457,16 @@ def _require_connectable_provider(provider_id: str):
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail="unknown_provider")
-    if provider.platform_owned:
+    if provider.credential_owner == "platform":
         # There is nothing for an admin to connect: the platform mints this
         # credential itself, per workspace and bucket-scoped.
         raise HTTPException(status_code=400, detail="provider_is_platform_owned")
+    if provider.credential_owner == "host":
+        # Also nothing to connect, but for a different reason worth stating
+        # separately: the git host gives each workflow run its own ephemeral
+        # token, and the repository this deploys from is configured through
+        # the GitHub integration rather than here.
+        raise HTTPException(status_code=400, detail="provider_is_host_owned")
     return provider
 
 
@@ -533,13 +556,7 @@ def disconnect_deploy_provider(
 
 
 def _repo_full_name(repo_url: str) -> str | None:
-    """`https://github.com/acme/widget` -> `acme/widget`.
-
-    Derived rather than stored: `repo_url` is what repo creation persisted, and
-    adding a second column that could disagree with it would be one more thing
-    to keep in sync for no gain.
-    """
-    parts = [p for p in repo_url.rstrip("/").split("/") if p]
-    if len(parts) < 2:
-        return None
-    return f"{parts[-2]}/{parts[-1]}"
+    """`https://github.com/acme/widget` -> `acme/widget`. One implementation,
+    shared with the preview-URL resolver that derives a Pages address from the
+    same value."""
+    return repo_full_name_from_url(repo_url)

@@ -632,6 +632,34 @@ def test_a_docker_compose_project_seeds_the_runtime_its_plan_describes():
         assert "server.js" not in paths
 
 
+def test_a_github_pages_project_provisions_with_no_credential_at_all():
+    """The third credential posture (ADR 0023's amendment): nothing is
+    connected, nothing is sealed into the repository, and the preview URL is
+    derived from the repository the cloud just created."""
+    with _client() as client:
+        fake = _wire_github(client)
+        _ws, pid = _project_in_tech_review(client)
+        _with_template(client, pid, "github-pages")
+
+        assert _create_repo(client, pid).status_code == 200, "provisioning should succeed"
+        repo_name = "acme/rocket-ship"
+
+        # No secret exists to write: the deploy runs on the token GitHub gives
+        # the workflow. Only the two bookkeeping variables are set.
+        assert not [key for key in fake.secrets if key[0] == repo_name]
+        assert fake.variables[(repo_name, "PZ_PROJECT_ID")] == pid
+        assert fake.variables[(repo_name, "PZ_ENVIRONMENT")] == "preview"
+
+        # Resolved after creation, because before it there was no repository
+        # to derive it from.
+        state = client.app.state.repository.get_project(pid).deployment_state
+        assert state.url == "https://acme.github.io/rocket-ship/"
+        assert state.state == "awaiting_first_deploy"
+
+        paths = set(fake.commits[0]["paths"])
+        assert {"site/index.html", ".github/workflows/deploy.yml"} <= paths
+
+
 def test_missing_platform_credential_fails_before_any_repo_is_created():
     """Fail fast, step 3: a provider that cannot supply a credential must be
     caught before GitHub is touched at all."""

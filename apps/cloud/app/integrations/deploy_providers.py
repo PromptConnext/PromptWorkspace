@@ -4,7 +4,7 @@ The counterpart to `github_auth.py`, and shaped the same way for the same
 reason: several call sites need "the deploy credential for this workspace",
 and the decrypt-and-shape dance belongs in one place.
 
-Two kinds of provider, and the difference matters:
+Three kinds of provider, and the differences matter:
 
   Customer-owned (Vercel, Cloudflare Pages, Northflank). A workspace admin
   connects a token; it is verified against the provider before storage, held
@@ -18,6 +18,13 @@ Two kinds of provider, and the difference matters:
   by anyone who can push to that repository, so sealing the platform's own
   account-wide key into customer repos would make one leak a cross-tenant
   incident rather than a single-workspace one.
+
+  Host-owned (`github-pages`). No credential exists anywhere in this service.
+  The git host hands each workflow run an ephemeral token scoped to the
+  repository it runs in, and the deploy uses that. It is the cheapest posture
+  we can offer — no account, no secret to seal, nothing to rotate — and the
+  reason it is not simply "platform-owned with no minting" is that PromptZone
+  is not the one hosting the result.
 
 `actions_secrets`/`actions_vars` are the seam that keeps templates and
 providers independent. A template declares the *names* its workflow reads
@@ -39,6 +46,7 @@ from app.models.schemas import Workspace
 logger = logging.getLogger("promptconnext.deploy")
 
 PLATFORM_R2 = "platform-r2"
+GITHUB_PAGES = "github-pages"
 VERCEL = "vercel"
 SSH_DOCKER = "ssh-docker"
 
@@ -77,9 +85,19 @@ class DeployProvider:
     label: str
     # Non-secret identifiers an admin supplies alongside the token.
     fields: tuple[CredentialField, ...] = ()
-    # True when the platform owns the credential and there is nothing for a
-    # workspace admin to connect.
-    platform_owned: bool = False
+    # Who owns the credential this provider deploys with. Three values, not a
+    # boolean, because there are three honest answers (ADR 0023's amendment):
+    #
+    #   "customer" a workspace admin connects a token they got from a vendor.
+    #   "platform" the cloud is the provider and mints a scoped credential per
+    #              workspace; nothing to connect, and PromptZone is hosting.
+    #   "host"     the git host hands the workflow an ephemeral token of its
+    #              own; nothing to connect, and PromptZone is NOT hosting.
+    #
+    # Calling the last one "platform" would tell the picker to say "managed by
+    # PromptZone", which is not who is serving the site; calling it "customer"
+    # would send an admin to a connect form with no fields.
+    credential_owner: str = "customer"
     # What the provider's primary secret is called, and whether it spans more
     # than one line. Both exist so the connection form stays generic: an SSH
     # private key pasted into a single-line input loses its newlines and is
@@ -235,10 +253,23 @@ PROVIDERS: dict[str, DeployProvider] = {
     PLATFORM_R2: DeployProvider(
         id=PLATFORM_R2,
         label="PromptZone hosting",
-        platform_owned=True,
+        credential_owner="platform",
         notes=(
             "Managed by PromptZone — nothing to connect, and no third-party "
             "account required.",
+        ),
+    ),
+    GITHUB_PAGES: DeployProvider(
+        id=GITHUB_PAGES,
+        label="GitHub Pages",
+        credential_owner="host",
+        notes=(
+            "Nothing to connect: the deploy runs on the token GitHub gives "
+            "each workflow run, in the repository PromptZone already created "
+            "for the project.",
+            "The workspace's GitHub connection is what creates that "
+            "repository, and it is configured under the GitHub integration "
+            "rather than here.",
         ),
     ),
     VERCEL: DeployProvider(

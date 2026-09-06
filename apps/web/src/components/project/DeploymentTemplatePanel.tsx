@@ -8,6 +8,15 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { DeploymentTemplateOut, Project } from "@/lib/types";
 
+// Three postures, three different things to say. "No account needed" is true
+// of both providers nobody connects, but only one of them means PromptConnext
+// is hosting the result — saying that about GitHub Pages would be wrong.
+const ACCOUNT_NOTE: Record<DeploymentTemplateOut["provider_credential_owner"], string> = {
+  customer: "needs a connected account",
+  platform: "no account needed · hosted by PromptConnext",
+  host: "no account needed · deploys from this project's own repository",
+};
+
 // Maps apps/cloud/app/api/deployments.py's PATCH `detail` codes to sentences
 // a Tech Lead can act on — same convention as PolicyScopePanel's
 // describeError and CreateRepositoryPanel's DETAIL_MESSAGES.
@@ -165,10 +174,20 @@ export function DeploymentTemplatePanel({
                   <span className="block text-xs text-slate-500">{template.description}</span>
                   <span className="mt-1 block text-xs text-slate-400">
                     {template.provider_label}
-                    {template.provider_is_platform_owned
-                      ? " · no account needed"
-                      : " · needs a connected account"}
+                    {" · "}
+                    {ACCOUNT_NOTE[template.provider_credential_owner]}
                   </span>
+                  {/* The template's own caveats, at the moment of choosing.
+                      GitHub Pages costs a public repository, and that is not
+                      something a Tech Lead should discover from a document in
+                      the repo it already created. */}
+                  {template.notes.length > 0 && (
+                    <ul className="mt-1 list-inside list-disc text-xs text-slate-500">
+                      {template.notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
                 </span>
               </label>
 
@@ -282,8 +301,10 @@ export function DeploymentTemplatePanel({
 
       {/* A warning, not a block. Choosing a template before its credential is
           connected is a legitimate order of operations; the hard failure
-          belongs at repository creation, where it can be specific. */}
-      {!readOnly && chosen && !chosen.provider_is_platform_owned && (
+          belongs at repository creation, where it can be specific.
+          Shown only for a credential someone actually connects — a platform-
+          or host-owned provider has no settings page to send anyone to. */}
+      {!readOnly && chosen && chosen.provider_credential_owner === "customer" && (
         <p className="mt-3 text-xs text-amber-700">
           The workspace&apos;s {chosen.provider_label} account must be connected in{" "}
           <Link href={`/w/${workspaceId}/settings`} className="underline">
