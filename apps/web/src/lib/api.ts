@@ -3,6 +3,7 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
+  DeployConnection,
   DeploymentStatus,
   DeploymentTemplateOut,
   DocumentOut,
@@ -199,6 +200,32 @@ export function updateDeploymentConfig(
 // application is the reason the feature exists, so this is not admin-gated.
 export function getDeploymentStatus(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<DeploymentStatus>(`/projects/${projectId}/deployment`, authHeaders);
+}
+
+// Admin-only on the server. Verified against the provider before storage, so
+// a 400 here means the provider rejected the token, not that we did.
+export function getDeployConnection(
+  workspaceId: string,
+  providerId: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<DeployConnection>(
+    `/workspaces/${workspaceId}/integrations/deploy/${providerId}`,
+    authHeaders,
+  );
+}
+
+export function connectDeployProvider(
+  workspaceId: string,
+  providerId: string,
+  body: { token: string; values: Record<string, string> },
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<DeployConnection>(
+    `/workspaces/${workspaceId}/integrations/deploy/${providerId}`,
+    authHeaders,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
 }
 
 export function createRepository(

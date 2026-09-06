@@ -38,6 +38,7 @@ from app.models.schemas import Workspace
 logger = logging.getLogger("promptconnext.deploy")
 
 PLATFORM_R2 = "platform-r2"
+FLY = "fly"
 
 
 class ProviderCredentialError(RuntimeError):
@@ -70,6 +71,33 @@ class DeployProvider:
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
+async def verify_fly_token(app, config: dict) -> dict:
+    """Confirm a Fly.io deploy token can see the organisation before we store it.
+
+    Same reasoning as `connect_github`'s verification: a token that cannot
+    reach the org produces a workspace that looks connected in settings and
+    fails at tech-review exit, in front of a Tech Lead who cannot tell why.
+    """
+    import httpx
+
+    token = config.get("token") or ""
+    org = config.get("org_slug") or "personal"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                "https://api.machines.dev/v1/apps",
+                params={"org_slug": org},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as exc:  # noqa: BLE001 - transport failures included
+        raise ProviderCredentialError("deployment_provider_unreachable") from exc
+    if resp.status_code in (401, 403):
+        raise ProviderCredentialError("deploy_token_rejected")
+    if resp.is_error:
+        raise ProviderCredentialError("deployment_provider_unreachable")
+    return {}
+
+
 PROVIDERS: dict[str, DeployProvider] = {
     PLATFORM_R2: DeployProvider(
         id=PLATFORM_R2,
@@ -78,6 +106,21 @@ PROVIDERS: dict[str, DeployProvider] = {
         notes=(
             "Managed by PromptZone — nothing to connect, and no third-party "
             "account required.",
+        ),
+    ),
+    FLY: DeployProvider(
+        id=FLY,
+        label="Fly.io",
+        fields=(
+            CredentialField("app_name", "Fly application name"),
+            CredentialField("org_slug", "Fly organisation"),
+        ),
+        verify=verify_fly_token,
+        notes=(
+            "Create a deploy token in the Fly dashboard (Tokens → Deploy token) "
+            "scoped to this application, not an account-wide personal token.",
+            "The application must exist before the first deploy: run "
+            "`flyctl apps create <name>` once.",
         ),
     ),
 }

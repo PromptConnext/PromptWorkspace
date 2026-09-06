@@ -384,6 +384,17 @@ export interface DeploymentTemplateOut {
   workflow_preview: string;
 }
 
+// A deployment provider a workspace admin connects (ADR 0023). The token is
+// never returned — `connected` is the only readable proof it exists.
+export interface DeployConnection {
+  connected: boolean;
+  provider: string;
+  label: string;
+  fields: { name: string; label: string; secret: boolean }[];
+  values: Record<string, string>;
+  connected_at: string | null;
+}
+
 export interface DeploymentOut {
   id: string;
   state: string;

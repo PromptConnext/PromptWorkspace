@@ -29,7 +29,11 @@ from app.api._guards import require_admin, require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.registry import BUILTIN_TEMPLATES, get_template, template_files
-from app.integrations.deploy_providers import get_provider
+from app.integrations.deploy_providers import (
+    ProviderCredentialError,
+    get_provider,
+    provider_config,
+)
 from app.integrations.github import GithubWriteError, ensure_hook_events
 from app.integrations.github_auth import resolve_token
 from app.models.schemas import (
@@ -37,6 +41,7 @@ from app.models.schemas import (
     DeploymentConfig,
     DeploymentConfigUpdate,
     Project,
+    utcnow,
 )
 
 logger = logging.getLogger("promptconnext.deployments")
@@ -294,6 +299,140 @@ async def repair_webhook(
         raise HTTPException(status_code=502, detail="github_hook_repair_failed") from exc
 
     return {"repaired": repaired}
+
+
+class CredentialFieldOut(BaseModel):
+    name: str
+    label: str
+    secret: bool
+
+
+class DeployConnectionOut(BaseModel):
+    """Non-secret connection status. The token is never echoed — the only
+    readable proof it exists is `connected`."""
+
+    connected: bool
+    provider: str
+    label: str
+    fields: list[CredentialFieldOut]
+    # The non-secret identifiers the admin supplied (app name, org slug).
+    values: dict[str, str]
+    connected_at: str | None
+
+
+class DeployConnectRequest(BaseModel):
+    token: str
+    values: dict[str, str] = {}
+
+
+def _deploy_connection_out(provider, config: dict | None) -> DeployConnectionOut:
+    fields = [
+        CredentialFieldOut(name=f.name, label=f.label, secret=f.secret) for f in provider.fields
+    ]
+    return DeployConnectionOut(
+        connected=config is not None,
+        provider=provider.id,
+        label=provider.label,
+        fields=fields,
+        values={f.name: (config or {}).get(f.name, "") for f in provider.fields},
+        connected_at=(config or {}).get("connected_at"),
+    )
+
+
+def _require_connectable_provider(provider_id: str):
+    provider = get_provider(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="unknown_provider")
+    if provider.platform_owned:
+        # There is nothing for an admin to connect: the platform mints this
+        # credential itself, per workspace and bucket-scoped.
+        raise HTTPException(status_code=400, detail="provider_is_platform_owned")
+    return provider
+
+
+@router.get(
+    "/workspaces/{workspace_id}/integrations/deploy/{provider_id}",
+    response_model=DeployConnectionOut,
+)
+def get_deploy_connection(
+    workspace_id: str,
+    provider_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeployConnectionOut:
+    require_admin(repo, workspace_id, user)
+    provider = get_provider(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="unknown_provider")
+    return _deploy_connection_out(
+        provider, provider_config(repo.get_workspace(workspace_id), provider_id)
+    )
+
+
+@router.put(
+    "/workspaces/{workspace_id}/integrations/deploy/{provider_id}",
+    response_model=DeployConnectionOut,
+)
+async def connect_deploy_provider(
+    workspace_id: str,
+    provider_id: str,
+    body: DeployConnectRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeployConnectionOut:
+    """Verify against the provider, then store the token encrypted.
+
+    Verify-before-store, and store nothing at all on rejection: a half-written
+    credential is worse than an absent one, because the workspace looks
+    connected.
+    """
+    require_admin(repo, workspace_id, user)
+    provider = _require_connectable_provider(provider_id)
+    token = body.token.strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="token_required")
+
+    values = {f.name: (body.values.get(f.name) or "").strip() for f in provider.fields}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise HTTPException(status_code=422, detail="provider_fields_required")
+
+    if provider.verify is not None:
+        try:
+            await provider.verify(request.app, {"token": token, **values})
+        except ProviderCredentialError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    ws = repo.get_workspace(workspace_id)
+    merged = dict(ws.integration_config) if ws else {}
+    merged[provider_id] = {
+        **values,
+        "secret_ref": request.app.state.secret_store.encrypt(token),
+        "connected_by": user.id,
+        "connected_at": utcnow().isoformat(),
+    }
+    repo.update_workspace(workspace_id, integration_config=merged)
+    return _deploy_connection_out(provider, merged[provider_id])
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/integrations/deploy/{provider_id}",
+    response_model=DeployConnectionOut,
+)
+def disconnect_deploy_provider(
+    workspace_id: str,
+    provider_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeployConnectionOut:
+    require_admin(repo, workspace_id, user)
+    provider = _require_connectable_provider(provider_id)
+    ws = repo.get_workspace(workspace_id)
+    merged = dict(ws.integration_config) if ws else {}
+    merged.pop(provider_id, None)
+    repo.update_workspace(workspace_id, integration_config=merged)
+    return _deploy_connection_out(provider, None)
 
 
 def _repo_full_name(repo_url: str) -> str | None:
