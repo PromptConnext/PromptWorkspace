@@ -135,10 +135,24 @@ def parse_pull_request_event(payload: dict) -> PullRequestEvent | None:
 
 
 @dataclass(frozen=True)
+class PushCommit:
+    """One commit in a push delivery. `subject` is the first line only — the
+    same thing the extension reads, and scanning the body would match issue
+    references and quoted revert text."""
+
+    sha: str
+    subject: str
+    url: str
+
+
+@dataclass(frozen=True)
 class PushEvent:
     after_sha: str
     changed_paths: list[str] = field(default_factory=list)
     removed_paths: list[str] = field(default_factory=list)
+    # ADR 0023: the same delivery that drives RAG re-indexing also carries the
+    # subjects attribution is read from. One event, two readers.
+    commits: list[PushCommit] = field(default_factory=list)
 
 
 def parse_push_event(payload: dict, default_branch: str) -> PushEvent | None:
@@ -152,7 +166,17 @@ def parse_push_event(payload: dict, default_branch: str) -> PushEvent | None:
         return None
 
     path_action: dict[str, str] = {}
+    commits: list[PushCommit] = []
     for commit in payload.get("commits") or []:
+        sha = commit.get("id") or ""
+        if sha:
+            commits.append(
+                PushCommit(
+                    sha=sha,
+                    subject=(commit.get("message") or "").split("\n", 1)[0],
+                    url=commit.get("url") or "",
+                )
+            )
         for path in commit.get("added") or []:
             path_action[path] = "changed"
         for path in commit.get("modified") or []:
@@ -162,7 +186,9 @@ def parse_push_event(payload: dict, default_branch: str) -> PushEvent | None:
 
     changed = [p for p, a in path_action.items() if a == "changed"]
     removed = [p for p, a in path_action.items() if a == "removed"]
-    return PushEvent(after_sha=after_sha, changed_paths=changed, removed_paths=removed)
+    return PushEvent(
+        after_sha=after_sha, changed_paths=changed, removed_paths=removed, commits=commits
+    )
 
 
 @dataclass(frozen=True)

@@ -539,3 +539,40 @@ def _handle_push(
                 sha=event.after_sha,
             ),
         )
+
+    _record_task_attribution(repo, project_id, event)
+
+
+def _record_task_attribution(repo: Repository, project_id: str, event) -> int:
+    """Upsert the `Artifact(task_id, commit_sha, kind="code")` row for every
+    commit whose subject names a task (ADR 0023 decision 3).
+
+    Status is deliberately untouched. ADR 0022 puts that with the client that
+    observed the publication; the cloud cannot tell "implemented" from
+    "pushed" and should not guess. What the cloud gains here is the ability to
+    answer *which tasks are in this build* for repositories whose developers
+    never install the extension, and for commits that arrive through a merge
+    the extension never saw.
+
+    `upsert_task_artifact` is idempotent on (task_id, commit_sha), so a
+    redelivered webhook writes nothing new — which is the expected case, not
+    the exceptional one.
+    """
+    by_ref = tasks_by_ref(repo.get_graph(project_id).tasks)
+    if not by_ref:
+        return 0
+    now = utcnow()
+    written = 0
+    for commit in event.commits:
+        # No branch fallback: a push delivery to the default branch has no
+        # feature branch to read, and inferring one from `ref` would attribute
+        # every merge commit to whatever task the branch was named for.
+        for ref in refs_for_commit(commit.subject, None):
+            task_id = by_ref.get(ref)
+            if task_id is None:
+                continue
+            repo.upsert_task_artifact(
+                project_id, task_id, commit.url, commit.sha, ArtifactKind.code, now
+            )
+            written += 1
+    return written
