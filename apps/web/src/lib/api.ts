@@ -228,6 +228,18 @@ export function connectDeployProvider(
   );
 }
 
+export function disconnectDeployProvider(
+  workspaceId: string,
+  providerId: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<DeployConnection>(
+    `/workspaces/${workspaceId}/integrations/deploy/${providerId}`,
+    authHeaders,
+    { method: "DELETE" },
+  );
+}
+
 export function createRepository(
   projectId: string,
   body: { name?: string; private?: boolean },

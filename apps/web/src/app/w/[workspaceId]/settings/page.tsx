@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use } from "react";
+import { DeployConnectionsPanel } from "@/components/DeployConnectionsPanel";
 import { GithubConnectionForm } from "@/components/GithubConnectionForm";
 import { ModelConnectionForm } from "@/components/ModelConnectionForm";
 import { RequireAuth } from "@/components/RequireAuth";
@@ -35,6 +36,10 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
         {isAdmin && (
           <>
             <GithubConnectionForm workspaceId={workspaceId} />
+            {/* Directly after GitHub, because the two are consumed together:
+                repository creation writes this credential into the repo the
+                GitHub token creates. */}
+            <DeployConnectionsPanel workspaceId={workspaceId} />
             <ModelConnectionForm workspaceId={workspaceId} />
             <WorkspaceReindexPanel workspaceId={workspaceId} />
           </>
