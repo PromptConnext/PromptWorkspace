@@ -395,6 +395,14 @@ export interface DeployConnection {
   connected_at: string | null;
 }
 
+// One task inside a build (ADR 0023). Deliberately not a commit: the Preview
+// tab speaks the platform's vocabulary, not Git's.
+export interface BuildTask {
+  id: string;
+  title: string;
+  ref: string | null;
+}
+
 export interface DeploymentOut {
   id: string;
   state: string;
@@ -403,6 +411,8 @@ export interface DeploymentOut {
   ref: string | null;
   run_url: string | null;
   frame_policy: "allow" | "deny" | "unknown" | null;
+  // Frozen when the build reached a terminal state; empty while it is in flight.
+  tasks: BuildTask[];
   created_at: string;
   updated_at: string;
 }

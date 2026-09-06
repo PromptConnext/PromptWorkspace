@@ -36,6 +36,7 @@ from app.integrations.deploy_providers import (
 )
 from app.integrations.github import GithubWriteError, ensure_hook_events
 from app.integrations.github_auth import resolve_token
+from app.integrations.task_refs import task_ref_from_feature_tag
 from app.models.schemas import (
     Deployment,
     DeploymentConfig,
@@ -75,6 +76,19 @@ class DeploymentTemplateOut(BaseModel):
     workflow_preview: str
 
 
+class BuildTaskOut(BaseModel):
+    """One task in a build, in the platform's own vocabulary.
+
+    Deliberately not a commit: ADR 0023 decision 6 keeps Git terms off this
+    surface. `ref` is the project's own task number, which is what the task
+    board already shows.
+    """
+
+    id: str
+    title: str
+    ref: str | None
+
+
 class DeploymentOut(BaseModel):
     id: str
     state: str
@@ -83,6 +97,9 @@ class DeploymentOut(BaseModel):
     ref: str | None
     run_url: str | None
     frame_policy: str | None
+    # Frozen at terminal state (pz_deployment_tasks). Empty for a build still
+    # in flight, and empty for a build whose tasks have since been deleted.
+    tasks: list[BuildTaskOut] = []
     created_at: str
     updated_at: str
 
@@ -123,7 +140,10 @@ class DeploymentStatusOut(BaseModel):
     last_error: DeploymentErrorOut | None
 
 
-def _deployment_out(row: Deployment) -> DeploymentOut:
+def _deployment_out(
+    row: Deployment, tasks_by_id: dict[str, BuildTaskOut], repo: Repository
+) -> DeploymentOut:
+    frozen = repo.list_deployment_tasks(row.id)
     return DeploymentOut(
         id=row.id,
         state=row.state,
@@ -132,6 +152,10 @@ def _deployment_out(row: Deployment) -> DeploymentOut:
         ref=row.ref,
         run_url=row.run_url,
         frame_policy=row.frame_policy,
+        # A task deleted after the build shipped is omitted rather than
+        # rendered as a dangling id: the record of what shipped survives, the
+        # thing that no longer exists does not get a name.
+        tasks=[tasks_by_id[task_id] for task_id in frozen if task_id in tasks_by_id],
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -213,6 +237,14 @@ def get_deployment_status(
     state = project.deployment_state
 
     rows = repo.list_deployments(project_id, limit=10)
+    graph = repo.get_graph(project_id)
+    tasks_by_id = {
+        task.id: BuildTaskOut(
+            id=task.id, title=task.title, ref=task_ref_from_feature_tag(task.feature_tag)
+        )
+        for task in graph.tasks
+        if task.deleted_at is None
+    }
     last_error = next(
         (r for r in rows if r.state == "failed" and r.error_code),
         None,
@@ -232,8 +264,8 @@ def get_deployment_status(
         url=state.url if state else None,
         health_path=template.health_path if template else "/",
         pending=sum(1 for r in rows if r.state not in _TERMINAL_STATES),
-        last_deploy=_deployment_out(rows[0]) if rows else None,
-        recent=[_deployment_out(r) for r in rows],
+        last_deploy=_deployment_out(rows[0], tasks_by_id, repo) if rows else None,
+        recent=[_deployment_out(r, tasks_by_id, repo) for r in rows],
         last_error=(
             DeploymentErrorOut(
                 code=last_error.error_code or "deploy_failed",

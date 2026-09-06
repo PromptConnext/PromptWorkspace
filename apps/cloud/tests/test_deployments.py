@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from app.deployments.registry import WORKFLOW_PATH
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
-from app.models.schemas import DeploymentConfig, RepoWebhook, Role
+from app.models.schemas import DeploymentConfig, GraphUpsertRequest, RepoWebhook, Role, Task
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -538,3 +538,33 @@ def test_scheme_is_checked_even_for_provider_minted_urls(client):
         _trusted_environment_url(client.app, _Project(), template, "https://x.vercel.app/")
         == "https://x.vercel.app/"
     )
+
+
+def test_the_status_endpoint_names_the_tasks_in_each_build(client):
+    _ws, project_id = _project(client)
+    repository = client.app.state.repository
+    repository.upsert_graph(
+        project_id,
+        GraphUpsertRequest(
+            tasks=[
+                Task(id="t1", project_id=project_id, title="Add a retry", feature_tag="T001 [P]")
+            ]
+        ),
+        source="pz",
+    )
+    _post(client, "deployment_status", _deployment_status(project_id, state="success"))
+    row = repository.get_latest_deployment(project_id)
+    repository.set_deployment_tasks(row.id, ["t1"])
+
+    body = _status(client, project_id)
+    assert body["last_deploy"]["tasks"] == [{"id": "t1", "title": "Add a retry", "ref": "T1"}]
+    assert body["recent"][0]["tasks"] == body["last_deploy"]["tasks"]
+
+
+def test_a_task_deleted_after_the_build_is_simply_omitted(client):
+    _ws, project_id = _project(client)
+    _post(client, "deployment_status", _deployment_status(project_id, state="success"))
+    row = client.app.state.repository.get_latest_deployment(project_id)
+    client.app.state.repository.set_deployment_tasks(row.id, ["gone"])
+    body = _status(client, project_id)
+    assert body["last_deploy"]["tasks"] == []
