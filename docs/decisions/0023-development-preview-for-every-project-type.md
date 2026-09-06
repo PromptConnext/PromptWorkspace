@@ -146,3 +146,17 @@ Four things this costs, one of which is a change to shipped code.
 None of this disturbs the ADR's boundaries. No new inbound channel: the same per-repo webhook, the same four event types, the same HMAC secret. No cloud-side build, host or proxy — GitHub builds and GitHub serves, and the cloud observes exactly as it observes Fly or R2. No new column and no new route. Adding the template remains a directory, one `BUILTIN_TEMPLATES` entry and one `PROVIDERS` entry, which is the property decision 8 exists to protect.
 
 It belongs in **Phase 1**, alongside the two templates already there, since it introduces no delivery kind and depends on nothing in Phases 2 through 5 — with the caveat that the Pages-enablement path and the repo-visibility decision are settled first. Both are questions about the outside world, and neither is answerable from inside this repository.
+
+## Amendment — 2026-09-06: `next-vercel`, and why it deploys to production
+
+Phase 1 gains a fourth template, `next-vercel`, ahead of GitHub Pages: a Next.js App Router application on a customer-owned Vercel project. It is the same credential posture as `fly-node` and needs no change to the contract — a directory, one `BUILTIN_TEMPLATES` entry, one `PROVIDERS` entry — and it is prioritized because it is the stack the projects this platform creates actually are.
+
+Two things about it are worth recording rather than leaving in the template's `notes`.
+
+**It deploys to Vercel production, not to a Vercel preview deployment,** despite `preview` being the environment name on the GitHub Deployment. Vercel's Deployment Protection gates preview deployments — and the generated production deployment URL — behind a Vercel login by default; a production *domain* alias is not gated. Framing a sign-in wall would fail decision 6 as surely as showing a stakeholder a SHA would. This is also the more faithful reading of what the other two templates do: there is one always-on preview instance tracking the default branch, not one per commit. The workflow therefore resolves the project's production alias through the Vercel API and falls back to the generated deployment URL only when no alias exists.
+
+**Its `embeddable = True` is earned rather than measured.** `static-r2` frames because a public bucket URL sends no framing header — the absence of a restriction, which the template's own comment is careful to admit. `next-vercel` controls its response headers and names the web app as a frame ancestor from `next.config.mjs`, read at build time on the runner so no Vercel project environment variable has to exist for it. Per decision 1 the declaration still only narrows what the platform attempts; `_probe_frame_policy` remains what decides.
+
+One limitation ships with it, inherited rather than introduced: the Vercel project id lives on the *workspace* credential, so every project in a workspace deploys to the same Vercel project. This is exactly `fly-node`'s `app_name` problem, and it is structural — `DeploymentConfig` carries only `template_id`, so there is nowhere per-project to put a provider identifier. Fixing it means changing `DeploymentConfig`, which is a decision this ADR does not make.
+
+The question of generating templates from a project's technical plan, rather than hand-writing one per stack, is taken up separately in [ADR 0024](0024-generated-deployment-scaffolds.md), which answers it mostly in the negative.
