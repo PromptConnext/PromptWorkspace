@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.api._guards import require_admin
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.attribution import TERMINAL_STATES, freeze_build_tasks
 from app.deployments.registry import PREVIEW_ENVIRONMENT, WORKFLOW_PATH
 from app.deployments.registry import get_template as get_deployment_template
 from app.deployments.state import DEPLOY_STATE_BY_GITHUB as _DEPLOY_STATE_BY_GITHUB
@@ -208,7 +209,7 @@ async def github_webhook(request: Request, repo: Repository = Depends(get_reposi
     elif event_type == "deployment_status":
         await _handle_deployment_status(request.app, repo, project, payload)
     elif event_type == "workflow_run":
-        _handle_workflow_run(repo, project, payload)
+        await _handle_workflow_run(request.app, repo, project, payload)
 
     return {"received": True, "matched": True}
 
@@ -322,8 +323,13 @@ async def _handle_deployment_status(app, repo: Repository, project, payload: dic
     )
     _refresh_deployment_state(repo, project)
 
+    if state in TERMINAL_STATES:
+        row = repo.get_latest_deployment(project.id)
+        if row is not None and row.external_key == event.external_key:
+            await freeze_build_tasks(app, repo, project, row)
 
-def _handle_workflow_run(repo: Repository, project, payload: dict) -> None:
+
+async def _handle_workflow_run(app, repo: Repository, project, payload: dict) -> None:
     """Only terminal *failures* of the seeded workflow are recorded here.
 
     A successful run has already reported itself as a deployment carrying a
@@ -359,6 +365,12 @@ def _handle_workflow_run(repo: Repository, project, payload: dict) -> None:
         )
     )
     _refresh_deployment_state(repo, project)
+
+    # A dead build still names what was in it: "the version that did not
+    # publish contained these three tasks" is what a Tech Lead needs.
+    row = repo.get_latest_deployment(project.id)
+    if row is not None and row.external_key == event.external_key:
+        await freeze_build_tasks(app, repo, project, row)
 
 
 # The probe below fetches a URL that arrived in a webhook payload. The

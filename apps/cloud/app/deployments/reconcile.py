@@ -122,7 +122,18 @@ async def _reconcile_one(app, repo, row: Deployment) -> bool:
             }
         )
     )
-    refresh_deployment_state(repo, repo.get_project(row.project_id))
+    project = repo.get_project(row.project_id)
+    refresh_deployment_state(repo, project)
+
+    if state in ("live", "failed"):
+        # Same freeze the webhook path performs, for the same reason: a build
+        # closed out here is just as terminal as one GitHub told us about.
+        from app.deployments.attribution import freeze_build_tasks
+
+        latest = repo.get_latest_deployment(row.project_id)
+        if latest is not None and latest.external_key == row.external_key:
+            await freeze_build_tasks(app, repo, project, latest)
+
     logger.info("reconciled deployment %s to %s", row.id, state)
     return True
 

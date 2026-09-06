@@ -410,6 +410,12 @@ class GithubClient(Protocol):
 
     async def get_workflow_run(self, token: str, repo: str, run_id: str) -> dict | None: ...
 
+    async def compare_commits(self, token: str, repo: str, base: str, head: str) -> list[str]: ...
+
+    async def list_commits(
+        self, token: str, repo: str, sha: str, limit: int = 100
+    ) -> list[str]: ...
+
 
 async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> httpx.Response:
     """One GitHub request, with transport failures (DNS, connect refused,
@@ -612,6 +618,42 @@ class HttpGithubClient:
                 status_code=resp.status_code,
             )
         return resp.json()
+
+    async def compare_commits(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        """The shas between two commits, oldest first, excluding `base`."""
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/compare/{base}...{head}",
+            token=token,
+            what="compare two commits",
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"comparing two commits failed for {repo}: {resp.status_code}",
+                status_code=resp.status_code,
+            )
+        return [c["sha"] for c in (resp.json() or {}).get("commits", []) if c.get("sha")]
+
+    async def list_commits(self, token: str, repo: str, sha: str, limit: int = 100) -> list[str]:
+        """The first page of history reachable from `sha`, newest first.
+
+        Only used for a project's very first build, which has no previous
+        successful deploy to compare against. Capped rather than paginated: a
+        first build reaches back to the seed commit, and a repository whose
+        first deploy carries more than a hundred commits is one whose history
+        predates PromptZone entirely."""
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/commits?sha={sha}&per_page={min(limit, 100)}",
+            token=token,
+            what="list commits",
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"listing commits failed for {repo}: {resp.status_code}",
+                status_code=resp.status_code,
+            )
+        return [c["sha"] for c in (resp.json() or []) if c.get("sha")]
 
     async def put_file_content(
         self,
@@ -974,6 +1016,10 @@ class FakeGithubClient:
         # GitHub answering 404, which is exactly the abandoned-deploy case.
         self.deployment_states: dict[tuple[str, str], dict] = {}
         self.workflow_runs: dict[tuple[str, str], dict] = {}
+        # ADR 0023 build attribution. Keyed (repo, base, head) and (repo, sha);
+        # an unregistered key answers empty, which exercises the fallback.
+        self.comparisons: dict[tuple[str, str, str], list[str]] = {}
+        self.commit_lists: dict[tuple[str, str], list[str]] = {}
         self.reject_token = False
         self.token_owner_unreachable = False
         self.token_expires_at: str | None = None
@@ -987,6 +1033,12 @@ class FakeGithubClient:
 
     async def get_workflow_run(self, token: str, repo: str, run_id: str) -> dict | None:
         return self.workflow_runs.get((repo, run_id))
+
+    async def compare_commits(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        return list(self.comparisons.get((repo, base, head), []))
+
+    async def list_commits(self, token: str, repo: str, sha: str, limit: int = 100) -> list[str]:
+        return list(self.commit_lists.get((repo, sha), []))[:limit]
 
     async def verify_token(self, token: str, owner: str) -> TokenIdentity:
         self.verified_tokens.append((token, owner))
