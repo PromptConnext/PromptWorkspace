@@ -367,6 +367,13 @@ export interface DeploymentTemplateOut {
   name: string;
   description: string;
   stack: string;
+  // ADR 0023: decides how the Preview tab presents this project's build.
+  delivery_kind:
+    | "embedded_url"
+    | "external_url"
+    | "api_console"
+    | "artifact_download"
+    | "store_build";
   provider: string;
   provider_label: string;
   provider_is_platform_owned: boolean;

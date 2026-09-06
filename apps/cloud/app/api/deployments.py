@@ -52,6 +52,8 @@ class DeploymentTemplateOut(BaseModel):
     name: str
     description: str
     stack: str
+    # embedded_url | external_url | api_console | artifact_download | store_build
+    delivery_kind: str
     provider: str
     provider_label: str
     # True when the platform owns the credential, so the picker can say "no
@@ -151,6 +153,7 @@ def list_deployment_templates(
                 name=template.name,
                 description=template.description,
                 stack=template.stack,
+                delivery_kind=template.delivery_kind,
                 provider=template.provider,
                 provider_label=provider.label if provider else template.provider,
                 provider_is_platform_owned=bool(provider and provider.platform_owned),

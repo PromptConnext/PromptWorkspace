@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.deployments.registry import (
     BUILTIN_TEMPLATES,
+    DELIVERY_KINDS,
     PREVIEW_ENVIRONMENT,
     get_template,
     render_deployment_doc,
@@ -202,3 +203,18 @@ def test_project_defaults_to_no_deployment():
     project = Project(name="P", workspace_id="w", owner_id="u")
     assert project.deployment_config is None
     assert project.deployment_state is None
+
+
+def test_every_builtin_declares_a_known_delivery_kind():
+    for template in BUILTIN_TEMPLATES:
+        assert template.delivery_kind in DELIVERY_KINDS, template.id
+
+
+def test_static_r2_still_presents_as_an_embedded_url():
+    # ADR 0023 phase 1: behaviour must be byte-identical for existing projects.
+    assert get_template("static-r2").delivery_kind == "embedded_url"
+
+
+def test_delivery_kind_is_on_the_templates_endpoint(client):
+    rows = client.get("/deployment-templates", headers={"X-User-Id": "alice"}).json()
+    assert {r["id"]: r["delivery_kind"] for r in rows}["static-r2"] == "embedded_url"

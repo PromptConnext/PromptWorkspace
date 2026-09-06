@@ -51,6 +51,19 @@ WORKFLOW_PATH = ".github/workflows/deploy.yml"
 # start reporting them as the business user's preview.
 PREVIEW_ENVIRONMENT = "preview"
 
+# How the platform PRESENTS a build. The one new dispatch key ADR 0023 adds,
+# and deliberately not `stack`: `stack` stays a display string so a template
+# can never grow a per-stack special case in the cloud.
+#
+#   embedded_url      a web page the platform frames
+#   external_url      a web page that refuses framing, opened in its own tab
+#   api_console       an HTTP API; the build publishes an OpenAPI document
+#   artifact_download a file a person installs (installer, APK, .app archive)
+#   store_build       reaches its audience through TestFlight / a Play track
+DELIVERY_KINDS = frozenset(
+    {"embedded_url", "external_url", "api_console", "artifact_download", "store_build"}
+)
+
 
 @dataclass(frozen=True)
 class SecretSpec:
@@ -101,6 +114,11 @@ class DeploymentTemplate:
     # credential per workspace rather than sealing its own into a repo).
     provider_credential_kind: str | None
     scaffold_dir: str
+    # ADR 0023. Defaults to embedded_url so every template written before this
+    # field existed keeps exactly its previous presentation. Declared here
+    # rather than beside `stack` only because a defaulted field cannot precede
+    # the non-defaulted ones above it.
+    delivery_kind: str = "embedded_url"
     required_secrets: tuple[SecretSpec, ...] = ()
     required_vars: tuple[VarSpec, ...] = ()
     # Design-time claim, narrowed later by the server-side header probe. True
