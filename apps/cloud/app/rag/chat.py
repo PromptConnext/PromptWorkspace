@@ -10,6 +10,25 @@ from typing import Protocol
 
 import httpx
 
+# What actually holds this boundary, stated rather than implied: the prompt
+# below is defense-in-depth, not the guard. Retrieved chunks include uploaded
+# documents and discussion comments other members wrote, so the CONTEXT block
+# carries text a workspace member chose — the same trust seam the deploy-status
+# probe faces in api/github.py, where `environment_url` is written by whoever
+# has push access. That probe answers it structurally (a resolved-address check
+# a hostile value cannot argue with). Here the enforcing property is that the
+# assistant has nothing to do if it obeys: no tool use, no writes, read-only by
+# construction (ADR 0011). An instruction in a system prompt is a request to a
+# model, not a boundary, so an injected "ignore the above" costs at most a wrong
+# answer in one response — it cannot reach a side effect.
+#
+# The consequence for whoever changes this next: give the assistant a tool and
+# that ceases to be true, and this prompt becomes the only thing standing
+# between attacker-authored chunk text and a real action. Adding one is a
+# security change, not a feature — it needs the boundary re-established
+# somewhere it can be enforced (a separate un-prompted call that sees no
+# retrieved text, an allowlist of side-effect-free tools, or human confirmation
+# per action), not a stronger sentence below.
 SYSTEM_PROMPT = (
     "You are the PromptConnext project assistant. Answer only using the "
     "CONTEXT block below, which is retrieved project data (requirements, "
