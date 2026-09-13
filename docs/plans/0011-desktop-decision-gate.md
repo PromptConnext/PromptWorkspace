@@ -1,6 +1,10 @@
 # Plan 0011 — Desktop decision gate
 
-**Date:** 2026-09-12 · **Status:** Decision required — blocks plans 0012, 0021 and 0025 · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both still *Proposed*
+**Date:** 2026-09-12 · **Status:** **Answered 2026-09-13 — Branch A, retire.** Unblocks plans 0012, 0021 and 0025 · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both **Accepted 2026-09-13**
+
+> **Decision, 2026-09-13.** Retire both shells, per §7. `apps/desktop` and `apps/desktop-theia` are deleted; ADRs 0019 and 0020 move from Proposed to Accepted. Plan 0025 (the MCP server) is promoted from a long-term bet to a **release prerequisite** and sequenced ahead of the `apps/desktop` deletion, because it becomes the only channel for developers outside the VS Code family. Read §6's Branch A column for what each downstream plan now looks like; the Branch B column is retained as the record of what was rejected, not as live guidance.
+>
+> Implementation starts with plan 0012's M1, which §7 notes is correct under either branch and should not have waited on this answer.
 
 This is not a build plan. It is the memo that lets product and engineering answer question 1 of the [product vision](../product-vision-2026-09-12.md) — *is the desktop retired or funded?* — in one sitting, written so either answer can be executed the next morning. Everything below was measured against the working tree: line counts come from `git ls-files … | xargs wc -l`, and every `path:line` reference was read before it was written.
 

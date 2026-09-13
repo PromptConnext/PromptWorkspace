@@ -1,6 +1,8 @@
 # Plan 0022 — Correct the public positioning and the pricing model
 
-**Date:** 2026-09-12 · **Status:** Decision required, then ready for implementation · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both still *Proposed*
+**Date:** 2026-09-12 · **Status:** **Answered 2026-09-13 — option B. Ready for implementation.** · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both **Accepted 2026-09-13**; pricing recorded in [0027](../decisions/0027-what-is-free.md)
+
+> **Decision, 2026-09-13.** Option B, the metered free tier. Scope, Spec and the task graph are free for any number of people in one workspace under a lowered token ceiling; repository provisioning, deployment templates, the preview and a raised ceiling are paid. Recorded as [ADR 0027](../decisions/0027-what-is-free.md), which §2 asked for before M1 starts. The desktop question this plan waited on is answered as **retire** ([plan 0011](./0011-desktop-decision-gate.md)), so M2 follows its Branch A column: the download page loses its job as the primary conversion surface.
 
 This plan implements §3.5 and §4 of the [product vision](../product-vision-2026-09-12.md). [Plan 0003](./0003-marketing-website.md) built `apps/corp` against a locked intake decision — "desktop app **free** (BYO-model, no model tax); **enterprise is contact-sales**", with "**Primary conversion: Desktop download**" — and that is the product ADR 0019 proposes to delete. Every string quoted below was read out of the working tree. M1 waits on §2; M3 and M5 are branch-independent.
 

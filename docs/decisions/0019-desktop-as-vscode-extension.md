@@ -1,6 +1,8 @@
 # ADR 0019 — Replace the desktop application with a VS Code extension, plus an MCP server for everyone else
 
-**Date:** 2026-08-13 · **Status:** Proposed · **Deciders:** product + engineering
+**Date:** 2026-08-13 · **Status:** **Accepted 2026-09-13** · **Deciders:** product + engineering
+
+> **Accepted 2026-09-13.** Option 1 — replace the desktop application entirely with a VS Code extension, with an MCP server as the portable channel for developers outside the VS Code family. `apps/desktop` and `apps/desktop-theia` are retired. The deciding argument was not the platform analysis below but that the replacement already exists and is larger and more current than either thing it replaces: `apps/vscode` is 4,825 lines across 31 files with task closing, status writing and clone-sourced coding rules, while both shells have been frozen since this ADR was drafted and the Theia shell has plumbing and no product interface. Decision 3, the MCP server, is the one part of this ADR that had not been built and is now a release prerequisite sequenced ahead of the deletion — see [plan 0025](../plans/0025-mcp-server.md). Sizing, deletion order and the pnpm override prerequisite are in [plan 0011](../plans/0011-desktop-decision-gate.md).
 
 **Prompted by the decision:** *given that the cloud now owns planning and the desktop's job is narrowed to executing assigned tasks against a local repository, is a VS Code extension sufficient — rather than building and maintaining a standalone desktop application?*
 
