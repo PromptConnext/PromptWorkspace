@@ -26,6 +26,14 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 
 `apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; root `package.json`'s `pnpm.packageExtensions` pins each package's `@types/react` edge explicitly (not `pnpm-workspace.yaml` — pnpm 9.x only reads `packageExtensions` from `package.json`) — don't remove those. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
 
+> **Retirement accepted, 2026-09-13.** [ADR 0019](docs/decisions/0019-desktop-as-vscode-extension.md) and
+> [ADR 0020](docs/decisions/0020-cloud-is-the-source-of-truth.md) moved from Proposed to Accepted:
+> the cloud is authoritative for the task graph, and `apps/desktop` plus `apps/desktop-theia` are being
+> retired in favour of `apps/vscode` and an MCP server. Deletion is sequenced in
+> [plan 0011](docs/plans/0011-desktop-decision-gate.md); the sync inversion is
+> [plan 0012](docs/plans/0012-close-the-write-path.md). Treat desktop sections below as describing
+> what still exists, not what to extend.
+
 ## Development commands
 
 From the repo root:
@@ -72,7 +80,7 @@ Hono server bound to `127.0.0.1:47131` (`index.ts`). Routes are mounted flat: `m
 
 - **`gateway/`** — the BYO-model gateway. `ModelConnection` is an **OpenAI-compatible** shape (`endpoint` + `/chat/completions`); `anthropic-compat.ts` is the Anthropic Messages façade (ADR 0006) that lets Claude Code speak to the connected BYO model.
 - **`agent/`** — `loop.ts::runStage()` is the thin single-shot planning generator (constitution/specify/plan/tasks). `agent-runner.ts` + `adapters/` orchestrate external coding agents for **implementation**; each adapter (`claude-code`, `gemini`, `codex`, `custom`) is ~30 lines with `detect() / buildSpawn() / parseLine() / bringsOwnModel`. Result capture is **agent-agnostic** — changed files are read from Git and committed; a commit ref marks a task done.
-- **`db.ts`** — local `node:sqlite` task graph, the **offline source of truth** (ADR 0003).
+- **`db.ts`** — local `node:sqlite` task graph. A **cache of the cloud's graph**, not an authority: ADR 0020 inverted ADR 0003, so it may be deleted and rebuilt from the cloud without loss.
 - **`backup.ts`** — snapshots that database via SQLite's `VACUUM INTO` (consistent under concurrent writes; no WAL side-files to capture separately), surfaced as `GET`/`POST /engine/backups` and the desktop's "Back up now" panel. Cloud sync is opt-in, so this is the only second copy an offline user has. Never overwrites an existing file; restore is a manual file swap back to `dbFilePath()`.
 - **`keychain.ts`** — model credentials live in the OS keychain (macOS `security` CLI; Windows DPAPI via PowerShell), never in SQLite or config.
 - **`security.ts`** — origin allowlist + per-session bearer token (ADR 0008). See Security below.

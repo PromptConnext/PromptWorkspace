@@ -121,7 +121,7 @@ flowchart TB
 | **Spec Kit Runner** | Executes Spec Kit commands in the local workspace; never surfaced to users. |
 | **Model Gateway + Router** | Normalizes all providers to one interface; routes tasks to the right connected model by role; holds the two connection modes; degrades gracefully to the two required models. |
 | **Credential Vault** | Model keys/tokens in OS keychain. Never leaves the machine. |
-| **Local Task-Graph Cache** | Source of truth while offline; syncs to cloud when connected. |
+| **Local Task-Graph Cache** | A cache of the cloud's graph (ADR 0020); readable offline, rebuilt from the cloud without loss. |
 | **PromptConnext Cloud** | Identity, the shared task graph, collaboration (presence/comments/roles), external-tracker sync, and a workspace-BYO RAG assistant (ADR 0011, plan 0005 M9). No source code at rest; no *end-user* credentials — only a workspace admin's own model key, encrypted server-side. |
 
 ---
@@ -172,8 +172,8 @@ WS    /sync/projects/{id}/presence       → live collaboration
 ```
 
 Two things flow in opposite directions, and ADR 0015 keeps them strictly
-separate. The **task graph** stays **local-authoritative** (the engine is the
-source of truth; the cloud graph is a projection with per-field ownership for
+separate. The **task graph** is **cloud-authoritative** since ADR 0020 (the cloud
+authors it and the local graph is a cache; per-field ownership survives only for
 the few tracker-owned fields). But the **workspace/project roster** — which
 workspaces a signed-in user belongs to and which projects live in them — is
 **cloud-authoritative**: the engine mirrors the existing member-scoped
@@ -182,7 +182,7 @@ renders fully offline, refreshing it on sign-in / focus / explicit refresh and
 scrubbing it on sign-out. Opening a roster project this machine has never seen
 triggers a one-shot **full-graph bootstrap-pull** (`GET /sync/projects/{id}/graph`
 with no `since`, keyset-paginated) that replicates the cloud's already-merged
-state into empty local tables — after which the graph is local-authoritative as
+state into empty local tables — after which the local graph is a cache as
 usual. Consequently, offline-first now holds **after a first successful sign-in
 on that machine**, not on a cold, never-signed-in install (ADR 0015 narrows
 ADR 0003's "works with no network" for the roster, not the graph).
@@ -221,7 +221,7 @@ Because the roster is now the authority for what's reachable, a project that was
 
 - **Load reality:** heavy compute (inference, Spec Kit, Git) is **distributed to each user's machine** → the cloud scales with *graph size and collaboration events*, not tokens. This is inherently cheap and horizontally simple.
 - **Cloud scaling:** stateless Sync API behind a load balancer; Postgres/Supabase with read replicas as graph volume grows; WebSocket presence on a pub/sub layer.
-- **Reliability:** cloud outage must not block local work — the desktop engine is the offline source of truth; sync is eventually-consistent with per-field ownership to resolve conflicts deterministically.
+- **Reliability:** a cloud outage must not block local work — cached tasks stay readable and status changes queue until reconnect (ADR 0020 reduced ADR 0003's guarantee deliberately); the remaining multi-writer boundary is the tracker mirror, where per-field ownership still resolves conflicts.
 - **Monitoring:** engine emits local health (model reachability, step timing); cloud tracks sync lag, conflict rate, external-sync failures.
 
 ---

@@ -1,6 +1,10 @@
 # ADR 0020 — The cloud is the source of truth; the local graph becomes a cache
 
-**Date:** 2026-08-13 · **Status:** Proposed · **Deciders:** product + engineering
+**Date:** 2026-08-13 · **Status:** **Accepted 2026-09-13** · **Deciders:** product + engineering
+
+> **Accepted 2026-09-13.** The cloud is authoritative for the task graph; the local graph is a cache. Implementation is sequenced in [plan 0012](../plans/0012-close-the-write-path.md), whose M1 — disabling the engine's interval graph push — is the urgent step this ADR named and is starting first.
+>
+> Two corrections to the record below, found while planning. The module docstring in `apps/cloud/app/api/sync.py` has already been rewritten and no longer asserts local authority, so it should come off this ADR's documentation-debt list. And two of the six gaps under *What this requires that does not exist yet* have since shipped: the task-status PATCH and the cross-project assigned-tasks read both exist. The remaining four are real and are what plan 0012 covers.
 
 **Prompted by the decision:** *planning, task generation, AI coding rules, the repository constitution and task management now live in the cloud. The desktop's job is to help a developer execute assigned tasks against a local repository — not to plan.*
 
