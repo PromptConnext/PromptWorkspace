@@ -169,6 +169,13 @@ async def lifespan(app: FastAPI):
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
+    # Per-(workspace, user) budget on the repo-listing route (import picker).
+    # It reads with the workspace's own shared PAT, so a chatty client here
+    # burns the same budget that repo creation, code indexing and the
+    # assistant's snippet fetch all depend on — worth protecting on its own,
+    # not folded into _LIMITED_PREFIXES (that list is for hot sync/webhook
+    # paths; this is a one-off admin-adjacent read).
+    app.state.github_read_limiter = TokenBucketLimiter(per_minute=30, burst=10)
     # Deployment templates (ADR 0021). The only place the platform's
     # account-wide R2 token is used, and the only thing that mints the
     # per-workspace credential a project repo is given. Same override seam as

@@ -900,6 +900,41 @@ class GithubConnectionOut(BaseModel):
     owner: str | None = None
 
 
+class GithubRepoOut(BaseModel):
+    """One repository the workspace's PAT can see, for the import picker
+    (GET /workspaces/{id}/integrations/github/repos)."""
+
+    full_name: str
+    name: str
+    html_url: str
+    default_branch: str
+    private: bool
+    archived: bool = False
+    # Derived from GitHub's `size == 0` — the only available proxy for "has no
+    # commits". A repo in that state can't be seeded (the seed step reads the
+    # branch head first, which 404s), so the picker disables the row rather
+    # than letting the failure surface at tech-review exit.
+    empty: bool = False
+    pushed_at: datetime | None = None
+
+
+class GithubRepoListOut(BaseModel):
+    """Response for the import picker.
+
+    `owner`/`owner_type`/`account_login` are carried even when `repositories`
+    is empty — that emptiness is the out-of-scope-owner state a member sees
+    when their app lives under an account the workspace's PAT cannot reach,
+    and the connection-status endpoint that would otherwise supply the owner
+    is admin-only, so this response has to say it itself.
+    """
+
+    owner: str | None = None
+    owner_type: str | None = None
+    account_login: str | None = None
+    repositories: list[GithubRepoOut] = []
+    truncated: bool = False
+
+
 class CreateRepositoryRequest(BaseModel):
     """Body for POST /projects/{id}/lifecycle/create-repository. `name` lets
     the Tech Lead override the auto-derived slug; omitted, the endpoint
