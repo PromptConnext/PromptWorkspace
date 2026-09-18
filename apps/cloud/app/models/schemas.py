@@ -470,6 +470,11 @@ class Deployment(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     workspace_id: str
+    # Import gate: "owner/repo" of an existing repository to adopt at repo
+    # creation, chosen from GithubRepoListOut. None (the default) is today's
+    # unchanged start-from-scratch path. Deliberately a full_name and not a
+    # URL — the picker is the only source, there is no free-text paste path.
+    import_repo_full_name: str | None = None
 
 
 class Project(BaseModel):

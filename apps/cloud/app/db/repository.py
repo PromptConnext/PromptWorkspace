@@ -127,7 +127,15 @@ class Repository(abc.ABC):
 
     # -- projects --------------------------------------------------------- #
     @abc.abstractmethod
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project: ...
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project: ...
 
     @abc.abstractmethod
     def get_project(self, project_id: str) -> Project | None: ...
@@ -630,8 +638,22 @@ class InMemoryRepository(Repository):
         )
 
     # -- projects --------------------------------------------------------- #
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
-        project = Project(name=name, workspace_id=workspace_id, owner_id=created_by)
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project:
+        project = Project(
+            name=name,
+            workspace_id=workspace_id,
+            owner_id=created_by,
+            repo_url=repo_url,
+            repo_default_branch=repo_default_branch,
+        )
         self._projects[project.id] = project
         self._graph[project.id] = {etype: {} for etype in ENTITY_TYPES}
         return project

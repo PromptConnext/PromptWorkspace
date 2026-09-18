@@ -255,8 +255,22 @@ class SupabaseRepository(Repository):
         )
 
     # -- projects --------------------------------------------------------- #
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
-        project = Project(name=name, workspace_id=workspace_id, owner_id=created_by)
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project:
+        project = Project(
+            name=name,
+            workspace_id=workspace_id,
+            owner_id=created_by,
+            repo_url=repo_url,
+            repo_default_branch=repo_default_branch,
+        )
         self._client.table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
 

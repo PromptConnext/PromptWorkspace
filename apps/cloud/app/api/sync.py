@@ -87,16 +87,74 @@ router = APIRouter(tags=["sync"])
 logger = logging.getLogger("promptconnext.sync")
 
 
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
 @router.post("/projects", response_model=Project, status_code=201)
-def create_project(
+async def create_project(
     body: ProjectCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
     # Only members of the target workspace may create projects in it.
     require_workspace(repo, body.workspace_id, user)
+
+    if body.import_repo_full_name is None:
+        return repo.create_project(
+            workspace_id=body.workspace_id, created_by=user.id, name=body.name
+        )
+
+    # Import path: the user picked a repo from GithubRepoListOut. Everything
+    # below runs before any write, same discipline as create_repository.
+    full_name = body.import_repo_full_name
+    if not _REPO_FULL_NAME_RE.match(full_name):
+        raise HTTPException(status_code=422, detail="invalid_repo_full_name")
+
+    workspace = repo.get_workspace(body.workspace_id)
+    resolved = resolve_token(request.app, workspace)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    token, github_config = resolved
+    owner = github_config.get("owner")
+    if not owner:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+
+    # import_repo_full_name is client-supplied and therefore attacker-
+    # controllable by any workspace member; without this check a member could
+    # name a repo outside the connected owner and have the platform commit
+    # into it at tech-review exit.
+    if full_name.split("/")[0].lower() != owner.lower():
+        raise HTTPException(status_code=400, detail="repo_owner_out_of_scope")
+
+    # A second project importing the same repo would silently steal the
+    # first's webhook binding (pz_repo_webhooks is keyed by repo_full_name) —
+    # corrupting deploy state and build attribution for both with no error
+    # anywhere downstream. Catch it here instead.
+    for existing in repo.list_projects_by_workspace(body.workspace_id):
+        if existing.repo_url and repo_full_name_from_url(existing.repo_url) == full_name:
+            raise HTTPException(status_code=409, detail="repo_already_imported")
+
+    github_client = request.app.state.github_client
+    try:
+        found = await github_client.get_repo(token, full_name)
+    except GithubWriteError as exc:
+        if getattr(exc, "status_code", None) in (401, 403):
+            raise HTTPException(
+                status_code=400, detail="github_repo_not_in_token_scope"
+            ) from exc
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+    if found is None:
+        raise HTTPException(status_code=404, detail="repo_not_found")
+    if found.get("empty"):
+        raise HTTPException(status_code=400, detail="repo_is_empty")
+
     return repo.create_project(
-        workspace_id=body.workspace_id, created_by=user.id, name=body.name
+        workspace_id=body.workspace_id,
+        created_by=user.id,
+        name=body.name,
+        repo_url=found["html_url"],
+        repo_default_branch=found.get("default_branch") or "main",
     )
 
 
