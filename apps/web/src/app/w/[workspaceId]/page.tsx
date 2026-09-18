@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { Avatar } from "@/components/Avatar";
+import { NewProjectDialog } from "@/components/NewProjectDialog";
 import { safeWebUrl } from "@/components/project/previewState";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
-import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { useWorkspace, useWorkspaceName } from "@/lib/workspace";
@@ -61,30 +61,7 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
     `/workspaces/${workspaceId}/projects`,
   );
 
-  const { authHeaders } = useAuth();
   const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [createBusy, setCreateBusy] = useState(false);
-
-  async function createProject() {
-    if (!newName.trim()) return;
-    setCreateBusy(true);
-    setCreateError(null);
-    try {
-      const project = await apiFetch<Project>("/projects", authHeaders(), {
-        method: "POST",
-        body: JSON.stringify({ name: newName.trim(), workspace_id: workspaceId }),
-      });
-      setNewName("");
-      setCreating(false);
-      router.push(`/w/${workspaceId}/p/${project.id}`);
-    } catch (err) {
-      setCreateError((err as Error).message);
-    } finally {
-      setCreateBusy(false);
-    }
-  }
 
   // Treat visiting /w/{id} as an explicit selection: if it's a real membership,
   // make it the active workspace. Only bounce to the gate when memberships
@@ -108,40 +85,13 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
             {workspaceName}
           </h1>
           <div className="flex items-center gap-2">
-            {creating ? (
-              <span className="flex items-center gap-2">
-                <input
-                  autoFocus
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") createProject();
-                    if (e.key === "Escape") {
-                      setCreating(false);
-                      setNewName("");
-                    }
-                  }}
-                  placeholder="Project name"
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  disabled={createBusy || !newName.trim()}
-                  onClick={createProject}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-60"
-                >
-                  Add
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setCreating(true)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
-              >
-                + New project
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
+            >
+              + New project
+            </button>
             <Link
               href={`/w/${workspaceId}/members`}
               className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 hover:border-slate-300"
@@ -159,8 +109,6 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
             </Link>
           </div>
         </div>
-
-        {createError && <p className="mb-4 text-sm text-red-600">{createError}</p>}
 
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}
@@ -220,6 +168,15 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
           </ul>
         )}
       </main>
+      <NewProjectDialog
+        open={creating}
+        workspaceId={workspaceId}
+        onClose={() => setCreating(false)}
+        onCreated={(project) => {
+          setCreating(false);
+          router.push(`/w/${workspaceId}/p/${project.id}`);
+        }}
+      />
     </>
   );
 }

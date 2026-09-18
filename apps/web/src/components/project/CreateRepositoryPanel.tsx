@@ -5,6 +5,8 @@ import { type ReactNode, useState } from "react";
 import Link from "next/link";
 import { createRepository } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
+import type { Project } from "@/lib/types";
 
 // Mirrors apps/engine/src/routes/projects.ts's slug derivation so the
 // prefilled name matches what a desktop-side project creation would produce.
@@ -94,6 +96,7 @@ export function CreateRepositoryPanel({
   onCreated,
   constitutionReady,
   workspaceId,
+  project,
 }: {
   projectId: string;
   projectName: string;
@@ -107,6 +110,11 @@ export function CreateRepositoryPanel({
    *  so kept claiming it was missing after it had just been saved a few
    *  centimetres above. `undefined` means not loaded yet. */
   constitutionReady?: boolean;
+  /** When set and `project.repo_url` is already recorded (the project was
+   *  imported, not started from scratch), the panel shows the repo it will
+   *  adopt instead of a name/private form the server now ignores on that
+   *  path — see create_repository's import branch in apps/cloud. */
+  project?: Project;
 }) {
   const { authHeaders } = useAuth();
   const [name, setName] = useState(() => slugify(projectName));
@@ -132,29 +140,58 @@ export function CreateRepositoryPanel({
   }
 
   const disabled = creating || constitutionReady !== true;
+  const importedRepo = project?.repo_url;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
       <h3 className="mb-2 text-sm font-medium text-slate-900">Create repository</h3>
 
-      <label className="mb-2 block text-xs text-slate-600">
-        Repository name
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
-        />
-      </label>
+      {importedRepo ? (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+          <p>
+            This project will use the repository you imported:{" "}
+            <a
+              href={importedRepo}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium underline hover:text-slate-900"
+            >
+              {importedRepo}
+            </a>
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Existing files are kept; these are added or replaced in one commit:
+          </p>
+          <ul className="ml-4 mt-1 list-disc text-xs text-slate-600">
+            {SEEDED_FILES.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+            {project && hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
+            {project && hasDeploymentTemplate(project) && <li>{DEPLOY_WORKFLOW_PATH}</li>}
+          </ul>
+        </div>
+      ) : (
+        <>
+          <label className="mb-2 block text-xs text-slate-600">
+            Repository name
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
+            />
+          </label>
 
-      <label className="mb-3 flex items-center gap-2 text-xs text-slate-600">
-        <input
-          type="checkbox"
-          checked={isPrivate}
-          onChange={(e) => setIsPrivate(e.target.checked)}
-        />
-        Private repository
-      </label>
+          <label className="mb-3 flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+            />
+            Private repository
+          </label>
+        </>
+      )}
 
       {constitutionReady === false && (
         <p className="mb-2 text-xs text-amber-700">
