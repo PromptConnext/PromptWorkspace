@@ -158,6 +158,30 @@ def test_webhook_for_unknown_repo_is_acked_not_processed(client: TestClient):
     assert res.json() == {"received": True, "matched": False}
 
 
+def test_webhook_for_pending_binding_is_acked_until_registration_is_confirmed(
+    client: TestClient, workspace_project_task
+):
+    workspace_id, project_id, _task_id = workspace_project_task
+    client.app.state.repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
+            registration_state="pending",
+        )
+    )
+
+    res = _post_webhook(
+        client,
+        "push",
+        {"repository": {"full_name": REPO}, "ref": "refs/heads/main", "after": "abc"},
+    )
+
+    assert res.status_code == 200
+    assert res.json() == {"received": True, "matched": False}
+
+
 def test_webhook_secret_is_per_repo_not_shared(client: TestClient, workspace_project_task):
     # A second project's repo gets its own secret; the first repo's secret
     # must not validate a delivery for the second.

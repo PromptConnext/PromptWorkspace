@@ -360,7 +360,7 @@ class GithubClient(Protocol):
 
     async def create_repo_webhook(
         self, token: str, repo: str, callback_url: str, secret: str
-    ) -> None: ...
+    ) -> bool: ...
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str: ...
 
@@ -412,6 +412,16 @@ class GithubClient(Protocol):
 
     async def update_repo_hook(
         self, token: str, repo: str, hook_id: int, events: list[str]
+    ) -> None: ...
+
+    async def rotate_repo_hook_secret(
+        self,
+        token: str,
+        repo: str,
+        hook_id: int,
+        callback_url: str,
+        secret: str,
+        events: list[str],
     ) -> None: ...
 
     async def get_deployment(self, token: str, repo: str, deployment_id: str) -> dict | None: ...
@@ -480,6 +490,32 @@ async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> ht
         raise GithubWriteError(f"{what} failed: could not reach GitHub ({exc!r})") from exc
 
 
+def _is_duplicate_webhook_response(resp: httpx.Response) -> bool:
+    """Whether GitHub rejected a create because this hook already exists.
+
+    ``POST /repos/{owner}/{repo}/hooks`` uses 422 for validation failures and
+    secondary-rate limiting too. GitHub's duplicate response identifies the
+    offending resource as ``Hook`` and says the hook already exists; requiring
+    both fields keeps a malformed callback URL or a future event validation
+    failure from being mistaken for an idempotent registration.
+    """
+    try:
+        payload = resp.json()
+    except ValueError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return False
+    # A mixed response may also contain an actual validation failure. Treat it
+    # as a failure rather than accepting a partial match and hiding that error.
+    return len(errors) == 1 and isinstance(errors[0], dict) and (
+        errors[0].get("resource") == "Hook"
+        and errors[0].get("message") == "Hook already exists on this repository"
+    )
+
+
 class HttpGithubClient:
     async def verify_token(self, token: str, owner: str) -> TokenIdentity:
         """Prove the token works and can reach `owner`, before it is stored.
@@ -515,7 +551,7 @@ class HttpGithubClient:
 
     async def create_repo_webhook(
         self, token: str, repo: str, callback_url: str, secret: str
-    ) -> None:
+    ) -> bool:
         resp = await _send(
             "POST",
             f"{GITHUB_API}/repos/{repo}/hooks",
@@ -533,15 +569,17 @@ class HttpGithubClient:
                 },
             },
         )
-        # 422 means a hook with this config already exists — a retry after
-        # a partial failure, not an error worth failing repo creation over.
-        if resp.status_code == 422:
-            return
+        # GitHub documents 422 as both validation failure and secondary-rate
+        # limiting. Only its specific Hook-already-exists error is a safe
+        # retry outcome; every other 422 must reach the caller as a failure.
+        if resp.status_code == 422 and _is_duplicate_webhook_response(resp):
+            return False
         if resp.is_error:
             raise GithubWriteError(
                 f"create_repo_webhook failed for {repo}: {resp.status_code} {resp.text}",
                 status_code=resp.status_code,
             )
+        return True
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
         resp = await _send(
@@ -1075,6 +1113,45 @@ class HttpGithubClient:
                 status_code=resp.status_code,
             )
 
+    async def rotate_repo_hook_secret(
+        self,
+        token: str,
+        repo: str,
+        hook_id: int,
+        callback_url: str,
+        secret: str,
+        events: list[str],
+    ) -> None:
+        """Replace the secret on one existing PromptZone hook.
+
+        This is deliberately a PATCH to the hook selected from
+        ``list_repo_hooks``, not a POST to the collection. GitHub permits
+        multiple webhooks, and POST can either create a second one or reject
+        the request as a duplicate without changing the first hook's secret.
+        Supplying the complete config is also intentional: GitHub removes an
+        existing secret when a hook update omits it.
+        """
+        resp = await _send(
+            "PATCH",
+            f"{GITHUB_API}/repos/{repo}/hooks/{hook_id}",
+            token=token,
+            what=f"rotate_repo_hook_secret {hook_id} for {repo}",
+            json={
+                "events": list(events),
+                "config": {
+                    "url": callback_url,
+                    "content_type": "json",
+                    "secret": secret,
+                    "insecure_ssl": "0",
+                },
+            },
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"rotate_repo_hook_secret failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+
     async def _get_file_sha(self, token: str, repo: str, path: str, branch: str) -> str | None:
         """Blob sha of `path` on `branch`, or None when it doesn't exist.
         A permission failure also returns None — the PUT that follows is the
@@ -1124,6 +1201,9 @@ class FakeGithubClient:
         # Set-in-test knobs for exercising failure paths without a real API.
         self.fail_on_write_path: str | None = None
         self.fail_on_commit = False
+        self.fail_on_webhook = False
+        self.webhook_failure_status: int | None = 500
+        self.fail_on_hook_rotation = False
         self.fail_on_secret_write: str | None = None
         self.secret_failure_status: int | None = 403
         # Status the simulated write failure reports. Defaults to 500 ("GitHub
@@ -1181,8 +1261,18 @@ class FakeGithubClient:
 
     async def create_repo_webhook(
         self, token: str, repo: str, callback_url: str, secret: str
-    ) -> None:
+    ) -> bool:
         self.call_log.append(f"webhook:{repo}")
+        if self.fail_on_webhook:
+            raise GithubWriteError(
+                f"fake webhook failure for {repo}", status_code=self.webhook_failure_status
+            )
+        # GitHub rejects a duplicate hook registration and leaves the
+        # original hook (including its secret) untouched. Keeping one hook
+        # per repository lets retry tests observe the same behavior rather
+        # than silently inventing a second remote secret.
+        if any(hook["repo"] == repo and hook["url"] == callback_url for hook in self.webhooks):
+            return False
         self.webhooks.append(
             {
                 "repo": repo,
@@ -1192,6 +1282,7 @@ class FakeGithubClient:
             }
         )
         self.hooks_events.setdefault(repo, list(WEBHOOK_EVENTS))
+        return True
 
     async def fetch_file_content(self, token: str, repo: str, path: str, sha: str) -> str:
         self.fetched_files.append((repo, path, sha))
@@ -1328,14 +1419,44 @@ class FakeGithubClient:
         self.variables[(repo, name)] = value
 
     async def list_repo_hooks(self, token: str, repo: str) -> list[dict]:
-        events = self.hooks_events.get(repo)
-        if events is None:
-            return []
-        url = next((h["url"] for h in reversed(self.webhooks) if h["repo"] == repo), "")
-        return [{"id": 1, "events": list(events), "config": {"url": url}}]
+        hooks = [hook for hook in self.webhooks if hook["repo"] == repo]
+        return [
+            {
+                "id": index,
+                "events": list(hook.get("events", self.hooks_events.get(repo, []))),
+                "config": {"url": hook["url"]},
+            }
+            for index, hook in enumerate(hooks, start=1)
+        ]
 
     async def update_repo_hook(
         self, token: str, repo: str, hook_id: int, events: list[str]
     ) -> None:
         self.call_log.append(f"hook_update:{repo}")
+        hooks = [hook for hook in self.webhooks if hook["repo"] == repo]
+        if hook_id < 1 or hook_id > len(hooks):
+            raise GithubWriteError(f"fake hook {hook_id} missing for {repo}", status_code=404)
+        hooks[hook_id - 1]["events"] = list(events)
+        self.hooks_events[repo] = list(events)
+
+    async def rotate_repo_hook_secret(
+        self,
+        token: str,
+        repo: str,
+        hook_id: int,
+        callback_url: str,
+        secret: str,
+        events: list[str],
+    ) -> None:
+        self.call_log.append(f"hook_rotate:{repo}")
+        if self.fail_on_hook_rotation:
+            raise GithubWriteError(f"fake hook rotation failure for {repo}", status_code=500)
+        hooks = [hook for hook in self.webhooks if hook["repo"] == repo]
+        if hook_id < 1 or hook_id > len(hooks):
+            raise GithubWriteError(f"fake hook {hook_id} missing for {repo}", status_code=404)
+        hook = hooks[hook_id - 1]
+        if hook["url"] != callback_url:
+            raise GithubWriteError(f"fake hook {hook_id} URL changed for {repo}", status_code=409)
+        hook["secret"] = secret
+        hook["events"] = list(events)
         self.hooks_events[repo] = list(events)

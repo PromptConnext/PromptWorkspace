@@ -42,7 +42,13 @@ def client() -> TestClient:
         yield c
 
 
-def _project(client: TestClient, *, with_template: bool = True, member: str | None = None):
+def _project(
+    client: TestClient,
+    *,
+    with_template: bool = True,
+    member: str | None = None,
+    bind_webhook: bool = True,
+):
     ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
     project = client.post(
         "/projects", json={"name": "Rocket", "workspace_id": ws["id"]}, headers=ALICE
@@ -58,14 +64,15 @@ def _project(client: TestClient, *, with_template: bool = True, member: str | No
         # Directly, as tests/test_policy_scope.py does — the HTTP path is an
         # invitation flow, and this is about authorization, not invitations.
         repository.add_member(ws["id"], member, Role.member, invited_by="alice")
-    repository.upsert_repo_webhook(
-        RepoWebhook(
-            repo_full_name=REPO,
-            project_id=project["id"],
-            workspace_id=ws["id"],
-            secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
+    if bind_webhook:
+        repository.upsert_repo_webhook(
+            RepoWebhook(
+                repo_full_name=REPO,
+                project_id=project["id"],
+                workspace_id=ws["id"],
+                secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
+            )
         )
-    )
     return ws, project["id"]
 
 
@@ -434,6 +441,131 @@ def test_repair_refuses_before_the_repo_exists(client):
     res = client.post(f"/projects/{pid}/deployment/repair-webhook", headers=ALICE)
     assert res.status_code == 409
     assert res.json()["detail"] == "repo_not_created"
+
+
+def test_repair_rotates_an_existing_webhook_secret_after_github_accepts_it(client):
+    ws, pid = _project(client)
+    fake = _repo_created(client, ws["id"], pid, events=["push", "pull_request"])
+    old_secret = "before-rotation"
+    client.app.state.repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=pid,
+            workspace_id=ws["id"],
+            secret_ref=client.app.state.secret_store.encrypt(old_secret),
+        )
+    )
+    fake.webhooks[0]["secret"] = old_secret
+
+    res = client.post(
+        f"/projects/{pid}/deployment/repair-webhook",
+        json={"rotate_secret": True},
+        headers=ALICE,
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == {"repaired": True, "rotated": True}
+    assert fake.call_log == [f"hook_rotate:{REPO}"]
+    remote_secret = fake.webhooks[0]["secret"]
+    assert remote_secret != old_secret
+    binding = client.app.state.repository.get_repo_webhook(REPO)
+    assert binding is not None
+    assert binding.registration_state == "confirmed"
+    assert client.app.state.secret_store.decrypt(binding.secret_ref) == remote_secret
+    assert fake.hooks_events[REPO] == ["push", "pull_request", "workflow_run", "deployment_status"]
+
+
+def test_repair_rotation_keeps_the_existing_binding_when_github_rejects_it(client):
+    ws, pid = _project(client)
+    fake = _repo_created(client, ws["id"], pid, events=["push", "pull_request"])
+    old_secret = "still-the-live-secret"
+    client.app.state.repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=pid,
+            workspace_id=ws["id"],
+            secret_ref=client.app.state.secret_store.encrypt(old_secret),
+        )
+    )
+    fake.webhooks[0]["secret"] = old_secret
+    fake.fail_on_hook_rotation = True
+
+    res = client.post(
+        f"/projects/{pid}/deployment/repair-webhook",
+        json={"rotate_secret": True},
+        headers=ALICE,
+    )
+
+    assert res.status_code == 502
+    assert res.json()["detail"] == "github_hook_repair_failed"
+    assert fake.webhooks[0]["secret"] == old_secret
+    binding = client.app.state.repository.get_repo_webhook(REPO)
+    assert binding is not None
+    assert client.app.state.secret_store.decrypt(binding.secret_ref) == old_secret
+
+
+def test_repair_rotation_binds_a_legacy_hook_only_after_updating_it(client):
+    ws, pid = _project(client, bind_webhook=False)
+    fake = _repo_created(client, ws["id"], pid, events=["push", "pull_request"])
+
+    res = client.post(
+        f"/projects/{pid}/deployment/repair-webhook",
+        json={"rotate_secret": True},
+        headers=ALICE,
+    )
+
+    assert res.status_code == 200, res.text
+    binding = client.app.state.repository.get_repo_webhook(REPO)
+    assert binding is not None
+    assert binding.project_id == pid
+    assert binding.workspace_id == ws["id"]
+    assert binding.registration_state == "confirmed"
+    assert client.app.state.secret_store.decrypt(binding.secret_ref) == fake.webhooks[0]["secret"]
+    assert fake.webhooks[0]["secret"] != "s"
+
+
+def test_repair_rotation_requires_the_platform_callback_hook(client):
+    ws, pid = _project(client)
+    _repo_created(client, ws["id"], pid, events=["push", "pull_request"])
+    client.app.state.github_client.webhooks[0]["url"] = "https://other.example/hook"
+
+    res = client.post(
+        f"/projects/{pid}/deployment/repair-webhook",
+        json={"rotate_secret": True},
+        headers=ALICE,
+    )
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "webhook_not_found"
+    binding = client.app.state.repository.get_repo_webhook(REPO)
+    assert binding is not None
+    assert client.app.state.secret_store.decrypt(binding.secret_ref) == WEBHOOK_SECRET
+
+
+def test_repair_rotation_waits_for_an_in_progress_registration(client):
+    ws, pid = _project(client)
+    fake = _repo_created(client, ws["id"], pid, events=["push", "pull_request"])
+    client.app.state.repository.upsert_repo_webhook(
+        RepoWebhook(
+            repo_full_name=REPO,
+            project_id=pid,
+            workspace_id=ws["id"],
+            secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
+            registration_state="pending",
+            registration_owner="00000000-0000-4000-8000-000000000001",
+        )
+    )
+
+    res = client.post(
+        f"/projects/{pid}/deployment/repair-webhook",
+        json={"rotate_secret": True},
+        headers=ALICE,
+    )
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "webhook_registration_in_progress"
+    assert fake.call_log == []
+    assert fake.webhooks[0]["secret"] == "s"
 
 
 # --------------------------------------------------------------------------- #

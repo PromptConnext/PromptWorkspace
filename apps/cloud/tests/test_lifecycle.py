@@ -7,13 +7,16 @@ transition — later sub-projects own the rest of the state machine.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 from fastapi.testclient import TestClient
 
 from app.db.repository import Repository
 from app.dependencies import get_repository
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
-from app.models.schemas import DeploymentConfig
+from app.models.schemas import DeploymentConfig, RepoWebhook
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -405,7 +408,7 @@ class _CallerScopedRepository:
     def __getattr__(self, name: str):
         return getattr(self._inner, name)
 
-    def upsert_repo_webhook(self, webhook):
+    def create_repo_webhook_if_absent(self, webhook):
         self.blocked += 1
         raise RuntimeError("permission denied for table pz_repo_webhooks")
 
@@ -441,27 +444,263 @@ def test_create_repository_writes_the_webhook_binding_with_the_service_key():
         registered_secret = fake.webhooks[0]["secret"]
         assert binding.secret_ref != registered_secret
         assert client.app.state.secret_store.decrypt(binding.secret_ref) == registered_secret
+        assert binding.registration_state == "confirmed"
 
 
-def test_create_repository_survives_a_failed_webhook_binding_write():
-    """Bookkeeping is best-effort by design: a repo that exists and is fully
-    seeded must not be stranded in tech_review because a follow-up row could
-    not be written. The cost is indexing, and it is logged."""
+def test_create_repository_retry_reuses_the_persisted_webhook_secret():
+    """A retry after the hook but before the seed commit must keep GitHub's
+    remote secret and the local binding aligned. FakeGithubClient models
+    GitHub's duplicate rejection by keeping the first hook and secret.
+    """
     with _client() as client:
-        _wire_github(client)
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        _ws, pid = _project_in_tech_review(client)
+
+        fake.fail_on_commit = True
+        first = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert first.status_code == 502, first.text
+
+        repo_name = "acme/rocket-ship"
+        original_secret = fake.webhooks[0]["secret"]
+        first_binding = client.app.state.repository.get_repo_webhook(repo_name)
+        assert first_binding is not None
+        assert client.app.state.secret_store.decrypt(first_binding.secret_ref) == original_secret
+
+        fake.fail_on_commit = False
+        retry = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert retry.status_code == 200, retry.text
+        assert len(fake.webhooks) == 1
+        assert fake.webhooks[0]["secret"] == original_secret
+
+        binding = client.app.state.repository.get_repo_webhook(repo_name)
+        assert binding is not None
+        assert client.app.state.secret_store.decrypt(binding.secret_ref) == original_secret
+
+
+def test_create_repository_requires_repair_for_a_legacy_remote_hook_without_binding():
+    """A duplicate remote hook with an unknown secret cannot be adopted.
+
+    Keeping the repository identity lets the future deliberate repair rotate
+    the remote hook, but the provisional local secret must be removed first.
+    """
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        _ws, pid = _project_in_tech_review(client)
+        repo_name = "acme/rocket-ship"
+        legacy_secret = "legacy-remote-secret"
+        fake.webhooks.append(
+            {
+                "repo": repo_name,
+                "url": "https://cloud.example.com/api/webhooks/github",
+                "secret": legacy_secret,
+                "events": ["push", "pull_request"],
+            }
+        )
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+
+        assert res.status_code == 409, res.text
+        assert res.json()["detail"] == "webhook_secret_repair_required"
+        project = client.app.state.repository.get_project(pid)
+        assert project.lifecycle_status == "tech_review"
+        assert project.repo_url == "https://github.com/acme/rocket-ship"
+        assert project.repo_id == fake.created_repos[0]["id"]
+        assert client.app.state.repository.get_repo_webhook(repo_name) is None
+        assert fake.webhooks == [
+            {
+                "repo": repo_name,
+                "url": "https://cloud.example.com/api/webhooks/github",
+                "secret": legacy_secret,
+                "events": ["push", "pull_request"],
+            }
+        ]
+        assert fake.commits == []
+
+
+def test_create_repository_keeps_an_unreadable_existing_binding_for_repair():
+    """A corrupt binding cannot be silently replaced with a new secret."""
+    with _client() as client:
+        fake = _wire_github(client)
         client.app.state.settings.public_api_url = "https://cloud.example.com"
         ws, pid = _project_in_tech_review(client)
+        repo_name = "acme/rocket-ship"
+        corrupt = RepoWebhook(
+            repo_full_name=repo_name,
+            project_id=pid,
+            workspace_id=ws["id"],
+            secret_ref="not-a-secret-store-ciphertext",
+        )
+        client.app.state.repository.upsert_repo_webhook(corrupt)
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+
+        assert res.status_code == 409, res.text
+        assert res.json()["detail"] == "webhook_secret_repair_required"
+        assert client.app.state.repository.get_repo_webhook(repo_name) == corrupt
+        assert fake.webhooks == []
+        assert client.app.state.repository.get_project(pid).lifecycle_status == "tech_review"
+
+
+class _BlockingWebhookFake(FakeGithubClient):
+    """Holds the first registration open to expose a second request's view."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registration_started = threading.Event()
+        self.continue_registration = threading.Event()
+
+    async def create_repo_webhook(self, token, repo, callback_url, secret):
+        self.registration_started.set()
+        assert await asyncio.to_thread(self.continue_registration.wait, 2)
+        return await super().create_repo_webhook(token, repo, callback_url, secret)
+
+
+def test_overlapping_legacy_hook_registration_never_adopts_a_provisional_secret():
+    """Only the reservation creator may inspect the duplicate remote hook.
+
+    The concurrent request sees `pending` and returns an in-progress response
+    without making its own GitHub call or accepting the first request's secret.
+    """
+    with _client() as client:
+        fake = _BlockingWebhookFake()
+        client.app.state.github_client = fake
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        _ws, pid = _project_in_tech_review(client)
+        fake.webhooks.append(
+            {
+                "repo": "acme/rocket-ship",
+                "url": "https://cloud.example.com/api/webhooks/github",
+                "secret": "legacy-secret",
+                "events": ["push"],
+            }
+        )
+
+        first_result = {}
+
+        def first_request() -> None:
+            first_result["response"] = client.post(
+                f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+            )
+
+        first = threading.Thread(target=first_request)
+        first.start()
+        assert fake.registration_started.wait(timeout=2)
+
+        second = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert second.status_code == 409, second.text
+        assert second.json()["detail"] == "webhook_registration_in_progress"
+        assert fake.call_log.count("webhook:acme/rocket-ship") == 0
+
+        fake.continue_registration.set()
+        first.join(timeout=2)
+        assert not first.is_alive()
+        first_response = first_result["response"]
+        assert first_response.status_code == 409, first_response.text
+        assert first_response.json()["detail"] == "webhook_secret_repair_required"
+        assert fake.call_log.count("webhook:acme/rocket-ship") == 1
+        assert client.app.state.repository.get_repo_webhook("acme/rocket-ship") is None
+
+
+def test_create_repository_retries_after_webhook_registration_failure():
+    """A failed registration keeps its reserved secret and tech-review
+    lifecycle so the next request can safely finish provisioning."""
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        _ws, pid = _project_in_tech_review(client)
+        fake.fail_on_webhook = True
+
+        failed = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert failed.status_code == 502, failed.text
+        assert failed.json()["detail"] == "github_webhook_failed"
+        assert fake.webhooks == []
+        assert client.app.state.repository.get_project(pid).lifecycle_status == "tech_review"
+
+        repo_name = "acme/rocket-ship"
+        first_binding = client.app.state.repository.get_repo_webhook(repo_name)
+        assert first_binding is not None
+        reserved_secret = client.app.state.secret_store.decrypt(first_binding.secret_ref)
+
+        fake.fail_on_webhook = False
+        retry = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["lifecycle_status"] == "repo_created"
+        assert len(fake.webhooks) == 1
+        assert fake.webhooks[0]["secret"] == reserved_secret
+
+        binding = client.app.state.repository.get_repo_webhook(repo_name)
+        assert binding is not None
+        assert client.app.state.secret_store.decrypt(binding.secret_ref) == reserved_secret
+
+
+def test_create_repository_retries_when_webhook_binding_cannot_be_persisted():
+    """Never tell the caller the repo is ready when GitHub could be signing
+    with a secret that the cloud failed to store. The failed request leaves a
+    re-adoptable repository and does not register a remote hook; a later retry
+    can reserve the binding and finish safely."""
+    with _client() as client:
+        fake = _wire_github(client)
+        client.app.state.settings.public_api_url = "https://cloud.example.com"
+        ws, pid = _project_in_tech_review(client)
+
+        service_repo = client.app.state.repository
+        original = service_repo.create_repo_webhook_if_absent
 
         def _explode(_webhook):
             raise RuntimeError("permission denied for table pz_repo_webhooks")
 
-        client.app.state.repository.upsert_repo_webhook = _explode
+        service_repo.create_repo_webhook_if_absent = _explode
 
-        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        failed = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert failed.status_code == 502
+        assert failed.json()["detail"] == "webhook_binding_failed"
+        assert fake.webhooks == []
+        assert service_repo.get_project(pid).lifecycle_status == "tech_review"
 
-        assert res.status_code == 200, res.text
-        assert res.json()["lifecycle_status"] == "repo_created"
-        assert res.json()["repo_url"] == "https://github.com/acme/rocket-ship"
+        service_repo.create_repo_webhook_if_absent = original
+        retry = client.post(
+            f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["lifecycle_status"] == "repo_created"
+        assert len(fake.webhooks) == 1
+
+
+def test_webhook_binding_reservation_keeps_the_first_secret():
+    """The in-memory implementation follows the same first-writer-wins
+    contract as Supabase's INSERT ... ON CONFLICT DO NOTHING."""
+    with _client() as client:
+        repo = client.app.state.repository
+        first = RepoWebhook(
+            repo_full_name="acme/retry-race",
+            project_id="project-a",
+            workspace_id="workspace-a",
+            secret_ref="first-secret-ref",
+        )
+        second = RepoWebhook(
+            repo_full_name="acme/retry-race",
+            project_id="project-a",
+            workspace_id="workspace-a",
+            secret_ref="second-secret-ref",
+        )
+
+        stored, created = repo.create_repo_webhook_if_absent(first)
+        assert (stored, created) == (first, True)
+        stored, created = repo.create_repo_webhook_if_absent(second)
+        assert (stored, created) == (first, False)
+        assert repo.get_repo_webhook("acme/retry-race") == first
 
 
 def test_create_repository_forbidden_for_non_member():

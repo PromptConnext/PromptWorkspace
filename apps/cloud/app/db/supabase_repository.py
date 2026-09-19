@@ -173,6 +173,80 @@ class SupabaseRepository(Repository):
         ).execute()
         return webhook
 
+    def create_repo_webhook_if_absent(self, webhook: RepoWebhook) -> tuple[RepoWebhook, bool]:
+        # PostgreSQL serializes competing INSERT ... ON CONFLICT DO NOTHING
+        # statements on the primary key. Read after it so both callers use the
+        # first stored secret rather than racing to overwrite it with upsert.
+        res = self._client.table(_REPO_WEBHOOKS).upsert(
+            _dump(webhook),
+            on_conflict="repo_full_name",
+            ignore_duplicates=True,
+            returning="representation",
+        ).execute()
+        if res.data:
+            return RepoWebhook(**res.data[0]), True
+        stored = self.get_repo_webhook(webhook.repo_full_name)
+        if stored is None:
+            raise RuntimeError("repo webhook binding disappeared after insert")
+        return stored, False
+
+    def claim_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        res = (
+            self._client.table(_REPO_WEBHOOKS)
+            .update({"registration_owner": owner}, returning="representation")
+            .eq("repo_full_name", webhook.repo_full_name)
+            .eq("project_id", webhook.project_id)
+            .eq("workspace_id", webhook.workspace_id)
+            .eq("secret_ref", webhook.secret_ref)
+            .eq("registration_state", "pending")
+            .is_("registration_owner", "null")
+            .execute()
+        )
+        return bool(res.data)
+
+    def release_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        res = (
+            self._client.table(_REPO_WEBHOOKS)
+            .update({"registration_owner": None}, returning="representation")
+            .eq("repo_full_name", webhook.repo_full_name)
+            .eq("secret_ref", webhook.secret_ref)
+            .eq("registration_state", "pending")
+            .eq("registration_owner", owner)
+            .execute()
+        )
+        return bool(res.data)
+
+    def confirm_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        res = (
+            self._client.table(_REPO_WEBHOOKS)
+            .update(
+                {"registration_state": "confirmed", "registration_owner": None},
+                returning="representation",
+            )
+            .eq("repo_full_name", webhook.repo_full_name)
+            .eq("secret_ref", webhook.secret_ref)
+            .eq("registration_state", "pending")
+            .eq("registration_owner", owner)
+            .execute()
+        )
+        return bool(res.data)
+
+    def delete_repo_webhook_if_matches(self, webhook: RepoWebhook, owner: str) -> bool:
+        # Match the binding identity and its unique ciphertext so a delayed
+        # cleanup cannot delete a newer or another project's binding.
+        res = (
+            self._client.table(_REPO_WEBHOOKS)
+            .delete(returning="representation")
+            .eq("repo_full_name", webhook.repo_full_name)
+            .eq("project_id", webhook.project_id)
+            .eq("workspace_id", webhook.workspace_id)
+            .eq("secret_ref", webhook.secret_ref)
+            .eq("registration_state", "pending")
+            .eq("registration_owner", owner)
+            .execute()
+        )
+        return bool(res.data)
+
     def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
         res = (
             self._client.table(_REPO_WEBHOOKS)

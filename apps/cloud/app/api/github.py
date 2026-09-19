@@ -229,6 +229,12 @@ async def github_webhook(request: Request, repo: Repository = Depends(get_reposi
         # over from a disconnected workspace). Ack so GitHub stops retrying.
         return {"received": True, "matched": False}
 
+    if binding.registration_state != "confirmed":
+        # The creator has durably reserved this secret but GitHub has not yet
+        # confirmed it accepted it. A delivery during that interval cannot be
+        # trusted as a live project binding, even if it happens to validate.
+        return {"received": True, "matched": False}
+
     try:
         secret = request.app.state.secret_store.decrypt(binding.secret_ref)
     except Exception:  # noqa: BLE001 - unusable secret must not 500 a public route

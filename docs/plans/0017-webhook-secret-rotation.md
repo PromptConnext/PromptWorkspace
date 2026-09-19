@@ -1,6 +1,6 @@
 # Plan 0017 — Make webhook secret handling recoverable
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation · **ADR:** [0021](../decisions/0021-deployment-templates-seeded-ci-cloud-observed.md)
+**Date:** 2026-09-12 · **Status:** Implemented 2026-09-20 · **ADR:** [0021](../decisions/0021-deployment-templates-seeded-ci-cloud-observed.md)
 
 `apps/cloud/app/api/sync.py:313-352`, inside `create_repository`, registers each repository's inbound webhook and stores the signing secret it just generated. Every attempt — including a retry against a repository that already has a hook — mints a fresh secret with `new_webhook_secret()` (`apps/cloud/app/integrations/github.py:83-87`) and persists it. GitHub treats a duplicate-hook registration as a no-op: it keeps signing deliveries with whatever secret the *first* successful registration set, and the route's own event-repair path (`ensure_hook_events`, `apps/cloud/app/integrations/github.py:308-330`) documents in its own docstring that it deliberately leaves that remote secret untouched. The result is a retry that stores a secret GitHub is not using, silently and permanently. This plan closes that gap: reuse the persisted secret on a safe retry, stop mistaking an unrelated rejection for a completed registration, and give a genuine rotation a recoverable order of operations.
 

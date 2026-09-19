@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import abc
 import copy
+import threading
 from datetime import datetime, timedelta
 
 from app.db.merge import incoming_dump as _incoming_dump
@@ -87,6 +88,37 @@ class Repository(abc.ABC):
     def upsert_repo_webhook(self, webhook: RepoWebhook) -> RepoWebhook:
         """Bind a repository to the project whose repo it is, together with
         that repo's own signing secret. Keyed by `repo_full_name`."""
+
+    @abc.abstractmethod
+    def create_repo_webhook_if_absent(self, webhook: RepoWebhook) -> tuple[RepoWebhook, bool]:
+        """Atomically reserve a binding, returning ``(stored, created)``.
+
+        The first caller's signing secret wins. This differs from ``upsert``:
+        two overlapping repository-creation retries must never replace an
+        already-reserved secret after GitHub has accepted it.
+        """
+
+    @abc.abstractmethod
+    def claim_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        """Claim an unlocked pending binding before registering it remotely."""
+
+    @abc.abstractmethod
+    def release_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        """Release a pending registration claim after a retryable failure."""
+
+    @abc.abstractmethod
+    def confirm_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        """Mark a claimed binding confirmed after GitHub accepted its secret."""
+
+    @abc.abstractmethod
+    def delete_repo_webhook_if_matches(self, webhook: RepoWebhook, owner: str) -> bool:
+        """Remove a provisional binding only when it still equals ``webhook``.
+
+        A duplicate remote hook with no earlier local binding has an unknown
+        signing secret. Callers use this compare-and-delete operation to
+        discard their provisional secret without deleting another request's
+        binding.
+        """
 
     @abc.abstractmethod
     def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
@@ -519,6 +551,7 @@ class InMemoryRepository(Repository):
         # token -> Invitation
         self._invitations: dict[str, Invitation] = {}
         self._repo_webhooks: dict[str, RepoWebhook] = {}
+        self._repo_webhooks_lock = threading.Lock()
         # project_id -> external_key -> Deployment (ADR 0021). Keyed by the
         # idempotency key so a repeated delivery updates rather than appends,
         # mirroring the supabase table's unique (project_id, external_key).
@@ -587,6 +620,66 @@ class InMemoryRepository(Repository):
     def upsert_repo_webhook(self, webhook: RepoWebhook) -> RepoWebhook:
         self._repo_webhooks[webhook.repo_full_name] = webhook
         return webhook
+
+    def create_repo_webhook_if_absent(self, webhook: RepoWebhook) -> tuple[RepoWebhook, bool]:
+        with self._repo_webhooks_lock:
+            stored = self._repo_webhooks.get(webhook.repo_full_name)
+            if stored is not None:
+                return stored, False
+            self._repo_webhooks[webhook.repo_full_name] = webhook
+            return webhook, True
+
+    def claim_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        with self._repo_webhooks_lock:
+            stored = self._repo_webhooks.get(webhook.repo_full_name)
+            if (
+                stored != webhook
+                or stored.registration_state != "pending"
+                or stored.registration_owner is not None
+            ):
+                return False
+            stored.registration_owner = owner
+            return True
+
+    def release_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        with self._repo_webhooks_lock:
+            stored = self._repo_webhooks.get(webhook.repo_full_name)
+            if (
+                stored is None
+                or stored.registration_state != "pending"
+                or stored.registration_owner != owner
+            ):
+                return False
+            stored.registration_owner = None
+            return True
+
+    def confirm_pending_repo_webhook(self, webhook: RepoWebhook, owner: str) -> bool:
+        with self._repo_webhooks_lock:
+            stored = self._repo_webhooks.get(webhook.repo_full_name)
+            if (
+                stored is None
+                or stored.registration_state != "pending"
+                or stored.registration_owner != owner
+            ):
+                return False
+            stored.registration_state = "confirmed"
+            stored.registration_owner = None
+            return True
+
+    def delete_repo_webhook_if_matches(self, webhook: RepoWebhook, owner: str) -> bool:
+        with self._repo_webhooks_lock:
+            stored = self._repo_webhooks.get(webhook.repo_full_name)
+            if (
+                stored is None
+                or stored.registration_state != "pending"
+                or stored.registration_owner != owner
+                or stored.secret_ref != webhook.secret_ref
+                or stored.project_id != webhook.project_id
+                or stored.workspace_id != webhook.workspace_id
+            ):
+                return False
+            del self._repo_webhooks[webhook.repo_full_name]
+            return True
 
     def get_repo_webhook(self, repo_full_name: str) -> RepoWebhook | None:
         return self._repo_webhooks.get(repo_full_name)

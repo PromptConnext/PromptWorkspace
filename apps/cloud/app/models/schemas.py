@@ -650,6 +650,11 @@ class RepoWebhook(BaseModel):
     project_id: str
     workspace_id: str
     secret_ref: str
+    # A binding is pending until GitHub confirms it accepted this secret. This
+    # state is durable so overlapping requests never mistake another request's
+    # provisional secret for a known-good one.
+    registration_state: Literal["pending", "confirmed"] = "confirmed"
+    registration_owner: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

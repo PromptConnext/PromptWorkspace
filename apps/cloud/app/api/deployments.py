@@ -38,7 +38,12 @@ from app.integrations.deploy_providers import (
     resolve_provider_credential,
     workspace_fields,
 )
-from app.integrations.github import GithubWriteError, ensure_hook_events
+from app.integrations.github import (
+    WEBHOOK_EVENTS,
+    GithubWriteError,
+    ensure_hook_events,
+    new_webhook_secret,
+)
 from app.integrations.github_auth import resolve_token
 from app.integrations.task_refs import task_ref_from_feature_tag
 from app.models.schemas import (
@@ -46,6 +51,7 @@ from app.models.schemas import (
     DeploymentConfig,
     DeploymentConfigUpdate,
     Project,
+    RepoWebhook,
     utcnow,
 )
 
@@ -64,6 +70,13 @@ class CredentialFieldOut(BaseModel):
     # "workspace" | "project" — see CredentialField in deploy_providers.py.
     # The web app uses it to decide which surface asks for the value.
     scope: str = "workspace"
+
+
+class RepairWebhookRequest(BaseModel):
+    """Optional repair action. Secret rotation is admin-only through the
+    route's existing authorization checks and is deliberately opt-in."""
+
+    rotate_secret: bool = False
 
 
 class DeploymentTemplateOut(BaseModel):
@@ -358,10 +371,11 @@ def get_deployment_status(
 async def repair_webhook(
     project_id: str,
     request: Request,
+    body: RepairWebhookRequest | None = None,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> dict:
-    """Widen this project's repo hook to the current event list.
+    """Widen this project's repo hook, optionally rotating its secret.
 
     The one endpoint in this feature that is *allowed* while `repo_created`,
     because it is the only migration path for repositories created before ADR
@@ -370,7 +384,9 @@ async def repair_webhook(
     that route returns early for a project already at `repo_created`, and its
     registration call swallows GitHub's "already exists" as success.
 
-    Idempotent: a hook already carrying every event is left untouched.
+    Idempotent by default: a hook already carrying every event is left
+    untouched. ``rotate_secret`` intentionally changes the hook in place,
+    then persists the new local binding only after GitHub accepts the PATCH.
     """
     project = require_project(repo, project_id, user)
     require_admin(repo, project.workspace_id, user)
@@ -390,13 +406,59 @@ async def repair_webhook(
     if full_name is None:
         raise HTTPException(status_code=409, detail="repo_url_unrecognized")
 
+    callback_url = f"{public_api_url.rstrip('/')}/api/webhooks/github"
+    rotate_secret = bool(body and body.rotate_secret)
+    service_repo = request.app.state.repository
+    binding = service_repo.get_repo_webhook(full_name)
+    if binding and (
+        binding.project_id != project.id or binding.workspace_id != project.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="repo_webhook_already_bound")
+    if binding and binding.registration_state == "pending" and binding.registration_owner:
+        # The repository-creation request that reserved this secret is still
+        # contacting GitHub. A rotation now could make either request confirm
+        # the wrong local secret, so the admin should retry after it finishes.
+        raise HTTPException(status_code=409, detail="webhook_registration_in_progress")
     try:
-        repaired = await ensure_hook_events(
-            request.app.state.github_client,
-            token,
-            full_name,
-            f"{public_api_url.rstrip('/')}/api/webhooks/github",
-        )
+        if rotate_secret:
+            hooks = await request.app.state.github_client.list_repo_hooks(token, full_name)
+            hook = next(
+                (hook for hook in hooks if (hook.get("config") or {}).get("url") == callback_url),
+                None,
+            )
+            if hook is None:
+                raise HTTPException(status_code=409, detail="webhook_not_found")
+
+            # GitHub first: retaining the existing binding until this PATCH
+            # succeeds keeps verification aligned if the remote write fails.
+            new_secret = new_webhook_secret()
+            await request.app.state.github_client.rotate_repo_hook_secret(
+                token,
+                full_name,
+                hook["id"],
+                callback_url,
+                new_secret,
+                list(WEBHOOK_EVENTS),
+            )
+            # The service repository is required here: pz_repo_webhooks is
+            # intentionally inaccessible to the caller's JWT-scoped client.
+            service_repo.upsert_repo_webhook(
+                RepoWebhook(
+                    repo_full_name=full_name,
+                    project_id=project.id,
+                    workspace_id=project.workspace_id,
+                    secret_ref=request.app.state.secret_store.encrypt(new_secret),
+                    registration_state="confirmed",
+                )
+            )
+            repaired = True
+        else:
+            repaired = await ensure_hook_events(
+                request.app.state.github_client,
+                token,
+                full_name,
+                callback_url,
+            )
     except GithubWriteError as exc:
         logger.warning("repairing the hook for %s failed: %s", full_name, exc)
         if getattr(exc, "status_code", None) in (401, 403, 404):
@@ -405,7 +467,7 @@ async def repair_webhook(
             ) from exc
         raise HTTPException(status_code=502, detail="github_hook_repair_failed") from exc
 
-    return {"repaired": repaired}
+    return {"repaired": repaired, "rotated": True} if rotate_secret else {"repaired": repaired}
 
 
 class DeployConnectionOut(BaseModel):

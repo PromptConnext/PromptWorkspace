@@ -69,6 +69,7 @@ from app.models.schemas import (
     TaskAssignmentUpdate,
     TaskStatus,
     TaskStatusUpdate,
+    new_id,
     utcnow,
 )
 from app.rag.queue import EmbedJob, enqueue
@@ -295,10 +296,11 @@ async def create_repository(
       5. write the Actions secrets and variables. This MUST precede the seed
          commit: that commit fires `on: push` immediately, and a workflow
          that starts before its secrets exist fails its first run for nothing.
-      6. register the webhook and store its binding. This MUST also precede
-         the seed commit, for a sharper reason: the first `deployment_status`
-         can otherwise arrive before the binding row exists and be dropped as
-         an unknown repository — losing exactly the first deploy's URL.
+      6. reserve the webhook binding, then register the webhook. This MUST
+         also precede the seed commit, for a sharper reason: the first
+         `deployment_status` can otherwise arrive before the binding row
+         exists and be dropped as an unknown repository — losing exactly the
+         first deploy's URL.
       7. commit everything as ONE commit (see
          github.py::create_commit_with_files for why not N).
       8. persist `repo_url` and the initial deployment state.
@@ -433,12 +435,10 @@ async def create_repository(
                 ) from exc
             raise HTTPException(status_code=502, detail="github_secrets_failed") from exc
 
-    # Register this repo's webhook with its own freshly generated secret, so
-    # PR/push indexing starts working without any further setup. Best-effort
-    # on purpose: a failure here costs indexing, not the repo — and failing
-    # the whole transition would strand a repo that is already created and
-    # fully seeded. Skipped entirely when PUBLIC_API_URL is unset (local dev,
-    # where GitHub cannot reach this service anyway).
+    # Register this repo's webhook with its own secret, so PR/push indexing
+    # starts working without any further setup. Skipped entirely when
+    # PUBLIC_API_URL is unset (local dev, where GitHub cannot reach this
+    # service anyway).
     #
     # Step 6, and it runs BEFORE the seed commit on purpose: that commit
     # triggers the first deploy, and a delivery arriving before the binding
@@ -447,43 +447,106 @@ async def create_repository(
     public_api_url = request.app.state.settings.public_api_url
     if public_api_url:
         callback_url = f"{public_api_url.rstrip('/')}/api/webhooks/github"
-        secret = new_webhook_secret()
+        # Persist a first-writer-wins binding *before* registering remotely.
+        # It begins pending and is confirmed only after GitHub accepts it.
+        # The durable claim on a pending row prevents a second request from
+        # treating the first request's provisional secret as known-good.
+        service_repo = request.app.state.repository
+        registration_owner = new_id()
         try:
-            await github_client.create_repo_webhook(token, full_name, callback_url, secret)
-            # `create_repo_webhook` treats GitHub's 422 "already exists" as
-            # success, so on the adopt-a-repo retry path it may have changed
-            # nothing at all — including leaving an older hook subscribed to
-            # the pre-ADR-0021 event list. Widening is idempotent and cheap,
-            # so it runs unconditionally rather than only on the retry path.
-            await ensure_hook_events(github_client, token, full_name, callback_url)
-        except GithubWriteError:
-            logger.warning("webhook registration failed for %s; indexing will not start", full_name)
-        else:
-            # The *unscoped* repository, not the caller-scoped `repo`:
-            # migration 0020 revokes pz_repo_webhooks from `authenticated` on
-            # purpose (a webhook signing secret must never be reachable from a
-            # browser session), and app/dependencies.py::get_repository hands
-            # every authenticated route a JWT-scoped client running as exactly
-            # that role. Only the service key may write this binding.
-            service_repo = request.app.state.repository
+            proposed_binding = RepoWebhook(
+                repo_full_name=full_name,
+                project_id=project_id,
+                workspace_id=project.workspace_id,
+                secret_ref=request.app.state.secret_store.encrypt(new_webhook_secret()),
+                registration_state="pending",
+                registration_owner=registration_owner,
+            )
+            binding, reservation_created = service_repo.create_repo_webhook_if_absent(
+                proposed_binding
+            )
+        except Exception as exc:  # noqa: BLE001 - repository failure maps to a retryable response
+            logger.exception("storing webhook binding for %s failed", full_name)
+            raise HTTPException(status_code=502, detail="webhook_binding_failed") from exc
+
+        if binding.project_id != project_id or binding.workspace_id != project.workspace_id:
+            raise HTTPException(status_code=409, detail="repo_webhook_already_bound")
+
+        try:
+            secret = request.app.state.secret_store.decrypt(binding.secret_ref)
+        except Exception:  # noqa: BLE001 - never replace a corrupt persisted secret
+            logger.warning("webhook binding for %s has an unusable secret", full_name)
+            raise HTTPException(status_code=409, detail="webhook_secret_repair_required") from None
+
+        pending_claimed = reservation_created
+        if binding.registration_state == "pending" and not reservation_created:
             try:
-                service_repo.upsert_repo_webhook(
-                    RepoWebhook(
-                        repo_full_name=full_name,
-                        project_id=project_id,
-                        workspace_id=project.workspace_id,
-                        secret_ref=request.app.state.secret_store.encrypt(secret),
-                    )
+                pending_claimed = service_repo.claim_pending_repo_webhook(
+                    binding, registration_owner
                 )
-            except Exception:  # noqa: BLE001 - bookkeeping must not strand the repo
-                # Same best-effort reasoning as the registration call above,
-                # and the same cost: without the stored secret no delivery for
-                # this repo can be verified, so indexing stays dark until the
-                # binding is written. The repo itself is created and seeded.
-                logger.exception(
-                    "storing the webhook binding for %s failed; indexing will not start",
-                    full_name,
+            except Exception as exc:  # noqa: BLE001 - repository failure is retryable
+                logger.exception("claiming webhook registration for %s failed", full_name)
+                raise HTTPException(status_code=502, detail="webhook_binding_failed") from exc
+            if not pending_claimed:
+                # Another request owns the only safe registration attempt.
+                # It will either confirm this binding or leave a repairable
+                # pending row; this request must not contact GitHub meanwhile.
+                raise HTTPException(status_code=409, detail="webhook_registration_in_progress")
+
+        try:
+            registered_new_hook = await github_client.create_repo_webhook(
+                token, full_name, callback_url, secret
+            )
+            if not registered_new_hook and binding.registration_state == "pending":
+                # A pending binding has not yet proved that its secret is the
+                # remote secret. A duplicate can therefore be a legacy hook.
+                # Only its creator removes it: a later request may be retrying
+                # an earlier uncertain result and must leave the evidence for
+                # explicit repair rather than racing its cleanup.
+                if reservation_created:
+                    if not service_repo.delete_repo_webhook_if_matches(
+                        binding, registration_owner
+                    ):
+                        raise RuntimeError("provisional webhook binding changed before cleanup")
+                elif not service_repo.release_pending_repo_webhook(binding, registration_owner):
+                    raise RuntimeError("pending webhook registration claim changed before release")
+                repo.update_project_repo(
+                    project_id, created["html_url"], created["id"], default_branch
                 )
+                raise HTTPException(status_code=409, detail="webhook_secret_repair_required")
+
+            if binding.registration_state == "pending":
+                if not service_repo.confirm_pending_repo_webhook(binding, registration_owner):
+                    raise RuntimeError("webhook binding changed before confirmation")
+
+            # A locally known duplicate may still need the event list widened
+            # after an older registration. That update never changes config or
+            # the signing secret, so it is safe for ordinary retries.
+            await ensure_hook_events(github_client, token, full_name, callback_url)
+        except HTTPException:
+            raise
+        except GithubWriteError as exc:
+            # The binding is deliberately left in place. A retry must reuse
+            # the same secret: GitHub may have accepted the first request even
+            # though its response was lost, and changing the local secret
+            # would make future deliveries unverifiable. Stop before the seed
+            # commit and lifecycle transition so this remains an explicitly
+            # retryable tech-review project.
+            if binding.registration_state == "pending" and pending_claimed:
+                try:
+                    service_repo.release_pending_repo_webhook(binding, registration_owner)
+                except Exception:  # noqa: BLE001 - preserve the binding even if unlock fails
+                    logger.exception("releasing webhook registration for %s failed", full_name)
+            logger.warning("webhook registration failed for %s: %s", full_name, exc)
+            raise HTTPException(status_code=502, detail="github_webhook_failed") from exc
+        except Exception as exc:  # noqa: BLE001 - preserve the recovery state on cleanup errors
+            if binding.registration_state == "pending" and pending_claimed:
+                try:
+                    service_repo.release_pending_repo_webhook(binding, registration_owner)
+                except Exception:  # noqa: BLE001 - original error remains the useful response
+                    logger.exception("releasing webhook registration for %s failed", full_name)
+            logger.exception("cleaning up webhook binding for %s failed", full_name)
+            raise HTTPException(status_code=502, detail="webhook_binding_cleanup_failed") from exc
 
     # Step 7: one commit, not one per file. See
     # github.py::create_commit_with_files — this is what collapses the
