@@ -869,6 +869,17 @@ class HttpGithubClient:
             )
         tree_sha = tree_resp.json()["sha"]
 
+        # A genuine retry that correctly adopts the same repository (plan
+        # 0016) would otherwise recommit byte-identical content: the six seed
+        # files converge to the same tree, but a new commit still fires
+        # `on: push` and re-triggers the customer's deploy pipeline for no
+        # reason. Comparing against base_tree (the branch's tip, read above)
+        # rather than any other tree catches exactly the no-op case — the
+        # seed content matches what's already at HEAD — without touching the
+        # case where stage documents changed and the seed is genuinely new.
+        if tree_sha == base_tree:
+            return base_sha
+
         commit_resp = await _send(
             "POST",
             f"{GITHUB_API}/repos/{repo}/git/commits",
