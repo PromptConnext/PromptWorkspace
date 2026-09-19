@@ -288,10 +288,11 @@ class SupabaseRepository(Repository):
         return project
 
     def update_project_repo(
-        self, project_id: str, repo_url: str, default_branch: str
+        self, project_id: str, repo_url: str, repo_id: int, default_branch: str
     ) -> Project:
         patch = {
             "repo_url": repo_url,
+            "repo_id": repo_id,
             "repo_default_branch": default_branch,
             "updated_at": utcnow().isoformat(),
         }

@@ -42,7 +42,7 @@ def _project_with_stuck_deploy(client: TestClient, *, age_minutes: int, external
     repository.update_project_deployment_config(
         project["id"], DeploymentConfig(template_id="static-r2")
     )
-    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", "main")
+    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", 1, "main")
     repository.upsert_repo_webhook(
         RepoWebhook(
             repo_full_name=REPO,

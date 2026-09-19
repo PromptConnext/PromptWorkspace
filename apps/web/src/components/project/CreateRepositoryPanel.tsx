@@ -22,6 +22,14 @@ const DETAIL_MESSAGES: Record<string, string> = {
   github_seed_failed:
     "The repository was created but seeding the AI context files failed. Try again — it will pick up where it left off.",
   repo_name_taken: "That repository name is already taken — choose a different name.",
+  // Distinct from repo_name_taken: the cloud resolved the conflicting
+  // repository and confirmed it is NOT one this project created (plan 0016)
+  // — a different name is the only fix, since retrying with the same one
+  // hits the identical conflict every time.
+  repo_name_collision:
+    "That repository name belongs to a different, unrelated repository the workspace's GitHub token " +
+    "can also see. Choose a different name for this project's repository, or rename the conflicting " +
+    "one on GitHub first.",
   github_repo_not_in_token_scope:
     "The repository was created, but the workspace's GitHub token can't write to it — a token scoped to " +
     '"Only select repositories" never covers a repo created after it was issued. A workspace admin ' +

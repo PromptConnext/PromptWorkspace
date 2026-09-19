@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -222,16 +223,28 @@ def start_tech_review(
 
 
 async def _adopt_repo(
-    github_client, token: str, full_name: str, missing_detail: str
+    github_client,
+    token: str,
+    full_name: str,
+    missing_detail: str,
+    *,
+    identity_ok: Callable[[dict], bool] | None = None,
 ) -> dict:
     """Read a repository this project is to use rather than creating one.
 
-    Two callers, same failure semantics: the retry path after a mid-flight
-    failure (where the repo is one a previous attempt created), and the import
-    path (where it is one the user picked from their own workspace's grant).
-    `missing_detail` is the only difference — "the name is taken by something
-    else" and "the repository you imported is gone" are different problems for
-    whoever reads the error.
+    Two callers, different identity questions. The retry path (a name
+    collision from `create_org_repo`) has no prior identity to check against —
+    "GitHub returned a repo for this name" is a lookup key, not proof this
+    project made it (plan 0016) — so it passes `identity_ok` and this refuses
+    to adopt when that check fails. The import path already knows exactly
+    which repository it means, from `project.repo_url` recorded at project
+    creation and re-verified against the workspace's current owner just
+    above; there is no name to guess from, so it passes no `identity_ok` and
+    any repository `get_repo` returns is adopted as-is.
+
+    `missing_detail` is the other difference between the two callers — "the
+    name is taken by something else" and "the repository you imported is
+    gone" are different problems for whoever reads the error.
     """
     try:
         existing = await github_client.get_repo(token, full_name)
@@ -246,6 +259,12 @@ async def _adopt_repo(
         raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
     if existing is None:
         raise HTTPException(status_code=409, detail=missing_detail) from None
+    if identity_ok is not None and not identity_ok(existing):
+        # A name collision with a repository this project never created — the
+        # case plan 0016 exists for. Refusing to adopt is the whole point:
+        # writing secrets and a seed commit into it would be exactly the
+        # "someone else's repository" incident the plan describes.
+        raise HTTPException(status_code=409, detail="repo_name_collision") from None
     return existing
 
 
@@ -365,10 +384,25 @@ async def create_repository(
                 github_config.get("owner_type", "Organization"),
             )
         except RepoAlreadyExistsError:
-            # Retry path after a mid-flight failure: adopt the repo we (likely)
-            # created on a previous attempt rather than failing outright.
+            # Retry path after a mid-flight failure: adopt the repo we
+            # (likely) created on a previous attempt — but only if the
+            # evidence actually supports "likely" (plan 0016). Two windows:
+            # repo_id was already persisted on an earlier successful retry
+            # (the numeric id is authoritative, even across a rename); or
+            # this is the very first retry, before step 8 ever ran, in which
+            # case the only signal available is the description this project
+            # would have written verbatim at creation.
+            def _is_our_repo(existing: dict) -> bool:
+                if project.repo_id is not None:
+                    return existing.get("id") == project.repo_id
+                return existing.get("description") == description
+
             created = await _adopt_repo(
-                github_client, token, f"{owner}/{name}", "repo_name_taken"
+                github_client,
+                token,
+                f"{owner}/{name}",
+                "repo_name_taken",
+                identity_ok=_is_our_repo,
             )
         except GithubWriteError as exc:
             raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
@@ -480,7 +514,7 @@ async def create_repository(
         raise HTTPException(status_code=502, detail="github_seed_failed") from exc
 
     # Step 8: repo-write first, lifecycle flip last — see docstring.
-    repo.update_project_repo(project_id, created["html_url"], default_branch)
+    repo.update_project_repo(project_id, created["html_url"], created["id"], default_branch)
     if deployment is not None:
         template = deployment["template"]
         # Resolved a second time for a template whose URL is derived from the

@@ -195,6 +195,10 @@ def test_create_repository_happy_path():
         fake = client.app.state.github_client
         assert ("acme/rocket-ship", "AGENTS.md") in fake.written_files
         assert "Be kind." in fake.written_files[("acme/rocket-ship", "AGENTS.md")]
+        # plan 0016: the numeric id GitHub assigned at creation is persisted —
+        # the identity a later collision check verifies against, not just
+        # repo_url/full_name.
+        assert body["repo_id"] == fake.created_repos[0]["id"]
 
 
 def test_create_repository_rejects_when_not_in_tech_review():
@@ -262,25 +266,88 @@ def test_create_repository_seed_403_reports_token_scope_not_a_transient_failure(
 
 
 def test_create_repository_retry_adopts_existing_repo_without_duplicate_create():
+    """The crash window plan 0016 names: repo_id was never persisted (step 8
+    never ran), so the only signal available is the description this project
+    would have written verbatim at creation — present here, which is what
+    makes this a genuine retry rather than the collision M2 refuses."""
     with _client() as client:
         fake = _wire_github(client)
         ws, pid = _project_in_tech_review(client)
 
         # Simulate a prior partial attempt: the repo already exists on
-        # GitHub (e.g. from a crash after create but before seeding).
+        # GitHub (e.g. from a crash after create but before seeding), with
+        # the description this project's own create_org_repo call would have
+        # sent.
         fake.existing_repos["acme/rocket-ship"] = {
+            "id": 4242,
             "full_name": "acme/rocket-ship",
             "html_url": "https://github.com/acme/rocket-ship",
             "default_branch": "main",
+            "description": f"PromptZone-managed repository for project {pid}",
         }
 
         res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
         assert res.status_code == 200, res.text
         assert res.json()["lifecycle_status"] == "repo_created"
         assert res.json()["repo_url"] == "https://github.com/acme/rocket-ship"
+        assert res.json()["repo_id"] == 4242
         # No duplicate create — create_org_repo raised RepoAlreadyExistsError
         # and the retry path adopted via get_repo instead.
         assert fake.created_repos == []
+
+
+def test_create_repository_retry_after_repo_id_persisted_uses_the_numeric_id():
+    """The other crash window: repo_id WAS persisted on an earlier successful
+    retry (e.g. secrets/webhook/commit failed afterward), so the numeric id
+    is authoritative — even if the repository were renamed and its
+    description no longer matched, which this test proves by making the
+    description wrong on purpose."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        client.app.state.repository.update_project_repo(
+            pid, "https://github.com/acme/rocket-ship", 4242, "main"
+        )
+        fake.existing_repos["acme/rocket-ship"] = {
+            "id": 4242,
+            "full_name": "acme/rocket-ship",
+            "html_url": "https://github.com/acme/rocket-ship",
+            "default_branch": "main",
+            "description": "renamed since — description no longer matches",
+        }
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert res.status_code == 200, res.text
+        assert res.json()["lifecycle_status"] == "repo_created"
+        assert fake.created_repos == []
+
+
+def test_create_repository_refuses_to_adopt_an_unrelated_repo_with_the_same_name():
+    """The finding plan 0016 exists for: a name collision with a repository
+    this project never created must not silently adopt it and write secrets,
+    a webhook and a seed commit into someone else's repository."""
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        fake.existing_repos["acme/rocket-ship"] = {
+            "id": 999,
+            "full_name": "acme/rocket-ship",
+            "html_url": "https://github.com/acme/rocket-ship",
+            "default_branch": "main",
+            "description": "Alice's personal fork",
+        }
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+        assert res.status_code == 409, res.text
+        assert res.json()["detail"] == "repo_name_collision"
+
+        project = client.app.state.repository.get_project(pid)
+        assert project.lifecycle_status == "tech_review"
+        assert project.repo_url is None
+        assert project.repo_id is None
+        # Nothing downstream of the identity check should have fired against
+        # a repository that failed it.
+        assert fake.call_log == ["get_repo:acme/rocket-ship"]
 
 
 def test_create_repository_retry_reports_token_scope_when_the_repo_is_unreadable():

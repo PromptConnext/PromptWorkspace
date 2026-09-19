@@ -43,7 +43,7 @@ def _setup(client: TestClient):
     repository.update_project_deployment_config(
         project["id"], DeploymentConfig(template_id="static-r2")
     )
-    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", "main")
+    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", 1, "main")
     repository.update_workspace(
         ws["id"],
         integration_config={

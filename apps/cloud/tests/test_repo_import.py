@@ -26,6 +26,11 @@ ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
 TOKEN = "github_pat_11ABCDEF_secretvalue"
 
+# _repo_row (app/integrations/github.py) requires "id" unconditionally —
+# plan 0016's identity field. Fixtures below don't care about the value,
+# only that every seeded repo has a distinct one.
+_next_test_repo_id = iter(range(9000, 9999))
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -60,6 +65,7 @@ def _seed_repo(
     """Populate FakeGithubClient.existing_repos with the raw shape _repo_row
     normalizes, so list_repos and get_repo both see it."""
     client.app.state.github_client.existing_repos[full_name] = {
+        "id": next(_next_test_repo_id),
         "full_name": full_name,
         "html_url": f"https://github.com/{full_name}",
         "default_branch": default_branch,

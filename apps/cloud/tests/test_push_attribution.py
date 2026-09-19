@@ -36,7 +36,7 @@ def _project(client: TestClient) -> str:
         "/projects", json={"name": "Rocket", "workspace_id": ws["id"]}, headers=ALICE
     ).json()
     repository = client.app.state.repository
-    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", "main")
+    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", 1, "main")
     repository.upsert_repo_webhook(
         RepoWebhook(
             repo_full_name=REPO,

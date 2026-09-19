@@ -439,6 +439,10 @@ def _repo_row(data: dict) -> dict:
     consistent, so treat `empty` as advisory, not as the guard.
     """
     return {
+        # GitHub's stable numeric id — immutable across a rename or transfer,
+        # unlike full_name. What a repo-collision check verifies identity
+        # against (plan 0016); full_name alone is a lookup key.
+        "id": data["id"],
         "full_name": data["full_name"],
         "name": data.get("name") or data["full_name"].split("/")[-1],
         "html_url": data["html_url"],
@@ -447,6 +451,10 @@ def _repo_row(data: dict) -> dict:
         "archived": bool(data.get("archived", False)),
         "empty": data.get("size", 1) == 0,
         "pushed_at": data.get("pushed_at"),
+        # The project-specific description create_org_repo wrote at creation
+        # (api/sync.py) — the only signal available to recognize "our earlier
+        # attempt" in the crash window before repo_id is persisted.
+        "description": data.get("description"),
     }
 
 
@@ -591,12 +599,7 @@ class HttpGithubClient:
                 f"create_org_repo failed: {resp.status_code} {resp.text}",
                 status_code=resp.status_code,
             )
-        data = resp.json()
-        return {
-            "full_name": data["full_name"],
-            "html_url": data["html_url"],
-            "default_branch": data.get("default_branch", "main"),
-        }
+        return _repo_row(resp.json())
 
     async def get_repo(self, token: str, repo: str) -> dict | None:
         """None means "no such repo" — every other failure raises, so the
@@ -1116,6 +1119,11 @@ class FakeGithubClient:
         # is unwell"); set 403/404 to exercise the token-scope path.
         self.write_failure_status: int | None = 500
         self.existing_repos: dict[str, dict] = {}
+        # Mints ids for fake-created repos, mirroring GitHub's own numeric
+        # repository id (plan 0016). A repo seeded directly into
+        # existing_repos by a test (to simulate an unrelated repository) must
+        # set its own "id" — this counter never overwrites one already there.
+        self._next_repo_id: int = 1000
         # Status `get_repo` fails with, for the adopt-on-retry path. None =
         # answer normally (the repo, or None when unknown).
         self.get_repo_failure_status: int | None = None
@@ -1191,10 +1199,13 @@ class FakeGithubClient:
         if full_name in self.existing_repos:
             raise RepoAlreadyExistsError(f"repo {full_name} already exists")
         self.call_log.append(f"create_repo:{full_name}")
+        self._next_repo_id += 1
         record = {
+            "id": self._next_repo_id,
             "full_name": full_name,
             "html_url": f"https://github.com/{full_name}",
             "default_branch": "main",
+            "description": description,
         }
         self.created_repos.append(record)
         self.existing_repos[full_name] = record

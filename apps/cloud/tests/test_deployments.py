@@ -378,7 +378,7 @@ def _repo_created(
     client: TestClient, ws_id: str, pid: str, *, events: list[str]
 ) -> FakeGithubClient:
     repository = client.app.state.repository
-    repository.update_project_repo(pid, f"https://github.com/{REPO}", "main")
+    repository.update_project_repo(pid, f"https://github.com/{REPO}", 1, "main")
     repository.update_workspace(
         ws_id,
         integration_config={

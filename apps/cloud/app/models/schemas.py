@@ -500,6 +500,12 @@ class Project(BaseModel):
     )
     repo_url: str | None = None
     repo_default_branch: str | None = None
+    # GitHub's own numeric repository id — immutable across a rename or
+    # transfer, unlike repo_url/full_name. The identity a name-collision check
+    # verifies against (plan 0016); a name alone is a lookup key, not proof of
+    # provenance. Nullable: every project predating this field has a repo_url
+    # with no recorded id.
+    repo_id: int | None = None
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
