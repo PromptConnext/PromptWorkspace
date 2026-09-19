@@ -138,14 +138,16 @@ function registerLocalHttpsAlias(barePath: string): string {
 
 await loginStub();
 
-test("open on tech_review (not repo_created) returns 409 project_not_ready", async () => {
+test("open on a pre-repo imported project returns 409 even when repo_url is set", async () => {
   cloud.projects.push({
     id: "cp-tr",
-    name: "Tech Review Project",
+    name: "Imported Planning Project",
     workspace_id: "ws-1",
-    lifecycle_status: "tech_review",
-    repo_url: null,
-    repo_default_branch: null,
+    lifecycle_status: "planning",
+    // Imports retain their existing repository while planning. The engine must
+    // not clone it before cloud-side repo creation has seeded the AI context.
+    repo_url: "https://github.com/acme/imported-planning-project",
+    repo_default_branch: "main",
   });
   await req("/engine/cloud/roster/refresh", { method: "POST" });
 
@@ -153,7 +155,7 @@ test("open on tech_review (not repo_created) returns 409 project_not_ready", asy
   assert.equal(res.status, 409);
   const body = (await res.json()) as { error: string; lifecycle_status: string };
   assert.equal(body.error, "project_not_ready");
-  assert.equal(body.lifecycle_status, "tech_review");
+  assert.equal(body.lifecycle_status, "planning");
 });
 
 test("open on repo_created with a repo_url clones the real repo (local bare repo, no network)", async () => {

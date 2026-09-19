@@ -254,9 +254,11 @@ cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
 
   // Repo handoff gate (plan: cloud creates the repo at tech-review exit): a
   // project isn't clonable/init-able until the cloud has finished planning it
-  // and, at repo_created, seeded the repo with AI context. Surfacing the
-  // lifecycle status lets the desktop show an informational panel instead of
-  // an open action for the three pre-repo states.
+  // and, at repo_created, seeded the repo with AI context. An imported project
+  // retains its repo_url while it is still planning, so the URL alone must not
+  // select the clone path. Surfacing the lifecycle status lets the desktop show
+  // an informational panel instead of an open action for the three pre-repo
+  // states.
   if (rosterProject.lifecycle_status !== "repo_created") {
     return c.json(
       { error: "project_not_ready", lifecycle_status: rosterProject.lifecycle_status },

@@ -9,6 +9,7 @@ target/
 .envrc
 .omc/
 .omc/state/
+.omx/
 .playwright-*
 .claude/*
 .engine-pkg/
