@@ -479,10 +479,17 @@ cloud.post("/engine/projects/:id/discussions", async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, 'pz')`,
   ).run(id, projectId, body.parentNodeType.trim(), body.parentNodeId.trim(), author, body.body.trim());
 
-  // Push immediately rather than waiting for the next interval tick —
-  // comments should feel synchronous, not delayed up to CLOUD_SYNC_POLL_SECONDS.
-  await pushProjectSnapshot(projectId).catch(() => {});
-
+  // The automatic full-graph push is retired (ADR 0020, plan 0012 M1), so
+  // this reply is local-only until it reaches the cloud some other way.
+  // The cloud already has a dedicated, discussion-scoped write for this
+  // (`POST /projects/{id}/discussions`), but wiring it here isn't a safe
+  // one-line change: that endpoint mints its own server-side id rather than
+  // accepting the one just inserted above, and the pull path upserts by id
+  // (`ON CONFLICT(id)`), so calling it naively would leave two rows for the
+  // same comment — the local one and a second copy pulled back under the
+  // cloud's id. Reconciling local and cloud ids for pz-authored writes is
+  // exactly the cache-vs-authority work plan 0012's M4 does for tasks;
+  // give discussions the same treatment there instead of a narrower fix here.
   const created = db
     .prepare(
       "SELECT id, project_id, parent_node_type, parent_node_id, author, body, source, updated_at FROM discussions WHERE id = ?",

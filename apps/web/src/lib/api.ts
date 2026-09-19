@@ -7,6 +7,7 @@ import type {
   DeploymentStatus,
   DeploymentTemplateOut,
   DocumentOut,
+  GithubRepoList,
   IndexStatus,
   PolicyScope,
   PolicyTemplateOut,
@@ -239,6 +240,27 @@ export function disconnectDeployProvider(
     authHeaders,
     { method: "DELETE" },
   );
+}
+
+// Membership-only read on the server, deliberately — the import gate exists
+// for business users, who are not admins. Returns the connected `owner` even
+// when the list is empty: that is the out-of-scope-owner state, and the
+// connection-status endpoint that would otherwise supply it is admin-only.
+export function listGithubRepos(workspaceId: string, authHeaders: Record<string, string>) {
+  return apiFetch<GithubRepoList>(
+    `/workspaces/${workspaceId}/integrations/github/repos`,
+    authHeaders,
+  );
+}
+
+export function createProject(
+  body: { name: string; workspace_id: string; import_repo_full_name?: string },
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Project>("/projects", authHeaders, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function createRepository(

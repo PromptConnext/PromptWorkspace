@@ -220,6 +220,36 @@ export interface GithubConnection {
   connected_at: string | null;
 }
 
+// One repository the workspace's PAT can see
+// (GET /workspaces/{id}/integrations/github/repos), for the import gate.
+export interface GithubRepo {
+  full_name: string;
+  name: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
+  archived: boolean;
+  // GitHub has no "has no commits" flag; this is size === 0. A repo in this
+  // state can't be seeded — the seed step reads the branch head first, which
+  // 404s — so the picker disables the row instead of failing at tech-review
+  // exit.
+  empty: boolean;
+  pushed_at: string | null;
+}
+
+// owner/owner_type/account_login are present even when repositories is
+// empty: that emptiness is the out-of-scope-owner state the import gate has
+// to explain (the user's repo lives under an account the connected PAT
+// can't reach), and the connection-status endpoint that would otherwise
+// supply the owner is admin-only, so a member reads it here instead.
+export interface GithubRepoList {
+  owner: string | null;
+  owner_type: string | null;
+  account_login: string | null;
+  repositories: GithubRepo[];
+  truncated: boolean;
+}
+
 // Assistant model status (apps/cloud/app/api/assistant.py). `configured` is
 // about this workspace's own connection; the two `*_source` fields are what
 // the assistant would actually resolve, which is what the UI reports — with

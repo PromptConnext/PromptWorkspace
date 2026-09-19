@@ -495,7 +495,13 @@ export function startCloudSyncLoop(): void {
   if (loopTimer) return;
   loopTimer = setInterval(async () => {
     for (const projectId of linkedProjectIds()) {
-      await pushProjectSnapshot(projectId).catch(() => {});
+      // The automatic full-graph push is retired (ADR 0020, plan 0012 M1):
+      // the cloud is authoritative for the task graph, and an interval push
+      // from every connected desktop would overwrite it. Pulls only. The
+      // manual, user-initiated push in routes/cloud.ts (`POST
+      // /engine/projects/:id/cloud-sync`) still calls pushProjectSnapshot
+      // directly and is unaffected — see that route and assembleSnapshot's
+      // doc comment for why that path survives until M4 replaces it.
       await pullProjectDiscussions(projectId).catch(() => {});
       await pullProjectTaskAssignments(projectId).catch(() => {});
     }

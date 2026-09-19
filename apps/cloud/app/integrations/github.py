@@ -376,6 +376,14 @@ class GithubClient(Protocol):
 
     async def get_repo(self, token: str, repo: str) -> dict | None: ...
 
+    async def list_repos(
+        self,
+        token: str,
+        owner: str,
+        owner_type: str = "Organization",
+        max_pages: int = 5,
+    ) -> tuple[list[dict], bool]: ...
+
     async def put_file_content(
         self,
         token: str,
@@ -415,6 +423,43 @@ class GithubClient(Protocol):
     async def list_commits(
         self, token: str, repo: str, sha: str, limit: int = 100
     ) -> list[str]: ...
+
+
+# GitHub caps `per_page` at 100 on both repository listings.
+_REPO_PAGE_SIZE = 100
+
+
+def _repo_row(data: dict) -> dict:
+    """The subset of a GitHub repository object this service uses.
+
+    `empty` is derived from `size`: GitHub exposes no "has no commits" flag,
+    and a repository with no commits cannot be seeded at all — the seed step
+    reads the branch head first, which 404s. Catching it at the picker turns a
+    502 days later into a disabled row now. `size` is in KB and is eventually
+    consistent, so treat `empty` as advisory, not as the guard.
+    """
+    return {
+        # GitHub's stable numeric id — immutable across a rename or transfer,
+        # unlike full_name. What a repo-collision check verifies identity
+        # against (plan 0016); full_name alone is a lookup key.
+        "id": data["id"],
+        "full_name": data["full_name"],
+        "name": data.get("name") or data["full_name"].split("/")[-1],
+        "html_url": data["html_url"],
+        "default_branch": data.get("default_branch", "main"),
+        "private": bool(data.get("private", False)),
+        "archived": bool(data.get("archived", False)),
+        "empty": data.get("size", 1) == 0,
+        "pushed_at": data.get("pushed_at"),
+        # The project-specific description create_org_repo wrote at creation
+        # (api/sync.py) — the only signal available to recognize "our earlier
+        # attempt" in the crash window before repo_id is persisted.
+        "description": data.get("description"),
+    }
+
+
+def _owned_by(row: dict, owner: str) -> bool:
+    return row["full_name"].split("/")[0].lower() == owner.lower()
 
 
 async def _send(method: str, url: str, *, token: str, what: str, **kwargs) -> httpx.Response:
@@ -554,12 +599,7 @@ class HttpGithubClient:
                 f"create_org_repo failed: {resp.status_code} {resp.text}",
                 status_code=resp.status_code,
             )
-        data = resp.json()
-        return {
-            "full_name": data["full_name"],
-            "html_url": data["html_url"],
-            "default_branch": data.get("default_branch", "main"),
-        }
+        return _repo_row(resp.json())
 
     async def get_repo(self, token: str, repo: str) -> dict | None:
         """None means "no such repo" — every other failure raises, so the
@@ -577,12 +617,82 @@ class HttpGithubClient:
                 f"get_repo failed for {repo}: {resp.status_code} {resp.text}",
                 status_code=resp.status_code,
             )
-        data = resp.json()
-        return {
-            "full_name": data["full_name"],
-            "html_url": data["html_url"],
-            "default_branch": data.get("default_branch", "main"),
-        }
+        return _repo_row(resp.json())
+
+    async def list_repos(
+        self,
+        token: str,
+        owner: str,
+        owner_type: str = "Organization",
+        max_pages: int = 5,
+    ) -> tuple[list[dict], bool]:
+        """Every repository under `owner` this token can see, newest push first.
+
+        Returns `(repos, truncated)`. Capped rather than exhaustively paginated
+        — `max_pages` x 100 is far past what a picker can usefully show, and a
+        page shorter than `per_page` ends the walk, so the common case is one
+        request.
+
+        The results are filtered by `owner` here, not trusted from GitHub.
+        A fine-grained PAT is scoped to a single resource owner, but
+        `/user/repos` is documented in terms of the *user's* affiliations, and
+        the consequence of letting a foreign-owner repo through is not a
+        cosmetic one: the platform would accept an import it can never write
+        to, and the failure would not surface until the seed commit days later.
+        """
+        collected: list[dict] = []
+        truncated = False
+        for page in range(1, max_pages + 1):
+            resp = await _send(
+                "GET",
+                f"{GITHUB_API}/user/repos",
+                token=token,
+                what="list_repos",
+                params={
+                    "affiliation": "owner,organization_member",
+                    "sort": "pushed",
+                    "direction": "desc",
+                    "per_page": _REPO_PAGE_SIZE,
+                    "page": page,
+                },
+            )
+            if resp.is_error:
+                raise GithubWriteError(
+                    f"list_repos failed for {owner}: {resp.status_code} {resp.text}",
+                    status_code=resp.status_code,
+                )
+            batch = resp.json()
+            collected.extend(batch)
+            if len(batch) < _REPO_PAGE_SIZE:
+                break
+        else:
+            truncated = True
+
+        rows = [r for r in (_repo_row(raw) for raw in collected) if _owned_by(r, owner)]
+        if rows or owner_type != "Organization":
+            return rows, truncated
+
+        # Nothing under the connected org came back. GitHub's own docs do not
+        # promise that a token scoped to an organization surfaces that org's
+        # repositories through the *user*-affiliation endpoint, so fall back to
+        # the org listing rather than rendering an empty picker. One extra
+        # request, and only in the case that would otherwise show nothing.
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/orgs/{owner}/repos",
+            token=token,
+            what="list_repos org fallback",
+            params={"type": "all", "sort": "pushed", "per_page": _REPO_PAGE_SIZE},
+        )
+        if resp.status_code == 404:
+            return [], False
+        if resp.is_error:
+            raise GithubWriteError(
+                f"list_repos failed for {owner}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        org_rows = [r for r in (_repo_row(raw) for raw in resp.json()) if _owned_by(r, owner)]
+        return org_rows, len(org_rows) == _REPO_PAGE_SIZE
 
     async def get_deployment(self, token: str, repo: str, deployment_id: str) -> dict | None:
         """The newest status for one deployment, or None when GitHub has no
@@ -758,6 +868,17 @@ class HttpGithubClient:
                 status_code=tree_resp.status_code,
             )
         tree_sha = tree_resp.json()["sha"]
+
+        # A genuine retry that correctly adopts the same repository (plan
+        # 0016) would otherwise recommit byte-identical content: the six seed
+        # files converge to the same tree, but a new commit still fires
+        # `on: push` and re-triggers the customer's deploy pipeline for no
+        # reason. Comparing against base_tree (the branch's tip, read above)
+        # rather than any other tree catches exactly the no-op case — the
+        # seed content matches what's already at HEAD — without touching the
+        # case where stage documents changed and the seed is genuinely new.
+        if tree_sha == base_tree:
+            return base_sha
 
         commit_resp = await _send(
             "POST",
@@ -1009,9 +1130,16 @@ class FakeGithubClient:
         # is unwell"); set 403/404 to exercise the token-scope path.
         self.write_failure_status: int | None = 500
         self.existing_repos: dict[str, dict] = {}
+        # Mints ids for fake-created repos, mirroring GitHub's own numeric
+        # repository id (plan 0016). A repo seeded directly into
+        # existing_repos by a test (to simulate an unrelated repository) must
+        # set its own "id" — this counter never overwrites one already there.
+        self._next_repo_id: int = 1000
         # Status `get_repo` fails with, for the adopt-on-retry path. None =
         # answer normally (the repo, or None when unknown).
         self.get_repo_failure_status: int | None = None
+        self.list_repos_failure_status: int | None = None
+        self.list_repos_truncated: bool = False
         # ADR 0023 reconciliation. Keyed (repo, id); an unregistered key is
         # GitHub answering 404, which is exactly the abandoned-deploy case.
         self.deployment_states: dict[tuple[str, str], dict] = {}
@@ -1082,22 +1210,49 @@ class FakeGithubClient:
         if full_name in self.existing_repos:
             raise RepoAlreadyExistsError(f"repo {full_name} already exists")
         self.call_log.append(f"create_repo:{full_name}")
+        self._next_repo_id += 1
         record = {
+            "id": self._next_repo_id,
             "full_name": full_name,
             "html_url": f"https://github.com/{full_name}",
             "default_branch": "main",
+            "description": description,
         }
         self.created_repos.append(record)
         self.existing_repos[full_name] = record
         return record
 
     async def get_repo(self, token: str, repo: str) -> dict | None:
+        self.call_log.append(f"get_repo:{repo}")
         if self.get_repo_failure_status is not None:
             raise GithubWriteError(
                 f"fake get_repo failure for {repo}",
                 status_code=self.get_repo_failure_status,
             )
-        return self.existing_repos.get(repo)
+        found = self.existing_repos.get(repo)
+        return _repo_row(found) if found is not None else None
+
+    async def list_repos(
+        self,
+        token: str,
+        owner: str,
+        owner_type: str = "Organization",
+        max_pages: int = 5,
+    ) -> tuple[list[dict], bool]:
+        """Answers from `existing_repos`, so one fixture serves both the picker
+        and the adopt path a test drives afterwards."""
+        self.call_log.append(f"list_repos:{owner}")
+        if self.list_repos_failure_status is not None:
+            raise GithubWriteError(
+                f"fake list_repos failure for {owner}",
+                status_code=self.list_repos_failure_status,
+            )
+        rows = [
+            _repo_row(record)
+            for full_name, record in self.existing_repos.items()
+            if full_name.split("/")[0].lower() == owner.lower()
+        ]
+        return rows, self.list_repos_truncated
 
     async def put_file_content(
         self,

@@ -1,9 +1,18 @@
 """Git-host integration API (M11): connection management + inbound webhooks.
 
-  GET    /workspaces/{id}/integrations/github   admin — non-secret status
-  PUT    /workspaces/{id}/integrations/github   admin — connect (verify + store PAT)
-  DELETE /workspaces/{id}/integrations/github   admin — disconnect
-  POST   /api/webhooks/github                   public, signature-verified
+  GET    /workspaces/{id}/integrations/github        admin — non-secret status
+  PUT    /workspaces/{id}/integrations/github        admin — connect (verify + store PAT)
+  DELETE /workspaces/{id}/integrations/github        admin — disconnect
+  GET    /workspaces/{id}/integrations/github/repos  member — list, for the import picker
+  POST   /api/webhooks/github                        public, signature-verified
+
+The repo-listing route is deliberately member-gated, not admin-gated, unlike
+its three siblings above: the import gate at project creation exists *for*
+business users, who are workspace members, not admins (the same reasoning
+`getDeploymentStatus` in apps/web/src/lib/api.ts already states for reading
+deploy status). The honest cost: this discloses the *names* of private
+repositories under the connected owner to every workspace member. No
+credential crosses the boundary — the response never carries the token.
 
 Doesn't reuse app/api/integrations.py's tracker_webhook — that endpoint's
 contract (adapter.handle_webhook -> pmo-only InboundUpdate) is shaped around
@@ -17,12 +26,13 @@ import asyncio
 import ipaddress
 import logging
 import socket
+import time
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api._guards import require_admin
+from app.api._guards import require_admin, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.attribution import TERMINAL_STATES, freeze_build_tasks
@@ -40,7 +50,7 @@ from app.integrations.github import (
     parse_workflow_run_event,
     verify_signature,
 )
-from app.integrations.github_auth import github_config
+from app.integrations.github_auth import github_config, resolve_token
 from app.integrations.task_refs import refs_for_commit, tasks_by_ref
 from app.models.schemas import (
     Artifact,
@@ -48,6 +58,8 @@ from app.models.schemas import (
     Deployment,
     GithubConnectionOut,
     GithubConnectRequest,
+    GithubRepoListOut,
+    GithubRepoOut,
     GraphUpsertRequest,
     PullRequest,
     Workspace,
@@ -149,6 +161,50 @@ def disconnect_github(
     merged = dict(ws.integration_config) if ws else {}
     merged.pop("github", None)
     return _connection_out(repo.update_workspace(workspace_id, integration_config=merged))
+
+
+@router.get(
+    "/workspaces/{workspace_id}/integrations/github/repos", response_model=GithubRepoListOut
+)
+async def list_github_repos(
+    workspace_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> GithubRepoListOut:
+    """Repositories the workspace's PAT can see, for the new-project import
+    picker. Member-gated — see the module docstring for why."""
+    require_workspace(repo, workspace_id, user)
+
+    limiter = request.app.state.github_read_limiter
+    if not limiter.allow(f"{workspace_id}:{user.id}", time.monotonic()):
+        raise HTTPException(status_code=429, detail="github_rate_limited")
+
+    ws = repo.get_workspace(workspace_id)
+    resolved = resolve_token(request.app, ws)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    token, config = resolved
+    owner = config.get("owner")
+    if not owner:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+
+    try:
+        rows, truncated = await request.app.state.github_client.list_repos(
+            token, owner, config.get("owner_type", "Organization")
+        )
+    except GithubWriteError as exc:
+        if getattr(exc, "status_code", None) in (401, 403):
+            raise HTTPException(status_code=400, detail="github_token_rejected") from exc
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+
+    return GithubRepoListOut(
+        owner=owner,
+        owner_type=config.get("owner_type"),
+        account_login=config.get("account_login"),
+        repositories=[GithubRepoOut(**row) for row in rows],
+        truncated=truncated,
+    )
 
 
 @router.post("/api/webhooks/github")

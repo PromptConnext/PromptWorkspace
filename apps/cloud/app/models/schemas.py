@@ -470,6 +470,11 @@ class Deployment(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     workspace_id: str
+    # Import gate: "owner/repo" of an existing repository to adopt at repo
+    # creation, chosen from GithubRepoListOut. None (the default) is today's
+    # unchanged start-from-scratch path. Deliberately a full_name and not a
+    # URL — the picker is the only source, there is no free-text paste path.
+    import_repo_full_name: str | None = None
 
 
 class Project(BaseModel):
@@ -495,6 +500,12 @@ class Project(BaseModel):
     )
     repo_url: str | None = None
     repo_default_branch: str | None = None
+    # GitHub's own numeric repository id — immutable across a rename or
+    # transfer, unlike repo_url/full_name. The identity a name-collision check
+    # verifies against (plan 0016); a name alone is a lookup key, not proof of
+    # provenance. Nullable: every project predating this field has a repo_url
+    # with no recorded id.
+    repo_id: int | None = None
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
@@ -898,6 +909,41 @@ class GithubConnectionOut(BaseModel):
     # app/api/sync.py) needs this separately from `repo`, since `repo` may
     # not exist yet at install time; null falls back to `repo.split("/")[0]`.
     owner: str | None = None
+
+
+class GithubRepoOut(BaseModel):
+    """One repository the workspace's PAT can see, for the import picker
+    (GET /workspaces/{id}/integrations/github/repos)."""
+
+    full_name: str
+    name: str
+    html_url: str
+    default_branch: str
+    private: bool
+    archived: bool = False
+    # Derived from GitHub's `size == 0` — the only available proxy for "has no
+    # commits". A repo in that state can't be seeded (the seed step reads the
+    # branch head first, which 404s), so the picker disables the row rather
+    # than letting the failure surface at tech-review exit.
+    empty: bool = False
+    pushed_at: datetime | None = None
+
+
+class GithubRepoListOut(BaseModel):
+    """Response for the import picker.
+
+    `owner`/`owner_type`/`account_login` are carried even when `repositories`
+    is empty — that emptiness is the out-of-scope-owner state a member sees
+    when their app lives under an account the workspace's PAT cannot reach,
+    and the connection-status endpoint that would otherwise supply the owner
+    is admin-only, so this response has to say it itself.
+    """
+
+    owner: str | None = None
+    owner_type: str | None = None
+    account_login: str | None = None
+    repositories: list[GithubRepoOut] = []
+    truncated: bool = False
 
 
 class CreateRepositoryRequest(BaseModel):

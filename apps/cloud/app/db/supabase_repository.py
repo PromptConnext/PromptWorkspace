@@ -255,8 +255,22 @@ class SupabaseRepository(Repository):
         )
 
     # -- projects --------------------------------------------------------- #
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
-        project = Project(name=name, workspace_id=workspace_id, owner_id=created_by)
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project:
+        project = Project(
+            name=name,
+            workspace_id=workspace_id,
+            owner_id=created_by,
+            repo_url=repo_url,
+            repo_default_branch=repo_default_branch,
+        )
         self._client.table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
 
@@ -274,10 +288,11 @@ class SupabaseRepository(Repository):
         return project
 
     def update_project_repo(
-        self, project_id: str, repo_url: str, default_branch: str
+        self, project_id: str, repo_url: str, repo_id: int, default_branch: str
     ) -> Project:
         patch = {
             "repo_url": repo_url,
+            "repo_id": repo_id,
             "repo_default_branch": default_branch,
             "updated_at": utcnow().isoformat(),
         }

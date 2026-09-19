@@ -132,7 +132,7 @@ def workspace_project_task(client: TestClient) -> tuple[str, str, str]:
     _bind_repo(client, ws["id"], project["id"])
     # The push handler reads the branch off the project, not workspace config.
     client.app.state.repository.update_project_repo(
-        project["id"], f"https://github.com/{REPO}", "main"
+        project["id"], f"https://github.com/{REPO}", 1, "main"
     )
     return ws["id"], project["id"], "t1"
 

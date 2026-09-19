@@ -118,7 +118,7 @@ def test_no_source_code_plaintext_anywhere_in_storage_after_index_and_chat(clien
             secret_ref=client.app.state.secret_store.encrypt(WEBHOOK_SECRET),
         )
     )
-    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", "main")
+    repository.update_project_repo(project["id"], f"https://github.com/{REPO}", 1, "main")
 
     fake_github = client.app.state.github_client
     fake_github.set_file(REPO, "src/auth.ts", "sha-head", FILE_CONTENT)

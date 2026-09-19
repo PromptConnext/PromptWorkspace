@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,7 +30,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api._guards import require_project, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.deployments.preview_url import platform_preview_url, resolves_before_repo
+from app.deployments.preview_url import (
+    platform_preview_url,
+    repo_full_name_from_url,
+    resolves_before_repo,
+)
 from app.deployments.registry import PREVIEW_ENVIRONMENT
 from app.deployments.registry import get_template as get_deployment_template
 from app.integrations.deploy_providers import (
@@ -83,16 +88,74 @@ router = APIRouter(tags=["sync"])
 logger = logging.getLogger("promptconnext.sync")
 
 
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
 @router.post("/projects", response_model=Project, status_code=201)
-def create_project(
+async def create_project(
     body: ProjectCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Project:
     # Only members of the target workspace may create projects in it.
     require_workspace(repo, body.workspace_id, user)
+
+    if body.import_repo_full_name is None:
+        return repo.create_project(
+            workspace_id=body.workspace_id, created_by=user.id, name=body.name
+        )
+
+    # Import path: the user picked a repo from GithubRepoListOut. Everything
+    # below runs before any write, same discipline as create_repository.
+    full_name = body.import_repo_full_name
+    if not _REPO_FULL_NAME_RE.match(full_name):
+        raise HTTPException(status_code=422, detail="invalid_repo_full_name")
+
+    workspace = repo.get_workspace(body.workspace_id)
+    resolved = resolve_token(request.app, workspace)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    token, github_config = resolved
+    owner = github_config.get("owner")
+    if not owner:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+
+    # import_repo_full_name is client-supplied and therefore attacker-
+    # controllable by any workspace member; without this check a member could
+    # name a repo outside the connected owner and have the platform commit
+    # into it at tech-review exit.
+    if full_name.split("/")[0].lower() != owner.lower():
+        raise HTTPException(status_code=400, detail="repo_owner_out_of_scope")
+
+    # A second project importing the same repo would silently steal the
+    # first's webhook binding (pz_repo_webhooks is keyed by repo_full_name) —
+    # corrupting deploy state and build attribution for both with no error
+    # anywhere downstream. Catch it here instead.
+    for existing in repo.list_projects_by_workspace(body.workspace_id):
+        if existing.repo_url and repo_full_name_from_url(existing.repo_url) == full_name:
+            raise HTTPException(status_code=409, detail="repo_already_imported")
+
+    github_client = request.app.state.github_client
+    try:
+        found = await github_client.get_repo(token, full_name)
+    except GithubWriteError as exc:
+        if getattr(exc, "status_code", None) in (401, 403):
+            raise HTTPException(
+                status_code=400, detail="github_repo_not_in_token_scope"
+            ) from exc
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+    if found is None:
+        raise HTTPException(status_code=404, detail="repo_not_found")
+    if found.get("empty"):
+        raise HTTPException(status_code=400, detail="repo_is_empty")
+
     return repo.create_project(
-        workspace_id=body.workspace_id, created_by=user.id, name=body.name
+        workspace_id=body.workspace_id,
+        created_by=user.id,
+        name=body.name,
+        repo_url=found["html_url"],
+        repo_default_branch=found.get("default_branch") or "main",
     )
 
 
@@ -159,6 +222,52 @@ def start_tech_review(
     return repo.update_project_lifecycle_status(project_id, "tech_review")
 
 
+async def _adopt_repo(
+    github_client,
+    token: str,
+    full_name: str,
+    missing_detail: str,
+    *,
+    identity_ok: Callable[[dict], bool] | None = None,
+) -> dict:
+    """Read a repository this project is to use rather than creating one.
+
+    Two callers, different identity questions. The retry path (a name
+    collision from `create_org_repo`) has no prior identity to check against —
+    "GitHub returned a repo for this name" is a lookup key, not proof this
+    project made it (plan 0016) — so it passes `identity_ok` and this refuses
+    to adopt when that check fails. The import path already knows exactly
+    which repository it means, from `project.repo_url` recorded at project
+    creation and re-verified against the workspace's current owner just
+    above; there is no name to guess from, so it passes no `identity_ok` and
+    any repository `get_repo` returns is adopted as-is.
+
+    `missing_detail` is the other difference between the two callers — "the
+    name is taken by something else" and "the repository you imported is
+    gone" are different problems for whoever reads the error.
+    """
+    try:
+        existing = await github_client.get_repo(token, full_name)
+    except GithubWriteError as exc:
+        # The repo is there but this token cannot read it. With a fine-grained
+        # PAT scoped to "Only select repositories" that is the *expected*
+        # answer for a repo outside the grant, so it gets the same actionable
+        # error the seeding step raises.
+        logger.warning("adopting %s failed: %s", full_name, exc)
+        if getattr(exc, "status_code", None) in (401, 403):
+            raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
+        raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
+    if existing is None:
+        raise HTTPException(status_code=409, detail=missing_detail) from None
+    if identity_ok is not None and not identity_ok(existing):
+        # A name collision with a repository this project never created — the
+        # case plan 0016 exists for. Refusing to adopt is the whole point:
+        # writing secrets and a seed commit into it would be exactly the
+        # "someone else's repository" incident the plan describes.
+        raise HTTPException(status_code=409, detail="repo_name_collision") from None
+    return existing
+
+
 @router.post("/projects/{project_id}/lifecycle/create-repository", response_model=Project)
 async def create_repository(
     project_id: str,
@@ -180,7 +289,9 @@ async def create_repository(
       2. resolve the GitHub token.
       3. resolve the deployment provider credential. A missing one fails
          here, before any external mutation, rather than after a repo exists.
-      4. create the repo (or adopt one from a prior partial attempt).
+      4. create the repo — or adopt an existing one, either the repository the
+         user imported at project creation or one a prior partial attempt left
+         behind.
       5. write the Actions secrets and variables. This MUST precede the seed
          commit: that commit fires `on: push` immediately, and a workflow
          that starts before its secrets exist fails its first run for nothing.
@@ -242,36 +353,59 @@ async def create_repository(
     name = body.name or _slugify(project.name)
     description = f"PromptZone-managed repository for project {project.id}"
 
-    try:
-        created = await github_client.create_org_repo(
-            token,
-            owner,
-            name,
-            description,
-            body.private,
-            github_config.get("owner_type", "Organization"),
+    if project.repo_url:
+        # Step 4, import variant: the project already names a repository the
+        # user picked at creation, so adopt it instead of creating one. This is
+        # the behaviour the docstring above has always described ("or adopt one
+        # from a prior partial attempt") — until now the code could only reach
+        # it by colliding on a name it derived itself.
+        #
+        # `body.name` and `body.private` are ignored here on purpose: the repo
+        # exists and already has both.
+        imported_full_name = repo_full_name_from_url(project.repo_url)
+        if imported_full_name is None:
+            raise HTTPException(status_code=409, detail="repo_url_unrecognized")
+        # Re-check the owner even though creation checked it: an admin may have
+        # reconnected the workspace to a different owner in between, and the
+        # PAT we are about to write secrets with belongs to the *current* one.
+        if imported_full_name.split("/")[0].lower() != owner.lower():
+            raise HTTPException(status_code=400, detail="repo_owner_out_of_scope")
+        created = await _adopt_repo(
+            github_client, token, imported_full_name, "imported_repo_not_found"
         )
-    except RepoAlreadyExistsError:
-        # Retry path after a mid-flight failure: adopt the repo we (likely)
-        # created on a previous attempt rather than failing outright.
+    else:
         try:
-            existing = await github_client.get_repo(token, f"{owner}/{name}")
+            created = await github_client.create_org_repo(
+                token,
+                owner,
+                name,
+                description,
+                body.private,
+                github_config.get("owner_type", "Organization"),
+            )
+        except RepoAlreadyExistsError:
+            # Retry path after a mid-flight failure: adopt the repo we
+            # (likely) created on a previous attempt — but only if the
+            # evidence actually supports "likely" (plan 0016). Two windows:
+            # repo_id was already persisted on an earlier successful retry
+            # (the numeric id is authoritative, even across a rename); or
+            # this is the very first retry, before step 8 ever ran, in which
+            # case the only signal available is the description this project
+            # would have written verbatim at creation.
+            def _is_our_repo(existing: dict) -> bool:
+                if project.repo_id is not None:
+                    return existing.get("id") == project.repo_id
+                return existing.get("description") == description
+
+            created = await _adopt_repo(
+                github_client,
+                token,
+                f"{owner}/{name}",
+                "repo_name_taken",
+                identity_ok=_is_our_repo,
+            )
         except GithubWriteError as exc:
-            # The name is taken by something this token cannot read. With a
-            # fine-grained PAT scoped to "Only select repositories" that is
-            # the *expected* answer for a repo created outside the grant, so
-            # it gets the same actionable error the seeding step raises.
-            logger.warning("adopting %s/%s failed: %s", owner, name, exc)
-            if getattr(exc, "status_code", None) in (401, 403):
-                raise HTTPException(
-                    status_code=400, detail="github_repo_not_in_token_scope"
-                ) from exc
             raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
-        if existing is None:
-            raise HTTPException(status_code=409, detail="repo_name_taken") from None
-        created = existing
-    except GithubWriteError as exc:
-        raise HTTPException(status_code=502, detail="github_repo_create_failed") from exc
 
     full_name = created["full_name"]
     default_branch = created.get("default_branch") or "main"
@@ -380,7 +514,7 @@ async def create_repository(
         raise HTTPException(status_code=502, detail="github_seed_failed") from exc
 
     # Step 8: repo-write first, lifecycle flip last — see docstring.
-    repo.update_project_repo(project_id, created["html_url"], default_branch)
+    repo.update_project_repo(project_id, created["html_url"], created["id"], default_branch)
     if deployment is not None:
         template = deployment["template"]
         # Resolved a second time for a template whose URL is derived from the

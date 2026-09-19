@@ -127,7 +127,15 @@ class Repository(abc.ABC):
 
     # -- projects --------------------------------------------------------- #
     @abc.abstractmethod
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project: ...
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project: ...
 
     @abc.abstractmethod
     def get_project(self, project_id: str) -> Project | None: ...
@@ -209,13 +217,16 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def update_project_repo(
-        self, project_id: str, repo_url: str, default_branch: str
+        self, project_id: str, repo_url: str, repo_id: int, default_branch: str
     ) -> Project:
         """Persist the GitHub repo this project was born into at the
         `tech_review -> repo_created` transition (see app/api/sync.py's
         `create_repository`). Written before the lifecycle status flips, so a
         crash mid-transition leaves `repo_url` set with status still
-        `tech_review` — the state a retry treats as adoptable."""
+        `tech_review` — the state a retry treats as adoptable. `repo_id` is
+        GitHub's numeric id, the identity a later collision check verifies
+        against (plan 0016) — `repo_url` alone is a lookup key, not proof of
+        provenance."""
 
     @abc.abstractmethod
     def list_invitations(
@@ -630,8 +641,22 @@ class InMemoryRepository(Repository):
         )
 
     # -- projects --------------------------------------------------------- #
-    def create_project(self, workspace_id: str, created_by: str, name: str) -> Project:
-        project = Project(name=name, workspace_id=workspace_id, owner_id=created_by)
+    def create_project(
+        self,
+        workspace_id: str,
+        created_by: str,
+        name: str,
+        *,
+        repo_url: str | None = None,
+        repo_default_branch: str | None = None,
+    ) -> Project:
+        project = Project(
+            name=name,
+            workspace_id=workspace_id,
+            owner_id=created_by,
+            repo_url=repo_url,
+            repo_default_branch=repo_default_branch,
+        )
         self._projects[project.id] = project
         self._graph[project.id] = {etype: {} for etype in ENTITY_TYPES}
         return project
@@ -646,12 +671,13 @@ class InMemoryRepository(Repository):
         return updated
 
     def update_project_repo(
-        self, project_id: str, repo_url: str, default_branch: str
+        self, project_id: str, repo_url: str, repo_id: int, default_branch: str
     ) -> Project:
         project = self._projects[project_id]
         updated = project.model_copy(
             update={
                 "repo_url": repo_url,
+                "repo_id": repo_id,
                 "repo_default_branch": default_branch,
                 "updated_at": utcnow(),
             }
