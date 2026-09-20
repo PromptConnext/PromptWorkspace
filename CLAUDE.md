@@ -15,7 +15,7 @@ For product framing, use [`docs/product-vision-2026-09-12.md`](docs/product-visi
 
 ## Layout
 
-This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo build tool. The six apps are independent.
+This is a **pnpm workspace** (`apps/*` plus a shared-library `packages/*`) plus one Python app — no monorepo build tool. The seven apps are independent.
 
 | App | Stack | Purpose |
 |---|---|---|
@@ -25,6 +25,9 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 | `apps/web` | Next.js 16 App Router, React 19, TypeScript | Team-member web UI; read/collaborate against `apps/cloud` |
 | `apps/corp` | Next.js 16 App Router, React 19, `next-intl` (EN/TH), Tailwind v4 | Public **marketing website** + the **desktop-app download page**; static/SEO-first, no backend |
 | `apps/vscode` | VS Code extension — TypeScript, esbuild, no runtime deps | Developer surface for cloud-planned work (ADR 0019): assigned tasks, coding rules from the clone, push-driven task close (ADR 0022). Talks straight to `apps/cloud` — **no sidecar** |
+| `apps/mcp` | Node/TypeScript — `@modelcontextprotocol/sdk`, esbuild | Portable stdio MCP server (ADR 0019 decision 3, plan 0025) for editors outside VS Code — JetBrains, Neovim, Zed. `list_my_tasks` + `get_task` so far (M1); no full-graph write, no claim tool, ever |
+
+`packages/pz-cloud` is the shared, non-deployable library `apps/vscode` and `apps/mcp` both depend on via `workspace:*` — the cloud transport (with its refresh-token coalescing), wire types, session store, retry queue, task-ref grammar and JSON cache, so the two surfaces can't drift on any of those independently.
 
 `apps/desktop` (React 18), `apps/web` (React 19) and `apps/corp` (React 19) share one pnpm store; root `package.json`'s `pnpm.packageExtensions` pins each package's `@types/react` edge explicitly (not `pnpm-workspace.yaml` — pnpm 9.x only reads `packageExtensions` from `package.json`) — don't remove those. `apps/corp` is a **public, unauthenticated** surface — it talks to no engine and no cloud API; its only outbound links are the download host (desktop installers) and the cloud sign-in URL.
 
@@ -49,6 +52,7 @@ pnpm engine      # engine alone on 127.0.0.1:47131 (tokenless dev mode)
 pnpm web         # apps/web (team UI) on http://localhost:3000
 pnpm corp        # apps/corp (marketing + download) on http://localhost:3002
 pnpm vscode      # apps/vscode esbuild watch; press F5 in apps/vscode for an Extension Host
+pnpm mcp         # apps/mcp esbuild watch (stdio MCP server; run `login` once, then point an MCP client at dist/index.js)
 ```
 
 `apps/web` and `apps/corp` are both Next.js on different ports (3000 vs 3002) so they can run side by side.
@@ -71,6 +75,8 @@ ruff check .                                   # lint (line-length 100)
 **Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck) / `vitest run` (test suite).
 
 **VS Code extension** (`apps/vscode`): `typecheck` / `build` (esbuild) / `test` (`node --test test/unit/*.test.ts`, no editor host) / `package` (VSIX). Configured through VS Code settings (`promptconnext.*`), never `process.env` — nothing sets env for the extension host. `src/git/git.d.ts` is a **vendored pinned copy** of the built-in Git extension's API and `src/git/gitBridge.ts` is its only importer; typecheck is the drift tripwire. It has no sidecar and must not grow one (ADR 0019).
+
+**MCP server** (`apps/mcp`): `typecheck` / `build` (esbuild, single CJS `dist/index.js`) / `test` (`node --test test/*.test.ts`, drives the real tools through the SDK's `InMemoryTransport` against a fake cloud). stdio transport only — HTTP is a later milestone. Configured via a JSON file under the user's XDG config dir, overridable by `PROMPTCONNEXT_*` env vars (an MCP client launches a bare process, so nothing can inject editor-style settings). `login` is a pasted-code flow against the same `/desktop-auth/redeem` endpoint the browser handoff uses; the session lands in the OS keychain via a port of `apps/engine/src/keychain.ts`, plus a Linux fallback (a `0600` file) that module never had. Never calls `PUT /sync/projects/{id}/graph` and never will — same prohibition as `apps/vscode`.
 
 **Corp** (`apps/corp`): `pnpm --dir apps/corp dev` (port 3002) / `build` / `typecheck` / `lint`. Copy `.env.example` → `.env.local` and set `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_DOWNLOAD_BASE_URL` (leave the last empty to render the download page's "coming soon" state).
 
