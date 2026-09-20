@@ -6,14 +6,14 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { SignInFlow } from "./auth/signIn.ts";
-import { CloudClient } from "./cloud/client.ts";
-import { SessionStore } from "./cloud/session.ts";
+import { CloudClient } from "@promptconnext/pz-cloud";
+import { SessionStore } from "@promptconnext/pz-cloud";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
   isClosed,
   type TaskStatus,
-} from "./cloud/types.ts";
+} from "@promptconnext/pz-cloud";
 import { projectIdFor, readConfig } from "./config.ts";
 import { ContextViewProvider } from "./context/contextView.ts";
 import { RepoDocs } from "./context/repoDocs.ts";
@@ -26,9 +26,9 @@ import { clearCloneState, readPendingClone } from "./projects/knownClones.ts";
 import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
-import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "./storage/cache.ts";
+import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptconnext/pz-cloud";
 import { copyTaskContext } from "./tasks/copyContext.ts";
-import { StatusQueue, type QueueEntry } from "./tasks/queue.ts";
+import { StatusQueue, type QueueEntry } from "@promptconnext/pz-cloud";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
 import { TaskStore } from "./tasks/taskStore.ts";

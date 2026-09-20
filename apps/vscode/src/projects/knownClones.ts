@@ -9,7 +9,7 @@
 // is believed (see roster.ts), and a pendingClone expires. Losing either costs
 // a duplicate Clone offer, never correctness.
 
-import type { StorageLike } from "../cloud/session.ts";
+import type { StorageLike } from "@promptconnext/pz-cloud";
 import type { PendingClone } from "./roster.ts";
 
 export const KNOWN_CLONES_KEY = "promptconnext.knownClones";

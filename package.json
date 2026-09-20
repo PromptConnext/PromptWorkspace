@@ -9,7 +9,8 @@
     "desktop": "pnpm --dir apps/desktop tauri dev",
     "web": "pnpm --dir apps/web dev",
     "corp": "pnpm --dir apps/corp dev",
-    "vscode": "pnpm --dir apps/vscode watch"
+    "vscode": "pnpm --dir apps/vscode watch",
+    "mcp": "pnpm --dir apps/mcp watch"
   },
   "pnpm": {
     "overrides": {

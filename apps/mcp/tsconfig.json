@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    // Both settings are inherited from apps/vscode/tsconfig.json by way of
+    // packages/pz-cloud, whose sources this project type-checks as part of its
+    // own program. They are not optional here: the shared package's modules
+    // import each other with `.ts` specifiers, and its own tests run under bare
+    // `node --test`, which type-strips rather than compiles.
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src", "test"],
+  "exclude": ["dist", "node_modules"]
+}

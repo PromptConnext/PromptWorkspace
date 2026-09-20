@@ -8,7 +8,7 @@
 // reach the UI, let alone a git process.
 
 import { isCloneableRepoUrl, sameRepo } from "../link/repoUrl.ts";
-import type { CloudProject, LifecycleStatus, Workspace } from "../cloud/types.ts";
+import type { CloudProject, LifecycleStatus, Workspace } from "@promptconnext/pz-cloud";
 import type { ProjectCandidate } from "../link/projectLink.ts";
 
 /** `local` = on this machine · `remote-only` = clonable · `no-repo` = nothing

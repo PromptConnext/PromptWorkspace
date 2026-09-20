@@ -7,9 +7,9 @@
 // status write — every point where the user could plausibly notice staleness.
 
 import * as vscode from "vscode";
-import type { CloudClient } from "../cloud/client.ts";
-import type { AssignedTask, TaskStatus } from "../cloud/types.ts";
-import { CACHE_FILES, type JsonCache } from "../storage/cache.ts";
+import type { CloudClient } from "@promptconnext/pz-cloud";
+import type { AssignedTask, TaskStatus } from "@promptconnext/pz-cloud";
+import { CACHE_FILES, type JsonCache } from "@promptconnext/pz-cloud";
 import type { OutputLogger } from "../util/log.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;

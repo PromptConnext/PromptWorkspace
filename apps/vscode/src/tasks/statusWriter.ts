@@ -7,11 +7,11 @@
 // version of this bug.
 
 import * as vscode from "vscode";
-import { CloudHttpError, CloudNotLoggedInError } from "../cloud/errors.ts";
-import type { CloudClient } from "../cloud/client.ts";
-import type { StatusArtifact, TaskStatus } from "../cloud/types.ts";
+import { CloudHttpError, CloudNotLoggedInError } from "@promptconnext/pz-cloud";
+import type { CloudClient } from "@promptconnext/pz-cloud";
+import type { StatusArtifact, TaskStatus } from "@promptconnext/pz-cloud";
 import type { OutputLogger } from "../util/log.ts";
-import type { StatusQueue } from "./queue.ts";
+import type { StatusQueue } from "@promptconnext/pz-cloud";
 import type { TaskStore } from "./taskStore.ts";
 
 export interface StatusWriteRequest {

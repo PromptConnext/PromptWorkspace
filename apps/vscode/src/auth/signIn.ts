@@ -18,7 +18,7 @@
 
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import type { CloudClient } from "../cloud/client.ts";
+import type { CloudClient } from "@promptconnext/pz-cloud";
 import { readConfig } from "../config.ts";
 import type { OutputLogger } from "../util/log.ts";
 

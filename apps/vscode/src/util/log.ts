@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { LoggerLike } from "../cloud/client.ts";
+import type { LoggerLike } from "@promptconnext/pz-cloud";
 
 export class OutputLogger implements LoggerLike {
   private readonly channel: vscode.OutputChannel;

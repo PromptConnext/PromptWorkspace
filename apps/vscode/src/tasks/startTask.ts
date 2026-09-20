@@ -13,10 +13,10 @@
 // neither, this extension does not guess, and says so.
 
 import * as vscode from "vscode";
-import { CloudHttpError } from "../cloud/errors.ts";
-import type { AssignedTask } from "../cloud/types.ts";
+import { CloudHttpError } from "@promptconnext/pz-cloud";
+import type { AssignedTask } from "@promptconnext/pz-cloud";
 import type { GitBridge } from "../git/gitBridge.ts";
-import { branchNameForTask, taskRefFromFeatureTag } from "../git/taskRefs.ts";
+import { branchNameForTask, taskRefFromFeatureTag } from "@promptconnext/pz-cloud";
 import type { ProjectLink } from "../link/projectLink.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { StatusWriter } from "./statusWriter.ts";

@@ -1,5 +1,10 @@
 packages:
   - apps/*
+  # Shared libraries, not deployables. Added for plan 0025: `packages/pz-cloud`
+  # holds the modules apps/vscode and apps/mcp must not fix twice — the cloud
+  # transport (and its refresh coalescing), the wire types, the session store,
+  # the retry queue and the task-ref grammar.
+  - packages/*
 
 # apps/desktop (React 18), apps/web (React 19.0) and apps/corp (React 19.2)
 # share one pnpm store. Packages that reference React's types internally but

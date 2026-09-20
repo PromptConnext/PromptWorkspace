@@ -1,0 +1,35 @@
+{
+  "name": "@promptconnext/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PromptConnext MCP server — assigned tasks and their context, for the editors the VS Code extension cannot reach (ADR 0019 decision 3).",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/9haroon/prompt-zone.git",
+    "directory": "apps/mcp"
+  },
+  "bin": {
+    "promptconnext-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "start": "node --experimental-strip-types src/index.ts",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@promptconnext/pz-cloud": "workspace:*",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}

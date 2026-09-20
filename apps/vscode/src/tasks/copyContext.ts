@@ -6,9 +6,9 @@
 // failure-tolerant by construction.
 
 import * as vscode from "vscode";
-import type { CloudClient } from "../cloud/client.ts";
-import type { AssignedTask } from "../cloud/types.ts";
-import { TASK_STATUS_LABELS } from "../cloud/types.ts";
+import type { CloudClient } from "@promptconnext/pz-cloud";
+import type { AssignedTask } from "@promptconnext/pz-cloud";
+import { TASK_STATUS_LABELS } from "@promptconnext/pz-cloud";
 import type { RepoDocs } from "../context/repoDocs.ts";
 import type { OutputLogger } from "../util/log.ts";
 

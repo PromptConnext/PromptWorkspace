@@ -10,9 +10,9 @@
 // affordance for "done", which is why engines.vscode floors at 1.85.
 
 import * as vscode from "vscode";
-import type { AssignedTask } from "../cloud/types.ts";
-import { TASK_STATUS_LABELS, isClosed } from "../cloud/types.ts";
-import { taskRefFromFeatureTag } from "../git/taskRefs.ts";
+import type { AssignedTask } from "@promptconnext/pz-cloud";
+import { TASK_STATUS_LABELS, isClosed } from "@promptconnext/pz-cloud";
+import { taskRefFromFeatureTag } from "@promptconnext/pz-cloud";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";

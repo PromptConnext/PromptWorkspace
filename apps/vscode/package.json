@@ -389,6 +389,7 @@
     "publish": "vsce publish --no-dependencies"
   },
   "devDependencies": {
+    "@promptconnext/pz-cloud": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/vscode": "1.85.0",
     "@vscode/vsce": "^3.2.1",

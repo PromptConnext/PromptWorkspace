@@ -1,4 +1,4 @@
-// Run:  node --test apps/vscode/test/unit/taskRefs.test.ts
+// Run:  node --test packages/pz-cloud/test/taskRefs.test.ts
 //
 // Pins the two edges ADR 0019 names in the engine's syncTasksFromGit — the
 // three-digit-only regex, and the fact that widening it is not enough because
@@ -16,7 +16,7 @@ import {
   taskRefFromBranch,
   taskRefFromFeatureTag,
   taskRefsInSubject,
-} from "../../src/git/taskRefs.ts";
+} from "../src/taskRefs.ts";
 
 test("normalises padded and unpadded refs to the same key", () => {
   assert.equal(normalizeTaskRef("T001"), "T1");
