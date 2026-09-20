@@ -1,6 +1,6 @@
 # Plan 0016 — Persist a repository provisioning identity
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md)
+**Date:** 2026-09-12 · **Status:** Implemented (M1–M4) · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md)
 
 `apps/cloud/app/api/sync.py:162-408` (`create_repository`) is the route that turns a project's tech review into a live GitHub repository, seeded with the constitution, spec, plan and tasks the Tech Lead just approved. Stated plainly because the impact is unusual for a "High" finding in this codebase: on a repository-name collision, that route adopts whatever repository the GitHub API hands back for the requested name, with nothing persisted anywhere that proves this project created it. It then writes Actions secrets, registers a webhook, and commits six files of planning documents into that repository — all before it has any evidence the repository is the one this project is supposed to own. A name collision with an unrelated but token-accessible repository is therefore not a retry recovery. It is writing a customer's planning documents and deployment credentials into someone else's repository. This plan closes that gap by giving the route a real identity to check before it adopts anything.
 
