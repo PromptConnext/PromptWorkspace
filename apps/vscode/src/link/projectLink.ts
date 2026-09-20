@@ -21,11 +21,10 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import type { StorageLike } from "@promptconnext/pz-cloud";
+import { isCloneableRepoUrl, sameRepo, type StorageLike } from "@promptconnext/pz-cloud";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
 import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
-import { isCloneableRepoUrl, sameRepo } from "./repoUrl.ts";
 import type { OutputLogger } from "../util/log.ts";
 
 export interface ProjectCandidate {

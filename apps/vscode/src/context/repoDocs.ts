@@ -8,22 +8,17 @@
 //
 // The stage document is still fetched, but only as provenance — one line of
 // state when the two have diverged, never a diff view.
+//
+// The path list and the drift comparison live in @promptconnext/pz-cloud
+// because apps/mcp's `get_project_rules` answers the same question over
+// `node:fs` (plan 0025 §2). Only the reader is local to this file, and only
+// because `vscode.workspace.fs` is the reader an editor should use.
 
 import * as vscode from "vscode";
-import type { CloudClient } from "@promptconnext/pz-cloud";
+import { SEEDED_DOCS, sameDocText, seededDocFor, type CloudClient, type SeededDocKey } from "@promptconnext/pz-cloud";
 import type { OutputLogger } from "../util/log.ts";
 
-export const SEEDED_DOCS = [
-  { key: "agents", label: "AGENTS.md", path: "AGENTS.md" },
-  { key: "conventions", label: "Conventions", path: "docs/conventions.md" },
-  {
-    key: "constitution",
-    label: "Constitution",
-    path: ".specify/memory/constitution.md",
-  },
-] as const;
-
-export type SeededDocKey = (typeof SEEDED_DOCS)[number]["key"];
+export { SEEDED_DOCS, type SeededDocKey };
 
 export interface RepoDocContents {
   key: SeededDocKey;
@@ -62,8 +57,7 @@ export class RepoDocs {
   /** The constitution text for a project, preferring the clone. Used by
    *  copy-task-context, where a stale-but-present rule beats no rule. */
   async read(projectId: string, key: SeededDocKey): Promise<string | null> {
-    const doc = SEEDED_DOCS.find((d) => d.key === key);
-    if (!doc) return null;
+    const doc = seededDocFor(key);
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const text = await readFile(vscode.Uri.joinPath(folder.uri, doc.path));
       if (text) return text;
@@ -85,21 +79,17 @@ export class RepoDocs {
     folder: vscode.Uri,
   ): Promise<boolean | undefined> {
     const onDisk = await readFile(
-      vscode.Uri.joinPath(folder, ".specify/memory/constitution.md"),
+      vscode.Uri.joinPath(folder, seededDocFor("constitution").path),
     );
     if (onDisk === null) return undefined;
     try {
       const stage = await this.client.getStageDocument(projectId, "constitution");
       if (!stage.content) return undefined;
-      return normalize(stage.content) !== normalize(onDisk);
+      return !sameDocText(stage.content, onDisk);
     } catch {
       return undefined;
     }
   }
-}
-
-function normalize(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
 }
 
 async function readFile(uri: vscode.Uri): Promise<string | null> {

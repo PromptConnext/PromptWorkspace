@@ -53,7 +53,8 @@ export async function buildTaskContext(
       "## Project coding rules",
       "",
       "_From the cloud's constitution stage document. The repository's own seeded",
-      "files are the authority and may have moved on; reading them is M2._",
+      "files are the authority and may have moved on — call get_project_rules to",
+      "read them from the clone._",
       "",
       constitution.trim(),
       "",
@@ -93,10 +94,12 @@ async function specExcerpt(
 
 /** The constitution, from the cloud only.
  *
- *  apps/vscode prefers the clone and falls back to this; the server has no
- *  workspace root to look in until M2 gives it one, so this is the whole story
- *  for now and the section above says so rather than implying the file on disk
- *  was consulted. */
+ *  apps/vscode prefers the clone and falls back to this. `get_task` cannot: it
+ *  is answered from the task id alone, with no workspace root to look in — the
+ *  caller need not even be standing in the project's clone to ask about a task.
+ *  Reading the clone is `get_project_rules`, which takes that root as an
+ *  argument, so the section above names its source rather than implying the
+ *  file on disk was consulted. */
 async function cloudConstitution(
   projectId: string,
   client: CloudClient,

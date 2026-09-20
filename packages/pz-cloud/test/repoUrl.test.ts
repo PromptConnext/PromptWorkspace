@@ -1,4 +1,4 @@
-// Run:  node --test apps/vscode/test/unit/repoUrl.test.ts
+// Run:  node --test packages/pz-cloud/test/repoUrl.test.ts
 //
 // The guard half is ported from apps/engine (clone-url-validation.test.ts) and
 // keeps the same threat model: `ext::sh -c` is RCE, a leading `-` is argument
@@ -14,7 +14,7 @@ import {
   isCloneableRepoUrl,
   normalizeRepoUrl,
   sameRepo,
-} from "../../src/link/repoUrl.ts";
+} from "../src/repoUrl.ts";
 
 test("accepts the two forms a git host actually hands out", () => {
   assert.equal(

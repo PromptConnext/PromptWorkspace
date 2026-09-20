@@ -1,6 +1,6 @@
 # Plan 0025 — The MCP server
 
-**Date:** 2026-09-12 · **Status:** M1 implemented 2026-09-20 (`packages/pz-cloud` extraction, `apps/mcp` stdio server, `list_my_tasks` + `get_task`) · M2–M4 open · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md)
+**Date:** 2026-09-12 · **Status:** M1 implemented 2026-09-20 (`packages/pz-cloud` extraction, `apps/mcp` stdio server, `list_my_tasks` + `get_task`) · M2 implemented 2026-09-20 (workspace-root resolution from the git remote, `get_project_rules`) · M3–M4 open · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md)
 
 ADR 0019 made two decisions about the developer surface. Decision 1 built a VS Code extension; decision 3 named an MCP server as the portable floor beneath it, because MCP is the one AI-integration protocol honoured across VS Code, Cursor, Windsurf, Claude Code, Theia and the JetBrains assistants. Decision 5 then made the server load-bearing rather than decorative: our job is "supplying context and receiving outcomes," through `lm.registerTool` on VS Code "and through the MCP server everywhere."
 

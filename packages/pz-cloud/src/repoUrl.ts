@@ -1,11 +1,18 @@
 // Repository URL handling: the guard, and the comparison.
 //
 // `assertCloneableRepoUrl` is ported from apps/engine/src/routes/projects.ts
-// (:173-183) with its threat model intact. Cloning is out of this extension's
+// (:173-183) with its threat model intact. Cloning is out of a task client's
 // scope, so its new job is to refuse a hostile `repo_url` arriving from the
 // cloud before we normalise, render or ever hand it to git — `ext::sh -c …` is
 // remote code execution, and a leading `-` is argument injection into whatever
 // git command a future phase adds.
+//
+// Shared rather than duplicated (plan 0025 M2): apps/vscode matches a folder's
+// remotes against the roster to offer a link, and apps/mcp matches the same
+// remotes against the same roster to answer `get_project_rules` for the
+// developer's cwd. Two surfaces disagreeing about whether `git@github.com:a/b`
+// is `https://github.com/a/b.git` would resolve the same clone to two different
+// projects, so there is exactly one copy of the answer.
 
 const HTTPS_REPO_URL_RE =
   /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d+)?\/\S+$/;

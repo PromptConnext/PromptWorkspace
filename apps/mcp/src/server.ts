@@ -6,8 +6,8 @@
 // for one case — a workspace wanting a shared endpoint — which needs an OAuth
 // resource-server story rather than a pasted token.
 //
-// Two tools, and the ceiling is deliberate (plan 0025 §1). `get_project_rules`
-// is M2 and `close_task` is M3. Above all: this server never touches
+// Three tools, and the ceiling is deliberate (plan 0025 §1). `close_task` is
+// M3 and is the only one still missing. Above all: this server never touches
 // `PUT /sync/projects/{id}/graph`. That is the same prohibition
 // packages/pz-cloud/src/client.ts writes down for the same reason — a task
 // client with a full-graph push can overwrite the requirements and specs the
@@ -17,10 +17,10 @@
 //
 // The low-level `Server` rather than `McpServer`: the latter's `inputSchema`
 // takes a Zod shape, and adding Zod as a direct dependency of this app would
-// pin a second copy against the SDK's own `^3.25 || ^4.0` range for two tools
-// whose entire input is three optional-or-required strings. JSON Schema is what
-// goes over the wire regardless, so it is declared directly and validated by
-// hand below.
+// pin a second copy against the SDK's own `^3.25 || ^4.0` range for tools whose
+// entire input is a handful of optional-or-required strings. JSON Schema is
+// what goes over the wire regardless, so it is declared directly and validated
+// by hand below.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -41,6 +41,10 @@ import {
   type TaskStatus,
 } from "@promptconnext/pz-cloud";
 import { createCloudContext, stderrLog } from "./cloud.ts";
+import { readGitRemotes } from "./gitRemotes.ts";
+import { buildProjectRules } from "./projectRules.ts";
+import { listProjectCandidates, matchCandidates } from "./projectResolve.ts";
+import { resolveWorkspaceRoot } from "./repoDocs.ts";
 import { buildTaskContext, summarizeTasks } from "./taskContext.ts";
 
 export const SERVER_NAME = "promptconnext";
@@ -88,6 +92,36 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["task_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "get_project_rules",
+    title: "Get a PromptConnext project's coding rules",
+    description:
+      "The project's seeded coding-rules files — AGENTS.md, docs/conventions.md " +
+      "and .specify/memory/constitution.md — read from the developer's clone. The " +
+      "project is resolved from the folder's git remote unless `project_id` says " +
+      "otherwise. Read these before writing code in this repository.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace_root: {
+          type: "string",
+          description:
+            "Absolute path to the clone to read. Defaults to this server's working " +
+            "directory, which is whatever the MCP client launched it in — pass the " +
+            "path explicitly if that is not the developer's project.",
+        },
+        project_id: {
+          type: "string",
+          description:
+            "Use this project instead of resolving one from the folder's git remote. " +
+            "Needed when several projects share a repository, or when the folder has " +
+            "no remote at all.",
+        },
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -161,6 +195,66 @@ async function getTask(
   return text(await buildTaskContext(entry, client, log));
 }
 
+async function getProjectRules(
+  client: CloudClient,
+  log: LoggerLike,
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const root = resolveWorkspaceRoot(optionalString(args, "workspace_root"));
+  const explicitId = optionalString(args, "project_id");
+  const candidates = await listProjectCandidates(client, log);
+
+  if (explicitId) {
+    const named = candidates.find((c) => c.projectId === explicitId);
+    if (!named) {
+      return failure(
+        `No PromptConnext project ${explicitId} is visible to you. Either the id is ` +
+          "wrong or you are not a member of its workspace.",
+      );
+    }
+    return text(await buildProjectRules(root, named, client, log));
+  }
+
+  const { isRepository, remotes } = await readGitRemotes(root);
+  if (!isRepository) {
+    return failure(
+      `${root} is not inside a git repository, so there is no remote to match a ` +
+        "PromptConnext project against. Pass workspace_root for the developer's " +
+        "clone, or project_id to name the project directly.",
+    );
+  }
+  if (remotes.length === 0) {
+    return failure(
+      `The git repository at ${root} has no remote, so it cannot be matched to a ` +
+        "PromptConnext project. Pass project_id to name the project directly.",
+    );
+  }
+
+  const matches = matchCandidates(remotes, candidates);
+  if (matches.length === 0) {
+    return failure(
+      `No PromptConnext project's repository matches the git remote of ${root} ` +
+        `(${remotes.join(", ")}). Check that this is the right clone, or pass ` +
+        "project_id to name the project directly.",
+    );
+  }
+  if (matches.length > 1) {
+    // A fork, or a monorepo holding several cloud projects. Guessing between
+    // them would hand the agent another project's rules and look like it
+    // worked, so the developer disambiguates — the same job apps/vscode's
+    // persisted `projectId` setting does when its own matcher returns several.
+    const listed = matches
+      .map((m) => `  - ${m.projectId}: ${m.projectName} (${m.workspaceName})`)
+      .join("\n");
+    return failure(
+      `${matches.length} PromptConnext projects share the git remote of ${root}. ` +
+        `Call get_project_rules again with project_id set to one of:\n${listed}`,
+    );
+  }
+
+  return text(await buildProjectRules(root, matches[0], client, log));
+}
+
 export function createServer(
   client: CloudClient,
   log: LoggerLike = stderrLog,
@@ -170,8 +264,9 @@ export function createServer(
     {
       capabilities: { tools: {} },
       instructions:
-        "PromptConnext tasks assigned to this developer. Read-only: this server " +
-        "reports work and its context, and never writes to the task graph.",
+        "PromptConnext tasks assigned to this developer, and the coding rules of " +
+        "the project they are working in. Read-only: this server reports work and " +
+        "its context, and never writes to the task graph.",
     },
   );
 
@@ -185,6 +280,8 @@ export function createServer(
           return await listMyTasks(client, args);
         case "get_task":
           return await getTask(client, log, args);
+        case "get_project_rules":
+          return await getProjectRules(client, log, args);
         default:
           return failure(`Unknown tool: ${request.params.name}`);
       }
