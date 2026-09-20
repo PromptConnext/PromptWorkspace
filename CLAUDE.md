@@ -8,12 +8,14 @@ PromptConnext is an **AI-native development workspace**: the **3S flow** (Scope 
 
 Two load-bearing decisions shape everything (see `docs/decisions/`):
 
-- **Tauri shell + Node sidecar** (ADR 0001) — the desktop app is a thin Rust window; the engine runs locally as a spawned process.
+- **Tauri shell + Node sidecar** (ADR 0001) — the desktop app is a thin Rust window; the engine runs locally as a spawned process. **Stale as of ADR 0019/0020 (Accepted 2026-09-13):** this shape is being retired, not extended — see the Layout section's retirement notice below.
 - **BYO-agent / BYO-model** (ADR 0009) — PromptConnext orchestrates the coding agent and model you already pay for (Claude Code, Gemini CLI, Codex CLI, Ollama, or any CLI via `PROMPTCONNEXT_AGENT_CMD`); it ships no model runtime of its own. Compute, keys, and code stay on the user's machine.
+
+For product framing, use [`docs/product-vision-2026-09-12.md`](docs/product-vision-2026-09-12.md) — it supersedes `docs/promptzone-product-roadmap.md` and `docs/promptzone-platform-architecture.md`, both written for the two-persona desktop product the ADRs above retire.
 
 ## Layout
 
-This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo build tool. The five apps are independent.
+This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo build tool. The six apps are independent.
 
 | App | Stack | Purpose |
 |---|---|---|
@@ -31,8 +33,10 @@ This is a **pnpm workspace** (`apps/*`) plus one Python app — no monorepo buil
 > the cloud is authoritative for the task graph, and `apps/desktop` plus `apps/desktop-theia` are being
 > retired in favour of `apps/vscode` and an MCP server. Deletion is sequenced in
 > [plan 0011](docs/plans/0011-desktop-decision-gate.md); the sync inversion is
-> [plan 0012](docs/plans/0012-close-the-write-path.md). Treat desktop sections below as describing
-> what still exists, not what to extend.
+> [plan 0012](docs/plans/0012-close-the-write-path.md), of which **only Milestone 1 has shipped**
+> (the engine's interval push is disabled) — M2–M5 (status-vocabulary alignment, the `spec_id` FK,
+> inverting the pull loop, git-truth status writes) are still open, so don't assume the write path is
+> fully closed. Treat desktop sections below as describing what still exists, not what to extend.
 
 ## Development commands
 
@@ -125,7 +129,7 @@ The engine binds loopback but any web page can still reach it, so (ADR 0008): an
 
 ## Deployment
 
-Four deployable pieces (`docs/DEPLOYMENT.md`):
+Four deployable pieces (`docs/DEPLOYMENT.md` — that doc, `docs/DEVELOPMENT.md`, and `docs/BUILD_AND_DISTRIBUTE.md` all predate the retirement decision and still describe the desktop pipeline below as a live release channel, not a frozen one):
 
 - **`apps/cloud` → Railway** (or any container host; `Dockerfile` targets Cloud Run too). **Not Vercel** — it's a long-lived container with WebSocket presence and in-process state that requires a **single instance**. On Cloud Run, enable session affinity and pin one instance until a backplane exists.
 - **`apps/web` → Vercel.** Static/client rendering, no server WS — a clean fit. Wire `NEXT_PUBLIC_CLOUD_*` to the cloud origin and add the Vercel domain to the cloud's `CORS_ORIGINS`.
@@ -138,7 +142,7 @@ Four deployable pieces (`docs/DEPLOYMENT.md`):
 
 Read the relevant ADR before changing its area — they carry the "why," including retired approaches not to restore.
 
-0001 Tauri shell + Node sidecar · 0002 minimal agent loop over templates · 0003 SQLite graph, zero cloud in the skeleton · 0004 Skill stage owns task generation · 0005 implementation kickoff (single-shot fallback) · 0006 Anthropic-compat façade · 0007 Cursor-like workspace (integrated terminal + Git) · 0008 localhost origin allowlist + bearer · 0009 orchestrate external agents (no own runtime) · 0010 task-graph sync model · 0011 cloud as product pillar (web workspace + RAG) · 0012 web-app authoring via paired local compute node · 0013 managed Thai-LLM tier (Typhoon); the per-stage routing table it originally proposed was dropped for the cloud Planner, which is unconditionally managed-only (see the ADR's 2026-07-25 update) · 0014 desktop signs in through the hosted web auth pages (browser handoff, no native form) · 0015 desktop requires a cloud identity + workspace membership (cloud-projected roster) · 0016 VS Code–compatible shell via Eclipse Theia, not a fork · 0017 the cloud creates the project Git repo at tech-review exit, seeded with AI context · 0018 tasks assignable to workspace members via a pz-owned `assigned_user_id` (web edits, desktop displays) · 0021 deployment is a repo-seeded template run by the project's own CI, observed and embedded by the cloud · 0022 the developer's task loop starts and closes in the editor; a task closes on push, not on commit · 0023 the preview generalizes to every project type via a `delivery_kind` discriminator, and every build names the tasks inside it (its 2026-09-06 amendment adds GitHub Pages as a third, *host-owned* credential posture and generalizes the preview-URL pin) · 0024 a model may author a project's application scaffold, never its deployment pipeline (proposed, and answered mostly in the negative) · 0025 a deploy credential splits in two — the provider account is workspace-scoped, the provider-side project it deploys to is project-scoped and lives in `DeploymentConfig.provider_values` · 0026 Docker Compose on a server the customer owns, reached over SSH, with the runtime and backing services *selected* from the project's technical plan among hand-written scaffolds (this retires the Fly.io template and provider — don't restore them).
+0001 Tauri shell + Node sidecar · 0002 minimal agent loop over templates · 0003 SQLite graph, zero cloud in the skeleton · 0004 Skill stage owns task generation · 0005 implementation kickoff (single-shot fallback) · 0006 Anthropic-compat façade · 0007 Cursor-like workspace (integrated terminal + Git) · 0008 localhost origin allowlist + bearer · 0009 orchestrate external agents (no own runtime) · 0010 task-graph sync model · 0011 cloud as product pillar (web workspace + RAG) · 0012 web-app authoring via paired local compute node · 0013 managed Thai-LLM tier (Typhoon); the per-stage routing table it originally proposed was dropped for the cloud Planner, which is unconditionally managed-only (see the ADR's 2026-07-25 update) · 0014 desktop signs in through the hosted web auth pages (browser handoff, no native form) · 0015 desktop requires a cloud identity + workspace membership (cloud-projected roster) · 0016 VS Code–compatible shell via Eclipse Theia, not a fork · 0017 the cloud creates the project Git repo at tech-review exit, seeded with AI context · 0018 tasks assignable to workspace members via a pz-owned `assigned_user_id` (web edits, desktop displays) · 0019 retire both desktop shells for a VS Code extension + a portable MCP server (**Accepted 2026-09-13**; deletion sequenced in plan 0011, MCP server itself unbuilt — plan 0025) · 0020 the cloud is authoritative for the task graph; the engine's local SQLite is a deletable cache (**Accepted 2026-09-13**; write-path inversion is plan 0012, only M1 shipped) · 0021 deployment is a repo-seeded template run by the project's own CI, observed and embedded by the cloud · 0022 the developer's task loop starts and closes in the editor; a task closes on push, not on commit · 0023 the preview generalizes to every project type via a `delivery_kind` discriminator, and every build names the tasks inside it (its 2026-09-06 amendment adds GitHub Pages as a third, *host-owned* credential posture and generalizes the preview-URL pin) · 0024 a model may author a project's application scaffold, never its deployment pipeline (proposed, and answered mostly in the negative) · 0025 a deploy credential splits in two — the provider account is workspace-scoped, the provider-side project it deploys to is project-scoped and lives in `DeploymentConfig.provider_values` · 0026 Docker Compose on a server the customer owns, reached over SSH, with the runtime and backing services *selected* from the project's technical plan among hand-written scaffolds (this retires the Fly.io template and provider — don't restore them) · 0027 planning is free and metered (managed Typhoon, per-workspace daily token budget), provisioning (repo, deploy, CI) is paid (**Accepted**; `apps/corp`'s pricing copy still describes the retired desktop free tier — plan 0022 hasn't landed).
 
 `0016` was briefly claimed twice; the task-assignment ADR was renumbered to 0018, so `0016` means the Theia shell decision only. Check the directory before claiming a number.
 
