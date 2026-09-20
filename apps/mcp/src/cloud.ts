@@ -1,9 +1,16 @@
 // One place that assembles a CloudClient, so the `login` subcommand and the
 // stdio server cannot drift into two different notions of where the session is.
 
-import { CloudClient, SessionStore, type LoggerLike } from "@promptconnext/pz-cloud";
+import { randomUUID } from "node:crypto";
+import {
+  CloudClient,
+  SessionStore,
+  StatusQueue,
+  type LoggerLike,
+  type QueueEntry,
+} from "@promptconnext/pz-cloud";
 import { ensureConfigDir, readConfig, type McpConfig } from "./config.ts";
-import { JsonState, KeychainSecrets } from "./tokenStore.ts";
+import { JsonState, KeychainSecrets, QUEUE_FILE } from "./tokenStore.ts";
 
 /** Everything goes to stderr. stdout is the JSON-RPC channel when this process
  *  is a stdio server, and a stray line on it corrupts the stream for the client
@@ -18,6 +25,24 @@ export interface CloudContext {
   client: CloudClient;
   session: SessionStore;
   config: McpConfig;
+  queue: StatusQueue;
+}
+
+/** The pending status writes, in a file of their own under `dir`.
+ *
+ *  File-backed rather than in-memory because the process is disposable: an MCP
+ *  client starts and kills this server around a single conversation, and a
+ *  queued write that lived only in memory would be lost by the next question.
+ *  Exported so a test can point one at a temp directory and prove exactly
+ *  that. */
+export function createStatusQueue(dir: string): StatusQueue {
+  const state = new JsonState(dir, QUEUE_FILE);
+  return new StatusQueue({
+    load: async () => state.get<QueueEntry[]>("entries"),
+    save: (entries) => state.update("entries", entries),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  });
 }
 
 export function createCloudContext(log: LoggerLike = stderrLog): CloudContext {
@@ -40,5 +65,5 @@ export function createCloudContext(log: LoggerLike = stderrLog): CloudContext {
     fetch: (input, init) => fetch(input, init),
     log,
   });
-  return { client, session, config };
+  return { client, session, config, queue: createStatusQueue(dir) };
 }

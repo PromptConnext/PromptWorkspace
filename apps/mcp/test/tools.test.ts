@@ -9,12 +9,14 @@
 // `get_project_rules` extends that to the disk: the clones below are real git
 // repositories in a temp directory with real remotes, because the thing most
 // likely to be wrong is the remote parsing and the URL matching, and a stubbed
-// `git remote -v` would test neither.
+// `git remote -v` would test neither. `close_task` extends it again — its
+// artifact comes from a real `HEAD`, and its queue from a real file that a
+// second server instance reads back.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -26,11 +28,14 @@ import {
   SessionStore,
   type AssignedTask,
   type LoggerLike,
+  type QueueEntry,
   type SecretsLike,
   type StorageLike,
 } from "@promptconnext/pz-cloud";
+import { createStatusQueue } from "../src/cloud.ts";
 import { readConfig } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
+import { StatusWriter } from "../src/statusWriter.ts";
 
 const silent: LoggerLike = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -92,18 +97,64 @@ const PROJECT = {
 
 interface Recorded {
   path: string;
+  method: string;
+  body?: Record<string, unknown>;
 }
 
 interface Harness {
   call: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>;
   listToolNames: () => Promise<string[]>;
   seen: Recorded[];
+  /** The queue as it is on disk, which is the only copy that survives this
+   *  process. */
+  queued: () => QueueEntry[];
+  queueDir: string;
 }
 
 interface HarnessOptions {
   /** Extra projects in the same workspace — a fork or a monorepo sharing a
    *  remote with `PROJECT`. */
   extraProjects?: unknown[];
+  /** How the fake cloud answers `PATCH …/status`. A function so a test can
+   *  change its mind between calls. Default: accept. */
+  statusReply?: () => { code: number; detail?: string };
+  /** Share one queue file between two harnesses, standing in for two runs of
+   *  the server against the same config directory. */
+  queueDir?: string;
+}
+
+function readQueueFile(dir: string): QueueEntry[] {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, "queue.json"), "utf8")) as {
+      entries?: QueueEntry[];
+    };
+    return parsed.entries ?? [];
+  } catch {
+    // No file at all is the same answer as an empty one: nothing is queued.
+    return [];
+  }
+}
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  clones.push(dir);
+  return dir;
+}
+
+function readBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw) return resolve(undefined);
+      try {
+        resolve(JSON.parse(raw) as Record<string, unknown>);
+      } catch {
+        resolve(undefined);
+      }
+    });
+  });
 }
 
 async function withTools(
@@ -113,8 +164,22 @@ async function withTools(
   const seen: Recorded[] = [];
   const http: HttpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
     const path = req.url ?? "";
-    seen.push({ path });
+    const method = req.method ?? "GET";
     res.setHeader("content-type", "application/json");
+    if (method === "PATCH" && /^\/projects\/[^/]+\/tasks\/[^/]+\/status$/.test(path)) {
+      void readBody(req).then((body) => {
+        seen.push({ path, method, body });
+        const reply = options.statusReply?.() ?? { code: 200 };
+        res.statusCode = reply.code;
+        if (reply.code >= 400) {
+          res.end(JSON.stringify({ detail: reply.detail ?? "refused" }));
+        } else {
+          res.end(JSON.stringify({ ...TASK.task, status: (body?.status as string) ?? "todo" }));
+        }
+      });
+      return;
+    }
+    seen.push({ path, method });
     if (path.startsWith("/me/tasks")) {
       res.end(JSON.stringify([TASK]));
     } else if (path.startsWith("/workspaces/ws-1/projects")) {
@@ -154,7 +219,9 @@ async function withTools(
     log: silent,
   });
 
-  const server = createServer(client, silent);
+  const queueDir = options.queueDir ?? tempDir("pz-mcp-queue-");
+  const writer = new StatusWriter(client, createStatusQueue(queueDir), silent);
+  const server = createServer(client, silent, writer);
   const mcp = new Client({ name: "test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
@@ -165,6 +232,8 @@ async function withTools(
         (await mcp.callTool({ name, arguments: args })) as CallToolResult,
       listToolNames: async () => (await mcp.listTools()).tools.map((t) => t.name),
       seen,
+      queued: () => readQueueFile(queueDir),
+      queueDir,
     });
   } finally {
     await mcp.close();
@@ -186,21 +255,45 @@ function makeClone(files: Record<string, string>, remote: string | null = REPO_U
   return root;
 }
 
+/** Commit everything in a clone, and hand back the sha `HEAD` now points at.
+ *  `-c` rather than a written config, so a machine with no `user.email` (CI)
+ *  behaves like one that has. */
+function commitAll(root: string, subject: string): string {
+  execFileSync("git", ["add", "-A"], { cwd: root, stdio: "pipe" });
+  execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", subject],
+    { cwd: root, stdio: "pipe" },
+  );
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, stdio: "pipe" })
+    .toString()
+    .trim();
+}
+
+function bodyOf(result: CallToolResult): string {
+  return (result.content[0] as { text: string }).text;
+}
+
+function statusWrites(seen: Recorded[]): Recorded[] {
+  return seen.filter((s) => s.method === "PATCH");
+}
+
 const clones: string[] = [];
 
 after(() => {
   for (const root of clones) rmSync(root, { recursive: true, force: true });
 });
 
-test("the server advertises exactly the read-only tools of this milestone", async () => {
+test("the server advertises exactly the four tools of plan 0025", async () => {
   await withTools(async ({ listToolNames }) => {
-    // A fourth name appearing here means M3's close_task landed early, or a
-    // claim tool was invented for which /me/tasks gives no caller. Plan 0025
-    // §1 and §5.
+    // A fifth name appearing here means a tool was invented outside plan 0025
+    // §1 — most likely a claim or assignment tool, for which /me/tasks gives no
+    // caller, or something that writes the graph.
     assert.deepEqual(await listToolNames(), [
       "list_my_tasks",
       "get_task",
       "get_project_rules",
+      "close_task",
     ]);
   });
 });
@@ -416,6 +509,193 @@ test("a folder that is not a git repository says so rather than reporting no mat
       (result.content[0] as { text: string }).text,
       /is not inside a git repository/,
     );
+  });
+});
+
+// --------------------------------------------------------------- close_task
+
+test("close_task writes the status with the commit the caller names", async () => {
+  await withTools(async ({ call, seen, queued }) => {
+    const result = await call("close_task", {
+      task_id: "task-1",
+      status: "implemented",
+      commit_sha: "1a2b3c4d5e6f",
+      commit_message: "T012: retry the upload",
+    });
+    assert.equal(result.isError, undefined);
+    const body = bodyOf(result);
+    assert.match(body, /T012 \(Add a retry to the uploader\) is now Implemented/);
+    assert.match(body, /Commit recorded: 1a2b3c4d5e6f/);
+    assert.match(body, /Nothing is queued/);
+
+    const writes = statusWrites(seen);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].path, "/projects/proj-1/tasks/task-1/status");
+    assert.deepEqual(writes[0].body, {
+      status: "implemented",
+      // Same `git: <subject>` shape apps/vscode's watcher writes, so an
+      // artifact from either surface renders identically in apps/web.
+      artifact: { commit_sha: "1a2b3c4d5e6f", uri: "git: T012: retry the upload", kind: "code" },
+    });
+    assert.deepEqual(queued(), []);
+  });
+});
+
+test("close_task records HEAD when the caller names no commit", async () => {
+  const root = makeClone({ "src/retry.ts": "export const retries = 3;\n" });
+  const sha = commitAll(root, "T012: retry the upload");
+  await withTools(async ({ call, seen }) => {
+    const result = await call("close_task", {
+      task_id: "task-1",
+      status: "implemented",
+      workspace_root: root,
+    });
+    assert.equal(result.isError, undefined);
+    assert.match(bodyOf(result), new RegExp(`Commit recorded: ${sha} \\(HEAD of ${root}\\)`));
+    assert.deepEqual(statusWrites(seen)[0].body, {
+      status: "implemented",
+      artifact: { commit_sha: sha, uri: "git: T012: retry the upload", kind: "code" },
+    });
+  });
+});
+
+test("a workspace root with no commits closes the task and says no commit was recorded", async () => {
+  // The status is the point; the evidence is the bonus. Refusing the close
+  // because a folder has no HEAD would strand the developer's work as open.
+  const root = makeClone({ "AGENTS.md": "x" });
+  await withTools(async ({ call, seen }) => {
+    const result = await call("close_task", {
+      task_id: "task-1",
+      status: "implemented",
+      workspace_root: root,
+    });
+    assert.equal(result.isError, undefined);
+    assert.match(bodyOf(result), /No commit recorded/);
+    assert.deepEqual(statusWrites(seen)[0].body, { status: "implemented" });
+  });
+});
+
+test("a 4xx refusal is an error and never enters the queue", async () => {
+  // The whole point of the ported rule: a 403 will not succeed on the tenth
+  // attempt either, so it is surfaced and dropped.
+  await withTools(
+    async ({ call, queued, seen }) => {
+      const result = await call("close_task", {
+        task_id: "task-1",
+        status: "implemented",
+        commit_sha: "deadbeef",
+      });
+      assert.equal(result.isError, true);
+      const body = bodyOf(result);
+      assert.match(body, /assigned to someone else, or to nobody/);
+      assert.match(body, /status is unchanged/);
+      assert.equal(statusWrites(seen).length, 1);
+      assert.deepEqual(queued(), []);
+    },
+    { statusReply: () => ({ code: 403, detail: "status_forbidden" }) },
+  );
+});
+
+test("verified without admin is reported in the cloud's own terms", async () => {
+  await withTools(
+    async ({ call, queued }) => {
+      const result = await call("close_task", { task_id: "task-1", status: "verified" });
+      assert.equal(result.isError, true);
+      assert.match(bodyOf(result), /Only a workspace admin can mark a task verified/);
+      assert.deepEqual(queued(), []);
+    },
+    { statusReply: () => ({ code: 403, detail: "verified_requires_admin" }) },
+  );
+});
+
+test("an unreachable cloud queues the write instead of failing it", async () => {
+  await withTools(
+    async ({ call, queued }) => {
+      const result = await call("close_task", {
+        task_id: "task-1",
+        status: "implemented",
+        commit_sha: "deadbeef",
+      });
+      // Not an error: the write is accepted and durable, it simply has not
+      // landed. Calling it a failure would send the agent off to redo work.
+      assert.equal(result.isError, undefined);
+      const body = bodyOf(result);
+      assert.match(body, /queued rather than lost/);
+      assert.match(body, /still shows the task's old status/);
+      assert.match(body, /1 status write\(s\) still queued/);
+
+      const entries = queued();
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].taskId, "task-1");
+      assert.equal(entries[0].projectId, "proj-1");
+      assert.equal(entries[0].status, "implemented");
+      assert.equal(entries[0].artifact?.commit_sha, "deadbeef");
+    },
+    { statusReply: () => ({ code: 503, detail: "upstream unavailable" }) },
+  );
+});
+
+test("a second close for the same task supersedes the queued one", async () => {
+  await withTools(
+    async ({ call, queued }) => {
+      await call("close_task", { task_id: "task-1", status: "todo", commit_sha: "aaa" });
+      await call("close_task", { task_id: "task-1", status: "implemented", commit_sha: "bbb" });
+      // Status is a scalar, so last write wins; a queue that replayed both
+      // would flap the task through a state the developer left behind.
+      const entries = queued();
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].status, "implemented");
+      assert.equal(entries[0].artifact?.commit_sha, "bbb");
+    },
+    { statusReply: () => ({ code: 500 }) },
+  );
+});
+
+test("a queued write survives the server that made it and flushes from the next one", async () => {
+  // Two server instances over one config directory, which is what an MCP client
+  // actually does: it starts and kills this process around a conversation.
+  const queueDir = tempDir("pz-mcp-queue-shared-");
+  await withTools(
+    async ({ call, queued }) => {
+      await call("close_task", { task_id: "task-1", status: "implemented", commit_sha: "aaa" });
+      assert.equal(queued().length, 1);
+    },
+    { queueDir, statusReply: () => ({ code: 503 }) },
+  );
+
+  await withTools(
+    async ({ call, seen, queued }) => {
+      const result = await call("close_task", { task_id: "task-1", status: "verified", commit_sha: "bbb" });
+      assert.equal(result.isError, undefined);
+      const writes = statusWrites(seen);
+      // The parked write goes first, read back off disk by a process that never
+      // enqueued it, and the new one follows.
+      assert.equal(writes.length, 2);
+      assert.equal((writes[0].body?.artifact as { commit_sha: string }).commit_sha, "aaa");
+      assert.equal(writes[1].body?.status, "verified");
+      assert.deepEqual(queued(), []);
+      assert.match(bodyOf(result), /Nothing is queued/);
+    },
+    { queueDir },
+  );
+});
+
+test("close_task refuses an unknown task id without queueing anything", async () => {
+  await withTools(async ({ call, queued, seen }) => {
+    const result = await call("close_task", { task_id: "nope", status: "implemented" });
+    assert.equal(result.isError, true);
+    assert.match(bodyOf(result), /No task nope is assigned to you/);
+    assert.equal(statusWrites(seen).length, 0);
+    assert.deepEqual(queued(), []);
+  });
+});
+
+test("close_task refuses a status outside the one vocabulary", async () => {
+  await withTools(async ({ call, seen }) => {
+    const result = await call("close_task", { task_id: "task-1", status: "done" });
+    assert.equal(result.isError, true);
+    assert.match(bodyOf(result), /must be one of: todo, in_progress, implemented, verified/);
+    assert.equal(statusWrites(seen).length, 0);
   });
 });
 
