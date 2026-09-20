@@ -282,6 +282,71 @@ def test_import_duplicate_repo_in_same_workspace(client: TestClient):
     assert second.json()["detail"] == "repo_already_imported"
 
 
+def test_import_duplicate_repo_across_workspaces_is_generic(client: TestClient):
+    """Cross-workspace collision (plan 0016 M5): bob has no membership in
+    alice's workspace, so the 409 must not leak its id, name, or project."""
+    ws_a = _workspace(client)
+    _connect(client, ws_a, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+
+    first = client.post(
+        "/projects",
+        json={"name": "First", "workspace_id": ws_a, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert first.status_code == 201, first.text
+
+    ws_b = client.post("/workspaces", json={"name": "Bobco"}, headers=BOB).json()["id"]
+    client.put(
+        f"/workspaces/{ws_b}/integrations/github",
+        json={"owner": "acme", "token": TOKEN},
+        headers=BOB,
+    )
+
+    second = client.post(
+        "/projects",
+        json={"name": "Second", "workspace_id": ws_b, "import_repo_full_name": "acme/storyapp"},
+        headers=BOB,
+    )
+    assert second.status_code == 409, second.text
+    body = second.json()
+    assert body["detail"] == "repo_already_imported"
+    assert ws_a not in str(body)
+    assert "First" not in str(body)
+
+
+def test_import_duplicate_repo_survives_a_rename(client: TestClient):
+    """full_name alone can't catch this — id is GitHub's stable identity
+    across a rename/transfer (plan 0016 M5)."""
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+
+    first = client.post(
+        "/projects",
+        json={"name": "First", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert first.status_code == 201, first.text
+
+    # Simulate GitHub renaming the repo: same id, new full_name/key.
+    record = client.app.state.github_client.existing_repos.pop("acme/storyapp")
+    record["full_name"] = "acme/storyapp-renamed"
+    client.app.state.github_client.existing_repos["acme/storyapp-renamed"] = record
+
+    second = client.post(
+        "/projects",
+        json={
+            "name": "Second",
+            "workspace_id": ws_id,
+            "import_repo_full_name": "acme/storyapp-renamed",
+        },
+        headers=ALICE,
+    )
+    assert second.status_code == 409, second.text
+    assert second.json()["detail"] == "repo_already_imported"
+
+
 def test_import_empty_repo_refused(client: TestClient):
     ws_id = _workspace(client)
     _connect(client, ws_id, owner="acme")

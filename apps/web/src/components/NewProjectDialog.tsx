@@ -21,7 +21,10 @@ const DETAIL_MESSAGES: Record<string, string> = {
   repo_owner_out_of_scope:
     "That repository isn't under the workspace's connected GitHub account.",
   repo_not_found: "That repository is gone — refresh the list and try again.",
-  repo_already_imported: "Another project in this workspace already imports that repository.",
+  // Scope-neutral by design (plan 0016 M5): the match can land in a
+  // workspace this user isn't a member of, so the message must not name
+  // which workspace or project already imported it.
+  repo_already_imported: "This repository is already connected to a PromptConnext project.",
   repo_is_empty:
     "That repository has no commits yet — PromptConnext can only add files on top of an existing one.",
   invalid_repo_full_name: "That doesn't look like a repository — refresh the list and try again.",

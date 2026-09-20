@@ -1,6 +1,6 @@
 # Plan 0016 — Persist a repository provisioning identity
 
-**Date:** 2026-09-12 · **Status:** Implemented (M1–M4) · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md)
+**Date:** 2026-09-12 · **Status:** Implemented (M1–M5, 2026-09-20) · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md)
 
 `apps/cloud/app/api/sync.py:162-408` (`create_repository`) is the route that turns a project's tech review into a live GitHub repository, seeded with the constitution, spec, plan and tasks the Tech Lead just approved. Stated plainly because the impact is unusual for a "High" finding in this codebase: on a repository-name collision, that route adopts whatever repository the GitHub API hands back for the requested name, with nothing persisted anywhere that proves this project created it. It then writes Actions secrets, registers a webhook, and commits six files of planning documents into that repository — all before it has any evidence the repository is the one this project is supposed to own. A name collision with an unrelated but token-accessible repository is therefore not a retry recovery. It is writing a customer's planning documents and deployment credentials into someone else's repository. This plan closes that gap by giving the route a real identity to check before it adopts anything.
 
@@ -118,11 +118,61 @@ Add to `apps/cloud/tests/test_lifecycle.py`, alongside the existing retry tests 
 
 Note for whoever implements M2/M3 together with the webhook fix in the companion plan: the review observed that the current fake "does not faithfully model the existing-hook case" (finding 8) — `FakeGithubClient.create_repo_webhook` (`apps/cloud/app/integrations/github.py:1054-1065`) simply appends to `self.webhooks` every call rather than modeling GitHub's 422-on-duplicate behavior the real client special-cases at lines 493-494. Test 2 above will pass against today's fake regardless, but it does not exercise that gap; docs/plans/0017-webhook-secret-rotation.md owns making the fake model the existing-hook case faithfully, since that is squarely about the secret-rotation half of the problem, not the identity half this plan fixes.
 
+## M5 — Cross-workspace collision on the *import* path
+
+M1–M4 close the gap on the *creation* path (`create_repository`, a name collision against an unrelated repository). A second, separate entry point shares the same underlying question and was not in scope when this plan was written: `POST /projects` with `import_repo_full_name` (`apps/cloud/app/api/sync.py:105-160`), where a workspace member points the platform at an *existing* GitHub repository rather than asking it to create one.
+
+That path already guards against re-importing the same repo twice, but only within one workspace and only by string match:
+
+```python
+for existing in repo.list_projects_by_workspace(body.workspace_id):
+    if existing.repo_url and repo_full_name_from_url(existing.repo_url) == full_name:
+        raise HTTPException(status_code=409, detail="repo_already_imported")
+```
+
+(`apps/cloud/app/api/sync.py:136-138`). Two gaps, same root cause as M2's: a name, not an id, is being treated as identity, and the check's scope is arbitrarily narrowed to the importing workspace.
+
+1. **Cross-workspace collision isn't checked at all.** A workspace's GitHub PAT is scoped by its issuer (ADR 0017 amendment) and routinely covers repositories an unrelated workspace already imported — an org-wide token sees every project's repo, not just the importer's own. Workspace B can currently "import" a repository workspace A already owns; nothing in `sync.py:136-138` looks past `body.workspace_id`. The result mirrors M1's original problem: two `pz_projects` rows both pointing at the same GitHub repository, with webhook delivery, deploy state and CI attribution ambiguous between them.
+2. **`full_name` string matching is the same fragile key M2 replaced with `repo_id` for the creation path.** A rename or transfer changes `full_name` without changing the repository; two differently-named-over-time projects could both legitimately match or fail to match depending on when each check ran. `get_repo` (called at `sync.py:142`, just below the current check) already returns `id` as of M1 — the import path simply never reads it for this purpose.
+
+**Fix — move the check after `get_repo`, key it on `repo_id`, and make it workspace-independent.** `find_project_by_repo_id` is a new repository method with no existing analogue (`list_projects_by_workspace` and `list_projects` are both membership-scoped by design — see `apps/cloud/app/db/repository.py:176-180` — neither can answer "does *any* project already own this repo"). Add it to the `Repository` ABC (`apps/cloud/app/db/repository.py`), alongside `get_project`:
+
+```python
+@abc.abstractmethod
+def find_project_by_repo_id(self, repo_id: int) -> Project | None:
+    """The project, in any workspace, whose repo_id matches — deliberately
+    unscoped by membership, since this exists to detect a repository already
+    claimed by a workspace the caller may not belong to."""
+```
+
+`InMemoryRepository`: scan `self._projects.values()` for a `repo_id` match (mirrors `list_projects_by_workspace`'s pattern at `repository.py:853`). `SupabaseRepository`: `self._client.table(_PROJECTS).select("*").eq("repo_id", repo_id).limit(1).execute()`, same shape as `get_project`.
+
+Widen `create_project` (abstract + both implementations, `apps/cloud/app/db/repository.py:162-170`, `repository.py:737-755`, `apps/cloud/app/db/supabase_repository.py:332-349`) to accept `repo_id: int | None = None` and persist it at insert time — today only `update_project_repo` (the *creation* path's write site) persists `repo_id`; the import path calls `create_project` directly and would otherwise leave `repo_id` null forever, defeating M5 for every project imported after this lands.
+
+Replace `sync.py:132-138`'s workspace-scoped loop with a global check run *after* `get_repo` returns (so `found["id"]` is available), before the empty-repo check is fully settled but after it — ordering matters only in that this must run once `found` exists:
+
+```python
+existing_project = repo.find_project_by_repo_id(found["id"])
+if existing_project is not None:
+    raise HTTPException(status_code=409, detail="repo_already_imported")
+```
+
+and pass the id through on creation: `repo.create_project(..., repo_id=found["id"])`.
+
+**Why the error must stay generic.** `repo_already_imported`'s existing message ("Another project in this workspace already imports that repository," `apps/web/src/components/NewProjectDialog.tsx:24`) is safe today only because the check was workspace-scoped — the requester is necessarily a member of the workspace it's naming. Once the check spans workspaces, the requester may have no membership in whichever workspace already imported the repo, so the response must not name it, its project, or any other identifying detail — doing so would let any workspace member fingerprint another workspace's existence and project names just by trying to import repositories they don't otherwise have access to. Reuse the same `409 repo_already_imported` code for both the same-workspace and cross-workspace case (the fix is identical from the requester's side — pick a different repository) and update the copy to be scope-neutral: "This repository is already connected to a PromptConnext project." No new `DETAIL_MESSAGES` entry needed, only a copy edit.
+
+**Tests**, added to `apps/cloud/tests/test_repo_import.py` alongside `test_import_duplicate_repo_in_same_workspace` (line 264):
+
+1. **Same-workspace duplicate, by id.** Existing `test_import_duplicate_repo_in_same_workspace` continues to pass unchanged — same behavior, now reached via `repo_id` instead of `full_name`.
+2. **Cross-workspace duplicate.** Create two workspaces both connected to the same GitHub owner (or with tokens that can both see the same repo), import the repo into workspace A, then attempt to import the identical repo into workspace B as a different user with no membership in A. Assert `409 repo_already_imported` and that the response body contains no reference to workspace A's id, name, or its project.
+3. **Rename tolerance.** Import a repo, then have the fake report a different `full_name` for the same `id` on a second attempt (simulating a GitHub rename) — assert the collision is still caught, which `full_name`-only matching could not do.
+
 ## Suggested commit sequence
 
 1. `feat(cloud): persist repo_id on project + migration 0028 (M1)` — schema, repository methods, GitHub client id plumbing.
 2. `feat(cloud): only auto-adopt the known repository on name collision (M2)` — the identity check, `repo_name_collision`, web copy.
 3. `feat(cloud): skip a no-op seed commit on retry (M3)` — tree comparison short-circuit.
 4. `test(cloud): repository-identity adoption and collision cases (M4)`.
+5. `feat(cloud): key the import-path duplicate check on repo_id, not workspace + name (M5)` — `find_project_by_repo_id`, `create_project` widening, scope-neutral copy, tests.
 
-M1+M2 close the severity this plan exists for and should ship together; M3 is a correctness/cost improvement that can follow without re-opening the adoption logic; M4 should land with whichever of M1/M2 introduces the behavior it tests, not as a trailing cleanup.
+M1+M2 close the severity this plan exists for and should ship together; M3 is a correctness/cost improvement that can follow without re-opening the adoption logic; M4 should land with whichever of M1/M2 introduces the behavior it tests, not as a trailing cleanup. M5 is independent of M1–M4's internals (it touches the import path, not `create_repository`) but depends on M1's `repo_id` field and GitHub-client id plumbing already existing.

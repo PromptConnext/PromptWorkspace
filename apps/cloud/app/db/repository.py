@@ -167,10 +167,18 @@ class Repository(abc.ABC):
         *,
         repo_url: str | None = None,
         repo_default_branch: str | None = None,
+        repo_id: int | None = None,
     ) -> Project: ...
 
     @abc.abstractmethod
     def get_project(self, project_id: str) -> Project | None: ...
+
+    @abc.abstractmethod
+    def find_project_by_repo_id(self, repo_id: int) -> Project | None:
+        """The project, in any workspace, whose repo_id matches — deliberately
+        unscoped by membership, since this exists to detect a repository
+        already claimed by a workspace the caller may not belong to (plan
+        0016 M5)."""
 
     @abc.abstractmethod
     def list_projects(self, user_id: str) -> list[Project]:
@@ -742,6 +750,7 @@ class InMemoryRepository(Repository):
         *,
         repo_url: str | None = None,
         repo_default_branch: str | None = None,
+        repo_id: int | None = None,
     ) -> Project:
         project = Project(
             name=name,
@@ -749,6 +758,7 @@ class InMemoryRepository(Repository):
             owner_id=created_by,
             repo_url=repo_url,
             repo_default_branch=repo_default_branch,
+            repo_id=repo_id,
         )
         self._projects[project.id] = project
         self._graph[project.id] = {etype: {} for etype in ENTITY_TYPES}
@@ -756,6 +766,12 @@ class InMemoryRepository(Repository):
 
     def get_project(self, project_id: str) -> Project | None:
         return self._projects.get(project_id)
+
+    def find_project_by_repo_id(self, repo_id: int) -> Project | None:
+        for project in self._projects.values():
+            if project.repo_id == repo_id:
+                return project
+        return None
 
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         project = self._projects[project_id]

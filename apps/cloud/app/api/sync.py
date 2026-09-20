@@ -129,14 +129,6 @@ async def create_project(
     if full_name.split("/")[0].lower() != owner.lower():
         raise HTTPException(status_code=400, detail="repo_owner_out_of_scope")
 
-    # A second project importing the same repo would silently steal the
-    # first's webhook binding (pz_repo_webhooks is keyed by repo_full_name) —
-    # corrupting deploy state and build attribution for both with no error
-    # anywhere downstream. Catch it here instead.
-    for existing in repo.list_projects_by_workspace(body.workspace_id):
-        if existing.repo_url and repo_full_name_from_url(existing.repo_url) == full_name:
-            raise HTTPException(status_code=409, detail="repo_already_imported")
-
     github_client = request.app.state.github_client
     try:
         found = await github_client.get_repo(token, full_name)
@@ -151,12 +143,23 @@ async def create_project(
     if found.get("empty"):
         raise HTTPException(status_code=400, detail="repo_is_empty")
 
+    # A second project importing the same repo would silently steal the
+    # first's webhook binding (pz_repo_webhooks is keyed by repo_full_name) —
+    # corrupting deploy state and build attribution for both with no error
+    # anywhere downstream. Keyed on GitHub's numeric id, not full_name (a
+    # rename/transfer changes the latter without changing the repo), and
+    # deliberately unscoped to this workspace — an org-wide token routinely
+    # sees repos another workspace already imported (plan 0016 M5).
+    if repo.find_project_by_repo_id(found["id"]) is not None:
+        raise HTTPException(status_code=409, detail="repo_already_imported")
+
     return repo.create_project(
         workspace_id=body.workspace_id,
         created_by=user.id,
         name=body.name,
         repo_url=found["html_url"],
         repo_default_branch=found.get("default_branch") or "main",
+        repo_id=found["id"],
     )
 
 

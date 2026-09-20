@@ -337,6 +337,7 @@ class SupabaseRepository(Repository):
         *,
         repo_url: str | None = None,
         repo_default_branch: str | None = None,
+        repo_id: int | None = None,
     ) -> Project:
         project = Project(
             name=name,
@@ -344,12 +345,18 @@ class SupabaseRepository(Repository):
             owner_id=created_by,
             repo_url=repo_url,
             repo_default_branch=repo_default_branch,
+            repo_id=repo_id,
         )
         self._client.table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
 
     def get_project(self, project_id: str) -> Project | None:
         res = self._client.table(_PROJECTS).select("*").eq("id", project_id).limit(1).execute()
+        rows = res.data or []
+        return Project(**rows[0]) if rows else None
+
+    def find_project_by_repo_id(self, repo_id: int) -> Project | None:
+        res = self._client.table(_PROJECTS).select("*").eq("repo_id", repo_id).limit(1).execute()
         rows = res.data or []
         return Project(**rows[0]) if rows else None
 
