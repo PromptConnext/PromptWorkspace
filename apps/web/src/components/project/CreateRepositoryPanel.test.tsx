@@ -46,6 +46,7 @@ describe("CreateRepositoryPanel", () => {
         projectName="Widget App"
         onCreated={onCreated}
         constitutionReady
+        tasksReady
       />,
     );
 
@@ -74,6 +75,24 @@ describe("CreateRepositoryPanel", () => {
     expect(screen.getByText(/seeds AGENTS\.md in the new repo/i)).toBeInTheDocument();
   });
 
+  it("disables the create button with a hint when the tasks doc is missing", async () => {
+    mockFetch();
+    render(
+      <CreateRepositoryPanel
+        projectId="p1"
+        projectName="Widget App"
+        onCreated={vi.fn()}
+        constitutionReady
+        tasksReady={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /create repository/i })).toBeDisabled();
+    });
+    expect(screen.getByText(/first — the planner locks once the repository exists/i)).toBeInTheDocument();
+  });
+
   it("renders a human sentence for github_not_configured", async () => {
     mockFetch({ ok: false, status: 400, detail: "github_not_configured" });
     render(
@@ -82,6 +101,7 @@ describe("CreateRepositoryPanel", () => {
         projectName="Widget App"
         onCreated={vi.fn()}
         constitutionReady
+        tasksReady
         workspaceId="ws1"
       />,
     );

@@ -298,7 +298,7 @@ describe("Planner", () => {
   });
 
   it("enables create-repository as soon as the rules are saved, without a reload", async () => {
-    mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
     render(
       <Planner
         project={makeProject({ lifecycle_status: "tech_review" })}
@@ -342,7 +342,7 @@ describe("Planner", () => {
     );
     expect(screen.getByText(/repository created/i)).toBeInTheDocument();
     expect(screen.getByText("https://github.com/acme/widget")).toBeInTheDocument();
-    expect(screen.getByText(/clone this repo in the promptzone desktop app/i)).toBeInTheDocument();
+    expect(screen.getByText(/clone this repo and open it in the promptconnext vs code extension/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
   });
 
@@ -568,6 +568,54 @@ describe("Planner", () => {
     await screen.findByRole("tab", { name: /tasks/i });
     openTab(/tasks/i);
     fireEvent.click(await screen.findByRole("button", { name: /open the task board/i }));
+    expect(onOpenTasks).toHaveBeenCalled();
+  });
+
+  it("says the board didn't move when a save reports a failed projection", async () => {
+    // Plan 0018 M4: "Last saved" on its own implied the graph agreed with the
+    // document. A save the cloud could not project has to say so.
+    const onOpenTasks = vi.fn();
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url.toString();
+      const match = href.match(/\/stage-documents\/(\w+)/);
+      if (match) {
+        const content = init?.method === "PATCH" ? "# Tasks\n\nNo checklist here." : "# Tasks";
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "sd1",
+            stage: match[1],
+            content,
+            updated_at: "2026-08-01T00:00:00Z",
+            ...(init?.method === "PATCH" ? { projection: "failed" } : {}),
+          }),
+        });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(
+      <Planner
+        project={makeProject()}
+        projectId="p1"
+        onChange={vi.fn()}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+
+    await screen.findByRole("tab", { name: /tasks/i });
+    openTab(/tasks/i);
+    const tasks = within(
+      screen.getByRole("heading", { name: /3 · tasks/i }).closest("div") as HTMLElement,
+    );
+    const editor = (await waitFor(() =>
+      tasks.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && !el.id),
+    )) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# Tasks\n\nNo checklist here." } });
+    fireEvent.click(tasks.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByText(/the task board didn't update/i)).toBeInTheDocument();
+    fireEvent.click(tasks.getByRole("button", { name: /open the task board/i }));
     expect(onOpenTasks).toHaveBeenCalled();
   });
 

@@ -13,13 +13,15 @@ Developers who want their own model plan through the desktop app instead
 (apps/engine's own `runStage()`), which this change leaves untouched.
 
 Persistence mirrors what the engine's own stage routes already do
-(apps/engine/src/routes/projects.ts): `specify` creates a Requirement,
-`plan` creates a SpecDocument against the latest requirement, `tasks`
-parses the checklist into Task rows against the latest spec document.
+(apps/engine/src/routes/projects.ts): `specify` lands on a Requirement,
+`plan` on a SpecDocument against the latest requirement, `tasks` on Task rows
+parsed out of the checklist. None of that lives here any more — it is
+app/generation/stage_apply.py, shared with the manual-edit route so a
+generated and a hand-written stage cannot diverge (plan 0018).
 `constitution` has no graph entity to land on (it's project-level
 governance text, not a per-requirement artifact) — it streams back to the
 caller and is recorded in `generation_runs`, but isn't itself persisted to
-the graph in this milestone.
+the graph.
 """
 
 from __future__ import annotations
@@ -37,27 +39,22 @@ from pydantic import BaseModel, Field
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.generation.parsing import parse_task_lines
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
 from app.generation.prefill import parse_prefill
 from app.generation.prompts import StageKind, driver_prompt
 from app.generation.routing import select_model
 from app.generation.service import GenerationError, HttpGenerationProvider, parse_stage_output
+from app.generation.stage_apply import StageApplyResult, apply_stage_content
 from app.models.schemas import (
-    AcceptanceCriterion,
     GenerateRequest,
     GenerationRun,
-    GraphUpsertRequest,
     Project,
     Requirement,
-    RequirementStatus,
     SpecDocument,
-    Task,
 )
 from app.policies.registry import render_policy_context, render_policy_summary
 from app.rag.budget import estimate_tokens
-from app.rag.queue import EmbedJob, enqueue
 
 logger = logging.getLogger("promptconnext.generation")
 router = APIRouter(tags=["generation"])
@@ -244,59 +241,70 @@ async def generate(
             "truncated": truncated,
         }
 
-        # Save the raw markdown FIRST, before the graph-entity persistence
-        # below. Both orders keep a successful run intact, but only this one
-        # keeps the generated text when graph persistence rejects it — most
-        # visibly the `tasks` stage, where an unparseable (or truncated)
-        # checklist raises GenerationError. Saved first, the user reopens the
-        # project and finds their document waiting in the editor; saved last,
-        # they came back to an empty stage and a lost generation.
-        saved = False
+        # One call does the raw-markdown save, the graph projection and the RAG
+        # enqueues, shared with the manual-edit route (app/generation/
+        # stage_apply.py, plan 0018 M1). The save happens first inside it, so
+        # generated text the graph rejects — most visibly a `tasks` stage whose
+        # checklist doesn't parse — is still waiting in the editor when the user
+        # reopens the project.
+        applied: StageApplyResult | None = None
         try:
-            stage_doc = repo.upsert_stage_document(
-                project_id, project.workspace_id, stage, result.content, user.id
-            )
-            saved = True
-            payload["updated_at"] = stage_doc.updated_at.isoformat()
-            enqueue(
-                request.app,
-                EmbedJob(project.workspace_id, project_id, "stage_documents", stage_doc.id),
+            applied = apply_stage_content(
+                repo,
+                project,
+                stage,
+                result.content,
+                source="generated",
+                actor_id=user.id,
+                app=request.app,
+                user_input=body.user_input,
             )
         except Exception:
-            # A side-store failure must not fail a generation that otherwise
-            # succeeded, but the client is told (`saved: false`) so it can warn
-            # that this text won't survive a reload rather than implying it will.
+            # The side store is unreachable. Nothing is written — neither the
+            # document nor the graph — which is the point: half-applying a
+            # generation is the inconsistency plan 0018 exists to remove. The
+            # client is told (`saved: false`) so it can warn that this text
+            # won't survive a reload rather than implying it will.
             logger.exception(
                 "auto-save of stage document failed for project=%s stage=%s",
                 project_id,
                 stage,
             )
-        payload["saved"] = saved
 
-        try:
-            if stage == "specify":
-                payload["requirement_id"] = _persist_requirement(repo, project_id, result, body)
-            elif stage == "plan":
-                payload["spec_document_id"] = _persist_spec_document(
-                    repo, project, requirement, result
-                )
-            elif stage == "tasks":
-                payload["task_count"] = _persist_tasks(repo, project, spec, result)
-        except GenerationError as exc:
+        saved = applied is not None
+        payload["saved"] = saved
+        payload["projection"] = applied.projection if applied is not None else "failed"
+        if applied is not None and applied.document_updated_at is not None:
+            payload["updated_at"] = applied.document_updated_at
+
+        if applied is None or applied.projection == "failed":
             repo.update_generation_run(
                 run.id,
                 status="failed",
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
-            error_payload = {"error": str(exc), "draft_saved": saved, "truncated": truncated}
+            message = (
+                applied.error
+                if applied is not None and applied.error
+                else "the generated document could not be applied to the project graph"
+            )
+            error_payload = {"error": message, "draft_saved": saved, "truncated": truncated}
             if truncated:
                 error_payload["error"] = (
-                    f"{exc} — the model stopped at its output limit, so the document is "
+                    f"{message} — the model stopped at its output limit, so the document is "
                     "incomplete. The partial draft was kept; try generating again."
                 )
             yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
             return
+
+        if stage == "specify" and applied.entity_ids:
+            payload["requirement_id"] = applied.entity_ids[0]
+        elif stage == "plan" and applied.entity_ids:
+            payload["spec_document_id"] = applied.entity_ids[0]
+        elif stage == "tasks":
+            payload["task_count"] = applied.task_count
+            payload["retired_count"] = applied.retired_count
 
         repo.update_generation_run(
             run.id,
@@ -490,43 +498,3 @@ def _policy_block(project: Project, stage: str) -> str:
     if stage == "constitution":
         return render_policy_context(scope, max_chars=30_000)
     return render_policy_summary(scope, max_chars=1_500)
-
-
-def _persist_requirement(repo: Repository, project_id: str, result, body: GenerateRequest) -> str:
-    requirement = Requirement(
-        project_id=project_id,
-        title=result.title,
-        description=body.user_input,
-        status=RequirementStatus.draft,
-    )
-    repo.upsert_graph(project_id, GraphUpsertRequest(requirements=[requirement]), source="pz")
-    return requirement.id
-
-
-def _persist_spec_document(repo: Repository, project, requirement: Requirement, result) -> str:
-    spec_document = SpecDocument(
-        project_id=project.id,
-        requirement_id=requirement.id,
-        content=result.content,
-        version=1,
-    )
-    repo.upsert_graph(project.id, GraphUpsertRequest(spec_documents=[spec_document]), source="pz")
-    return spec_document.id
-
-
-def _persist_tasks(repo: Repository, project, spec: SpecDocument, result) -> int:
-    parsed = parse_task_lines(result.content)
-    if not parsed:
-        raise GenerationError("tasks document contained no parseable '- [ ] T###' checklist lines")
-    tasks = [
-        Task(
-            project_id=project.id,
-            spec_id=spec.id,
-            title=t["title"],
-            acceptance_criteria=[AcceptanceCriterion(text=t["title"])],
-            feature_tag=f"{t['ref']} [P]" if t["parallel"] else t["ref"],
-        )
-        for t in parsed
-    ]
-    repo.upsert_graph(project.id, GraphUpsertRequest(tasks=tasks), source="pz")
-    return len(tasks)

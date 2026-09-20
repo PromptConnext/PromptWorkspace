@@ -105,6 +105,7 @@ export function CreateRepositoryPanel({
   constitutionReady,
   workspaceId,
   project,
+  tasksReady,
 }: {
   projectId: string;
   projectName: string;
@@ -118,6 +119,13 @@ export function CreateRepositoryPanel({
    *  so kept claiming it was missing after it had just been saved a few
    *  centimetres above. `undefined` means not loaded yet. */
   constitutionReady?: boolean;
+  /** Whether the tasks document exists. Once the repo is created the whole
+   *  Planner freezes (`Planner.tsx`'s `readOnly`), so a project that reaches
+   *  `repo_created` with no tasks generated has no way back — this gate
+   *  makes "generate tasks" a precondition of "create repository" rather
+   *  than something to notice was missing after the fact. `undefined` means
+   *  not loaded yet. */
+  tasksReady?: boolean;
   /** When set and `project.repo_url` is already recorded (the project was
    *  imported, not started from scratch), the panel shows the repo it will
    *  adopt instead of a name/private form the server now ignores on that
@@ -147,7 +155,7 @@ export function CreateRepositoryPanel({
     }
   }
 
-  const disabled = creating || constitutionReady !== true;
+  const disabled = creating || constitutionReady !== true || tasksReady !== true;
   const importedRepo = project?.repo_url;
 
   return (
@@ -205,6 +213,13 @@ export function CreateRepositoryPanel({
         <p className="mb-2 text-xs text-amber-700">
           Fill in <strong>Project rules</strong> above first — that document seeds AGENTS.md in
           the new repo.
+        </p>
+      )}
+
+      {constitutionReady === true && tasksReady === false && (
+        <p className="mb-2 text-xs text-amber-700">
+          Generate <strong>Tasks</strong> first — the Planner locks once the repository exists, so
+          there will be no way to generate them afterward.
         </p>
       )}
 

@@ -136,22 +136,59 @@ def test_plan_saved_before_any_specify_projects_nothing():
     assert client.app.state.repository.get_latest_spec_document(pid) is None
 
 
-def test_empty_and_task_documents_project_nothing():
+def test_an_empty_document_projects_nothing():
     client = _client()
     _ws_id, pid = _bootstrap(client)
     repo = client.app.state.repository
 
-    client.patch(f"/projects/{pid}/stage-documents/specify", json={"content": "  "}, headers=ALICE)
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify", json={"content": "  "}, headers=ALICE
+    )
+    assert res.json()["projection"] == "not_applicable"
     assert repo.get_latest_requirement(pid) is None
 
-    # tasks stays generation-owned: re-parsing the checklist on every save
-    # would fork the task list and orphan the status already on those rows.
+
+def test_a_hand_edited_tasks_document_reaches_the_board():
+    """Plan 0018 M2/M3: `tasks` used to be generation-owned, so a hand edit
+    moved the document and left the board alone, silently. It is reconciled by
+    task reference now, which is what makes editing safe."""
+    client = _client()
+    _ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
     client.patch(
+        f"/projects/{pid}/stage-documents/specify", json={"content": "# Spec"}, headers=ALICE
+    )
+    client.patch(f"/projects/{pid}/stage-documents/plan", json={"content": "# Plan"}, headers=ALICE)
+
+    res = client.patch(
         f"/projects/{pid}/stage-documents/tasks",
         json={"content": "# Tasks\n\n- [ ] T001 Do the thing\n"},
         headers=ALICE,
     )
-    assert not repo._graph[pid]["tasks"]
+
+    assert res.json()["projection"] == "current"
+    tasks = [t for t in repo._graph[pid]["tasks"].values() if t.deleted_at is None]
+    assert [t.title for t in tasks] == ["Do the thing"]
+    assert tasks[0].spec_id == repo.get_latest_spec_document(pid).id
+
+
+def test_a_hand_edited_tasks_document_before_any_plan_fails_the_projection():
+    """Without a plan, tasks would carry spec_id=None — invisible to
+    ProgressRollup.tsx and skipped outright by the engine's incremental apply
+    (plan 0018 review finding). Matches the 409 the generated path raises."""
+    client = _client()
+    _ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/tasks",
+        json={"content": "# Tasks\n\n- [ ] T001 Do the thing\n"},
+        headers=ALICE,
+    )
+
+    assert res.json()["projection"] == "failed"
+    assert res.json()["error"] == "spec_document_required"
+    assert not repo._graph.get(pid, {}).get("tasks", {})
 
 
 def test_a_failed_projection_does_not_fail_the_save(monkeypatch):
@@ -161,7 +198,7 @@ def test_a_failed_projection_does_not_fail_the_save(monkeypatch):
     def _boom(*_args, **_kwargs):
         raise RuntimeError("graph unavailable")
 
-    monkeypatch.setattr("app.api.stage_documents.project_stage_document", _boom)
+    monkeypatch.setattr("app.generation.stage_apply._project", _boom)
 
     res = client.patch(
         f"/projects/{pid}/stage-documents/specify", json={"content": "# Spec"}, headers=ALICE
@@ -169,6 +206,7 @@ def test_a_failed_projection_does_not_fail_the_save(monkeypatch):
 
     assert res.status_code == 200, res.text
     assert res.json()["content"] == "# Spec"
+    assert res.json()["projection"] == "failed"
 
 
 def test_get_stage_document_returns_id_after_save():
@@ -225,7 +263,7 @@ def test_patch_enqueues_embed_job_for_rag(monkeypatch):
     def _fake_enqueue(app, job):
         captured["job"] = job
 
-    monkeypatch.setattr("app.api.stage_documents.enqueue", _fake_enqueue)
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", _fake_enqueue)
 
     client.patch(
         f"/projects/{pid}/stage-documents/plan", json={"content": "index me"}, headers=ALICE

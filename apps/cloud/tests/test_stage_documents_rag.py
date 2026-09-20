@@ -59,7 +59,7 @@ def test_reindex_sweeps_stage_documents(monkeypatch):
     # no public sync-drain API to begin with (same issue Task 3's
     # test_patch_enqueues_embed_job_for_rag hit). Capture jobs at each call
     # site via monkeypatch instead of racing the live worker for the queue.
-    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: None)
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", lambda app, job: None)
 
     client.patch(f"/projects/{pid}/stage-documents/plan", json={"content": "x"}, headers=ALICE)
 
@@ -217,7 +217,7 @@ def test_reindex_sweeps_all_three_categories(monkeypatch):
     assert res.status_code == 200, res.text
 
     # Stage document. Uses "constitution" specifically because it has no
-    # graph-entity projection (app/generation/projection.py) — "plan" would
+    # graph-entity projection (app/generation/stage_apply.py) — "plan" would
     # also enqueue a spec_documents projection job once a requirement
     # exists, muddying this test's node-type assertion below.
     res = client.patch(
@@ -258,10 +258,10 @@ def test_reindex_sweeps_all_three_categories(monkeypatch):
 
 
 def test_specify_patch_enqueues_projection_job_for_requirement(monkeypatch):
-    """app/generation/projection.py::project_stage_document upserts the
-    Requirement directly through the repository, bypassing the enqueue loop
-    that lives in app/api/sync.py's push handler — so the projected entity
-    was never getting embedded until the caller enqueued it itself."""
+    """app/generation/stage_apply.py upserts the Requirement directly through
+    the repository, bypassing the enqueue loop that lives in app/api/sync.py's
+    push handler — so the projected entity was never getting embedded until the
+    write path enqueued it itself."""
     from app.main import create_app
     from app.rag.chat import FakeChatProvider
     from app.rag.embedder import FakeEmbeddingProvider
@@ -279,7 +279,7 @@ def test_specify_patch_enqueues_projection_job_for_requirement(monkeypatch):
     pid = project["id"]
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", lambda app, job: captured.append(job))
 
     res = client.patch(
         f"/projects/{pid}/stage-documents/specify",
@@ -324,7 +324,7 @@ def test_plan_patch_enqueues_projection_job_for_spec_document(monkeypatch):
     )
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", lambda app, job: captured.append(job))
 
     res = client.patch(
         f"/projects/{pid}/stage-documents/plan",
@@ -343,7 +343,7 @@ def test_plan_patch_enqueues_projection_job_for_spec_document(monkeypatch):
 
 
 def test_constitution_patch_enqueues_no_projection_job(monkeypatch):
-    """constitution has no graph entity (app/generation/projection.py's
+    """constitution has no graph entity (app/generation/stage_apply.py's
     module docstring), so nothing beyond the stage_documents job itself
     should be enqueued."""
     from app.main import create_app
@@ -363,7 +363,7 @@ def test_constitution_patch_enqueues_no_projection_job(monkeypatch):
     pid = project["id"]
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", lambda app, job: captured.append(job))
 
     res = client.patch(
         f"/projects/{pid}/stage-documents/constitution",
@@ -378,8 +378,8 @@ def test_constitution_patch_enqueues_no_projection_job(monkeypatch):
 
 
 def test_empty_specify_patch_enqueues_no_projection_job(monkeypatch):
-    """An empty document projects nothing (project_stage_document returns
-    None), so there is no entity id to enqueue a job for."""
+    """An empty document projects nothing (apply_stage_content reports
+    not_applicable), so there is no entity id to enqueue a job for."""
     from app.main import create_app
     from app.rag.chat import FakeChatProvider
     from app.rag.embedder import FakeEmbeddingProvider
@@ -397,7 +397,7 @@ def test_empty_specify_patch_enqueues_no_projection_job(monkeypatch):
     pid = project["id"]
 
     captured: list[object] = []
-    monkeypatch.setattr("app.api.stage_documents.enqueue", lambda app, job: captured.append(job))
+    monkeypatch.setattr("app.generation.stage_apply.enqueue", lambda app, job: captured.append(job))
 
     res = client.patch(
         f"/projects/{pid}/stage-documents/specify",

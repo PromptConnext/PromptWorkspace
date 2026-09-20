@@ -14,6 +14,7 @@ import type {
   PrefillOut,
   Project,
   StageDocumentOut,
+  StageDocumentSaved,
   StageKind,
   Task,
   TaskStatus,
@@ -140,10 +141,14 @@ export function updateStageDocument(
   content: string,
   authHeaders: Record<string, string>,
 ) {
-  return apiFetch<StageDocumentOut>(`/projects/${projectId}/stage-documents/${stage}`, authHeaders, {
-    method: "PATCH",
-    body: JSON.stringify({ content }),
-  });
+  return apiFetch<StageDocumentSaved>(
+    `/projects/${projectId}/stage-documents/${stage}`,
+    authHeaders,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    },
+  );
 }
 
 // Idempotent — the design doc calls this "automatic on first Tech Lead

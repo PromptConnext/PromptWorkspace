@@ -343,6 +343,15 @@ export interface DocumentOut {
   updated_at: string;
 }
 
+/** How faithfully the project graph reflects the saved stage document
+ *  (apps/cloud/app/generation/stage_apply.py::ProjectionState). Both write
+ *  paths — generation and a manual save — report it in this one vocabulary:
+ *  "current" means the board was updated from this document, "failed" means the
+ *  document was saved but the graph was left alone, "not_applicable" means the
+ *  stage has no graph entity of its own (the project rules), and "pending" is
+ *  reserved for a stage that grows an explicit apply step. */
+export type ProjectionState = "current" | "pending" | "failed" | "not_applicable";
+
 export interface GenerateDoneEvent {
   stage: StageKind;
   title: string;
@@ -350,12 +359,19 @@ export interface GenerateDoneEvent {
   requirement_id?: string;
   spec_document_id?: string;
   task_count?: number;
+  // Tasks this generation tombstoned — dropped from the checklist, or an
+  // existing duplicate reference this generation consolidated. `tasks` only.
+  retired_count?: number;
   // The model stopped at its output limit — the document is real but cut off.
   truncated?: boolean;
   // Whether the raw markdown was written to the stage-document side store,
   // i.e. whether it will still be there on the next visit to the project.
   saved?: boolean;
   updated_at?: string;
+  // Only ever "current" or "not_applicable" here: a "failed" projection
+  // never reaches a `done` event (apps/cloud/app/api/generation.py sends a
+  // GenerateErrorEvent instead), and "pending" has no producer yet.
+  projection?: ProjectionState;
 }
 
 export interface GenerateErrorEvent {
@@ -380,6 +396,17 @@ export interface StageDocumentOut {
   stage: StageKind;
   content: string;
   updated_at: string | null;
+}
+
+/** A save knows something a read cannot: whether the graph now reflects the
+ *  document (PATCH only, apps/cloud/app/api/stage_documents.py). */
+export interface StageDocumentSaved extends StageDocumentOut {
+  projection: ProjectionState;
+  // Why `projection` is "failed", in the server's own error vocabulary.
+  error?: string | null;
+  // Tasks this save tombstoned — dropped from the checklist, or an existing
+  // duplicate reference this save consolidated. `tasks` only.
+  retired_count?: number | null;
 }
 
 // A built-in (or, later, workspace-defined) compliance template offered by

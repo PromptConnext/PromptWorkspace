@@ -28,7 +28,13 @@ import {
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
-import type { DocumentOut, Project, StageKind, WorkspaceMember } from "@/lib/types";
+import type {
+  DocumentOut,
+  Project,
+  ProjectionState,
+  StageKind,
+  WorkspaceMember,
+} from "@/lib/types";
 
 type StageMeta = {
   stage: StageKind;
@@ -117,11 +123,20 @@ const TECH_LEAD_NOTE =
 // detail codes.
 const STAGE_ERROR_TEXT: Record<string, string> = {
   requirement_required: "Generate the specification first — the plan is written against it.",
-  spec_document_required: "Generate the plan first — the task breakdown is derived from it.",
+  spec_document_required: "Save or generate the plan first — the task breakdown is derived from it.",
   model_connection_not_configured:
     "No model is configured for this workspace, so generation is unavailable.",
   managed_tier_rate_limited: "The shared model is busy right now — try again in a moment.",
   daily_token_budget_exceeded: "This workspace hit its daily generation budget.",
+  // Raw error strings from apps/cloud/app/generation/stage_apply.py, surfaced
+  // verbatim by a manual save's projection="failed" response — mapped here so
+  // the amber block says what actually went wrong instead of a hardcoded
+  // guess (plan 0018 review finding).
+  "a plan needs a specification to be a plan for":
+    "Save or generate the specification first — the plan is written against it.",
+  "tasks document contained no parseable '- [ ] T###' checklist lines":
+    "Every line needs the `- [ ] T001 Description` shape — check the checklist formatting.",
+  graph_write_failed: "Something went wrong applying this to the project — try saving again.",
 };
 
 // One stepper section. The input surface is stage-shaped: `specify` and `plan`
@@ -136,6 +151,7 @@ function StageSection({
   blockedBy,
   note,
   onDocPresence,
+  onOpenTasks,
   readOnly = false,
 }: {
   projectId: string;
@@ -149,6 +165,9 @@ function StageSection({
    *  Without it a non-author sees an unexplained empty editor. */
   note?: string;
   onDocPresence?: (stage: StageKind, present: boolean) => void;
+  /** Switches the page to its Tasks tab, so a document the graph rejected can
+   *  be checked against the board it failed to move. */
+  onOpenTasks?: () => void;
   readOnly?: boolean;
 }) {
   const { authHeaders } = useAuth();
@@ -162,6 +181,14 @@ function StageSection({
   const [docError, setDocError] = useState<string | null>(null);
   const [docUpdatedAt, setDocUpdatedAt] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // What the last save reported about the graph. A GET can't tell us this (the
+  // server has no projection to report for a read), so it stays null until this
+  // session writes something.
+  const [docProjection, setDocProjection] = useState<ProjectionState | null>(null);
+  // Why the last save's projection failed, and how many tasks it retired —
+  // both null until this session writes something, same as docProjection.
+  const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
+  const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
 
   // Every previously generated or hand-edited stage document is fetched on
   // mount, so reopening the project shows the work as it was left rather than
@@ -196,6 +223,8 @@ function StageSection({
     if (status === "done" && result) {
       setDocContent(result.content);
       setDocUpdatedAt(result.updated_at ?? null);
+      setDocProjection(result.projection ?? null);
+      setDocRetiredCount(result.retired_count ?? null);
       onDocPresence?.(stage, result.content.trim().length > 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,7 +256,12 @@ function StageSection({
       const doc = await updateStageDocument(projectId, stage, docContent, authHeaders());
       setDocUpdatedAt(doc.updated_at);
       // The save projects the document onto the graph server-side, so a
-      // hand-written stage unlocks the next one without a reload.
+      // hand-written stage unlocks the next one without a reload — and says
+      // whether that projection actually happened rather than leaving the
+      // saved-at line to imply it.
+      setDocProjection(doc.projection);
+      setDocProjectionError(doc.error ?? null);
+      setDocRetiredCount(doc.retired_count ?? null);
       onDocPresence?.(stage, doc.content.trim().length > 0);
     } catch (err) {
       setDocError((err as Error).message);
@@ -316,8 +350,9 @@ function StageSection({
           {status === "done" && result && (
             <p className="mt-2 text-xs text-slate-500">
               {result.task_count !== undefined
-                ? `${result.task_count} tasks created`
+                ? `${result.task_count} tasks on the board`
                 : "Saved as a draft"}
+              {Boolean(result.retired_count) && `, ${result.retired_count} retired`}
               {result.saved === false && " — couldn't be saved; copy this text before leaving"}
             </p>
           )}
@@ -343,7 +378,35 @@ function StageSection({
           {docUpdatedAt && (
             <p className="mt-1 text-xs text-slate-500">
               Last saved {new Date(docUpdatedAt).toLocaleString()}
+              {docProjection === "current" &&
+                Boolean(docRetiredCount) &&
+                ` — ${docRetiredCount} task${docRetiredCount === 1 ? "" : "s"} retired`}
             </p>
+          )}
+          {/* "Last saved" used to be the only signal either write path gave,
+              and it says nothing about the board the document is supposed to
+              drive. A failed projection is the one case where the two
+              disagree, so it is the one case that needs saying out loud —
+              amber, like a truncated generation above, because the text is
+              safe and the work is not finished. */}
+          {docProjection === "failed" && (
+            <div className="mt-2 rounded bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">The task board didn&apos;t update</p>
+              <p className="mt-1">
+                {(docProjectionError && STAGE_ERROR_TEXT[docProjectionError]) ||
+                  docProjectionError ||
+                  "This document is saved, but nothing in it could be applied to the project graph — the board still shows what it showed before."}
+              </p>
+              {onOpenTasks && (
+                <button
+                  type="button"
+                  onClick={onOpenTasks}
+                  className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-xs"
+                >
+                  Open the task board
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -554,7 +617,7 @@ export function Planner({
             {hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
             {hasDeploymentTemplate(project) && <li>{DEPLOY_WORKFLOW_PATH}</li>}
           </ul>
-          <p className="mt-2">Developers can now clone this repo in the PromptZone desktop app.</p>
+          <p className="mt-2">Developers can now clone this repo and open it in the PromptConnext VS Code extension.</p>
         </div>
       )}
 
@@ -633,6 +696,7 @@ export function Planner({
                 blockedBy={stageReadOnly ? undefined : blockedBy(meta)}
                 note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
+                onOpenTasks={onOpenTasks}
                 readOnly={stageReadOnly}
               />
             );
@@ -674,6 +738,7 @@ export function Planner({
               projectName={project.name}
               onCreated={onChange}
               constitutionReady={docPresent.constitution}
+              tasksReady={docPresent.tasks}
               workspaceId={project.workspace_id}
               project={project}
             />

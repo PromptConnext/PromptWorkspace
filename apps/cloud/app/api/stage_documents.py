@@ -3,14 +3,15 @@ editor in apps/web can fetch and persist edits independent of the
 graph-entity parsing in app/api/generation.py
 (docs/superpowers/specs/2026-07-26-planner-markdown-editor-design.md).
 
-"Independent" covers the *parsing*, not the graph: a saved `specify` or `plan`
-document is projected onto the same Requirement / SpecDocument a generation
-would have produced (app/generation/projection.py), so the stage after it is
-unblocked whether the document was generated or written by hand."""
+"Independent" covers the *parsing*, not the graph: a saved document is applied
+to the graph through the same service a generation goes through
+(app/generation/stage_apply.py, plan 0018), so the stage after it is unblocked
+— and the task board reconciled — whether the document was generated or
+written by hand. The PATCH response says how far that got, rather than
+returning the raw document and letting the client assume the graph agrees."""
 
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -19,10 +20,7 @@ from pydantic import BaseModel
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.generation.projection import PROJECTION_NODE_TYPE, project_stage_document
-from app.rag.queue import EmbedJob, enqueue
-
-logger = logging.getLogger("promptconnext.stage_documents")
+from app.generation.stage_apply import ProjectionState, apply_stage_content
 
 router = APIRouter(tags=["stage_documents"])
 
@@ -38,6 +36,21 @@ class StageDocumentOut(BaseModel):
     stage: str
     content: str
     updated_at: str | None
+
+
+class StageDocumentSaved(StageDocumentOut):
+    """A PATCH knows something a GET cannot: whether the graph now reflects
+    this document (plan 0018, M4). A read has no projection to report, so the
+    field lives on the write response only rather than as a nullable field on
+    both."""
+
+    projection: ProjectionState
+    # Why `projection` is "failed" (stage_apply's own error vocabulary), so
+    # the Planner can say what actually went wrong instead of guessing.
+    error: str | None = None
+    # Tasks this save tombstoned — dropped from the checklist, or an
+    # existing duplicate reference this save consolidated. `tasks` only.
+    retired_count: int | None = None
 
 
 class StageDocumentUpdate(BaseModel):
@@ -60,7 +73,7 @@ def get_stage_document(
     )
 
 
-@router.patch("/projects/{project_id}/stage-documents/{stage}", response_model=StageDocumentOut)
+@router.patch("/projects/{project_id}/stage-documents/{stage}", response_model=StageDocumentSaved)
 def update_stage_document(
     project_id: str,
     stage: StageName,
@@ -68,31 +81,30 @@ def update_stage_document(
     request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> StageDocumentOut:
+) -> StageDocumentSaved:
     project = require_project(repo, project_id, user)
     require_stage_access(repo, project, stage, user)
-    doc = repo.upsert_stage_document(project_id, project.workspace_id, stage, body.content, user.id)
-    enqueue(request.app, EmbedJob(project.workspace_id, project_id, "stage_documents", doc.id))
-    try:
-        entity_id = project_stage_document(repo, project, stage, body.content)
-    except Exception:
-        # The document itself is already saved. A failed projection costs the
-        # next stage its unlock, not the user's text, so it must not 500 the
-        # save that would otherwise have succeeded.
-        logger.exception(
-            "graph projection failed for project=%s stage=%s", project_id, stage
-        )
-    else:
-        # The stage document above is one EmbedJob; the graph entity it was
-        # just projected onto (Requirement for specify, SpecDocument for
-        # plan) is a second, separate one — upsert_graph's own callers
-        # (app/api/sync.py) enqueue for a push, but project_stage_document
-        # calls the repository directly and enqueues nothing on its own.
-        node_type = PROJECTION_NODE_TYPE.get(stage)
-        if entity_id is not None and node_type is not None:
-            enqueue(
-                request.app, EmbedJob(project.workspace_id, project_id, node_type, entity_id)
-            )
-    return StageDocumentOut(
-        id=doc.id, stage=stage, content=doc.content, updated_at=doc.updated_at.isoformat()
+    # The save, the graph projection and the RAG enqueues all live in
+    # apply_stage_content, so this route and the generation route cannot drift
+    # apart again (plan 0018, M1). A projection this content can't produce
+    # comes back as projection="failed" rather than as an exception — the
+    # document is saved either way, which is the guarantee this endpoint has
+    # always made.
+    applied = apply_stage_content(
+        repo,
+        project,
+        stage,
+        body.content,
+        source="manual",
+        actor_id=user.id,
+        app=request.app,
+    )
+    return StageDocumentSaved(
+        id=applied.document_id,
+        stage=stage,
+        content=applied.document.content,
+        updated_at=applied.document_updated_at,
+        projection=applied.projection,
+        error=applied.error,
+        retired_count=applied.retired_count,
     )
