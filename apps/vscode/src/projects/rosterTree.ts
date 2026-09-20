@@ -12,7 +12,7 @@ import type { GitBridge } from "../git/gitBridge.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import { buildRoster, type ProjectRow, type WorkspaceRow } from "./roster.ts";
 import { readKnownClones } from "./knownClones.ts";
-import type { StorageLike } from "../cloud/session.ts";
+import type { StorageLike } from "@promptconnext/pz-cloud";
 import type { RosterStore } from "./rosterStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
 

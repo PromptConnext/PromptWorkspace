@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { JsonCache, CACHE_FILES, type FileStoreLike } from "../../src/storage/cache.ts";
+import { JsonCache, CACHE_FILES, type FileStoreLike } from "@promptconnext/pz-cloud";
 import { RosterStore } from "../../src/projects/rosterStore.ts";
 
 function memoryStore() {

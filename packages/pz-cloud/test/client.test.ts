@@ -1,4 +1,4 @@
-// Run:  node --test apps/vscode/test/unit/client.test.ts
+// Run:  node --test packages/pz-cloud/test/client.test.ts
 //
 // Same strategy as apps/engine's suite: no mocking library, a real
 // http.createServer on port 0 standing in for the cloud, and the code under
@@ -9,9 +9,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { CloudClient } from "../../src/cloud/client.ts";
-import { CloudHttpError, CloudNotLoggedInError } from "../../src/cloud/errors.ts";
-import { SessionStore, type SecretsLike, type StorageLike } from "../../src/cloud/session.ts";
+import { CloudClient } from "../src/client.ts";
+import { CloudHttpError, CloudNotLoggedInError } from "../src/errors.ts";
+import { SessionStore, type SecretsLike, type StorageLike } from "../src/session.ts";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 

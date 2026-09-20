@@ -10,7 +10,7 @@
 //   * A 4xx never enters the queue (see statusWriter). A 403 or 404 will not
 //     succeed on the tenth attempt either.
 
-import type { StatusArtifact, TaskStatus } from "../cloud/types.ts";
+import type { StatusArtifact, TaskStatus } from "./types.ts";
 
 export interface QueueEntry {
   id: string;

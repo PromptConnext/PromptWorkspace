@@ -21,7 +21,7 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import type { StorageLike } from "../cloud/session.ts";
+import type { StorageLike } from "@promptconnext/pz-cloud";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
 import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";

@@ -1,9 +1,9 @@
-// Run:  node --test apps/vscode/test/unit/cache.test.ts
+// Run:  node --test packages/pz-cloud/test/cache.test.ts
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { JsonCache, type FileStoreLike } from "../../src/storage/cache.ts";
+import { JsonCache, type FileStoreLike } from "../src/cache.ts";
 
 function memoryStore(seed: Record<string, string> = {}) {
   const files = new Map(Object.entries(seed));

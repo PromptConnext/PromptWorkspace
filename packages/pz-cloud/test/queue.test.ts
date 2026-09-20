@@ -1,11 +1,11 @@
-// Run:  node --test apps/vscode/test/unit/queue.test.ts
+// Run:  node --test packages/pz-cloud/test/queue.test.ts
 //
 // Clock and id generator are injected, so no timers and no randomness here.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_ATTEMPTS, StatusQueue, type QueueEntry } from "../../src/tasks/queue.ts";
+import { MAX_ATTEMPTS, StatusQueue, type QueueEntry } from "../src/queue.ts";
 
 function makeQueue(startAt = 1_000) {
   let saved: QueueEntry[] = [];

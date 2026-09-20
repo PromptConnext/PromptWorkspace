@@ -10,7 +10,7 @@
 // state when the two have diverged, never a diff view.
 
 import * as vscode from "vscode";
-import type { CloudClient } from "../cloud/client.ts";
+import type { CloudClient } from "@promptconnext/pz-cloud";
 import type { OutputLogger } from "../util/log.ts";
 
 export const SEEDED_DOCS = [
