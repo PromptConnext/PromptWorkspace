@@ -7,8 +7,13 @@
 // before it is rendered, compared or handed to git, so a hostile URL cannot
 // reach the UI, let alone a git process.
 
-import { isCloneableRepoUrl, sameRepo } from "../link/repoUrl.ts";
-import type { CloudProject, LifecycleStatus, Workspace } from "@promptconnext/pz-cloud";
+import {
+  isCloneableRepoUrl,
+  sameRepo,
+  type CloudProject,
+  type LifecycleStatus,
+  type Workspace,
+} from "@promptconnext/pz-cloud";
 import type { ProjectCandidate } from "../link/projectLink.ts";
 
 /** `local` = on this machine · `remote-only` = clonable · `no-repo` = nothing

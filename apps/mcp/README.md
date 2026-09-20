@@ -15,16 +15,27 @@ thing left for them to install. The build is sequenced in
 
 ## What it is, and what it is not
 
-This milestone (M1) ships two read-only tools:
+Three read-only tools, through M2:
 
 - **`list_my_tasks`** — the tasks assigned to you, across every workspace and
   project. Optional `workspace_id` and `status` filters; without `status` the
   cloud answers with open work only (`todo` and `in_progress`).
 - **`get_task`** — one task with its acceptance criteria, an excerpt of the
   specification it implements, and the project and repository it belongs to.
+- **`get_project_rules`** — the three files the cloud seeded into the project's
+  repository (`AGENTS.md`, `docs/conventions.md` and
+  `.specify/memory/constitution.md`), read **from your clone**. The project is
+  worked out from the folder's git remote: pass `workspace_root` for the clone
+  (it defaults to whatever directory your MCP client launched this process in,
+  which is often not your project), or `project_id` to name the project outright
+  when a repository backs more than one, or when the folder has no remote. A
+  missing file is reported as missing rather than quietly skipped, and the
+  cloud's constitution stage document is consulted only for provenance — to
+  stand in when the file is not in the clone, and to say in one line when the two
+  have diverged. The file on disk always wins: the cloud seeds these once and
+  never overwrites them.
 
-`get_project_rules` (reading the seeded `AGENTS.md`, conventions doc and
-constitution from your clone) is M2. `close_task` is M3. Streamable HTTP is M4.
+`close_task` is M3. Streamable HTTP is M4.
 
 This is **not a planning client**. It does not create projects, run stages,
 author or edit requirements and specs, upload a PRD, post discussions, or clone a
@@ -126,9 +137,18 @@ pnpm --dir apps/mcp watch       # esbuild in watch mode
 node dist/index.js --help
 ```
 
-The cloud transport, wire types, session store and error taxonomy come from
-`packages/pz-cloud`, shared with `apps/vscode` by `workspace:*`. Fix a transport
-bug there, not here.
+The cloud transport, wire types, session store, error taxonomy, repository-URL
+matching and seeded-document paths come from `packages/pz-cloud`, shared with
+`apps/vscode` by `workspace:*`. Fix a transport bug there, not here — and note
+that the repo-URL matching in particular is shared precisely so the two surfaces
+cannot resolve the same clone to two different projects.
+
+The one thing deliberately **not** shared is the reader for those seeded files:
+`apps/vscode` reads them through `vscode.workspace.fs` and this server over
+`node:fs`, because there is no editor here to ask. Likewise the git remotes,
+which the extension gets from the built-in Git extension's API and this server
+gets by running `git remote -v` in the workspace root — via `execFile`, never a
+shell, because that root is caller-supplied input.
 
 Unlike `apps/engine`, this app **is** bundled: it ships to npm and runs through
 `npx`, so one file beats a `node_modules` walk on every cold start. The engine's
