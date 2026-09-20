@@ -27,6 +27,11 @@ import type { SecretsLike, StorageLike } from "@promptconnext/pz-cloud";
 const ACCOUNT = "promptconnext-mcp";
 
 const STATE_FILE = "session.json";
+/** The pending status writes, in their own file beside the session. Same class,
+ *  a different name: M3's queue needs exactly what `JsonState` already does —
+ *  a 0600 JSON file in the config directory — and a third copy of that logic is
+ *  a third place for the mode bits to be wrong. */
+export const QUEUE_FILE = "queue.json";
 const SECRETS_SUBDIR = "secrets";
 
 // ------------------------------------------------------------------- macOS
@@ -157,13 +162,14 @@ export class KeychainSecrets implements SecretsLike {
 }
 
 /** SessionStore's metadata half: mode, user id, email. Not secret, but 0600
- *  anyway — an email address is still the user's. */
+ *  anyway — an email address is still the user's. Also the status queue's
+ *  backing store, under a file name of its own. */
 export class JsonState implements StorageLike {
   private readonly file: string;
   private cache: Record<string, unknown> | undefined;
 
-  constructor(configDir: string) {
-    this.file = join(configDir, STATE_FILE);
+  constructor(configDir: string, file: string = STATE_FILE) {
+    this.file = join(configDir, file);
   }
 
   private load(): Record<string, unknown> {

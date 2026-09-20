@@ -1,4 +1,5 @@
-// A folder's git remotes, without an editor to ask.
+// A folder's git state — its remotes, and since M3 its HEAD commit — without an
+// editor to ask.
 //
 // apps/vscode gets these from the built-in Git extension's API
 // (src/git/gitBridge.ts). There is no such API here, so the remotes come from
@@ -43,6 +44,34 @@ export async function readGitRemotes(dir: string): Promise<GitRemotes> {
     return { isRepository: false, remotes: [] };
   }
   return { isRepository: true, remotes: parseRemotes(stdout) };
+}
+
+export interface GitHead {
+  sha: string;
+  /** The commit's subject line. Empty is possible — git allows it — and the
+   *  caller must not assume otherwise. */
+  subject: string;
+}
+
+/** The commit `HEAD` points at, or null when there is nothing to read.
+ *
+ *  `close_task` uses this as the artifact when the caller names no commit: the
+ *  developer asking to close a task has, by construction, just committed the
+ *  work. One `git log` rather than a `rev-parse` plus a second call, because two
+ *  invocations could straddle a commit and report a sha with another commit's
+ *  subject. Null covers every failure the same way — no repository, no commits
+ *  yet, no git binary — because the answer to all of them is the same: close the
+ *  task, say no commit was recorded. */
+export async function readGitHead(dir: string): Promise<GitHead | null> {
+  let stdout: string;
+  try {
+    stdout = await runGit(dir, ["log", "-1", "--format=%H%n%s"]);
+  } catch {
+    return null;
+  }
+  const [sha = "", subject = ""] = stdout.split("\n");
+  if (!sha.trim()) return null;
+  return { sha: sha.trim(), subject: subject.trim() };
 }
 
 /** Parse `git remote -v` output: `<name>\t<url> (fetch|push)` per line. */
