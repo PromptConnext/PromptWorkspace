@@ -1,6 +1,6 @@
 # Plan 0021 — The operational floor
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation · **Source:** [product vision §3.4](../product-vision-2026-09-12.md)
+**Date:** 2026-09-12 · **Status:** M1 implemented 2026-09-21 (`.github/workflows/ci.yml`: cloud, engine, web, vscode, mcp, corp, pz-cloud jobs, path-filtered) · M2–M5 open · **Source:** [product vision §3.4](../product-vision-2026-09-12.md)
 
 PromptConnext is a hosted service holding real customer data — workspaces, task graphs, discussions, encrypted model keys and GitHub PATs — and it has no continuous integration for the four apps that matter, no error tracking, no tracing and no metrics beyond four counters on a health endpoint. The only automation in the repository builds desktop shells that [plan 0011](./0011-desktop-decision-gate.md) may be about to delete.
 

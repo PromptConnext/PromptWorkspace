@@ -36,7 +36,11 @@ This is a **pnpm workspace** (`apps/*` plus a shared-library `packages/*`) plus 
 > the cloud is authoritative for the task graph, and the developer-facing engine/sidecar shape is
 > retired in favour of `apps/vscode` and an MCP server (plan 0025, **M1–M3 shipped 2026-09-20**:
 > `list_my_tasks`, `get_task`, `get_project_rules`, `close_task`; M4 is HTTP transport + device-code
-> auth, non-blocking). `apps/desktop-theia` is deleted, per [plan 0011](docs/plans/0011-desktop-decision-gate.md).
+> auth, non-blocking). `apps/desktop-theia`'s CI workflow is retired (`ci.yml` replaced it, plan 0021 M1) but
+> the **directory itself is not yet deleted** — 16 tracked files remain, and root `package.json` still
+> carries the `drivelist`/`keytar`/`native-keymap` overrides pointed at its stubs. That deletion is
+> [plan 0011](docs/plans/0011-desktop-decision-gate.md) §4 item 3, a single atomic step (directory +
+> overrides + relock) nobody has executed yet — don't assume it's done because the workflow is gone.
 > **`apps/desktop` (Tauri) is not deleted** — [ADR 0028](docs/decisions/0028-desktop-repurposed-for-business-users.md)
 > (2026-09-21) retargets it at business users instead, in a shape a follow-up plan has yet to define;
 > until that plan lands, don't extend `apps/desktop`'s current developer-facing content as if it were
