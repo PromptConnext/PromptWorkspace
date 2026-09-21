@@ -1,5 +1,6 @@
 "use client";
 
+import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 
 // Next.js App Router root-layout error boundary (WP3). Only fires when the
@@ -13,6 +14,10 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
+    // A React render error never reaches window.onerror, so the browser SDK
+    // would not see this one without an explicit capture (plan 0021 M2). A
+    // no-op with no DSN configured.
+    Sentry.captureException(error);
     console.error(
       JSON.stringify({
         ts: new Date().toISOString(),

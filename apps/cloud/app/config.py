@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
 
+    # Error reporting (plan 0021 M2, app/observability.py). Unset means the
+    # Sentry SDK is never initialised — no network, no patched frameworks,
+    # nothing captured — which is the correct default for dev and for the test
+    # suite. A production instance without one is running blind, so
+    # require_production_safety() warns (never raises) about it below.
+    sentry_dsn: str | None = None
+
     # Personal-workspace auto-provision (ADR 0015 §5, plan 0006 G1). When an
     # authenticated user resolves to ZERO workspace memberships on GET
     # /workspaces, mint a default "{user}'s workspace" with that user as admin.
@@ -227,7 +234,11 @@ class Settings(BaseSettings):
         Stub auth (X-User-Id header, no verification) is a full auth bypass —
         raise and refuse to start. A CORS allowlist still pointed at the
         localhost dev defaults is not itself an auth bypass, so it only
-        warns (returned, not logged here — the caller owns logging).
+        warns (returned, not logged here — the caller owns logging). So does a
+        missing error-reporting DSN: running a hosted instance with no error
+        visibility is an operational fault, not a security hole, and refusing
+        to boot over it would take a working service down to fix a monitoring
+        gap.
         """
         if self.app_env == "production" and self.auth_mode == "stub":
             raise RuntimeError(
@@ -249,6 +260,12 @@ class Settings(BaseSettings):
                 "default ({}); set CORS_ORIGINS to your production origin(s).".format(
                     ", ".join(sorted(default_cors))
                 )
+            )
+        if self.app_env == "production" and not self.sentry_dsn:
+            warnings.append(
+                "Sentry DSN is not configured; a production instance is running "
+                "with no error visibility. Set SENTRY_DSN to the project's ingest "
+                "URL (app/observability.py scrubs every report before it leaves)."
             )
         return warnings
 

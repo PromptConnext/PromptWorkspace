@@ -20,6 +20,12 @@ python-multipart>=0.0.9,<0.1
 # app/integrations/github.py, so a deployment that never seeds a repo does
 # not need the wheel present.
 PyNaCl>=1.5,<2
+# Error reporting (plan 0021 M2). Imported unconditionally by
+# app/observability.py, but sentry_sdk.init() is only called when SENTRY_DSN
+# is set, so a dev run or a test pays nothing but the import. Major version
+# pinned: `include_local_variables` is the option this service's data-handling
+# guarantees rest on, and a major bump is where a default like that moves.
+sentry-sdk>=2.20,<3
 
 # Dev / test
 pytest>=8.2,<9

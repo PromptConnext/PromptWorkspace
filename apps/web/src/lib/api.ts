@@ -30,6 +30,20 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The single egress point for every cloud call this app makes.
+ *
+ * Deliberately carries no error-reporting code of its own (plan 0021 M2).
+ * Sentry's browser SDK already records a breadcrumb per fetch — method, URL
+ * and status, and nothing else — with no tracing enabled, which is the
+ * context a failed cloud call needs. What it must NOT record is
+ * `authHeaders`: that is a live Supabase bearer JWT, or the X-User-Id stub
+ * credential. Headers are never collected (`dataCollection.httpHeaders:
+ * false`) and are redacted again in `beforeSend` if one ever reaches an
+ * event — both in src/lib/sentry.ts, both covered by src/lib/sentry.test.ts.
+ * Adding a manual breadcrumb or context here would only create a second,
+ * unscrubbed path for the same header.
+ */
 export async function apiFetch<T>(
   path: string,
   authHeaders: Record<string, string>,

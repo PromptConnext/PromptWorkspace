@@ -38,6 +38,7 @@ from app.documents.storage import build_document_store
 from app.generation.managed import build_managed_connection, build_managed_embed_connection
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
+from app.observability import init_sentry
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
 from app.rag.embedder import HttpEmbeddingProvider
@@ -105,6 +106,14 @@ async def lifespan(app: FastAPI):
     # which drowns out our own records when LOG_LEVEL=DEBUG. Pin it to WARNING.
     for noisy in ("hpack", "h2", "httpcore", "httpx"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Error reporting (plan 0021 M2). Set up here alongside logging and before
+    # anything else in this function can fail, so a crash during the rest of
+    # startup is itself reported. A no-op with no SENTRY_DSN configured —
+    # app/observability.py never calls sentry_sdk.init() in that case, and
+    # require_production_safety() (via _build_repository below) warns if that
+    # is what a production instance is doing.
+    if init_sentry(settings, release=__version__):
+        logger.info("Error reporting enabled (environment=%s)", settings.app_env)
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
     app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)

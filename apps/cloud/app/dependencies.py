@@ -32,6 +32,7 @@ from fastapi import Header, HTTPException, Request
 
 from app.config import Settings
 from app.db.repository import Repository
+from app.observability import tag_user
 
 
 @dataclass
@@ -85,6 +86,7 @@ def get_current_user(
     settings = request.app.state.settings
     if settings.auth_mode == "stub":
         uid = x_user_id or "dev-user"
+        tag_user(uid)
         return User(id=uid, email=f"{uid}@promptconnext.local")
 
     token = (authorization or "").removeprefix("Bearer ").strip()
@@ -97,6 +99,10 @@ def get_current_user(
     sub = claims.get("sub")
     if not sub:
         raise HTTPException(status_code=401, detail="invalid_token")
+    # The one identifying value an error report is allowed to carry (plan 0021
+    # M2): our own user id, never the token it came from. Scoped to this
+    # request — see app/observability.py::tag_user.
+    tag_user(sub)
     return User(id=sub, email=claims.get("email", ""))
 
 
