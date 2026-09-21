@@ -44,6 +44,7 @@ from app.rag.chat import HttpChatProvider
 from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.queue import EmbedQueue, embed_worker_loop
 from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from app.requestlog import REQUEST_ID_HEADER, RequestIdMiddleware, configure_logging
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
 
@@ -98,14 +99,10 @@ async def _tombstone_gc_loop(app: FastAPI, settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    # The HTTP/2 stack under httpx logs every frame and HPACK header at DEBUG,
-    # which drowns out our own records when LOG_LEVEL=DEBUG. Pin it to WARNING.
-    for noisy in ("hpack", "h2", "httpcore", "httpx"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    # JSON lines carrying the request id bound by RequestIdMiddleware (plan
+    # 0021 M3) — one stdlib Formatter, no new dependency. Also pins the noisy
+    # httpx/h2 loggers; see app/requestlog.py::configure_logging.
+    configure_logging(settings.log_level)
     # Error reporting (plan 0021 M2). Set up here alongside logging and before
     # anything else in this function can fail, so a crash during the rest of
     # startup is itself reported. A no-op with no SENTRY_DSN configured —
@@ -244,6 +241,11 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # A response header is invisible to browser JS unless it is exposed,
+        # and the id is only half useful if the caller that sent it cannot read
+        # back the one actually used (a proxy's, or a minted one when the
+        # client sent none). Grep-side correlation works either way.
+        expose_headers=[REQUEST_ID_HEADER],
     )
     if settings.rate_limit_enabled:
         app.add_middleware(
@@ -253,6 +255,12 @@ def create_app() -> FastAPI:
                 burst=settings.rate_limit_burst,
             ),
         )
+    # Added last, so it is the outermost middleware: Starlette prepends, and
+    # the first entry wraps the rest. Everything below it — the rate limiter's
+    # own 429 included — is served with an id bound, and the binding happens
+    # before BaseHTTPMiddleware forks the child task that would otherwise only
+    # inherit a context copied too early. See app/requestlog.py.
+    app.add_middleware(RequestIdMiddleware)
     app.include_router(health.router)
     app.include_router(workspaces.router)
     # github.router's static /api/webhooks/github must be registered before

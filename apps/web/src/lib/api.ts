@@ -30,6 +30,26 @@ export class ApiError extends Error {
   }
 }
 
+/** The header apps/cloud reads, echoes and logs (apps/cloud/app/requestlog.py). */
+const REQUEST_ID_HEADER = "X-Request-Id";
+
+/**
+ * A fresh id per cloud call (plan 0021 M3), so a user reporting "it failed at
+ * 14:32" hands over a value that greps the cloud's JSON log lines and matches
+ * the `request_id` tag on the Sentry event for the same request.
+ *
+ * `crypto.randomUUID` needs a secure context. That covers https and localhost
+ * — every way this app is meant to be reached — but a plain-http internal
+ * host is not one, and there it is simply `undefined`: without the fallback
+ * every cloud call in the app would throw rather than lose a log id.
+ */
+function newRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 /**
  * The single egress point for every cloud call this app makes.
  *
@@ -53,6 +73,7 @@ export async function apiFetch<T>(
     ...init,
     headers: {
       "content-type": "application/json",
+      [REQUEST_ID_HEADER]: newRequestId(),
       ...authHeaders,
       ...((init.headers as Record<string, string>) ?? {}),
     },
