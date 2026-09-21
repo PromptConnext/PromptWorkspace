@@ -51,10 +51,11 @@ ids (project, workspace, task) are deliberately left alone — they are the
 same class of value as the tags below, and redacting them would leave a report
 that cannot be tied to anything.
 
-What is deliberately NOT scrubbed: `user_id` and `workspace_id`, which are set
-as tags (`tag_user` / `tag_workspace` below). They are this system's own
-identifiers, not credentials, and without them a report says only that
-something failed.
+What is deliberately NOT scrubbed: `user_id`, `workspace_id` and `request_id`,
+which are set as tags (`tag_user` / `tag_workspace` / `tag_request` below).
+They are this system's own identifiers, not credentials, and without them a
+report says only that something failed. `request_id` (plan 0021 M3) is what
+ties a report to the JSON log lines of the same request.
 
 With no DSN configured the SDK is never initialised at all — no network, no
 patched frameworks, no cost. That is the default in dev and in tests; a
@@ -383,3 +384,21 @@ def tag_workspace(workspace_id: str) -> None:
     per-request isolation and same rationale as `tag_user`."""
     if sentry_sdk.is_initialized():
         sentry_sdk.set_tag("workspace_id", workspace_id)
+
+
+def tag_request(request_id: str) -> None:
+    """Tag the current request with its `X-Request-Id` (plan 0021 M3).
+
+    Called from `app/requestlog.py::RequestIdMiddleware`, which runs inside the
+    per-request isolation scope the SDK's ASGI integration has already forked —
+    the same per-request isolation as `tag_user` above, and the reason this is
+    a tag rather than anything module-level.
+
+    Not scrubbed, and it is the one value in an event that is deliberately
+    *also* in the customer's hands: the same id appears in this request's log
+    lines and, when `apiFetch` minted it, in the browser's own record of the
+    call. That is the whole point — it is the join key between a report and a
+    log search, and it carries no information of its own.
+    """
+    if sentry_sdk.is_initialized():
+        sentry_sdk.set_tag("request_id", request_id)

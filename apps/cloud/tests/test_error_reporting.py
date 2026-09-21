@@ -538,6 +538,32 @@ def test_user_and_workspace_ids_land_as_tags(events: list[dict]):
     assert tags["workspace_id"] == ws_id
 
 
+def test_the_request_id_lands_as_a_tag(events: list[dict]):
+    """Plan 0021 M3. Not asked for by the plan, which predates M2 in its own
+    numbering, and the cheapest possible completion of it: the id is already
+    bound per request by app/requestlog.py, and as a tag it is the join between
+    an error report and the JSON log lines of the same request — otherwise the
+    two halves of the milestone answer "which request?" separately and neither
+    can reach the other.
+    """
+    with _client_with_exploding_route() as client:
+        ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+        res = client.post(
+            f"/__test__/boom/{ws['id']}",
+            headers={**ALICE, "X-Request-Id": "req-from-the-browser"},
+            json={},
+        )
+        assert res.status_code == 500
+
+    # This is the correlation path for an *unhandled* 500 specifically:
+    # Starlette builds that response in `ServerErrorMiddleware`, which sits
+    # above every user middleware, so it is the one response shape the echo
+    # header does not reach (see app/requestlog.py::RequestIdMiddleware). The
+    # tag is what ties the report to the log lines the handler emitted before
+    # it raised.
+    assert events[-1]["tags"]["request_id"] == "req-from-the-browser"
+
+
 def test_tags_do_not_leak_between_requests(events: list[dict]):
     """The tags are set on the per-request isolation scope the SDK's ASGI
     integration forks, not on module-level state — so a second request as a
@@ -554,8 +580,18 @@ def test_tags_do_not_leak_between_requests(events: list[dict]):
         ).status_code == 500
 
     assert len(events) == 2
-    assert events[0]["tags"] == {"user_id": "alice", "workspace_id": alice_ws["id"]}
-    assert events[1]["tags"] == {"user_id": "bob", "workspace_id": bob_ws["id"]}
+    assert events[0]["tags"]["user_id"] == "alice"
+    assert events[0]["tags"]["workspace_id"] == alice_ws["id"]
+    assert events[1]["tags"]["user_id"] == "bob"
+    assert events[1]["tags"]["workspace_id"] == bob_ws["id"]
+    # Same reasoning one level down for the request id (plan 0021 M3): it is
+    # minted per request, so two reports sharing one would mean the scope was
+    # not forked. Asserted by inequality rather than by value because the
+    # middleware minted both.
+    assert events[0]["tags"]["request_id"] != events[1]["tags"]["request_id"]
+    # And the tag set as a whole stays closed: nothing else may accumulate
+    # here, since every key in it is sent to a third party unscrubbed.
+    assert set(events[0]["tags"]) == {"user_id", "workspace_id", "request_id"}
 
 
 # --------------------------------------------------------------------------

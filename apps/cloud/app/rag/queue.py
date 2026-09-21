@@ -33,7 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,6 +41,7 @@ from app.integrations.github_auth import resolve_token
 from app.rag.chunker import chunk_text
 from app.rag.code_chunker import chunk_code
 from app.rag.source import node_text
+from app.requestlog import get_request_id, request_id_scope
 
 logger = logging.getLogger("promptconnext.rag")
 
@@ -58,6 +59,12 @@ class EmbedJob:
     repo: str | None = None
     path: str | None = None
     sha: str | None = None
+    # The request that caused this job to exist (plan 0021 M3). This queue is
+    # the one genuinely asynchronous path in the service, so without it the
+    # request whose push or upload filled the queue and the worker line
+    # reporting a failure half a second later cannot be tied together. Stamped
+    # by `enqueue()`; None for a job with no request behind it.
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,7 +163,17 @@ def enqueue(app: Any, job: EmbedJob) -> None:
     The reservation is taken here, synchronously, so the job is already
     counted by the time the enqueueing request returns; only the asyncio put
     is deferred to the loop thread.
+
+    The request id is stamped here rather than at each call site. This function
+    is the single funnel every producer goes through — the sync upsert, a new
+    discussion, a document upload, the GitHub webhook's push handler, stage
+    apply and the model-connection backfill — so one line covers all of them
+    and, more to the point, cannot be the line a future caller forgets. A job
+    that arrives already carrying an id keeps it, which is what the field being
+    a parameter rather than an internal is for.
     """
+    if job.request_id is None:
+        job = replace(job, request_id=get_request_id())
     queue: EmbedQueue = app.state.embed_queue
     queue.reserve(job)
     loop: asyncio.AbstractEventLoop | None = getattr(app.state, "loop", None)
@@ -170,15 +187,23 @@ async def embed_worker_loop(app: Any) -> None:
     queue: EmbedQueue = app.state.embed_queue
     while True:
         job = await queue.get()
-        try:
-            await _process_job(app, job)
-        except Exception as exc:  # noqa: BLE001 - one bad job must never kill the worker
-            logger.exception("embed job failed node=%s type=%s", job.node_id, job.node_type)
-            # Same reason index-status exists: the operator otherwise sees a
-            # chunk count that never moves and no way to learn why.
-            queue.record_failure(job, "embed_failed", str(exc) or type(exc).__name__)
-        finally:
-            queue.complete(job)
+        # Rebinding the enqueueing request's id for the duration of this job is
+        # what makes every line below — including the `logger.exception` in the
+        # except arm, which nothing here had to be taught about request ids —
+        # come out attributed to the request that caused the work. A background
+        # worker has no ASGI scope to hang a contextvar off, so the job carries
+        # the id and this restores it; the scope resets between jobs, or one
+        # failure would go out labelled with the previous request.
+        with request_id_scope(job.request_id):
+            try:
+                await _process_job(app, job)
+            except Exception as exc:  # noqa: BLE001 - one bad job must never kill the worker
+                logger.exception("embed job failed node=%s type=%s", job.node_id, job.node_type)
+                # Same reason index-status exists: the operator otherwise sees a
+                # chunk count that never moves and no way to learn why.
+                queue.record_failure(job, "embed_failed", str(exc) or type(exc).__name__)
+            finally:
+                queue.complete(job)
 
 
 async def _process_job(app: Any, job: EmbedJob) -> None:
