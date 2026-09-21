@@ -416,6 +416,8 @@ Manual is fine now; when ready, GitHub Actions is the natural fit:
 - [ ] service_role key set only in Railway variables — never in the repo or client
 - [ ] Replicas = 1 (in-process presence/rate-limit state)
 - [ ] `CORS_ORIGINS` includes the packaged app origin, excludes wildcards
+- [ ] `SENTRY_DSN` set on the cloud service and `NEXT_PUBLIC_SENTRY_DSN` on both Vercel projects (`apps/web`, `apps/corp`) — unset means the SDK never initialises and the instance runs blind; the cloud logs a startup warning to that effect
+- [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web/corp equivalent is `src/lib/sentry.ts` in each app, covered by `src/lib/sentry.test.ts`. The URL rules are the ones worth re-reading before adding a route: a credential in a path or fragment has no key name for a denylist to match, which is how `/invitations/{token}/accept` and Supabase's `#access_token=` recovery link both leaked in review
 - [ ] DMG uploaded to versioned R2 path + `checksums.txt` + `latest.json` updated
 - [ ] Download page includes the Gatekeeper workaround note (until signing exists)
 - [ ] Version bumped in `tauri.conf.json` and tagged in git

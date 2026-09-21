@@ -11,6 +11,13 @@ from fastapi import HTTPException
 from app.db.repository import Repository
 from app.dependencies import User
 from app.models.schemas import Project, Role, Workspace
+from app.observability import tag_workspace
+
+# Every authorised request passes through one of the three guards below, which
+# makes them the single place a request's workspace is known for certain — so
+# they are where an error report gets its `workspace_id` tag (plan 0021 M2).
+# The tag is an id of ours, not a credential, and is what makes a report
+# actionable; see app/observability.py for what is scrubbed instead.
 
 
 def require_workspace(repo: Repository, workspace_id: str, user: User) -> Workspace:
@@ -19,6 +26,7 @@ def require_workspace(repo: Repository, workspace_id: str, user: User) -> Worksp
         raise HTTPException(status_code=404, detail="workspace_not_found")
     if repo.get_membership(workspace_id, user.id) is None:
         raise HTTPException(status_code=403, detail="not_a_member")
+    tag_workspace(ws.id)
     return ws
 
 
@@ -28,6 +36,7 @@ def require_admin(repo: Repository, workspace_id: str, user: User) -> Workspace:
         raise HTTPException(status_code=404, detail="workspace_not_found")
     if repo.get_membership(workspace_id, user.id) != Role.admin:
         raise HTTPException(status_code=403, detail="admin_required")
+    tag_workspace(ws.id)
     return ws
 
 
@@ -51,4 +60,5 @@ def require_project(repo: Repository, project_id: str, user: User) -> Project:
         raise HTTPException(status_code=404, detail="project_not_found")
     if repo.get_membership(project.workspace_id, user.id) is None:
         raise HTTPException(status_code=403, detail="not_a_member")
+    tag_workspace(project.workspace_id)
     return project

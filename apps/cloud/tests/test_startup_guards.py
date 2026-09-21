@@ -4,10 +4,15 @@ from app.config import Settings
 
 
 def _settings(**overrides) -> Settings:
+    # `sentry_dsn` is pinned to a configured-looking value so these tests keep
+    # asserting on the CORS/auth branches alone; the error-reporting warning
+    # branch added by plan 0021 M2 has its own coverage in
+    # tests/test_error_reporting.py.
     defaults = dict(
         app_env="development",
         auth_mode="stub",
         cors_origins="http://localhost:3000,http://localhost:1420",
+        sentry_dsn="http://publickey@127.0.0.1:9/0",
     )
     defaults.update(overrides)
     return Settings(**defaults)

@@ -54,7 +54,6 @@ function RegisterForm() {
       setDone(true);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "An unknown error occurred";
-      console.log('[SUP]', err);
       setError(errorMessage);
       setPending(false);
     }
