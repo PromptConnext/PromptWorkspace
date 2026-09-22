@@ -13,6 +13,7 @@ board moved.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -215,8 +216,20 @@ def test_a_preexisting_reference_collision_is_consolidated_not_perpetuated(clien
 
     repo = client.app.state.repository
     original = next(t for t in _live_tasks(client, pid) if t.feature_tag == "T001 [P]")
+    # `get_graph` orders candidates by (updated_at, id) ascending, and
+    # `_apply_tasks` keeps whichever row it sees first for a reference —
+    # so the duplicate needs a strictly later `updated_at` than `original`
+    # to make it deterministically the one retired below. A shared
+    # `updated_at` (e.g. from a bare `model_copy`) leaves the tie broken by
+    # `id` string comparison against a random uuid4, which flips this
+    # test's outcome depending on which id happens to sort first.
     duplicate = original.model_copy(
-        update={"id": "dup-t1", "title": "A stray duplicate of T1", "feature_tag": "T001"}
+        update={
+            "id": "dup-t1",
+            "title": "A stray duplicate of T1",
+            "feature_tag": "T001",
+            "updated_at": original.updated_at + timedelta(seconds=1),
+        }
     )
     repo._graph[pid]["tasks"][duplicate.id] = duplicate
     assert colliding_refs(t.feature_tag for t in _live_tasks(client, pid)) == {"T1"}
