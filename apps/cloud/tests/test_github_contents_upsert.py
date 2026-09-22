@@ -22,7 +22,12 @@ import json
 import httpx
 import pytest
 
-from app.integrations.github import GithubBranchMovedError, GithubWriteError, HttpGithubClient
+from app.integrations.github import (
+    GithubBranchMovedError,
+    GithubRefUpdateRejectedError,
+    GithubWriteError,
+    HttpGithubClient,
+)
 
 REPO = "acme/make-story-time"
 EXISTING_SHA = "6515b55d5f456f846e8735f4c29c639180892a5d"
@@ -226,7 +231,14 @@ def test_sends_utf8_base64_content(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def _git_data(head: str, ref_update_status: int = 200):
+NOT_FAST_FORWARD = "Update is not a fast forward"
+PROTECTED = (
+    "Protected branch update failed for refs/heads/main: "
+    "Changes must be made through a pull request."
+)
+
+
+def _git_data(head: str, ref_update_status: int = 200, ref_message: str = NOT_FAST_FORWARD):
     """Handler for the Git Data API calls `create_commit_with_files` makes.
     Returns (handler, calls) — calls records (method, path) in order."""
     calls: list[tuple[str, str]] = []
@@ -247,7 +259,7 @@ def _git_data(head: str, ref_update_status: int = 200):
             return httpx.Response(201, json={"sha": "new-commit"})
         if path.endswith("/git/refs/heads/main"):
             if ref_update_status != 200:
-                return httpx.Response(ref_update_status, json={"message": "not a fast forward"})
+                return httpx.Response(ref_update_status, json={"message": ref_message})
             return httpx.Response(200, json={"object": {"sha": "new-commit"}})
         raise AssertionError(f"unexpected {request.method} {path}")
 
@@ -301,13 +313,36 @@ def test_a_branch_moving_during_the_commit_is_reported_as_moved(monkeypatch):
         _seed_commit("inspected")
 
 
-def test_without_a_pin_a_rejected_ref_update_stays_a_plain_write_error(monkeypatch):
-    handler, _calls = _git_data(head="whatever", ref_update_status=422)
+@pytest.mark.parametrize("pin", ["inspected", None])
+def test_a_protected_branch_is_not_reported_as_moved(monkeypatch, pin):
+    """A 422 that is not a lost race — branch protection, a ruleset — would
+    refuse every retry, so it must not read as a moved branch."""
+    handler, _calls = _git_data(head="inspected", ref_update_status=422, ref_message=PROTECTED)
+    _route(monkeypatch, handler)
+
+    with pytest.raises(GithubRefUpdateRejectedError) as exc:
+        _seed_commit(pin)
+    assert not isinstance(exc.value, GithubBranchMovedError)
+    assert exc.value.status_code == 422
+
+
+def test_a_non_fast_forward_without_a_pin_is_also_a_moved_branch(monkeypatch):
+    handler, _calls = _git_data(
+        head="whatever", ref_update_status=422, ref_message="Update is not a fast-forward"
+    )
+    _route(monkeypatch, handler)
+
+    with pytest.raises(GithubBranchMovedError):
+        _seed_commit(None)
+
+
+def test_other_ref_update_failures_stay_plain_write_errors(monkeypatch):
+    handler, _calls = _git_data(head="inspected", ref_update_status=500, ref_message="boom")
     _route(monkeypatch, handler)
 
     with pytest.raises(GithubWriteError) as exc:
-        _seed_commit(None)
-    assert not isinstance(exc.value, GithubBranchMovedError)
+        _seed_commit("inspected")
+    assert type(exc.value) is GithubWriteError
 
 
 def test_tree_entries_keep_directories_and_submodules(monkeypatch):

@@ -14,7 +14,10 @@ names, not by the call site (`_table` below). The seven graph tables in
 migration 0031 revoked them from `authenticated` and `anon` outright — the
 server is their only writer (plan 0014, Option A). Everything else goes
 through `_client`, which `for_user` swaps onto the caller's own JWT so
-Postgres RLS really does scope those tables per request.
+Postgres RLS really does scope those tables per request — except the writes
+to `_SERVICE_WRITE_TABLES` (`_write_table`): migration 0036 left
+`authenticated` only SELECT on pz_projects, so its reads stay scoped and its
+writes take the service-role client.
 """
 
 from __future__ import annotations
@@ -163,6 +166,16 @@ _SERVICE_ONLY_TABLES = frozenset(
     }
 )
 
+# Readable through the caller's own JWT — RLS still scopes the read to the
+# caller's workspaces — but written only by the server. Migration 0036 took
+# INSERT/UPDATE/DELETE on pz_projects away from `authenticated`: the row holds
+# columns only the server may set (repo_url, repo_id, repo_default_branch,
+# repo_origin, lifecycle_status, policy_scope, deployment_config/state), and
+# its only policy tested membership, so a member with their own JWT could set
+# any of them straight through PostgREST. Every write route already checks
+# membership or the admin role in app/api before it reaches this class.
+_SERVICE_WRITE_TABLES = frozenset({"pz_projects"})
+
 
 class SupabaseRepository(Repository):
     backend_name = "supabase"
@@ -189,9 +202,10 @@ class SupabaseRepository(Repository):
         client reaching one gets `permission denied for table ...`, not a
         narrower view. Scoping stays real, and still worth having, for the
         tables outside that set — pz_workspaces, pz_workspace_members,
-        pz_projects, pz_invitations, pz_documents and the rest — where RLS at
-        least enforces workspace membership, and on the two membership tables
-        the admin rule too.
+        pz_projects (reads only: its writes take the service-role client, see
+        `_SERVICE_WRITE_TABLES`), pz_invitations, pz_documents and the rest —
+        where RLS at least enforces workspace membership, and on the two
+        membership tables the admin rule too.
 
         Must not mutate `self._client` in place: `app.state.repository` is one
         shared instance across all concurrent requests (see
@@ -216,6 +230,14 @@ class SupabaseRepository(Repository):
         made — see `_SERVICE_ONLY_TABLES`."""
         client = self._service_client if name in _SERVICE_ONLY_TABLES else self._client
         return client.table(name)
+
+    def _write_table(self, name: str):
+        """Like `_table`, for an insert, update or delete: a table in
+        `_SERVICE_WRITE_TABLES` is written on the service-role client even
+        when its reads stay scoped to the caller."""
+        if name in _SERVICE_WRITE_TABLES:
+            return self._service_client.table(name)
+        return self._table(name)
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -456,7 +478,7 @@ class SupabaseRepository(Repository):
             repo_id=repo_id,
             repo_origin=repo_origin,
         )
-        self._table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
+        self._write_table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
 
     def get_project(self, project_id: str) -> Project | None:
@@ -471,7 +493,7 @@ class SupabaseRepository(Repository):
 
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         patch = {"lifecycle_status": status, "updated_at": utcnow().isoformat()}
-        self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
             raise KeyError("project_not_found")
@@ -494,7 +516,7 @@ class SupabaseRepository(Repository):
         }
         if repo_origin is not None:
             patch["repo_origin"] = repo_origin
-        self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
             raise KeyError("project_not_found")
@@ -505,7 +527,7 @@ class SupabaseRepository(Repository):
             "policy_scope": scope.model_dump(mode="json") if scope is not None else None,
             "updated_at": utcnow().isoformat(),
         }
-        self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
             raise KeyError("project_not_found")
@@ -518,7 +540,7 @@ class SupabaseRepository(Repository):
             "deployment_config": config.model_dump(mode="json") if config is not None else None,
             "updated_at": utcnow().isoformat(),
         }
-        self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
             raise KeyError("project_not_found")
@@ -529,7 +551,7 @@ class SupabaseRepository(Repository):
             "deployment_state": state.model_dump(mode="json"),
             "updated_at": utcnow().isoformat(),
         }
-        self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
+        self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
             raise KeyError("project_not_found")
@@ -816,7 +838,7 @@ class SupabaseRepository(Repository):
             self._table(_TABLE[etype]).upsert(rows, returning="minimal").execute()
             counts[etype] = len(rows)
         if counts:
-            self._table(_PROJECTS).update({"updated_at": now.isoformat()}).eq(
+            self._write_table(_PROJECTS).update({"updated_at": now.isoformat()}).eq(
                 "id", project_id
             ).execute()
         return counts, conflicts

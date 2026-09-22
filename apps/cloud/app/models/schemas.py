@@ -583,8 +583,9 @@ class Project(BaseModel):
     repo_id: int | None = None
     # How the project came by its repository (plan 0027, migration 0035):
     # "imported" by POST /projects, "created" by create_repository. Written by
-    # the server only — unlike the repository's description, which anyone
-    # with admin on the repository can edit. `None` for a project with no
+    # the server only — no route accepts it, and migration 0036 took member
+    # writes on pz_projects away — unlike the repository's description, which
+    # anyone with admin on the repository can edit. `None` for a project with no
     # repository yet, or one that predates the field; see `is_imported`.
     repo_origin: Literal["imported", "created"] | None = None
     # Nullable: `None` = never selected (backward compatible with every

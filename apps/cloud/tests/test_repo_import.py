@@ -922,3 +922,43 @@ def test_reindex_sweeps_code_only_with_a_model_connection_and_only_once(client: 
     enqueue_project_backfill(app, repository, project)
     assert _code_tree_jobs(app) == 1  # the second sweep finds one still queued
     assert app.state.embed_queue.has_pending_code_tree("acme/storyapp")
+
+
+def test_a_protected_default_branch_is_its_own_refusal(client: TestClient):
+    """Not `repo_moved_during_seed`: a retry cannot clear branch protection,
+    so the Tech Lead is told what to change instead of being told to retry."""
+    pid = _imported_at_tech_review(client, ["README.md"])
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.protected_branches.add("acme/storyapp")
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "default_branch_protected"
+    assert fake.commits == []
+    assert client.get(f"/projects/{pid}", headers=ALICE).json()["lifecycle_status"] == "tech_review"
+
+
+def test_a_directory_github_cannot_list_refuses_before_any_write(client: TestClient):
+    """N4: the truncation walk reaches a directory whose own listing is
+    truncated. There is no complete answer to "is this path free", so no
+    seed — and nothing else either: no secret, no webhook, no commit."""
+    pid = _imported_at_tech_review(
+        client, ["README.md", "docs/guide.md"], template="github-pages"
+    )
+    client.app.state.settings.public_api_url = "https://api.test"
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.tree_truncated = True
+    fake.truncated_directories["acme/storyapp"] = {"docs"}
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "repo_tree_too_large"
+    assert fake.commits == []
+    assert fake.secrets == {} and fake.variables == {}
+    writes = ("commit:", "secret:", "variable:", "webhook:")
+    assert not any(e.startswith(writes) for e in fake.call_log)
+    assert client.get(f"/projects/{pid}", headers=ALICE).json()["lifecycle_status"] == "tech_review"
+
+    preview = client.get(f"/projects/{pid}/repository/seed-preview", headers=ALICE)
+    assert preview.status_code == 409
+    assert preview.json()["detail"] == "repo_tree_too_large"

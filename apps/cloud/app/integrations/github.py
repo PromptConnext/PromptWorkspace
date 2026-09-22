@@ -266,6 +266,12 @@ def parse_workflow_run_event(payload: dict) -> WorkflowRunEvent | None:
     )
 
 
+def _is_not_fast_forward(body: str) -> bool:
+    """GitHub's wording for a ref update that lost a race."""
+    normalized = body.lower().replace("-", " ")
+    return "not a fast forward" in normalized
+
+
 class GithubWriteError(RuntimeError):
     """A GitHub write call (repo create / file commit) failed. `sync.py`
     catches this instead of importing httpx directly, keeping the API layer
@@ -287,6 +293,14 @@ class GithubBranchMovedError(GithubWriteError):
     commit the caller inspected (plan 0027). The no-overwrite check was made
     against that commit's tree, so committing on top of anything else could
     replace a file the check never saw — the caller refuses instead."""
+
+
+class GithubRefUpdateRejectedError(GithubWriteError):
+    """GitHub refused to move the branch for a reason other than a lost race
+    — a protected branch or a ruleset requiring a pull request, most often.
+    Kept apart from `GithubBranchMovedError` because the remedies differ: a
+    moved branch clears on retry, a protected one refuses every retry until
+    the protection changes."""
 
 
 class GithubAuthError(GithubWriteError):
@@ -948,6 +962,11 @@ class HttpGithubClient:
         the final ref update, `GithubBranchMovedError` is raised and nothing
         is committed — a push landing between the check and this write could
         otherwise add a file the new tree then replaces.
+
+        A 422 on the ref update is read by its message, pinned or not: "not a
+        fast forward" is a lost race (`GithubBranchMovedError`, retryable);
+        anything else — branch protection, a ruleset — is
+        `GithubRefUpdateRejectedError`, which no retry clears.
         """
         if not files:
             raise GithubWriteError("create_commit_with_files called with no files")
@@ -1021,10 +1040,18 @@ class HttpGithubClient:
             json={"sha": commit_sha, "force": False},
         )
         if ref_resp.is_error:
-            if expected_base_sha is not None and ref_resp.status_code == 422:
-                # Not a fast-forward: the branch moved after the read above.
-                raise GithubBranchMovedError(
-                    f"{repo}@{branch} moved during the seed commit", status_code=409
+            if ref_resp.status_code == 422:
+                # GitHub answers 422 both for a lost race ("Update is not a
+                # fast forward") and for a refusal that no retry will clear —
+                # branch protection, a ruleset. Only the message tells them
+                # apart, and only the first is a moved branch.
+                if _is_not_fast_forward(ref_resp.text):
+                    raise GithubBranchMovedError(
+                        f"{repo}@{branch} moved during the seed commit", status_code=409
+                    )
+                raise GithubRefUpdateRejectedError(
+                    f"update_ref rejected for {repo}@{branch}: {ref_resp.text}",
+                    status_code=422,
                 )
             raise GithubWriteError(
                 f"update_ref failed for {repo}: {ref_resp.status_code} {ref_resp.text}",
@@ -1338,6 +1365,13 @@ class FakeGithubClient:
         # A push that lands between the seed's tree check and its commit: the
         # branch head a commit into this repo finds instead of the one read.
         self.branch_head_on_commit: dict[str, str] = {}
+        # Repos whose default branch refuses a direct ref update (protection,
+        # a ruleset): a seed commit into one raises GithubRefUpdateRejectedError.
+        self.protected_branches: set[str] = set()
+        # Directories (by path, "" for the root) whose own non-recursive
+        # listing GitHub reports as truncated — a single directory too large
+        # to list at all.
+        self.truncated_directories: dict[str, set[str]] = {}
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
@@ -1481,7 +1515,7 @@ class FakeGithubClient:
             {**e, "path": posixpath.basename(e["path"])}
             for e in entries
             if posixpath.dirname(e["path"]) == directory
-        ], False
+        ], directory in self.truncated_directories.get(repo, set())
 
     async def list_repos(
         self,
@@ -1543,6 +1577,10 @@ class FakeGithubClient:
             self.branch_heads.get(repo, "fake-head-0") != expected_base_sha
         ):
             raise GithubBranchMovedError(f"fake branch moved for {repo}", status_code=409)
+        if repo in self.protected_branches:
+            raise GithubRefUpdateRejectedError(
+                f"fake protected branch {branch} in {repo}", status_code=422
+            )
         if self.fail_on_commit:
             raise GithubWriteError(
                 f"fake commit failure for {repo}", status_code=self.write_failure_status

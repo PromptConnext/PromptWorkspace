@@ -10,6 +10,7 @@ leak its *name* into a prompt and its content into a fetch log.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -229,6 +230,34 @@ def test_innocent_names_next_to_the_multi_segment_globs_survive(path: str):
         ("openai sk-" + "c" * 32, "sk-" + "c" * 32),
         ("slack xoxb-123456789012-abc", "xoxb-123456789012-abc"),
         ("slack xoxp-123456789012-abc", "xoxp-123456789012-abc"),
+        # Verification review of plan 0027 (N2).
+        ("DATABASE_URL=postgres://admin:s3cr3t@db.internal/app", "s3cr3t"),
+        ("see https://deploy:hunter2@git.example.com/repo.git", "hunter2"),
+        (
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3\n-----END RSA PRIVATE KEY-----",
+            "MIIEpAIBAAKCAQEA0Z3",
+        ),
+        (
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n(no end marker)",
+            "b3BlbnNzaC1rZXk",
+        ),
+        ("oauth gho_" + "d" * 36, "gho_" + "d" * 36),
+        ("user token ghu_" + "e" * 36, "ghu_" + "e" * 36),
+        ("server ghs_" + "f" * 36, "ghs_" + "f" * 36),
+        ("refresh ghr_" + "g" * 36, "ghr_" + "g" * 36),
+        ("stripe sk_live_" + "h" * 24, "sk_live_" + "h" * 24),
+        ("stripe sk_test_" + "i" * 24, "sk_test_" + "i" * 24),
+        ("maps AIza" + "j" * 35, "AIza" + "j" * 35),
+        ("sts ASIAABCDEFGHIJKLMNOP", "ASIAABCDEFGHIJKLMNOP"),
+        ("slack xoxa-123456789012-abc", "xoxa-123456789012-abc"),
+        ("slack xoxr-123456789012-abc", "xoxr-123456789012-abc"),
+        (
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+        ),
+        ('password = "correct horse battery staple"', "horse battery staple"),
+        ("client_secret: 'two words here'", "words here"),
+        ('DB_PASSWORD="unterminated value with spaces', "value with spaces"),
     ],
 )
 def test_secret_values_are_redacted(text: str, leaked: str):
@@ -253,3 +282,32 @@ def test_indexable_code_paths_spends_the_cap_on_source_first():
     selected = indexable_code_paths([*docs, "src/server.ts", "src/db.py"], CODE_INDEX_MAX_FILES)
     assert selected[:2] == ["src/db.py", "src/server.ts"]
     assert len(selected) == CODE_INDEX_MAX_FILES
+
+
+def test_quoted_values_keep_their_quotes_and_nothing_else():
+    assert redact_secrets('password = "a b c" # note') == 'password = "***" # note'
+    assert redact_secrets("postgres://admin:pw@db/x") == "postgres://admin:***@db/x"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x" * 200_000,
+        "pass" * 50_000,
+        "token" * 40_000 + "=",
+        "a://" * 50_000,
+        "ab:" * 60_000 + "@",
+        "-----BEGIN PRIVATE KEY-----" * 8_000,
+        "Bearer " * 30_000,
+        'password="' * 30_000,
+        "ghp_" * 50_000,
+    ],
+    ids=["word-run", "keyword-run", "keyword-run-then-eq", "scheme-run", "userinfo-run",
+         "pem-begins", "bearer-run", "open-quotes", "prefix-run"],
+)
+def test_redaction_is_linear_on_pathological_input(text: str):
+    """Measured ~0.1s at most for each of these; a quadratic expression takes
+    minutes on the same input, so the bound is generous without being blind."""
+    started = time.perf_counter()
+    redact_secrets(text)
+    assert time.perf_counter() - started < 2.0

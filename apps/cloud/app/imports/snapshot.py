@@ -141,21 +141,37 @@ _SECRET_PATH_GLOBS = (
 
 # Values redacted out of an excerpt before it is stored or put in a prompt
 # (plan 0027): the path filter above keeps credential *files* out, but a
-# README or a workflow can still quote a key inline. Two shapes — the value of
-# an assignment whose key names a secret, and a token whose prefix announces
-# one — each replaced with `***`. A false positive costs a dependency version
-# in a prompt; a false negative stores a live key.
-# The key's tail is bounded, and nothing is matched before the keyword (a
-# `DB_` prefix stays in the text untouched either way), so a long run of word
-# characters — a minified bundle, a base64 blob — cannot make this quadratic.
+# README or a workflow can still quote a key inline. Four shapes, each
+# replaced with `***`: a private-key PEM block, the password in a URL's
+# userinfo, the value of an assignment whose key names a secret (the whole
+# quoted string when it is quoted, spaces and all), and a token whose prefix
+# announces one. A false positive costs a dependency version in a prompt; a
+# false negative stores a live key.
+#
+# Every expression is linear in the text: nothing unbounded is matched before
+# a fixed keyword or prefix, repeats that could restart at every position are
+# anchored to a word start or bounded, and a quoted value stops at its line.
+# A minified bundle or a base64 blob cannot make any of them quadratic.
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN[A-Z0-9 ]{0,40}PRIVATE KEY-----"
+    r"(?:(?!-----END)[\s\S])*"
+    r"(?:-----END[A-Z0-9 ]{0,40}PRIVATE KEY-----|\Z)"
+)
+_URL_CREDENTIAL = re.compile(
+    r"(?<![\w+.-])([A-Za-z][\w+.-]{0,31}://[^\s:/@]{1,256}:)[^\s@/]{1,256}@"
+)
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)((?:pass(?:word)?|secret|token|api[_-]?key|private[_-]?key|credential)"
-    r"[\w.-]{0,64}[\"']?[ \t]*[:=][ \t]*[\"']?)([^\s\"',;]+)"
+    r"[\w.-]{0,64}[\"']?[ \t]*[:=][ \t]*)"
+    r"(?:(\")[^\"\n]*\"?|(')[^'\n]*'?|[^\s\"',;]+)"
 )
 _SECRET_TOKEN = re.compile(
-    r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}"
-    r"|xox[bp]-[A-Za-z0-9-]{10,})\b|(?<![\w-])sk-[A-Za-z0-9_-]{16,}"
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+    r"|sk_(?:live|test)_[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_-]{35}"
+    r"|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,})"
+    r"|(?<![\w-])sk-[A-Za-z0-9_-]{16,}"
 )
+_BEARER = re.compile(r"(?i)\b(bearer[ \t]+)[A-Za-z0-9._~+/-]{8,}=*")
 REDACTED = "***"
 
 # Root-level manifests, in the order the runtime is decided from: the first
@@ -231,8 +247,17 @@ def is_secret_path(path: str) -> bool:
 
 
 def redact_secrets(text: str) -> str:
-    """`text` with secret-shaped values replaced by `***`."""
-    text = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, text)
+    """`text` with secret-shaped values replaced by `***`. The PEM block
+    goes first, so the assignment rule never sees half a key."""
+    text = _PEM_BLOCK.sub(REDACTED, text)
+    text = _URL_CREDENTIAL.sub(lambda m: f"{m.group(1)}{REDACTED}@", text)
+
+    def assignment(m: re.Match) -> str:
+        quote = m.group(2) or m.group(3) or ""
+        return f"{m.group(1)}{quote}{REDACTED}{quote}"
+
+    text = _SECRET_ASSIGNMENT.sub(assignment, text)
+    text = _BEARER.sub(lambda m: m.group(1) + REDACTED, text)
     return _SECRET_TOKEN.sub(REDACTED, text)
 
 

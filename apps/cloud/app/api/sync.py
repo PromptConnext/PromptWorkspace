@@ -55,6 +55,7 @@ from app.integrations.deploy_providers import (
 from app.integrations.deploy_providers import get_provider as get_deploy_provider
 from app.integrations.github import (
     GithubBranchMovedError,
+    GithubRefUpdateRejectedError,
     GithubWriteError,
     RepoAlreadyExistsError,
     ensure_hook_events,
@@ -630,6 +631,13 @@ async def create_repository(
     except GithubBranchMovedError as exc:
         logger.warning("seeding %s refused: %s", full_name, exc)
         raise HTTPException(status_code=409, detail="repo_moved_during_seed") from exc
+    except GithubRefUpdateRejectedError as exc:
+        # Branch protection or a ruleset on the default branch: every retry
+        # would be refused the same way, so this must not read as the
+        # transient `repo_moved_during_seed`. The admin lifts the rule (or
+        # exempts the token's user) and retries.
+        logger.warning("seeding %s refused by the branch's rules: %s", full_name, exc)
+        raise HTTPException(status_code=409, detail="default_branch_protected") from exc
     except GithubWriteError as exc:
         # Do NOT advance the lifecycle — an unseeded repo must leave
         # repo_url unset so a retry re-enters at repo creation and adopts.
@@ -748,7 +756,11 @@ def _platform_created(project: Project, repo_row: dict, own_description: str) ->
     the crash-window retry `create_repository`'s docstring describes, where
     `repo_url` was recorded before the seed commit landed.
 
-    Decided by `project.repo_origin`, which only the server writes; the
+    Decided by `project.repo_origin`, which only the server can write: the
+    API never accepts it from a client, and since migration 0036 a member's
+    own JWT cannot write `pz_projects` through PostgREST either (before it,
+    `pz_projects_rw` tested membership alone and any member could set it —
+    so 0036 must be applied for this check to hold on Supabase). The
     repository description is a secondary check, never sufficient alone —
     anyone with admin on an imported repository can set it to the string
     this project would write, and the prize for doing so is a seed that

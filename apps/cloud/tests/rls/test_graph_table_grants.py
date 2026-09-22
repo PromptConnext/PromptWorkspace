@@ -256,3 +256,83 @@ def test_member_cannot_read_graph_tables_directly_either(
         params={"id": f"eq.{fixture.task_id}", "select": "*"},
     )
     _denied(res)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"repo_origin": "created"},
+        {"repo_url": "https://github.com/attacker/elsewhere"},
+        {"lifecycle_status": "tech_review"},
+    ],
+    ids=["repo_origin", "repo_url", "lifecycle_status"],
+)
+def test_member_cannot_write_server_owned_project_columns(
+    http: httpx.Client, target: Target, fixture: Fixture, patch: dict
+) -> None:
+    """Plan 0027 N1, migration 0036: `pz_projects` is written by the server
+    only. `repo_origin` decides whether an adopted repository gets the
+    overwriting seed, and `repo_url` which repository the platform writes
+    secrets, a webhook and a seed commit into — both were a member's to set
+    through PostgREST while `pz_projects_rw` tested membership alone."""
+    res = http.patch(
+        f"{target.rest}/pz_projects",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{fixture.project_id}"},
+        json=patch,
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_projects",
+        headers=target.service_headers(),
+        params={"id": f"eq.{fixture.project_id}", "select": ",".join(patch)},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() != [patch], "a member's direct project write landed"
+
+
+def test_member_cannot_insert_or_delete_a_project_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    headers = target.user_headers(fixture.member.access_token)
+    planted = str(uuid.uuid4())
+    _denied(
+        http.post(
+            f"{target.rest}/pz_projects",
+            headers=headers,
+            json={
+                "id": planted,
+                "workspace_id": fixture.workspace_id,
+                "name": "planted",
+                "owner_id": fixture.member.id,
+                "repo_origin": "created",
+            },
+        )
+    )
+    _denied(
+        http.delete(
+            f"{target.rest}/pz_projects",
+            headers=headers,
+            params={"id": f"eq.{fixture.project_id}"},
+        )
+    )
+    rows = http.get(
+        f"{target.rest}/pz_projects",
+        headers=target.service_headers(),
+        params={"id": f"in.({planted},{fixture.project_id})", "select": "id"},
+    ).json()
+    assert rows == [{"id": fixture.project_id}]
+
+
+def test_member_still_reads_their_own_project(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """0036 revokes writes only: the scoped read `list_projects` and
+    `get_project` depend on is still granted and still membership-scoped."""
+    res = http.get(
+        f"{target.rest}/pz_projects",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{fixture.project_id}", "select": "id"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json() == [{"id": fixture.project_id}]

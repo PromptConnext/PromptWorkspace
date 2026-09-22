@@ -1,0 +1,62 @@
+-- 0036 — pz_projects becomes server-written: members keep their scoped read,
+-- and lose their direct write (docs/plans/0027-brownfield-repo-import.md,
+-- security review follow-up N1).
+--
+-- Apply with scripts/migrate.py; never edit this file once applied — the
+-- pz_schema_migrations ledger (0024) checksums it and reports drift.
+--
+-- >>> APPLY THIS ONE *AFTER* THE CODE DEPLOY, NOT BEFORE. <<<
+-- Same reason as 0031 (docs/DEPLOYMENT.md §2.2): it takes privileges away
+-- from the role the previous code wrote this table as. Before the paired code
+-- change, SupabaseRepository wrote pz_projects through the caller's own JWT
+-- (for_user), i.e. as `authenticated`; applied ahead of the rollout, every
+-- project create, repository creation, lifecycle transition, policy-scope and
+-- deployment-config save and graph push fails with `permission denied for
+-- table pz_projects` until the new code is live. The paired change routes
+-- those writes onto the service-role client (`_SERVICE_WRITE_TABLES` /
+-- `_write_table` in app/db/supabase_repository.py); once it is live this
+-- migration is invisible to the application.
+--
+-- THE DEFECT
+-- 0006_grants.sql granted `authenticated` select/insert/update/delete on
+-- pz_projects, and its only policy, pz_projects_rw (0003_auth_workspaces.sql),
+-- tests `pz_is_member(workspace_id)` and nothing else. So any workspace member
+-- could PATCH their own project row straight through PostgREST and set the
+-- columns that only the server is meant to write: `repo_origin` (plan 0027's
+-- provenance — `created` earns an imported repository the overwriting seed),
+-- `repo_url`/`repo_id`/`repo_default_branch` (which repository the platform
+-- writes secrets, a webhook and a seed commit into), `lifecycle_status` (the
+-- tech-review gate), and the admin-only `policy_scope` and
+-- `deployment_config`/`deployment_state`. Every one of those has an app-layer
+-- rule in app/api; none of them had one in the database.
+--
+-- WHY REVOKE THE TABLE-LEVEL WRITE, NOT A FEW COLUMNS
+-- A column-level REVOKE does nothing while the table-level UPDATE grant
+-- stands, so the only way to protect columns is to revoke table-level UPDATE
+-- and grant back per-column UPDATE on what a client legitimately writes. No
+-- client writes this table at all: apps/web uses @supabase/supabase-js for
+-- auth sessions only, and no surface in apps/* or packages/* calls PostgREST
+-- on pz_projects — every project write goes through apps/cloud. Even the one
+-- column a member could arguably own, `name`, has no rename route in the API,
+-- so there is no column to grant back. INSERT, UPDATE and DELETE go outright:
+-- the plan 0014 posture (0031), applied to writes only.
+--
+-- WHY SELECT STAYS
+-- Unlike the graph tables, reads of pz_projects still run on the caller's JWT
+-- and RLS is what scopes them to the caller's workspaces (`list_projects`,
+-- `get_project`), so the member read grant is real defence in depth and is
+-- kept, as is the pz_projects_rw policy that now governs only it. A project
+-- deleted through its workspace's cascade is unaffected: referential actions
+-- run with the referencing table owner's rights, not the caller's.
+
+-- TRUNCATE, REFERENCES and TRIGGER go with the writes: PostgREST exposes none
+-- of them, but TRUNCATE ignores RLS entirely, and nothing a client does needs
+-- any of the three. `authenticated` is left holding SELECT alone; `anon`,
+-- which no policy admits anyway, nothing.
+revoke insert, update, delete, truncate, references, trigger on pz_projects from authenticated;
+revoke all on pz_projects from anon;
+
+-- The client the paired code change writes with. Idempotent where the
+-- platform's default privileges already granted it (hosted), required where
+-- they did not (a local stack, see tests/rls/conftest.py).
+grant select, insert, update, delete on pz_projects to service_role;
