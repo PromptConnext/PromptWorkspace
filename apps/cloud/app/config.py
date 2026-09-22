@@ -69,10 +69,16 @@ class Settings(BaseSettings):
 
     # External-tracker credentials (M5). Kept in the server env / secret manager,
     # never in a workspace row (ADR 0010 §5). Outbound Jira uses Basic auth
-    # (email + API token); inbound webhooks are HMAC-verified with the secret.
+    # (email + API token).
+    #
+    # There is deliberately no `jira_webhook_secret` any more (plan 0019): one
+    # process-wide inbound secret could only prove that *some* configured Jira
+    # sent a delivery, and since an issue key is unique per site rather than per
+    # provider, two tenants reusing a project prefix could cross-update each
+    # other's tasks. Inbound secrets are now minted per tracker account and held
+    # as ciphertext in pz_workspace_integrations.
     jira_email: str = ""
     jira_api_token: str = ""
-    jira_webhook_secret: str = ""
 
     # Presence (M6): ephemeral who's-here over WebSocket. In-memory, single
     # instance — horizontal scale needs a Redis/pub-sub backplane (flagged).

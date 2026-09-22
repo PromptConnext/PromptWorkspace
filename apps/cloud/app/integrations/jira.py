@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 
+from app.integrations.account import normalize_account_key
 from app.integrations.tracker import InboundComment, InboundUpdate, OutboundRequest
 from app.models.schemas import Task, TaskStatus
 
@@ -74,6 +75,33 @@ class JiraAdapter:
         )
 
     # -- inbound ---------------------------------------------------------- #
+    def account_key_from_payload(self, payload: dict) -> str:
+        """Which Jira *site* sent this delivery (plan 0019 M2).
+
+        Jira Cloud exposes no stable installation id in a webhook body, but
+        every entity it serializes carries `self` — an absolute REST URL on the
+        sending tenant's own host (`https://acme.atlassian.net/rest/api/3/...`).
+        `issue.self` is present on issue and comment events alike; the
+        top-level `self` and `comment.self` are the fallbacks for payload
+        shapes that omit it. Normalized to the same value
+        `configure_integration` derives from the admin's `base_url`, so the two
+        sides agree without either trusting the other.
+
+        Returns `""` when no host can be read — the route treats that as an
+        unrecognized account and drops the delivery unverified.
+        """
+        candidates = (
+            (payload.get("issue") or {}).get("self"),
+            (payload.get("comment") or {}).get("self"),
+            payload.get("self"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, str):
+                key = normalize_account_key(candidate)
+                if key:
+                    return key
+        return ""
+
     def handle_webhook(self, payload: dict, config: dict) -> list[InboundUpdate]:
         if payload.get("webhookEvent") not in {"jira:issue_updated", "jira:issue_created"}:
             return []

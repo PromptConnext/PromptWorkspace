@@ -14,9 +14,12 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import create_app
+from tests._tracker import account_secret
 
 JIRA_CONFIG = {"base_url": "https://acme.atlassian.net", "project_key": "PZ"}
-JIRA_WEBHOOK_SECRET = "webhook-secret-please-change-0123456789"
+# Every payload has to say which Jira site sent it (plan 0019 M2) — that is what
+# selects the secret the signature is verified against.
+JIRA_SITE_SELF = "https://acme.atlassian.net/rest/api/3/issue/10001"
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
 
@@ -25,7 +28,6 @@ BOB = {"X-User-Id": "bob"}
 def jira_client(monkeypatch) -> TestClient:
     monkeypatch.setenv("JIRA_EMAIL", "bot@acme.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "token-123")
-    monkeypatch.setenv("JIRA_WEBHOOK_SECRET", JIRA_WEBHOOK_SECRET)
     get_settings.cache_clear()
     app = create_app()
     with TestClient(app) as c:
@@ -60,24 +62,28 @@ def _bootstrap(client: TestClient, monkeypatch) -> tuple[str, str]:
     return ws["id"], pid
 
 
-def _sign(raw: bytes) -> str:
-    return hmac.new(JIRA_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+def _sign(secret: str, raw: bytes) -> str:
+    return hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
 
 
-def _post_comment_webhook(client: TestClient, payload: dict):
+def _post_comment_webhook(client: TestClient, workspace_id: str, payload: dict):
+    """Deliver a comment webhook as the configured Jira site would: the payload
+    names the site, and the signature is that site's own secret."""
+    payload = {**payload, "issue": {**payload.get("issue", {}), "self": JIRA_SITE_SELF}}
     raw = json.dumps(payload).encode()
+    secret = account_secret(client, workspace_id)
     return client.post(
         "/api/webhooks/jira",
         content=raw,
         headers={
-            "X-Hub-Signature-256": f"sha256={_sign(raw)}",
+            "X-Hub-Signature-256": f"sha256={_sign(secret, raw)}",
             "Content-Type": "application/json",
         },
     )
 
 
 def test_comment_created_becomes_pmo_discussion_linked_to_task(jira_client, monkeypatch):
-    _ws_id, pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
     payload = {
         "webhookEvent": "comment_created",
         "issue": {"key": "PZ-1"},
@@ -87,7 +93,7 @@ def test_comment_created_becomes_pmo_discussion_linked_to_task(jira_client, monk
             "body": "This looks ready to ship.",
         },
     }
-    res = _post_comment_webhook(jira_client, payload)
+    res = _post_comment_webhook(jira_client, ws_id, payload)
     assert res.status_code == 200, res.text
     assert res.json()["applied"] == 1
 
@@ -102,7 +108,7 @@ def test_comment_created_becomes_pmo_discussion_linked_to_task(jira_client, monk
 
 
 def test_comment_body_as_adf_extracts_plain_text(jira_client, monkeypatch):
-    _ws_id, pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
     payload = {
         "webhookEvent": "comment_created",
         "issue": {"key": "PZ-1"},
@@ -123,7 +129,7 @@ def test_comment_body_as_adf_extracts_plain_text(jira_client, monkeypatch):
             },
         },
     }
-    res = _post_comment_webhook(jira_client, payload)
+    res = _post_comment_webhook(jira_client, ws_id, payload)
     assert res.status_code == 200, res.text
 
     graph = jira_client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()
@@ -132,17 +138,17 @@ def test_comment_body_as_adf_extracts_plain_text(jira_client, monkeypatch):
 
 
 def test_comment_redelivery_is_idempotent(jira_client, monkeypatch):
-    _ws_id, pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
     payload = {
         "webhookEvent": "comment_created",
         "issue": {"key": "PZ-1"},
         "comment": {"id": "10003", "author": {"displayName": "Bob"}, "body": "First delivery"},
     }
-    assert _post_comment_webhook(jira_client, payload).status_code == 200
+    assert _post_comment_webhook(jira_client, ws_id, payload).status_code == 200
     # Redelivered (or a comment_updated for the same id) — same comment_id.
     payload["webhookEvent"] = "comment_updated"
     payload["comment"]["body"] = "First delivery, edited"
-    assert _post_comment_webhook(jira_client, payload).status_code == 200
+    assert _post_comment_webhook(jira_client, ws_id, payload).status_code == 200
 
     graph = jira_client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()
     assert len(graph["discussions"]) == 1
@@ -150,13 +156,13 @@ def test_comment_redelivery_is_idempotent(jira_client, monkeypatch):
 
 
 def test_comment_for_unlinked_issue_is_ignored(jira_client, monkeypatch):
-    _ws_id, pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
     payload = {
         "webhookEvent": "comment_created",
         "issue": {"key": "PZ-999"},  # no TaskLink for this key
         "comment": {"id": "10004", "author": {"displayName": "Bob"}, "body": "orphan comment"},
     }
-    res = _post_comment_webhook(jira_client, payload)
+    res = _post_comment_webhook(jira_client, ws_id, payload)
     assert res.status_code == 200
     assert res.json()["applied"] == 0
 
@@ -166,9 +172,10 @@ def test_comment_for_unlinked_issue_is_ignored(jira_client, monkeypatch):
 
 def test_comment_webhook_rejects_forged_signature(jira_client, monkeypatch):
     _bootstrap(jira_client, monkeypatch)
+    # Site is recognized (so routing succeeds); only the signature is wrong.
     payload = {
         "webhookEvent": "comment_created",
-        "issue": {"key": "PZ-1"},
+        "issue": {"key": "PZ-1", "self": JIRA_SITE_SELF},
         "comment": {"id": "10005", "author": {}, "body": "x"},
     }
     raw = json.dumps(payload).encode()
@@ -183,9 +190,10 @@ def test_comment_webhook_rejects_forged_signature(jira_client, monkeypatch):
 def test_mirrored_comment_is_cross_tenant_isolated(jira_client, monkeypatch):
     """RLS-equivalent boundary at the repository layer (memory backend) —
     same pattern as every other RAG/graph cross-tenant test this session."""
-    _ws_id, pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
     _post_comment_webhook(
         jira_client,
+        ws_id,
         {
             "webhookEvent": "comment_created",
             "issue": {"key": "PZ-1"},

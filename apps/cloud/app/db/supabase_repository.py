@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from app.db.merge import _as_dt, merge_entity
 from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import unwritten_fields as _unwritten_fields
-from app.db.repository import CrossProjectWrite, Repository
+from app.db.repository import CrossProjectWrite, Repository, TrackerAccountConflict
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
@@ -57,6 +57,7 @@ from app.models.schemas import (
     TaskLink,
     TaskStatus,
     Workspace,
+    WorkspaceIntegration,
     WorkspaceMember,
     new_id,
     utcnow,
@@ -99,6 +100,7 @@ _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
 _STAGE_DOCUMENTS = "pz_stage_documents"
 _REPO_WEBHOOKS = "pz_repo_webhooks"
+_WORKSPACE_INTEGRATIONS = "pz_workspace_integrations"
 _DEPLOYMENTS = "pz_deployments"
 _DEPLOYMENT_TASKS = "pz_deployment_tasks"
 
@@ -136,6 +138,18 @@ _SERVICE_ONLY_TABLES = frozenset(
         "pz_agent_runs",
         "pz_stage_documents",
         "pz_discussions",
+        # Not graph tables, but the same posture for the same reason. Migration
+        # 0032 hands `authenticated` a column-level SELECT on
+        # pz_workspace_integrations' non-secret columns and nothing else, so the
+        # server must reach it — including to write it, and including to read
+        # `webhook_secret_ref` — on the service-role client. pz_task_links is
+        # revoked outright by the same migration, because its `account_key` is
+        # now a tenant boundary the webhook routes on and its only policy tested
+        # workspace membership: a member could otherwise plant a row naming
+        # another tenant's account and squat their (provider, account_key,
+        # external_key) triple.
+        "pz_workspace_integrations",
+        "pz_task_links",
     }
 )
 
@@ -1006,7 +1020,11 @@ class SupabaseRepository(Repository):
     # -- external-tracker links (M5) -------------------------------------- #
     def upsert_task_link(self, link: TaskLink) -> TaskLink:
         self._table(_TASK_LINKS).upsert(
-            _dump(link), on_conflict="provider,external_key", returning="minimal"
+            _dump(link),
+            # Migration 0032's primary key. Three columns, because an external
+            # key is unique only within a provider account.
+            on_conflict="provider,account_key,external_key",
+            returning="minimal",
         ).execute()
         return link
 
@@ -1022,17 +1040,69 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return TaskLink(**rows[0]) if rows else None
 
-    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
+    def find_task_link_by_key(
+        self, provider: str, account_key: str, external_key: str
+    ) -> TaskLink | None:
         res = (
             self._table(_TASK_LINKS)
             .select("*")
             .eq("provider", provider)
+            .eq("account_key", account_key)
             .eq("external_key", external_key)
             .limit(1)
             .execute()
         )
         rows = res.data or []
         return TaskLink(**rows[0]) if rows else None
+
+    # -- tracker account bindings (plan 0019) ------------------------------ #
+    def upsert_workspace_integration(
+        self, integration: WorkspaceIntegration
+    ) -> WorkspaceIntegration:
+        # Checked before the write rather than relying on catching the unique
+        # violation: supabase-py surfaces a constraint error as an opaque
+        # APIError, and turning that back into a specific 409 would mean
+        # pattern-matching a Postgres message. The constraint is still the
+        # authority — it is what makes a race lose loudly instead of silently.
+        existing = self.find_workspace_integration_by_account(
+            integration.provider, integration.account_key
+        )
+        if existing is not None and existing.workspace_id != integration.workspace_id:
+            raise TrackerAccountConflict(integration.provider, integration.account_key)
+        self._table(_WORKSPACE_INTEGRATIONS).upsert(
+            _dump(integration), on_conflict="workspace_id,provider", returning="minimal"
+        ).execute()
+        return integration
+
+    def get_workspace_integration(
+        self, workspace_id: str, provider: str
+    ) -> WorkspaceIntegration | None:
+        res = (
+            self._table(_WORKSPACE_INTEGRATIONS)
+            .select("*")
+            .eq("workspace_id", workspace_id)
+            .eq("provider", provider)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return WorkspaceIntegration(**rows[0]) if rows else None
+
+    def find_workspace_integration_by_account(
+        self, provider: str, account_key: str
+    ) -> WorkspaceIntegration | None:
+        if not account_key:
+            return None
+        res = (
+            self._table(_WORKSPACE_INTEGRATIONS)
+            .select("*")
+            .eq("provider", provider)
+            .eq("account_key", account_key)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return WorkspaceIntegration(**rows[0]) if rows else None
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:

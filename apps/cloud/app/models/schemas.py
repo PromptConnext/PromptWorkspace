@@ -325,9 +325,76 @@ class TaskLink(BaseModel):
     task_id: str
     project_id: str
     provider: str  # "jira" | "clickup"
+    # Which provider *account* `external_key` belongs to — the normalized site
+    # base URL for Jira (see WorkspaceIntegration). Part of the primary key
+    # since migration 0032, because an issue key is unique per site and not per
+    # provider: two tenants each running a project keyed "PZ" both produce
+    # "PZ-1". Empty only on rows mirrored before that migration, which is a
+    # value no configured account can ever equal, so they no longer resolve.
+    account_key: str = ""
     external_key: str  # e.g. Jira issue key "PZ-42"
     external_url: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkspaceIntegration(BaseModel):
+    """One workspace's binding to one tracker *account*, with that account's own
+    webhook signing secret.
+
+    Its own row rather than a key inside `Workspace.integration_config` for the
+    same two reasons `RepoWebhook` is not a field on `Project`: `Workspace` is
+    serialized directly by several routes (`response_model=Workspace`), so a
+    ciphertext secret stored there could leak by accident, and
+    `(provider, account_key)` as a unique constraint makes the account →
+    workspace mapping unique *by construction* — which is precisely what
+    routing an inbound delivery on `(provider, external_key)` alone did not
+    guarantee.
+
+    `integration_config[provider]` keeps holding the non-secret settings
+    (`base_url`, `project_key`, `status_map`); only the account identity and the
+    secret live here.
+
+    Never returned by an API route.
+    """
+
+    workspace_id: str
+    provider: str  # "jira" | "clickup"
+    # The normalized provider account: scheme + lowercased host, no trailing
+    # slash (app/integrations/account.py::normalize_account_key). Never empty.
+    account_key: str
+    webhook_secret_ref: str  # ciphertext (app/secrets.py), never plaintext
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class TrackerIntegrationOut(BaseModel):
+    """What an admin sees after binding a workspace to a tracker account.
+
+    `webhook_secret` is plaintext and is populated on exactly two responses:
+    the one that *mints* a secret (a first bind, or a rebind to a different
+    account) and an explicit rotate. Every other response — a re-save of the
+    same account's settings, and every read anywhere in the API — leaves it
+    `None`. This is the one-time-reveal pattern, and the reason it exists is
+    that Jira's own webhook UI works the same way: the admin pastes the secret
+    into Jira by hand, and Atlassian likewise never shows it again ("You can't
+    retrieve your secret after you generate it - if you lose it, you have to
+    get a new one"). Unlike GitHub, the cloud cannot register a Jira webhook on
+    the admin's behalf — that needs a Connect/OAuth app, not the API token this
+    integration authenticates with — so *something* has to be transcribed, and
+    a reveal that happens once beats a reveal route that answers forever.
+
+    `WorkspaceIntegration` itself is still never serialized by a route: this is
+    a separate, deliberately narrow projection of it, for the same reason
+    `RepoWebhook` is not a field on `Project`.
+    """
+
+    workspace_id: str
+    provider: str
+    account_key: str
+    webhook_secret: str | None = None
+    # Where the admin pastes that secret, and which header we read the digest
+    # from — spelled out because getting either wrong fails as a silent 401.
+    signature_header: str = ""
 
 
 class JiraIntegrationConfig(BaseModel):

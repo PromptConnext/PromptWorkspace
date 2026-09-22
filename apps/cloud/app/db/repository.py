@@ -52,10 +52,28 @@ from app.models.schemas import (
     TaskLink,
     TaskStatus,
     Workspace,
+    WorkspaceIntegration,
     WorkspaceMember,
     new_id,
     utcnow,
 )
+
+
+class TrackerAccountConflict(ValueError):
+    """Another workspace is already bound to this tracker account.
+
+    `pz_workspace_integrations` is unique on `(provider, account_key)` since
+    migration 0032, and that uniqueness is the whole mechanism of plan 0019: if
+    two workspaces could both claim `https://acme.atlassian.net`, an inbound
+    delivery from that site would again have two possible owners and the
+    first-match routing bug would be back. Surfaced to a caller that faces a
+    client as a 409 (`app/api/integrations.py::configure_integration`).
+    """
+
+    def __init__(self, provider: str, account_key: str) -> None:
+        super().__init__(f"{provider} account {account_key} is bound to another workspace")
+        self.provider = provider
+        self.account_key = account_key
 
 
 class CrossProjectWrite(ValueError):
@@ -444,8 +462,46 @@ class Repository(abc.ABC):
     def get_task_link(self, task_id: str, provider: str) -> TaskLink | None: ...
 
     @abc.abstractmethod
-    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
-        """Resolve an inbound webhook's external key to a PromptConnext task."""
+    def find_task_link_by_key(
+        self, provider: str, account_key: str, external_key: str
+    ) -> TaskLink | None:
+        """Resolve an inbound webhook's external key to a PromptConnext task.
+
+        `account_key` is not optional and not a convenience filter: an external
+        key identifies an issue only within one provider account (plan 0019), so
+        a lookup without it is the cross-tenant bug. Callers pass the
+        `account_key` of the account whose secret *verified* the delivery, never
+        one taken from the payload's own claims.
+        """
+
+    # -- tracker account bindings (plan 0019) ------------------------------ #
+    @abc.abstractmethod
+    def upsert_workspace_integration(
+        self, integration: WorkspaceIntegration
+    ) -> WorkspaceIntegration:
+        """Bind a workspace to one tracker account, with that account's secret.
+
+        Raises `TrackerAccountConflict` when another workspace already holds
+        `(provider, account_key)` — the `unique` constraint in migration 0032 is
+        the authority, and the in-memory backend enforces the same rule so the
+        two adapters cannot disagree about it.
+        """
+
+    @abc.abstractmethod
+    def get_workspace_integration(
+        self, workspace_id: str, provider: str
+    ) -> WorkspaceIntegration | None: ...
+
+    @abc.abstractmethod
+    def find_workspace_integration_by_account(
+        self, provider: str, account_key: str
+    ) -> WorkspaceIntegration | None:
+        """The one workspace bound to this provider account, or None.
+
+        The inbound webhook route's first step: it selects whose secret the
+        delivery is verified against, so an unrecognized account is dropped
+        before its payload is trusted at all.
+        """
 
     @abc.abstractmethod
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
@@ -638,8 +694,12 @@ class InMemoryRepository(Repository):
         # mirroring the supabase table's unique (project_id, external_key).
         self._deployments: dict[str, dict[str, Deployment]] = {}
         self._deployment_tasks: dict[str, list[str]] = {}
-        # (provider, external_key) -> TaskLink
-        self._task_links: dict[tuple[str, str], TaskLink] = {}
+        # (provider, account_key, external_key) -> TaskLink. Three columns, not
+        # two, since plan 0019: an issue key is unique per provider account.
+        self._task_links: dict[tuple[str, str, str], TaskLink] = {}
+        # (workspace_id, provider) -> WorkspaceIntegration (plan 0019)
+        self._workspace_integrations: dict[tuple[str, str], WorkspaceIntegration] = {}
+        self._workspace_integrations_lock = threading.Lock()
         # workspace_id -> ModelConnection (M9)
         self._model_connections: dict[str, ModelConnection] = {}
         # project_id -> node_id -> chunk_index -> RagChunk (M9)
@@ -1232,7 +1292,7 @@ class InMemoryRepository(Repository):
 
     # -- external-tracker links (M5) -------------------------------------- #
     def upsert_task_link(self, link: TaskLink) -> TaskLink:
-        self._task_links[(link.provider, link.external_key)] = link
+        self._task_links[(link.provider, link.account_key, link.external_key)] = link
         return link
 
     def get_task_link(self, task_id: str, provider: str) -> TaskLink | None:
@@ -1241,8 +1301,48 @@ class InMemoryRepository(Repository):
                 return link
         return None
 
-    def find_task_link_by_key(self, provider: str, external_key: str) -> TaskLink | None:
-        return self._task_links.get((provider, external_key))
+    def find_task_link_by_key(
+        self, provider: str, account_key: str, external_key: str
+    ) -> TaskLink | None:
+        return self._task_links.get((provider, account_key, external_key))
+
+    # -- tracker account bindings (plan 0019) ------------------------------ #
+    def upsert_workspace_integration(
+        self, integration: WorkspaceIntegration
+    ) -> WorkspaceIntegration:
+        with self._workspace_integrations_lock:
+            # Mirrors migration 0032's `unique (provider, account_key)`. Without
+            # it the memory backend would happily let two workspaces claim one
+            # Jira site and no test on this backend could observe the collision
+            # the plan exists to make impossible.
+            for (ws_id, provider), stored in self._workspace_integrations.items():
+                if (
+                    provider == integration.provider
+                    and stored.account_key == integration.account_key
+                    and ws_id != integration.workspace_id
+                ):
+                    raise TrackerAccountConflict(integration.provider, integration.account_key)
+            key = (integration.workspace_id, integration.provider)
+            self._workspace_integrations[key] = integration
+            return integration
+
+    def get_workspace_integration(
+        self, workspace_id: str, provider: str
+    ) -> WorkspaceIntegration | None:
+        return self._workspace_integrations.get((workspace_id, provider))
+
+    def find_workspace_integration_by_account(
+        self, provider: str, account_key: str
+    ) -> WorkspaceIntegration | None:
+        if not account_key:
+            # `''` is the pre-0032 backfill value on pz_task_links.account_key
+            # and is forbidden on the integration row by a check constraint. Bail
+            # here too rather than relying on no row happening to match.
+            return None
+        for (_ws_id, stored_provider), stored in self._workspace_integrations.items():
+            if stored_provider == provider and stored.account_key == account_key:
+                return stored
+        return None
 
     # -- maintenance -------------------------------------------------------- #
     def purge_expired_tombstones(self, ttl_days: int) -> dict[str, int]:
