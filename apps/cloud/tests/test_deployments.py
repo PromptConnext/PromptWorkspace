@@ -596,7 +596,56 @@ def test_probe_refuses_non_public_targets(url):
     assert _probe_target_is_public(url) is False
 
 
-def test_probe_accepts_an_ordinary_public_host():
+def _resolves_to(*addresses: str):
+    """A `socket.getaddrinfo` stand-in answering with fixed addresses.
+
+    The real function is the one thing in this unit suite that reached the
+    network (plan 0020 M5): the old version of the case below asserted that
+    `https://example.com/` is public, which tests IANA's DNS rather than the
+    rule `_probe_target_is_public` exists to enforce, and failed in a sandbox
+    with no resolver while the rest of the suite stayed hermetic.
+    """
+    import socket
+
+    def fake_getaddrinfo(host, port, *_args, **_kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, port or 0))
+            for address in addresses
+        ]
+
+    return fake_getaddrinfo
+
+
+def test_probe_accepts_a_host_whose_addresses_are_all_public(monkeypatch):
+    from app.api import github
+
+    monkeypatch.setattr(github.socket, "getaddrinfo", _resolves_to("93.184.216.34"))
+    assert github._probe_target_is_public("https://example.com/index.html") is True
+
+
+def test_probe_refuses_a_host_that_also_resolves_to_a_private_address(monkeypatch):
+    """The actual rule: *every* resolved address must be public, not the first.
+
+    A hostname holding both a public record and a loopback one would otherwise
+    pass the check and then connect to whichever the client picked — the SSRF
+    the guard exists to stop, and the case a real resolver cannot stage.
+    """
+    from app.api import github
+
+    monkeypatch.setattr(github.socket, "getaddrinfo", _resolves_to("93.184.216.34", "127.0.0.1"))
+    assert github._probe_target_is_public("https://rebinding.test/") is False
+
+    monkeypatch.setattr(github.socket, "getaddrinfo", _resolves_to("93.184.216.34", "10.1.2.3"))
+    assert github._probe_target_is_public("https://rebinding.test/") is False
+
+
+@pytest.mark.network
+def test_probe_accepts_an_ordinary_public_host_with_a_real_resolver():
+    """The resolver check the two monkeypatched cases above deliberately do not
+    make, kept because `_probe_target_is_public` is a security guard and a
+    broken `getaddrinfo` call site would otherwise only fail in production.
+    Excluded from the default run (pyproject.toml's addopts): `pytest -m network`.
+    """
     from app.api.github import _probe_target_is_public
 
     # example.com is IANA-reserved for documentation and resolves publicly.
