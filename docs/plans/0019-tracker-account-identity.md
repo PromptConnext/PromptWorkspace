@@ -1,6 +1,6 @@
 # Plan 0019 — Scope tracker identity to the provider account
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation · **ADR:** [0010](../decisions/0010-sync-model.md)
+**Date:** 2026-09-12 · **Status:** Implemented 2026-09-22 (M1-M5). Security review blocked the first pass — the fix removed the only working configurable secret and replaced it with one no route could ever return, closed with a one-time-reveal-on-mint response plus an admin rotate route. That research also found this feature's signature header name was copied from GitHub's spelling and could never have matched a real Jira delivery, under the old shared secret either — fixed alongside. `pz_task_links` closed to direct writes; the unresolved-account response now acks rather than 401s, matching the existing GitHub webhook route. Verified live against real Supabase + real Jira-shaped signatures. · **ADR:** [0010](../decisions/0010-sync-model.md)
 
 This plan closes finding 16 of `docs/cloud-codebase-review-2026-09-06.md` (High): an external tracker reference is treated as globally unique per *provider*, when a Jira issue key is only unique within a *site*. Findings 14 and 15 live in the same subsystem — `apps/cloud/app/api/integrations.py` and `apps/cloud/app/integrations/` — and are folded in as adjacent milestones so the account-identity model introduced for 16 is the one place ClickUp's credential gap and mirror idempotency get fixed too, rather than three separate patches touching the same files out of sequence.
 
