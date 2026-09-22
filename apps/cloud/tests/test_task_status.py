@@ -461,15 +461,15 @@ def test_graph_push_cannot_tombstone_someone_elses_task(client):
     assert [t["id"] for t in _graph(client, project["id"])["tasks"]] == [task_id]
 
 
-def test_a_push_that_omits_status_and_criteria_changes_neither(client):
+def test_a_push_that_omits_acceptance_criteria_does_not_clear_them(client):
     """A full model dump carries every field at its default, so an omitted
-    `status`/`acceptance_criteria` used to be written as todo/[] — silently
-    deleting what the task was required to satisfy, by a caller who could not
-    have set either through the dedicated route."""
+    `acceptance_criteria` was written as `[]` — a non-assignee member deleting
+    what somebody else's task was required to satisfy, with no audit trail, by
+    sending a minimal payload. Nothing in the old gate saw a write at all,
+    because the payload's status matched the stored one."""
     criteria = [{"text": "Rejects a bad password"}, {"text": "Locks after 5 tries"}]
     _ws_, project, task_id = _setup(client, criteria=criteria)
     _assign(client, project["id"], task_id, "bob")
-    assert _set_status(client, project["id"], task_id, "implemented", user="bob").status_code == 200
 
     res = _push(
         client,
@@ -480,11 +480,28 @@ def test_a_push_that_omits_status_and_criteria_changes_neither(client):
     assert res.status_code == 200, res.text
 
     pulled = _get_task(client, project["id"], task_id)
-    assert pulled["status"] == "implemented"
     assert [c["text"] for c in pulled["acceptance_criteria"]] == [
         "Rejects a bad password",
         "Locks after 5 tries",
     ]
+
+
+def test_a_push_that_omits_status_does_not_reset_it(client):
+    """The twin of the case above, and the reason the gate reads
+    `model_fields_set` rather than the dump: an omitted `status` is neither a
+    write to refuse nor a value to store — it used to be both, in turn."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+    assert _set_status(client, project["id"], task_id, "implemented", user="bob").status_code == 200
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        {"id": task_id, "project_id": project["id"], "title": "Build login form"},
+    )
+    assert res.status_code == 200, res.text
+    assert _get_task(client, project["id"], task_id)["status"] == "implemented"
 
 
 def test_an_admin_may_still_set_verified_through_a_graph_push(client):
