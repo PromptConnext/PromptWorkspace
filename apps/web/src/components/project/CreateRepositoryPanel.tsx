@@ -69,6 +69,16 @@ const DETAIL_MESSAGES: Record<string, string> = {
   imported_repo_not_found:
     "The imported repository can't be found on GitHub — it may have been renamed, moved or deleted.",
   github_unreachable: "GitHub couldn't be reached. Try again in a moment.",
+  // The seed commit is pinned to the head the no-overwrite check read; a push
+  // in between refuses the commit rather than writing over what it missed.
+  repo_moved_during_seed:
+    "Someone pushed to the repository's default branch while it was being set up, so nothing was " +
+    "written. Check the file list again and retry.",
+  // Create-repository and the seed preview alike: a directory GitHub won't
+  // list in full leaves no complete answer to "is this path free".
+  repo_tree_too_large:
+    "A directory in this repository is too large for GitHub to list, so PromptConnext can't " +
+    "check safely which files already exist. Nothing was written.",
 };
 
 /** `github_not_configured` is the one failure whose fix is a whole other form,

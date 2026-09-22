@@ -88,6 +88,23 @@ describe("CodebaseAnalysisPanel", () => {
     expect(screen.getByText(/your tech lead analyzes the repository/i)).toBeInTheDocument();
   });
 
+  it("renders a member's view, whose snapshot arrives with its excerpts withheld", () => {
+    const base = analysis();
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({ snapshot: { ...base.snapshot!, excerpts: [] } })}
+        canEdit={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/42 files read/)).toBeInTheDocument();
+    expect(screen.getByText("TypeScript")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: /analyze/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
   it("saves an edited baseline and hands the stored analysis up", async () => {
     const saved = analysis({ baseline: "# Edited" });
     global.fetch = vi.fn().mockResolvedValue({

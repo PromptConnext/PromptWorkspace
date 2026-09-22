@@ -696,21 +696,28 @@ export function Planner({
           {project.repo_default_branch && (
             <p className="mt-1 text-emerald-800">Default branch: {project.repo_default_branch}</p>
           )}
-          {/* The fixed list is exact for a new repository. An imported one
-              kept its own files (plan 0027 M4), and the Project records no
-              trace of which kind this was, so the difference is said rather
-              than guessed at. */}
-          <p className="mt-2 text-emerald-800">
-            Seeded files (in an imported repository, any that already existed were left untouched
-            and PromptConnext&apos;s version went under docs/promptzone/):
-          </p>
-          <ul className="ml-4 list-disc text-emerald-800">
-            {SEEDED_FILES.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-            {hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
-            {hasDeploymentTemplate(project) && <li>{DEPLOY_WORKFLOW_PATH}</li>}
-          </ul>
+          {/* The fixed list is exact only for a repository the platform
+              created. An imported one kept its own files (plan 0027 M4), so
+              which paths were written depended on its tree at the time — say
+              the rule rather than list paths that may not be there. */}
+          {project.repo_origin === "imported" ? (
+            <p className="mt-2 text-emerald-800">
+              PromptConnext added its planning documents in one commit. Existing files were left
+              untouched; where a document would have landed on one, it went under
+              docs/promptzone/ instead.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-emerald-800">Seeded files:</p>
+              <ul className="ml-4 list-disc text-emerald-800">
+                {SEEDED_FILES.map((path) => (
+                  <li key={path}>{path}</li>
+                ))}
+                {hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
+                {hasDeploymentTemplate(project) && <li>{DEPLOY_WORKFLOW_PATH}</li>}
+              </ul>
+            </>
+          )}
           <p className="mt-2">Developers can now clone this repo and open it in the PromptConnext VS Code extension.</p>
         </div>
       )}

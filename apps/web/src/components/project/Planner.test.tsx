@@ -563,6 +563,34 @@ describe("Planner", () => {
 
   const IMPORTED = { repo_url: "https://github.com/acme/app", repo_default_branch: "main" };
 
+  it("lists the fixed seed only for a repository the platform created", async () => {
+    render(
+      <Planner
+        project={makeProject({ ...IMPORTED, lifecycle_status: "repo_created", repo_origin: "created" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Seeded files:")).toBeInTheDocument();
+    expect(screen.getByText("AGENTS.md")).toBeInTheDocument();
+    expect(screen.queryByText(/existing files were left untouched/i)).not.toBeInTheDocument();
+    await screen.findByRole("tab", { name: /plan/i });
+  });
+
+  it("describes the non-destructive seed, not the fixed list, for an imported repository", async () => {
+    render(
+      <Planner
+        project={makeProject({ ...IMPORTED, lifecycle_status: "repo_created", repo_origin: "imported" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/existing files were left untouched/i)).toBeInTheDocument();
+    expect(screen.queryByText("Seeded files:")).not.toBeInTheDocument();
+    expect(screen.queryByText("AGENTS.md")).not.toBeInTheDocument();
+    await screen.findByRole("tab", { name: /plan/i });
+  });
+
   it("holds an imported project's plan until the repository is analyzed, and points there", async () => {
     mockImported("none");
     render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);

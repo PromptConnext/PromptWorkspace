@@ -213,6 +213,63 @@ describe("CreateRepositoryPanel", () => {
       expect(screen.getByText(/can't be created until the conflicting files/i)).toBeInTheDocument();
     });
 
+    it("maps repo_moved_during_seed and re-reads the preview", async () => {
+      mockPreview(
+        { write: ["AGENTS.md"], relocated: [], skipped: [], conflicts: [] },
+        { ok: false, status: 409, detail: "repo_moved_during_seed" },
+      );
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      const button = await screen.findByRole("button", { name: /create repository/i });
+      await screen.findByText("AGENTS.md");
+      fireEvent.click(button);
+
+      expect(await screen.findByText(/nothing was written/i)).toBeInTheDocument();
+      expect(screen.queryByText("repo_moved_during_seed")).not.toBeInTheDocument();
+      const previewCalls = () =>
+        (global.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
+          String(url).includes("/repository/seed-preview"),
+        ).length;
+      await waitFor(() => expect(previewCalls()).toBe(2));
+    });
+
+    it("maps repo_tree_too_large when the preview itself is refused", async () => {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        if (url.toString().includes("/repository/seed-preview")) {
+          return Promise.resolve({
+            ok: false,
+            status: 409,
+            json: async () => ({ detail: "repo_tree_too_large" }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch;
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      expect(
+        await screen.findByText(/directory in this repository is too large/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("repo_tree_too_large")).not.toBeInTheDocument();
+    });
+
     it("maps deploy_workflow_conflict from create-repository to words", async () => {
       mockPreview(
         { write: ["AGENTS.md"], relocated: [], skipped: [], conflicts: [] },

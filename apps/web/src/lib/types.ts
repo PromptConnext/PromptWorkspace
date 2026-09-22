@@ -46,6 +46,10 @@ export interface Project {
   lifecycle_status: "planning" | "pending_tech_review" | "tech_review" | "repo_created";
   repo_url: string | null;
   repo_default_branch: string | null;
+  // Plan 0027. Server-recorded: "imported" by POST /projects, "created" by
+  // create-repository. null for a project with no repository yet, or one
+  // that predates the field.
+  repo_origin?: "imported" | "created" | null;
   policy_scope?: PolicyScope | null;
   // ADR 0021. `deployment_config` is the Tech Lead's frozen input;
   // `deployment_state` is the server's current view, written only by the
