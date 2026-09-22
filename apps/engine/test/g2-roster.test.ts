@@ -35,6 +35,7 @@ type RosterProjectFixture = {
 
 const cloud = {
   failCreate: false, // toggled to simulate "offline" for POST /projects
+  offline: false, // toggled to simulate the cloud being unreachable entirely
   workspaces: [
     { id: "ws-1", name: "Acme" },
     { id: "ws-2", name: "Beta" },
@@ -109,6 +110,17 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Simulate "cloud unreachable" by resetting the connection rather than by
+  // closing and later re-listening on the OS socket — actually cycling the
+  // listening socket on a fixed port raced its own re-bind on a loaded CI
+  // runner (TIME_WAIT / accept-queue timing), leaving the next test's first
+  // request seeing a connection failure that had nothing to do with what it
+  // was testing. Destroying the socket here is deterministic and needs no
+  // timing coordination with the caller.
+  if (cloud.offline) {
+    req.socket.destroy();
+    return;
+  }
   const url = new URL(req.url ?? "/", "http://localhost");
   const send = (status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json" });
@@ -184,21 +196,22 @@ test("roster cache renders the last-known workspaces/projects fully offline", as
   assert.equal(loadRosterWorkspaces().length, 2, "roster primed on sign-in");
 
   // Force the cloud offline: no live network call is allowed to read the cache.
-  await new Promise<void>((r) => server.close(() => r()));
-
-  const res = await req("/engine/cloud/roster");
-  assert.equal(res.status, 200);
-  const body = (await res.json()) as {
-    workspaces: { name: string }[];
-    projects: { name: string }[];
-    syncedAt: string | null;
-  };
-  assert.deepEqual(body.workspaces.map((w) => w.name), ["Acme", "Beta"]);
-  assert.deepEqual(body.projects.map((p) => p.name), ["Remote Project"]);
-  assert.ok(body.syncedAt, "records when the roster was last synced");
-
-  // Reopen the server for the remaining tests.
-  await new Promise<void>((r) => server.listen(port, "127.0.0.1", () => r()));
+  cloud.offline = true;
+  try {
+    const res = await req("/engine/cloud/roster");
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      workspaces: { name: string }[];
+      projects: { name: string }[];
+      syncedAt: string | null;
+    };
+    assert.deepEqual(body.workspaces.map((w) => w.name), ["Acme", "Beta"]);
+    assert.deepEqual(body.projects.map((p) => p.name), ["Remote Project"]);
+    assert.ok(body.syncedAt, "records when the roster was last synced");
+  } finally {
+    // Restore for the remaining tests regardless of outcome above.
+    cloud.offline = false;
+  }
 });
 
 test("GET /engine/cloud/config exposes the cloud web app URL", async () => {
