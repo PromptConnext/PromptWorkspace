@@ -37,6 +37,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.db.merge import PLANNER_SEED_FIELDS
 from app.db.repository import Repository
 from app.generation.parsing import parse_task_lines
 from app.integrations.task_refs import task_ref_from_feature_tag
@@ -377,7 +378,17 @@ def _apply_tasks(
         writes.append(task.model_copy(update={"deleted_at": retired_at}))
 
     retired_count = len(writes) - live_count
-    repo.upsert_graph(project.id, GraphUpsertRequest(tasks=writes), source="pz")
+    # The Planner is the writer that puts the plan's reference into `feature_tag`
+    # at creation, and the only one: the field's declared owner is the tracker,
+    # so the creation gate lets it through only for a caller that names it
+    # (app/db/merge.py). A graph push cannot, which is what stops a member
+    # forging a reference and capturing another task's commit attribution.
+    repo.upsert_graph(
+        project.id,
+        GraphUpsertRequest(tasks=writes),
+        source="pz",
+        seed_fields=PLANNER_SEED_FIELDS,
+    )
     return [task.id for task in writes], live_count, retired_count
 
 

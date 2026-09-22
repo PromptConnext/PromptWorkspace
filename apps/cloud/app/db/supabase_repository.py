@@ -19,7 +19,8 @@ from datetime import datetime, timedelta
 
 from app.db.merge import _as_dt, merge_entity
 from app.db.merge import incoming_dump as _incoming_dump
-from app.db.repository import Repository
+from app.db.merge import unwritten_fields as _unwritten_fields
+from app.db.repository import CrossProjectWrite, Repository
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
@@ -633,11 +634,29 @@ class SupabaseRepository(Repository):
 
     # -- graph ------------------------------------------------------------ #
     def upsert_graph(
-        self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
+        self,
+        project_id: str,
+        payload: GraphUpsertRequest,
+        source: str = "pz",
+        seed_fields: frozenset[str] = frozenset(),
     ) -> tuple[dict[str, int], dict[str, list[str]]]:
         counts: dict[str, int] = {}
         conflicts: dict[str, list[str]] = {}
         now = utcnow()
+        # Pass 1: read every stored row *and* refuse the whole write if an id
+        # belongs to another project. The lookup is by id alone because that is
+        # what the upsert below collides on — scoping this read to the project
+        # without the refusal would be worse, not better: the merge would take
+        # its creation branch and the upsert would then overwrite the other
+        # project's row wholesale, `project_id` included. Rows are cached here so
+        # the validation costs no extra round trip (plan 0015, review round 2).
+        stored_rows: dict[tuple[str, str], dict | None] = {}
+        for etype in ENTITY_TYPES:
+            for item in getattr(payload, etype):
+                row = self._fetch_row(etype, item.id)
+                if row is not None and row.get("project_id") != project_id:
+                    raise CrossProjectWrite(etype, item.id, row.get("project_id"))
+                stored_rows[(etype, item.id)] = row
         for etype in ENTITY_TYPES:
             items = getattr(payload, etype)
             if not items:
@@ -646,10 +665,17 @@ class SupabaseRepository(Repository):
             defaults = FIELD_DEFAULTS.get(etype, {})
             rows = []
             for item in items:
-                stored = self._fetch_row(etype, item.id)
+                stored = stored_rows[(etype, item.id)]
                 incoming = _incoming_dump(item)
                 merged, dropped = merge_entity(
-                    stored, incoming, authority, source, now, defaults
+                    stored,
+                    incoming,
+                    authority,
+                    source,
+                    now,
+                    defaults,
+                    _unwritten_fields(item),
+                    seed_fields,
                 )
                 merged["project_id"] = project_id
                 rows.append(merged)
@@ -664,6 +690,10 @@ class SupabaseRepository(Repository):
         return counts, conflicts
 
     def _fetch_row(self, etype: str, entity_id: str) -> dict | None:
+        """The row for this id, from *any* project — deliberately unscoped, since
+        the id is the primary key an upsert collides on. Every caller compares
+        `project_id` itself and refuses a foreign row (`upsert_graph`,
+        `assign_task`, `set_task_status`); none may assume otherwise."""
         res = self._client.table(_TABLE[etype]).select("*").eq("id", entity_id).limit(1).execute()
         rows = res.data or []
         return rows[0] if rows else None

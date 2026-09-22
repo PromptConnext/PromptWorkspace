@@ -210,6 +210,49 @@ def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
     assert task["assignee"] == "alice"  # pmo owns assignee
 
 
+def test_a_push_naming_another_projects_entity_is_refused(client):
+    """Entity ids are client-supplied, so a push can name a row it does not own.
+    Taking it would relocate that row into this project (plan 0015, review round
+    2); the repository refuses and the route says so rather than 500ing. The
+    cross-adapter statement of the same rule is tests/contract/
+    test_project_scoping.py — this asserts the HTTP answer."""
+    ws = _create_workspace(client)
+    headers = {"X-User-Id": "alice"}
+    project_a = _create_project(client, name="A", workspace_id=ws["id"])
+    project_b = _create_project(client, name="B", workspace_id=ws["id"])
+
+    client.put(
+        f"/sync/projects/{project_a['id']}/graph",
+        json={
+            "tasks": [
+                {
+                    "id": "t1",
+                    "project_id": project_a["id"],
+                    "title": "Theirs",
+                    "status": "implemented",
+                }
+            ]
+        },
+        headers=headers,
+    )
+
+    res = client.put(
+        f"/sync/projects/{project_b['id']}/graph",
+        json={"tasks": [{"id": "t1", "project_id": project_b["id"], "title": "Mine now"}]},
+        headers=headers,
+    )
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "entity_belongs_to_another_project"
+
+    a_tasks = client.get(f"/sync/projects/{project_a['id']}/graph", headers=headers).json()[
+        "tasks"
+    ]
+    assert [(t["title"], t["status"]) for t in a_tasks] == [("Theirs", "implemented")]
+    assert client.get(f"/sync/projects/{project_b['id']}/graph", headers=headers).json()[
+        "tasks"
+    ] == []
+
+
 # --------------------------------------------------------------------------- #
 # WP2 — sync conflict visibility (silent data loss fix)
 # --------------------------------------------------------------------------- #

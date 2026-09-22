@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.db.merge import merge_entity
+from app.db.merge import PLANNER_SEED_FIELDS, merge_entity
 from app.models.schemas import (
     FIELD_AUTHORITY,
     FIELD_DEFAULTS,
@@ -187,13 +187,27 @@ def test_a_pmo_first_write_cannot_author_a_pz_field():
     assert "status" not in merged["field_versions"]
 
 
-def test_a_pz_first_write_still_seeds_the_task_reference():
+def test_only_a_caller_that_names_a_seed_field_may_author_it_at_creation():
     """`feature_tag` is declared "pmo" but carries the plan's task reference,
-    which the pz author writes at creation (app/generation/stage_apply.py's
-    `_apply_tasks`, and the push-attribution path reads it back). It is the one
-    named exemption from the creation gate — see app/db/merge.py."""
+    which the Planner writes at creation (app/generation/stage_apply.py's
+    `_apply_tasks`, and the push-attribution path reads it back). It is authored
+    only by a caller that names it — a graph push names nothing, so it cannot
+    forge a reference."""
     now = utcnow()
-    merged, dropped = merge_entity(
+    planner, dropped = merge_entity(
+        None,
+        _row(feature_tag="T012 [P]", status="in_progress"),
+        TASK_AUTH,
+        "pz",
+        now,
+        defaults=FIELD_DEFAULTS["tasks"],
+        seed_fields=PLANNER_SEED_FIELDS,
+    )
+    assert planner["feature_tag"] == "T012 [P]"
+    assert planner["status"] == "in_progress"
+    assert dropped == []
+
+    pushed, dropped = merge_entity(
         None,
         _row(feature_tag="T012 [P]", status="in_progress"),
         TASK_AUTH,
@@ -201,9 +215,8 @@ def test_a_pz_first_write_still_seeds_the_task_reference():
         now,
         defaults=FIELD_DEFAULTS["tasks"],
     )
-    assert merged["feature_tag"] == "T012 [P]"
-    assert merged["status"] == "in_progress"
-    assert dropped == []
+    assert pushed["feature_tag"] is None  # the model default, not the forged ref
+    assert dropped == ["feature_tag"]
 
 
 def test_a_first_write_with_no_default_map_still_gates():

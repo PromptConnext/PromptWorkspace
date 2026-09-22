@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import merge_entity
+from app.db.merge import unwritten_fields as _unwritten_fields
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
@@ -55,6 +56,27 @@ from app.models.schemas import (
     new_id,
     utcnow,
 )
+
+
+class CrossProjectWrite(ValueError):
+    """An upsert named an entity id that already belongs to a different project.
+
+    Entity ids are client-supplied and globally unique (a uuid primary key), so
+    "the row for this id" and "a row in this project" are not the same lookup.
+    Taking the second for the first let a push into project B rewrite a row of
+    project A's — `project_id` and all — relocating and overwriting somebody
+    else's task with no error and no conflict reported. The row is never moved
+    between projects: every adapter refuses the whole write instead, and callers
+    that face a client turn this into a 4xx (see `app/api/sync.py::push_graph`).
+    """
+
+    def __init__(self, entity_type: str, entity_id: str, owner_project_id: str) -> None:
+        super().__init__(
+            f"{entity_type} id {entity_id} belongs to project {owner_project_id}"
+        )
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+        self.owner_project_id = owner_project_id
 
 
 class Repository(abc.ABC):
@@ -290,8 +312,23 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def upsert_graph(
-        self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
-    ) -> tuple[dict[str, int], dict[str, list[str]]]: ...
+        self,
+        project_id: str,
+        payload: GraphUpsertRequest,
+        source: str = "pz",
+        seed_fields: frozenset[str] = frozenset(),
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
+        """Merge a graph delta into `project_id`, returning (counts, conflicts).
+
+        `source` is the writer's authority domain and is always a literal at the
+        call site — never a value taken from a request body (plan 0015 M2).
+        `seed_fields` lets the in-process Planner author a field it does not own
+        at creation (`merge.PLANNER_SEED_FIELDS`); every client-facing caller
+        leaves it empty.
+
+        Raises `CrossProjectWrite` — before writing anything — if any id in the
+        payload already belongs to another project.
+        """
 
     @abc.abstractmethod
     def get_graph(
@@ -977,13 +1014,35 @@ class InMemoryRepository(Repository):
         return inv
 
     # -- graph ------------------------------------------------------------ #
+    def _owning_project(self, etype: str, entity_id: str) -> str | None:
+        """Which project holds this entity id, if any — the in-memory twin of the
+        supabase adapter's by-id row lookup, so both refuse a cross-project id."""
+        for owner_id, store in self._graph.items():
+            if entity_id in store.get(etype, {}):
+                return owner_id
+        return None
+
     def upsert_graph(
-        self, project_id: str, payload: GraphUpsertRequest, source: str = "pz"
+        self,
+        project_id: str,
+        payload: GraphUpsertRequest,
+        source: str = "pz",
+        seed_fields: frozenset[str] = frozenset(),
     ) -> tuple[dict[str, int], dict[str, list[str]]]:
         store = self._graph[project_id]
         counts: dict[str, int] = {}
         conflicts: dict[str, list[str]] = {}
         now = utcnow()  # server owns the cursor timestamp
+        # Pass 1: refuse the whole write if any id belongs to another project,
+        # before a single row lands. The store is keyed by project here, so a
+        # foreign id would otherwise read as "new" and be created as a second
+        # row — where the supabase adapter, keyed by id alone, would have
+        # rewritten the original. Neither is acceptable; both now raise.
+        for etype in ENTITY_TYPES:
+            for item in getattr(payload, etype):
+                owner = self._owning_project(etype, item.id)
+                if owner is not None and owner != project_id:
+                    raise CrossProjectWrite(etype, item.id, owner)
         for etype, model in ENTITY_TYPES.items():
             items = getattr(payload, etype)
             if not items:
@@ -994,7 +1053,14 @@ class InMemoryRepository(Repository):
                 stored = store[etype].get(item.id)
                 stored_dict = stored.model_dump(mode="json") if stored else None
                 merged, dropped = merge_entity(
-                    stored_dict, _incoming_dump(item), authority, source, now, defaults
+                    stored_dict,
+                    _incoming_dump(item),
+                    authority,
+                    source,
+                    now,
+                    defaults,
+                    _unwritten_fields(item),
+                    seed_fields,
                 )
                 store[etype][item.id] = model(**merged)
                 if dropped:

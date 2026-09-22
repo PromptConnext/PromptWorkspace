@@ -131,6 +131,90 @@ def test_discussion_via_sync_push_appears_in_graph(
     assert graph["discussions"][0]["body"] == "From desktop"
 
 
+def _join(client, workspace_id: str, user: str) -> None:
+    """BOB is a deliberate non-member in this module's fixture; the graph-write
+    cases below are about a *member's* powers, so they invite him in first."""
+    invitation = client.post(
+        f"/workspaces/{workspace_id}/invitations",
+        json={"email": f"{user}@x.com"},
+        headers=ALICE,
+    ).json()
+    accept = client.post(
+        f"/invitations/{invitation['invitation']['token']}/accept",
+        headers={"X-User-Id": user},
+    )
+    assert accept.status_code == 200, accept.text
+
+
+def _push_discussion(client, pid, task_id, headers, **fields):
+    discussion = {
+        "id": "d1",
+        "project_id": pid,
+        "parent_node_type": "tasks",
+        "parent_node_id": task_id,
+        "author": "alice",
+        "body": "Original",
+        "source": "pz",
+    }
+    discussion.update(fields)
+    return client.put(
+        f"/sync/projects/{pid}/graph", json={"discussions": [discussion]}, headers=headers
+    )
+
+
+def test_a_member_cannot_post_as_somebody_else_through_a_graph_push(
+    client: TestClient, project_with_task: tuple[str, str, str]
+):
+    """`create_discussion` takes `author` from the authenticated caller and never
+    from the body — a comment is an attributed statement. The graph door took
+    both `author` and the entity-level `source` from the body (plan 0015, review
+    round 2)."""
+    ws_id, pid, task_id = project_with_task
+    _join(client, ws_id, "bob")
+
+    spoofed = _push_discussion(client, pid, task_id, BOB, author="alice", body="Ship it")
+    assert spoofed.status_code == 403, spoofed.text
+    assert spoofed.json()["detail"] == "discussion_author_forbidden"
+
+    mirrored = _push_discussion(client, pid, task_id, BOB, author="bob", source="pmo")
+    assert mirrored.status_code == 403, mirrored.text
+    assert mirrored.json()["detail"] == "discussion_author_forbidden"
+
+    assert client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()["discussions"] == []
+
+
+def test_a_member_cannot_rewrite_another_authors_comment(
+    client: TestClient, project_with_task: tuple[str, str, str]
+):
+    """`body` and `author` are "shared" authority, so neither the ownership gate
+    nor LWW stands between a member and somebody else's stored comment."""
+    ws_id, pid, task_id = project_with_task
+    _join(client, ws_id, "bob")
+    assert _push_discussion(client, pid, task_id, ALICE).status_code == 200
+
+    tamper = _push_discussion(client, pid, task_id, BOB, author="bob", body="TAMPERED")
+    assert tamper.status_code == 403, tamper.text
+    assert tamper.json()["detail"] == "discussion_forbidden"
+
+    stored = client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()["discussions"][0]
+    assert stored["body"] == "Original"
+    assert stored["author"] == "alice"
+
+
+def test_a_member_may_still_push_their_own_comment(
+    client: TestClient, project_with_task: tuple[str, str, str]
+):
+    ws_id, pid, task_id = project_with_task
+    _join(client, ws_id, "bob")
+    res = _push_discussion(client, pid, task_id, BOB, author="bob", body="Mine")
+    assert res.status_code == 200, res.text
+
+    edit = _push_discussion(client, pid, task_id, BOB, author="bob", body="Mine, edited")
+    assert edit.status_code == 200, edit.text
+    stored = client.get(f"/sync/projects/{pid}/graph", headers=ALICE).json()["discussions"][0]
+    assert stored["body"] == "Mine, edited"
+
+
 def test_pz_and_pmo_can_each_create_their_own_discussion_row(
     client: TestClient, project_with_task: tuple[str, str, str]
 ):

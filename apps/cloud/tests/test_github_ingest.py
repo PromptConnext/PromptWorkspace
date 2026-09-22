@@ -13,9 +13,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.merge import PLANNER_SEED_FIELDS
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
-from app.models.schemas import RepoWebhook
+from app.models.schemas import GraphUpsertRequest, RepoWebhook, Task
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
 
@@ -114,19 +115,30 @@ def workspace_project_task(client: TestClient) -> tuple[str, str, str]:
             "spec_documents": [
                 {"id": "s1", "project_id": project["id"], "requirement_id": "r1", "content": "spec"}
             ],
-            "tasks": [
-                {
-                    "id": "t1",
-                    "project_id": project["id"],
-                    "spec_id": "s1",
-                    "title": "Build login form",
-                    "feature_tag": "T001",
-                }
-            ],
         },
         headers=ALICE,
     )
     assert push.status_code == 200, push.text
+
+    # The task's *reference* comes from the Planner, which is the only writer
+    # that may author `feature_tag` (a tracker-owned field) at creation — a
+    # graph push cannot, or a member could forge attribution (plan 0015).
+    client.app.state.repository.upsert_graph(
+        project["id"],
+        GraphUpsertRequest(
+            tasks=[
+                Task(
+                    id="t1",
+                    project_id=project["id"],
+                    spec_id="s1",
+                    title="Build login form",
+                    feature_tag="T001",
+                )
+            ]
+        ),
+        source="pz",
+        seed_fields=PLANNER_SEED_FIELDS,
+    )
 
     _connect_github(client, ws["id"])
     _bind_repo(client, ws["id"], project["id"])

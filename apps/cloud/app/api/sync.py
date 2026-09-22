@@ -32,7 +32,7 @@ from app.api._guards import (
     require_project,
     require_workspace,
 )
-from app.db.repository import Repository
+from app.db.repository import CrossProjectWrite, Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.preview_url import (
     platform_preview_url,
@@ -853,7 +853,24 @@ def push_graph(
     # author, so it is "pz" — hardcoded here exactly as every other in-process
     # caller hardcodes its own domain ("pmo" only inside the signature-verified
     # webhook, app/api/integrations.py).
-    counts, conflicts = repo.upsert_graph(project_id, payload, source="pz")
+    try:
+        counts, conflicts = repo.upsert_graph(project_id, payload, source="pz")
+    except CrossProjectWrite as exc:
+        # An id in the payload already belongs to another project. Entity ids are
+        # client-supplied, so this is reachable on purpose: taking the row would
+        # have relocated and overwritten a task of a project this caller may not
+        # even be a member of. Refuse the whole push rather than move the row.
+        logger.warning(
+            "graph push project=%s user=%s refused: %s %s belongs to project %s",
+            project_id,
+            user.id,
+            exc.entity_type,
+            exc.entity_id,
+            exc.owner_project_id,
+        )
+        raise HTTPException(
+            status_code=409, detail="entity_belongs_to_another_project"
+        ) from exc
     cursor, _ = repo.changes_head(project_id)
     total = sum(counts.values())
     metrics = getattr(request.app.state, "metrics", None)

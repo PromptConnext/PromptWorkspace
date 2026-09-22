@@ -263,6 +263,19 @@ def test_graph_push_may_still_self_assign(client):
     assert _get_task(client, project["id"], task_id)["assigned_user_id"] == "bob"
 
 
+def test_graph_push_cannot_assign_a_non_member_even_as_admin(client):
+    """The one rule in the graph gate that is not a non-admin restriction:
+    `assign_task` refuses a target who isn't a member of the task's workspace,
+    and parking a task on somebody outside the workspace is no more acceptable
+    through the other door."""
+    ws, project, task_id = _setup(client)
+
+    res = _push_assignment(client, project["id"], task_id, "dave", user="alice")
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "assignee_not_a_member"  # identical to the PATCH
+    assert _get_task(client, project["id"], task_id)["assigned_user_id"] is None
+
+
 def test_graph_push_that_omits_assigned_user_id_is_not_an_assignment(client):
     """The field is dropped from a push that never mentions it (merge.py's
     _OMIT_IF_UNSET), so a member's ordinary snapshot push must not be read as

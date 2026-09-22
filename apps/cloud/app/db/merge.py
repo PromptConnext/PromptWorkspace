@@ -32,36 +32,55 @@ from datetime import datetime, timezone
 # engine so it has no import cycle with schemas.
 _RESERVED = frozenset({"id", "project_id", "updated_at", "deleted_at", "field_versions"})
 
-# Fields whose default (unset) value must never merge as an implicit write —
-# the engine literally never sends them (ADR 0018: assigned_user_id is
-# app-authored via a dedicated endpoint, not the graph push). Unlike ordinary
-# pz fields, a full model dump can't distinguish "the writer wants to clear
-# this" from "the writer never touches this field at all", so these are
-# dropped from the incoming dict when the caller didn't explicitly set them.
-_OMIT_IF_UNSET = frozenset({"assigned_user_id"})
+# Fields whose default value must never merge as an *implicit* write. A full
+# model dump cannot tell "the writer wants to clear this" from "the writer never
+# touches this field at all", so for these the difference is read off
+# `model_fields_set` instead and an unset field is skipped by the merge:
+#
+#   * assigned_user_id — app-authored via a dedicated endpoint (ADR 0018); the
+#     engine never sends it.
+#   * status, acceptance_criteria — what a task is and whether it is done.
+#     `set_task_status`'s own docstring names both as the reason that route
+#     exists: a "mark done" through the full-graph door would merge an empty
+#     criteria list over the cloud's, silently deleting what the task was
+#     required to satisfy, with no audit trail (plan 0015, review round 2).
+#
+# `deleted_at` deliberately is *not* here, though it has the same shape: an
+# upsert that omits it restores a tombstoned row, which is the documented
+# recreate-after-delete contract of this API (plan 0001 M1, pinned by
+# tests/test_sync.py::test_recreate_after_delete). Setting a tombstone still
+# takes an explicit field, so the destructive direction is the gated one
+# (app/api/_guards.py); clearing one implicitly is a sync-contract decision,
+# not this plan's.
+#
+# Note this is not the same thing as dropping the key from the dict: the key
+# stays (so every row a batch writes carries the same columns, which PostgREST
+# requires of a bulk insert) and the merge simply never writes it.
+_NEVER_IMPLICIT = frozenset({"assigned_user_id", "status", "acceptance_criteria"})
 
-# Fields a writer outside the declared domain may still seed on a *first* write
-# (see _gate_creation). `feature_tag` is declared "pmo" in FIELD_AUTHORITY, but
-# it is also where the pz author records the plan's task reference ("T012 [P]"):
-# app/generation/stage_apply.py::_apply_tasks writes it when it creates a task,
-# and both the regeneration match and the push-attribution path
-# (app/api/github.py) read it back. Gating a pz creation on it would therefore
-# delete the task-reference machinery rather than close a hole. The honest fix is
-# to re-declare that field's authority, which is a schema decision plan 0015 does
-# not own — this exemption is the narrow, named alternative.
-_CREATION_SEEDABLE = frozenset({"feature_tag"})
+# The seed set the Planner's in-process writer passes to `upsert_graph` (see
+# `app/generation/stage_apply.py::_apply_tasks`). `feature_tag` is declared "pmo"
+# in FIELD_AUTHORITY, but it is also where the pz author records the plan's task
+# reference ("T012 [P]"), which the regeneration match and the push-attribution
+# path (app/api/github.py) both read back. Creation is the only moment it can be
+# written at all, so the Planner names it explicitly rather than every pz writer
+# being exempt — an HTTP push must not be able to forge a reference and capture
+# another task's commit attribution. The honest fix is to re-declare the field's
+# authority; that is a schema decision plan 0015 does not own.
+PLANNER_SEED_FIELDS = frozenset({"feature_tag"})
 
 
 def incoming_dump(item) -> dict:
-    """JSON-safe dict of `item` for merge_entity, dropping any `_OMIT_IF_UNSET`
-    field the caller didn't explicitly set (so an engine push that has never
-    heard of it can't clobber an app-authored value with an implicit None)."""
-    dumped = item.model_dump(mode="json")
+    """JSON-safe dict of `item` for merge_entity. Every field is present; see
+    `unwritten_fields` for the ones the writer never actually set."""
+    return item.model_dump(mode="json")
+
+
+def unwritten_fields(item) -> frozenset[str]:
+    """`_NEVER_IMPLICIT` fields this writer never explicitly set, which
+    `merge_entity` must therefore leave alone rather than read as a write."""
     fields_set = getattr(item, "model_fields_set", set())
-    for field in _OMIT_IF_UNSET:
-        if field in dumped and field not in fields_set:
-            dumped.pop(field)
-    return dumped
+    return frozenset(field for field in _NEVER_IMPLICIT if field not in fields_set)
 
 
 def _as_dt(value) -> datetime | None:
@@ -84,6 +103,8 @@ def merge_entity(
     source: str,
     now: datetime,
     defaults: dict | None = None,
+    unwritten: frozenset[str] = frozenset(),
+    seed_fields: frozenset[str] = frozenset(),
 ) -> tuple[dict, list[str]]:
     """Merge `incoming` into `stored` field-by-field, returning the new row and
     the list of incoming field names that were silently dropped (rejected by
@@ -98,6 +119,11 @@ def merge_entity(
       used by the creation gate below to reset a field the writer may not author.
       Omitting it makes that gate drop such a key outright instead — gated either
       way, never ungated; see _gate_creation.
+    * `unwritten` names fields the writer never set (`unwritten_fields`): present
+      in the dump at their default, but not a write, so they are left alone. Not
+      a conflict either — nothing was refused, nothing was lost.
+    * `seed_fields` names fields this caller may author at creation despite not
+      owning them (`PLANNER_SEED_FIELDS`); empty for every client-facing door.
 
     A field is written only if (a) `source` is allowed to own it and (b) the
     incoming write is newer than the stored field version (LWW within a domain).
@@ -109,7 +135,7 @@ def merge_entity(
     # the row whole, which let a writer author, at creation, a field the gate
     # below would refuse it a millisecond later (review finding 17, plan 0015).
     if not stored:
-        merged, dropped = _gate_creation(incoming, authority, source, defaults)
+        merged, dropped = _gate_creation(incoming, authority, source, defaults, seed_fields)
         merged["updated_at"] = now_iso
         merged["field_versions"] = _stamp_all(merged, authority, source, now_iso)
         return merged, dropped
@@ -119,7 +145,7 @@ def merge_entity(
     dropped: list[str] = []
 
     for field, value in incoming.items():
-        if field in _RESERVED:
+        if field in _RESERVED or field in unwritten:
             continue
         domain = authority.get(field, "pz")
 
@@ -140,8 +166,11 @@ def merge_entity(
         versions[field] = {"updated_at": now_iso, "source": source}
 
     # deleted_at is a tombstone signal, not an owned field: let either side set
-    # or clear it (LWW at the row level, consistent with M1).
-    if "deleted_at" in incoming:
+    # or clear it (LWW at the row level, consistent with M1) — but only when the
+    # writer actually sent it. A dump always carries the key, so without the
+    # `unwritten` check a push that never mentions the field resurrects a row
+    # somebody retired.
+    if "deleted_at" in incoming and "deleted_at" not in unwritten:
         merged["deleted_at"] = incoming["deleted_at"]
 
     merged["field_versions"] = versions
@@ -150,7 +179,11 @@ def merge_entity(
 
 
 def _gate_creation(
-    incoming: dict, authority: dict[str, str], source: str, defaults: dict | None
+    incoming: dict,
+    authority: dict[str, str],
+    source: str,
+    defaults: dict | None,
+    seed_fields: frozenset[str] = frozenset(),
 ) -> tuple[dict, list[str]]:
     """Apply the ownership gate to a row that does not exist yet.
 
@@ -172,7 +205,7 @@ def _gate_creation(
     merged = dict(incoming)
     dropped: list[str] = []
     for field, domain in authority.items():
-        if field not in merged or field in _RESERVED or field in _CREATION_SEEDABLE:
+        if field not in merged or field in _RESERVED or field in seed_fields:
             continue
         if domain == "shared" or domain == source:
             continue
@@ -198,6 +231,11 @@ def _gate_creation(
 
 
 def _stamp_all(incoming: dict, authority: dict[str, str], source: str, now_iso: str) -> dict:
+    """Version-stamp every field the writer owns. A seeded field (`seed_fields`)
+    is deliberately *not* stamped: the Planner may put the plan's reference there
+    at creation, but the field's declared owner keeps the clock, so a later
+    tracker write still lands rather than losing to a stamp from the other
+    domain."""
     versions: dict = {}
     for field in incoming:
         if field in _RESERVED:
