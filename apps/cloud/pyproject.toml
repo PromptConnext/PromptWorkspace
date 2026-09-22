@@ -9,6 +9,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "eval: golden-question RAG eval harness (M10) — subset via `pytest -m eval`",
+    "rls: direct-PostgREST grant probes (plan 0014 M4) — need a real Supabase stack and two real Auth users; subset via `pytest -m rls`, configured through PZ_RLS_SUPABASE_* (see tests/rls/conftest.py)",
     # Plan 0020. Both backends are collected by an ordinary `pytest`; the
     # supabase parameter skips itself, naming the missing variable, unless
     # PZ_CONTRACT_SUPABASE_URL/_KEY point at a disposable instance. The marker

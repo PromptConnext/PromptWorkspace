@@ -1,7 +1,18 @@
 """Shared authorization guards: workspace membership & admin role.
 
-App-layer checks are the primary access control; when the backend forwards the
-caller's JWT to Supabase, RLS enforces the same rules a second time.
+These checks are the only enforcement of admin-only stage authoring, task
+ownership, and admin-only verification (docs/plans/0014-row-level-security-
+parity.md). Postgres RLS on the graph tables was previously assumed to
+re-check the same rules; it never did — every policy there tested workspace
+membership and nothing else — and as of migration 0030 the `authenticated`
+role has no grant on those tables at all, so RLS does not run for them
+either. This module is not "primary" among layers that also enforce these
+rules. It is the entire enforcement.
+
+Membership itself is still checked in both places for the tables outside that
+set (workspaces, members, projects), where the policies and the guards do
+agree; `app/db/supabase_repository.py::for_user` still scopes those to the
+caller's JWT per request.
 """
 
 from __future__ import annotations

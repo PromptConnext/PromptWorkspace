@@ -111,8 +111,17 @@ def get_repository(
     authorization: str | None = Header(default=None),
 ) -> Repository:
     """The shared repository, scoped to the caller's own JWT when running in
-    supabase auth mode — so RLS applies per request (defense in depth behind
-    the app-layer membership guards in app/api/_guards.py).
+    supabase auth mode.
+
+    That scoping is real for workspaces, members, projects and the other
+    tables whose RLS policies express the rule the API expresses. It is *not*
+    what guards the six graph tables (pz_requirements, pz_spec_documents,
+    pz_tasks, pz_artifacts, pz_agent_runs, pz_stage_documents): calls against
+    those always use the service-role client, because migration 0030 revoked
+    them from `authenticated` entirely — the server is their only writer, and
+    app/api/_guards.py is their only enforcement (plan 0014). The routing is
+    in app/db/supabase_repository.py::_table, keyed by table name, so it holds
+    for both the scoped and unscoped repository this function can return.
 
     Un-authenticated call sites (inbound tracker webhooks, the tombstone GC
     loop) have no end-user token and correctly fall through to the shared,
