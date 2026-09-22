@@ -1,6 +1,6 @@
 # Plan 0020 — A repository contract suite that runs against both adapters
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation
+**Date:** 2026-09-12 · **Status:** Implemented 2026-09-22 (M1-M5; `apps/cloud/tests/contract/`, verified against a real local Supabase target — findings 4 and 17's second half reproduce deterministically, recorded `xfail(strict=True)` pending their fixes). **Finding 4 has no owning plan** — flagged for a follow-up plan, not fixed here (out of this plan's scope by its own M3 boundary).
 
 [Finding 22](../cloud-codebase-review-2026-09-06.md) of the cloud codebase review is the specification this plan implements, and it is the one finding that explains the others. The review's validation run produced **558 passed, 1 failed** against `apps/cloud`, and three separately-reported High and Medium defects — findings 3, 4 and 17 — sat inside that green run untouched. They were not missed because the suite is thin. They were missed because all 558 tests exercised `InMemoryRepository` and none exercised `SupabaseRepository`, the class that actually runs in production. A passing cloud test today establishes the behaviour of the in-memory double; it establishes nothing about the adapter behind `DATA_BACKEND=supabase`.
 
