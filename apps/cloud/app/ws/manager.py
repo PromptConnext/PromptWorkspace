@@ -73,6 +73,16 @@ class ConnectionManager:
             except Exception:  # noqa: BLE001 - a dead socket must not break fan-out
                 self.disconnect(project_id, socket)
 
+    def occupancy(self) -> tuple[int, int]:
+        """(projects with at least one live socket, total live sockets).
+
+        Read-only, for the single-instance report on /health (plan 0021 M4,
+        see app/capacity.py). `rooms` needs no "non-empty" filter: both
+        `disconnect` and `prune_idle` drop a room that empties, so a key here
+        always has a socket behind it.
+        """
+        return len(self._rooms), sum(len(room) for room in self._rooms.values())
+
     def prune_idle(self, project_id: str, ttl: float, now: float) -> list[object]:
         """Drop connections idle longer than `ttl`. Returns the removed sockets
         so the caller can close them. Deterministic — no timers involved."""

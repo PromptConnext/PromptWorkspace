@@ -31,6 +31,20 @@ class DailyTokenBudget:
             return daily_budget
         return max(0, daily_budget - usage.used)
 
+    def peak_usage_today(self) -> tuple[int, int]:
+        """(highest tokens one workspace has spent today, workspaces charged
+        today). Read-only, for the single-instance report on /health (plan 0021
+        M4, see app/capacity.py).
+
+        Filtered by day for the same reason `remaining()` is: nothing prunes a
+        rolled-over entry, so counting `_usage` wholesale would report a
+        workspace that has been idle since last week as if it were spending
+        now. No workspace id is returned — /health is unauthenticated.
+        """
+        today = self._today()
+        used = [usage.used for usage in self._usage.values() if usage.day == today]
+        return (max(used) if used else 0), len(used)
+
     def record(self, workspace_id: str, tokens: int) -> None:
         today = self._today()
         usage = self._usage.get(workspace_id)

@@ -133,6 +133,18 @@ class EmbedQueue:
         with self._lock:
             return self._pending.get(project_id, 0)
 
+    def pending_snapshot(self) -> tuple[int, int]:
+        """(in-flight jobs across every project, projects with at least one).
+
+        The whole-instance view of what `pending_for` reports per project —
+        queue depth for the single-instance report on /health (plan 0021 M4,
+        see app/capacity.py). Both numbers come from one lock acquisition so
+        the pair cannot disagree, and reserved-but-not-yet-delivered jobs count
+        here for the same reason they count there.
+        """
+        with self._lock:
+            return sum(self._pending.values()), len(self._pending)
+
     def record_failure(
         self, job: EmbedJob, code: str, message: str, *, at: datetime | None = None
     ) -> None:
