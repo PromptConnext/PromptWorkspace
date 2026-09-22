@@ -56,6 +56,20 @@ from app.models.schemas import (
     utcnow,
 )
 
+
+def _pg_filter_value(value: str) -> str:
+    """Quote a value for use inside a composed PostgREST filter expression.
+
+    Plain `.eq()`/`.gt()` calls take a value the client encodes for us, but an
+    `or=(...)` group is one string whose commas and parentheses are grammar.
+    A client-supplied `after_id` must not be able to reach that grammar, so it
+    goes in double quotes with `"` and `\\` escaped — which is also what makes a
+    timestamp's own punctuation safe.
+    """
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 _TABLE = {
     "requirements": "pz_requirements",
     "spec_documents": "pz_spec_documents",
@@ -662,7 +676,12 @@ class SupabaseRepository(Repository):
         if project is None:
             raise KeyError(project_id)
         graph = ProjectGraph(project=project)
-        max_cursor: datetime | None = None
+
+        # Gather candidates across all entity types, then order globally by
+        # (updated_at, id) so a `limit` yields a stable keyset page. Mirrors
+        # InMemoryRepository.get_graph; the contract both implement is stated on
+        # Repository.get_graph.
+        candidates: list[tuple[datetime, str, str, GraphEntity]] = []
         for etype, model in ENTITY_TYPES.items():
             query = self._client.table(_TABLE[etype]).select("*").eq("project_id", project_id)
             if since is not None:
@@ -671,23 +690,60 @@ class SupabaseRepository(Repository):
             else:
                 # Bootstrap pull: live rows only.
                 query = query.is_("deleted_at", "null")
-            # Keyset lower bound for pagination continuation.
             if after_ts is not None:
-                query = query.gte("updated_at", after_ts.isoformat())
+                # Keyset lower bound, exclusive, pushed into SQL *in full*. An
+                # inclusive bound refined in Python after Postgres has applied
+                # the limit can return a page made up entirely of rows the
+                # client already holds — an empty page, reported as drained,
+                # with unseen rows waiting behind it (plan 0013).
+                ts = _pg_filter_value(after_ts.isoformat())
+                if after_id is None:
+                    query = query.gt("updated_at", after_ts.isoformat())
+                else:
+                    query = query.or_(
+                        f"updated_at.gt.{ts},"
+                        f"and(updated_at.eq.{ts},id.gt.{_pg_filter_value(after_id)})"
+                    )
             query = query.order("updated_at").order("id")
             if limit is not None:
-                query = query.limit(limit)
+                # Per-table over-fetch bound, not the page size: the merged page
+                # can never need more than `limit` rows from one table, and the
+                # +1 is what tells `has_more` apart from drained when a single
+                # table holds exactly a page's worth of matching rows.
+                query = query.limit(limit + 1)
             res = query.execute()
-            rows = [model(**row) for row in (res.data or [])]
-            if after_ts is not None and after_id is not None:
-                rows = [
-                    r for r in rows if r.updated_at and (r.updated_at > after_ts or r.id > after_id)
-                ]
-            setattr(graph, etype, rows)
-            for row in rows:
-                if row.updated_at and (max_cursor is None or row.updated_at > max_cursor):
-                    max_cursor = row.updated_at
-        graph.cursor = max_cursor
+            for row in res.data or []:
+                entity = model(**row)
+                if entity.updated_at is None:
+                    continue
+                # The same exclusive bound as the push-down above, so the merge
+                # is correct on its own terms rather than trusting the filter.
+                if after_ts is not None:
+                    if entity.updated_at < after_ts:
+                        continue
+                    if entity.updated_at == after_ts and (
+                        after_id is None or entity.id <= after_id
+                    ):
+                        continue
+                candidates.append((entity.updated_at, entity.id, etype, entity))
+
+        candidates.sort(key=lambda c: (c[0], c[1]))
+        truncated = limit is not None and len(candidates) > limit
+        if limit is not None:
+            candidates = candidates[:limit]
+
+        rows_by_type: dict[str, list] = {etype: [] for etype in ENTITY_TYPES}
+        last: tuple[datetime, str] | None = None
+        for ts_value, eid, etype, entity in candidates:
+            rows_by_type[etype].append(entity)
+            last = (ts_value, eid)
+        for etype in ENTITY_TYPES:
+            setattr(graph, etype, rows_by_type[etype])
+
+        graph.cursor = last[0] if last else (after_ts if after_ts else since)
+        if truncated and last:
+            graph.next_id = last[1]
+            graph.has_more = True
         return graph
 
     def changes_head(
