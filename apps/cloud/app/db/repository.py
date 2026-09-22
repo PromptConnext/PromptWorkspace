@@ -303,8 +303,43 @@ class Repository(abc.ABC):
     ) -> ProjectGraph:
         """Pull the graph. `since` selects mode (bootstrap = live only;
         incremental = everything changed after it, tombstones included).
-        `limit` + (`after_ts`,`after_id`) give keyset pagination ordered by
-        (updated_at, id)."""
+        `limit` + (`after_ts`,`after_id`) give keyset pagination.
+
+        The pagination contract (plan 0013), binding on every adapter, because a
+        client that drains this endpoint has no other way to know it holds the
+        whole graph:
+
+        **Ordering key.** Candidate rows are ordered globally by
+        `(updated_at, id)` across *all* of `ENTITY_TYPES` — one sequence, not six
+        per-table sequences. Which table a row came from never affects its
+        position.
+
+        **The keyset predicate is exclusive, and applied first.** Given
+        `after_ts` (and `after_id`), a row is a candidate only if
+        `updated_at > after_ts`, or `updated_at == after_ts and id > after_id`.
+        With `after_ts` set and `after_id` None, every row at exactly `after_ts`
+        is already consumed. That predicate is applied in full, as an exclusive
+        bound, *before* any row is counted against `limit` — never as an
+        inclusive bound that a page-sized fetch truncates and application code
+        then refines, which can hand back a page of entirely already-seen rows
+        (so: empty) while unseen rows wait behind them.
+
+        **`limit` counts the page, not the table.** It bounds the total number of
+        rows returned across all entity types. A `limit=50` pull returns at most
+        50 rows however they split across the six lists.
+
+        **What the response reports.** `has_more` is True if and only if
+        candidate rows existed beyond the page returned. When it is True,
+        `cursor` and `next_id` are the `(updated_at, id)` of the last row in the
+        page, and a client resending them as `after_ts=cursor, after_id=next_id`
+        receives the next page with no gap and no duplicate. When `has_more` is
+        False the graph is drained at `cursor` and `next_id` is None; re-pulling
+        at the final cursor is idempotent and returns an empty page. An empty
+        page with `has_more` False therefore means drained, and nothing else.
+
+        `cursor` is the last returned row's `updated_at`, or — when the page is
+        empty — the position the caller asked from (`after_ts`, else `since`), so
+        a drained client's cursor never rewinds."""
 
     @abc.abstractmethod
     def changes_head(

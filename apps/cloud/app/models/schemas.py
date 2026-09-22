@@ -609,8 +609,13 @@ class ProjectGraph(BaseModel):
     agent_runs: list[AgentRun] = Field(default_factory=list)
     discussions: list[Discussion] = Field(default_factory=list)
     cursor: datetime | None = None
-    # Keyset continuation (M7): when a `limit` truncates the page, the client
-    # re-pulls with since=cursor & after_id=next_id. None means fully drained.
+    # Keyset continuation: when a `limit` truncates the page, the client re-pulls
+    # with after_ts=cursor & after_id=next_id. `has_more` False with `next_id`
+    # None means drained. The full contract every adapter implements — global
+    # (updated_at, id) ordering, the exclusive keyset predicate applied before
+    # limiting, and what `limit` counts — is stated once on
+    # `Repository.get_graph` in app/db/repository.py; read it before changing
+    # either adapter.
     next_id: str | None = None
     has_more: bool = False
 
