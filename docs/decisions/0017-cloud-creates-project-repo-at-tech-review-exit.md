@@ -168,3 +168,17 @@ The App's **single shared webhook secret** could authenticate a delivery but not
 **Revisit when** staff turnover or token rotation starts causing real incidents, or a customer's security review rejects storing a PAT at all. The answer then is not to go back to the body-supplied installation ID, but to add a proper GitHub App **install callback flow** — deriving `installation_id` from GitHub's redirect instead of the client — alongside the PAT path, with `integration_config["github"]["auth_kind"]` already in place to discriminate the two.
 
 **Superseded action items.** Items 2 and 4 above are void: there is no shared App to configure, and the webhook gap is closed rather than tracked.
+
+---
+
+## Amendment — 2026-09-22: an adopted repository is never overwritten
+
+**Status:** Accepted · implemented by [plan 0027](../plans/0027-brownfield-repo-import.md) M4 · narrows §2 for imported repositories only.
+
+§2 was written for a repository the cloud had just created, which holds nothing but GitHub's auto-init commit, so writing `README.md`, `AGENTS.md`, `docs/*` and `.specify/memory/constitution.md` at fixed paths overwrote nothing anyone cared about. [Plan 0016](../plans/0016-repository-provisioning-identity.md) then let a project adopt a repository the user imported at creation, and the same seed, built on the branch's base tree, replaced whatever the team already had at those paths — their README, their agent instructions, their constitution, and, with a deployment template selected, their scaffold and their workflow. Nothing in this ADR had anticipated a repository with a history.
+
+The rule for an adopted repository is now that **the seed never writes a path the repository already has.** The derived documents are namespaced: the README and the `docs/{scope,architecture,tasks,conventions,policy-scope}.md` set, along with a deployment template's `docs/deployment.md`, always go under `docs/promptzone/`, so a platform file never occupies a conventional path the team may want later. `AGENTS.md` and `.specify/memory/constitution.md` are still written where agents and the engine look for them, but only when those paths are free, and otherwise beside the others as `docs/promptzone/AGENTS.md` and `docs/promptzone/constitution.md`. Anything still colliding is dropped, and existing deployment scaffold files are skipped one at a time. An existing workflow file at the template's path is the one case that refuses instead (`deploy_workflow_conflict`), for the reason ADR 0021 gives about the workflow; see its pointer to this amendment.
+
+The check reads the repository's live tree at the moment of seeding rather than any stored snapshot, so a file pushed after the Tech Lead last looked is protected just the same, and a `GET /projects/{id}/repository/seed-preview` built from the same code shows the exact list of paths before the Tech Lead consents. A repository this project created — including the crash-window retry §5 describes — is unaffected and seeds exactly as §2 says.
+
+**What this costs.** An imported project's AI context is less discoverable than a created one's: an agent that reads only the root `AGENTS.md` sees the team's rules and not the platform's when both exist. That is the correct precedence — the team's instructions are authoritative in their own repository — and the relocated file says where it came from, but it does mean the constitution's reach into an imported repository depends on the team pointing their own `AGENTS.md` at it.
