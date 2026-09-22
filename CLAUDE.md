@@ -82,6 +82,8 @@ pytest                                         # cloud's test suite
 ruff check .                                   # lint (line-length 100)
 ```
 
+`tests/` is hermetic — `tests/conftest.py` pins `DATA_BACKEND=memory` before `app.config` is imported, so `pytest` needs no database, container or network. `tests/contract/` (plan 0020) is the one part that can reach the *other* adapter: its `repo` fixture is parametrised over `InMemoryRepository` and `SupabaseRepository`, and the supabase parameter skips itself — naming the missing variable — unless `PZ_CONTRACT_SUPABASE_URL`/`PZ_CONTRACT_SUPABASE_KEY` point at a disposable instance (`supabase start` plus `scripts/migrate.py apply --var embed_dim=1024`; the full recipe is in `tests/contract/conftest.py`). Run the pair with `pytest -m contract`; `.github/workflows/cloud-contract.yml` does it nightly and on any change under `app/db/**`. Two markers are opt-in: `eval` (RAG golden questions) and `network`, the only marker the default run deselects, because a unit suite that quietly needs a resolver lies about being hermetic.
+
 **Web** (`apps/web`): `next dev` / `next build` / `tsc --noEmit` (typecheck) / `vitest run` (test suite).
 
 **VS Code extension** (`apps/vscode`): `typecheck` / `build` (esbuild) / `test` (`node --test test/unit/*.test.ts`, no editor host) / `package` (VSIX). Configured through VS Code settings (`promptconnext.*`), never `process.env` — nothing sets env for the extension host. `src/git/git.d.ts` is a **vendored pinned copy** of the built-in Git extension's API and `src/git/gitBridge.ts` is its only importer; typecheck is the drift tripwire. It has no sidecar and must not grow one (ADR 0019).
