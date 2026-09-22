@@ -490,6 +490,14 @@ export interface DeploymentOut {
   frame_policy: "allow" | "deny" | "unknown" | null;
   // Frozen when the build reached a terminal state; empty while it is in flight.
   tasks: BuildTask[];
+  // Whether `tasks` is an answer at all. An empty list under "frozen" means
+  // this build closed nothing; an empty list under "uncomputed" means nobody
+  // ever worked out what it closed — usually because the code host was
+  // unreachable when it published. The two are different facts and used to
+  // render identically, which is the gap plan 0024 M3 closes: an evidence
+  // chain whose holes are invisible is not evidence.
+  attribution_state: "uncomputed" | "frozen";
+  attributed_at: string | null;
   created_at: string;
   updated_at: string;
 }

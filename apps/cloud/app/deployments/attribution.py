@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 
 from app.integrations.github_auth import resolve_token
-from app.models.schemas import ArtifactKind, Deployment
+from app.models.schemas import ArtifactKind, Deployment, utcnow
 
 logger = logging.getLogger("promptconnext.deploy")
 
@@ -63,10 +63,24 @@ async def _commits_in_build(
 
 
 async def freeze_build_tasks(app, repo, project, deployment: Deployment) -> list[str]:
-    """Resolve and persist this build's task set. Returns the task ids stored."""
+    """Resolve and persist this build's task set. Returns the task ids stored.
+
+    Once. Three call sites reach this — app/api/github.py twice and the
+    reconciliation sweep — and GitHub redelivers deliveries freely, so the
+    early return below is what makes "frozen" true rather than merely stated.
+    It sits *before* the GitHub round trip deliberately: a redelivery should
+    cost nothing and, more importantly, must not be able to observe a graph
+    that has changed since the build shipped.
+
+    The only thing that unfreezes a build is the admin-only reattribute
+    endpoint in app/api/deployments.py.
+    """
+    if deployment.attribution_state == "frozen":
+        return repo.list_deployment_tasks(deployment.id)
+
     if not deployment.commit_sha:
-        repo.set_deployment_tasks(deployment.id, [])
-        return []
+        repo.freeze_deployment_tasks(deployment.id, [], utcnow())
+        return repo.list_deployment_tasks(deployment.id)
 
     full_name = _repo_full_name(project.repo_url)
     resolved = resolve_token(app, repo.get_workspace(project.workspace_id))
@@ -94,5 +108,8 @@ async def freeze_build_tasks(app, repo, project, deployment: Deployment) -> list
     task_ids = [
         task.id for task in graph.tasks if task.id in attributed and task.deleted_at is None
     ]
-    repo.set_deployment_tasks(deployment.id, task_ids)
-    return task_ids
+    repo.freeze_deployment_tasks(deployment.id, task_ids, utcnow())
+    # The stored set, not the computed one. A concurrent delivery may have won
+    # the race and frozen a different list; that list is the record, and
+    # returning ours would hand the caller something no reader will ever see.
+    return repo.list_deployment_tasks(deployment.id)

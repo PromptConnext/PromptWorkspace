@@ -103,6 +103,10 @@ _REPO_WEBHOOKS = "pz_repo_webhooks"
 _WORKSPACE_INTEGRATIONS = "pz_workspace_integrations"
 _DEPLOYMENTS = "pz_deployments"
 _DEPLOYMENT_TASKS = "pz_deployment_tasks"
+# Migration 0033. The only writer of _DEPLOYMENT_TASKS: the replace and the
+# state stamp are one transaction, and the "already frozen" test happens under
+# a row lock rather than in this process between two round trips.
+_FREEZE_DEPLOYMENT_TASKS_RPC = "pz_freeze_deployment_tasks"
 
 # The seven tables migration 0031 revoked from `authenticated` and `anon`
 # (plan 0014, Option A). `authenticated` can no longer touch them at all, so
@@ -521,11 +525,17 @@ class SupabaseRepository(Repository):
         must land on the same row."""
         existing = self._get_deployment(deployment.project_id, deployment.external_key)
         if existing is not None:
+            # attribution_state/attributed_at are owned by
+            # pz_freeze_deployment_tasks, never by the delivery this row was
+            # built from. Carrying them forward is what stops a redelivery
+            # from writing the model default over a frozen row (plan 0024 M2).
             deployment = deployment.model_copy(
                 update={
                     "id": existing.id,
                     "created_at": existing.created_at,
                     "updated_at": utcnow(),
+                    "attribution_state": existing.attribution_state,
+                    "attributed_at": existing.attributed_at,
                 }
             )
         self._table(_DEPLOYMENTS).upsert(
@@ -560,16 +570,41 @@ class SupabaseRepository(Repository):
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
 
-    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
-        self._table(_DEPLOYMENT_TASKS).delete().eq("deployment_id", deployment_id).execute()
-        if not task_ids:
-            return
-        self._table(_DEPLOYMENT_TASKS).insert(
-            [
-                {"deployment_id": deployment_id, "task_id": task_id, "position": index}
-                for index, task_id in enumerate(task_ids)
-            ]
+    def freeze_deployment_tasks(
+        self, deployment_id: str, task_ids: list[str], now: datetime
+    ) -> bool:
+        # Exactly one round trip, and never a bare delete. The delete, the
+        # insert and the state stamp happen inside pz_freeze_deployment_tasks
+        # (migration 0033) so they cannot come apart: the previous shape
+        # issued the delete and the insert as two PostgREST calls, and a
+        # failure between them erased the record of what shipped rather than
+        # leaving the stale-but-true one in place.
+        #
+        # The "already frozen" test is inside the function too, under a `for
+        # update` row lock — not here. Checking it in Python would reintroduce
+        # the race the lock exists to close, since two concurrent deliveries
+        # of the same terminal event would both read 'uncomputed' before
+        # either wrote.
+        #
+        # `now` is unused: the function stamps attributed_at with the
+        # database's own now(), which is the clock the rest of the row is
+        # written against. The parameter stays in the signature because the
+        # in-memory adapter has no such clock and the contract suite drives
+        # both through one interface.
+        res = self._client.rpc(
+            _FREEZE_DEPLOYMENT_TASKS_RPC,
+            {"p_deployment_id": deployment_id, "p_task_ids": list(task_ids)},
         ).execute()
+        return bool(res.data)
+
+    def clear_deployment_attribution(self, deployment_id: str) -> bool:
+        res = (
+            self._table(_DEPLOYMENTS)
+            .update({"attribution_state": "uncomputed", "attributed_at": None})
+            .eq("id", deployment_id)
+            .execute()
+        )
+        return bool(res.data)
 
     def list_deployment_tasks(self, deployment_id: str) -> list[str]:
         res = (

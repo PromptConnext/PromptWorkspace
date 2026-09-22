@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProgressRollup, shippedTaskIds } from "./ProgressRollup";
+import { attributionIsComplete, ProgressRollup, shippedBuilds, shippedTaskIds } from "./ProgressRollup";
 import type { DeploymentStatus, ProjectGraph } from "@/lib/types";
 
 let mockStatus: DeploymentStatus | null = null;
@@ -25,12 +25,28 @@ const graph = {
   discussions: [],
 } as unknown as ProjectGraph;
 
+/** A live build row, newest-first ordering supplied by the caller. */
+function build(
+  id: string,
+  url: string,
+  taskIds: string[],
+  attribution_state: "uncomputed" | "frozen" = "frozen",
+) {
+  return {
+    id,
+    state: "live",
+    url,
+    attribution_state,
+    tasks: taskIds.map((t) => ({ id: t, title: t.toUpperCase(), ref: null })),
+  };
+}
+
 describe("shippedTaskIds", () => {
   it("takes only tasks from builds that actually published", () => {
     const status = {
       recent: [
         { id: "d2", state: "failed", tasks: [{ id: "t9", title: "X", ref: null }] },
-        { id: "d1", state: "live", tasks: [{ id: "t1", title: "A", ref: null }] },
+        { id: "d1", state: "live", attribution_state: "frozen", tasks: [{ id: "t1", title: "A", ref: null }] },
       ],
     } as unknown as DeploymentStatus;
     expect([...shippedTaskIds(status)]).toEqual(["t1"]);
@@ -39,12 +55,78 @@ describe("shippedTaskIds", () => {
   it("is empty when nothing has deployed", () => {
     expect(shippedTaskIds(null).size).toBe(0);
   });
+
+  // Plan 0024 M3: a frozen set is a delta, so the cumulative answer is
+  // bounded at the build currently being served.
+  it("unions every build up to and including the one being served", () => {
+    const status = {
+      url: "https://v2.test/",
+      recent: [build("d2", "https://v2.test/", ["t2"]), build("d1", "https://v1.test/", ["t1"])],
+    } as unknown as DeploymentStatus;
+    expect([...shippedTaskIds(status)].sort()).toEqual(["t1", "t2"]);
+  });
+
+  it("stops at the serving build, so a rolled-back build is not counted", () => {
+    // d3 is newer but the preview is back on d2's URL — a rollback. d3's work
+    // is NOT in the version you can open, and unioning it over-counted.
+    const status = {
+      url: "https://v2.test/",
+      recent: [
+        build("d3", "https://v3.test/", ["t3"]),
+        build("d2", "https://v2.test/", ["t2"]),
+        build("d1", "https://v1.test/", ["t1"]),
+      ],
+    } as unknown as DeploymentStatus;
+    expect([...shippedTaskIds(status)].sort()).toEqual(["t1", "t2"]);
+    expect(shippedBuilds(status).map((b) => b.id)).toEqual(["d2", "d1"]);
+  });
+
+  it("falls back to the newest live build when no URL matches", () => {
+    const status = {
+      url: "https://somewhere-else.test/",
+      recent: [build("d2", "https://v2.test/", ["t2"]), build("d1", "https://v1.test/", ["t1"])],
+    } as unknown as DeploymentStatus;
+    expect(shippedBuilds(status).map((b) => b.id)).toEqual(["d2", "d1"]);
+  });
+});
+
+describe("attributionIsComplete", () => {
+  it("is true when every contributing build was attributed", () => {
+    const status = {
+      url: "https://v1.test/",
+      recent: [build("d1", "https://v1.test/", ["t1"])],
+    } as unknown as DeploymentStatus;
+    expect(attributionIsComplete(status)).toBe(true);
+  });
+
+  it("is false when any contributing build was not", () => {
+    const status = {
+      url: "https://v2.test/",
+      recent: [
+        build("d2", "https://v2.test/", ["t2"]),
+        build("d1", "https://v1.test/", [], "uncomputed"),
+      ],
+    } as unknown as DeploymentStatus;
+    expect(attributionIsComplete(status)).toBe(false);
+  });
+
+  it("ignores an unattributed build that the serving bound excludes", () => {
+    const status = {
+      url: "https://v2.test/",
+      recent: [
+        build("d3", "https://v3.test/", [], "uncomputed"),
+        build("d2", "https://v2.test/", ["t2"]),
+      ],
+    } as unknown as DeploymentStatus;
+    expect(attributionIsComplete(status)).toBe(true);
+  });
 });
 
 describe("ProgressRollup", () => {
   it("says how many of the done tasks are in the version you can open", () => {
     mockStatus = {
-      recent: [{ id: "d1", state: "live", tasks: [{ id: "t1", title: "A", ref: null }] }],
+      url: "https://v1.test/",
+      recent: [build("d1", "https://v1.test/", ["t1"])],
     } as unknown as DeploymentStatus;
     render(<ProgressRollup graph={graph} projectId="p1" />);
     expect(screen.getByText(/2\/3 tasks/)).toBeInTheDocument();
@@ -55,5 +137,27 @@ describe("ProgressRollup", () => {
     mockStatus = null;
     render(<ProgressRollup graph={graph} projectId="p1" />);
     expect(screen.queryByText(/version you can open/)).not.toBeInTheDocument();
+  });
+
+  it("suppresses the count when a contributing build was never attributed", () => {
+    mockStatus = {
+      url: "https://v1.test/",
+      recent: [build("d1", "https://v1.test/", [], "uncomputed")],
+    } as unknown as DeploymentStatus;
+    render(<ProgressRollup graph={graph} projectId="p1" />);
+    expect(screen.getByText(/Not yet recorded/i)).toBeInTheDocument();
+    // The suppressed case must not fall through to "0 in the version you can
+    // open" — a guess dressed as a measurement. Matched on the leading count,
+    // since the suppression copy ends in the same words.
+    expect(screen.queryByText(/^\d+ in the version you can open/)).not.toBeInTheDocument();
+  });
+
+  it("still reports a frozen zero, which the old shipped.size guard hid", () => {
+    mockStatus = {
+      url: "https://v1.test/",
+      recent: [build("d1", "https://v1.test/", [])],
+    } as unknown as DeploymentStatus;
+    render(<ProgressRollup graph={graph} projectId="p1" />);
+    expect(screen.getByText(/0 in the version you can open/)).toBeInTheDocument();
   });
 });
