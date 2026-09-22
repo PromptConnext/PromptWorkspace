@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.models.schemas import GraphUpsertRequest, Task
+
 
 def _ws(client, name="Acme", user="alice"):
     res = client.post("/workspaces", json={"name": name}, headers={"X-User-Id": user})
@@ -155,10 +157,23 @@ def test_assign_missing_task_404(client):
 
 def test_pmo_assignee_and_pz_assigned_user_id_coexist(client):
     ws, project, task_id = _setup(client)
-    # pmo tracker mirror sets the free-text assignee
-    _push_task(
-        client, project["id"], "alice", task_id=task_id,
-        extra={"assignee": "Jira Name"}, source="pmo",
+    # The pmo tracker mirror sets the free-text assignee. It writes in-process,
+    # through the repository, exactly as the signature-verified webhook does
+    # (app/api/integrations.py) — the HTTP push can no longer *declare* itself a
+    # pmo writer (plan 0015 M2), so mirroring through it would prove nothing.
+    client.app.state.repository.upsert_graph(
+        project["id"],
+        GraphUpsertRequest(
+            tasks=[
+                Task(
+                    id=task_id,
+                    project_id=project["id"],
+                    title="Build login form",
+                    assignee="Jira Name",
+                )
+            ]
+        ),
+        source="pmo",
     )
     client.patch(
         f"/projects/{project['id']}/tasks/{task_id}/assignment",
@@ -182,3 +197,83 @@ def test_engine_push_does_not_clobber_assignment(client):
     pulled = _get_task(client, project["id"], task_id)
     assert pulled["assigned_user_id"] == "bob"
     assert pulled["status"] == "in_progress"
+
+
+# --------------------------------------------------------------------------- #
+# The same rule at the other door (plan 0015 M4)
+# --------------------------------------------------------------------------- #
+# `assigned_user_id` is writable through `PUT /sync/projects/{id}/graph` as
+# well, so the rule above is only real if the full-graph push refuses what this
+# route refuses, with the same detail string.
+def _push_assignment(client, project_id, task_id, target, user, source=None):
+    task = {
+        "id": task_id,
+        "project_id": project_id,
+        "title": "Build login form",
+        "assigned_user_id": target,
+    }
+    body = {"tasks": [task]}
+    if source is not None:
+        body["source"] = source
+    return client.put(
+        f"/sync/projects/{project_id}/graph", json=body, headers={"X-User-Id": user}
+    )
+
+
+def test_graph_push_cannot_assign_a_third_party(client):
+    ws, project, task_id = _setup(client)
+
+    res = _push_assignment(client, project["id"], task_id, "carol", user="bob")
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "assignment_forbidden"  # identical to the PATCH
+    assert _get_task(client, project["id"], task_id)["assigned_user_id"] is None
+
+
+def test_graph_push_declaring_source_pmo_cannot_assign_a_third_party(client):
+    """Declaring "pmo" in the body used to change which fields the merge let
+    through; it no longer picks the writer's authority at all (plan 0015 M2)."""
+    ws, project, task_id = _setup(client)
+
+    res = _push_assignment(client, project["id"], task_id, "carol", user="bob", source="pmo")
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "assignment_forbidden"
+
+
+def test_graph_push_cannot_steal_someone_elses_task(client):
+    ws, project, task_id = _setup(client)
+    client.patch(
+        f"/projects/{project['id']}/tasks/{task_id}/assignment",
+        json={"assigned_user_id": "bob"},
+        headers={"X-User-Id": "alice"},
+    )
+
+    # carol reassigning bob's task to herself is a self-assign the dedicated
+    # route allows, so the interesting theft is unassigning it.
+    res = _push_assignment(client, project["id"], task_id, None, user="carol")
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "assignment_forbidden"
+    assert _get_task(client, project["id"], task_id)["assigned_user_id"] == "bob"
+
+
+def test_graph_push_may_still_self_assign(client):
+    ws, project, task_id = _setup(client)
+
+    res = _push_assignment(client, project["id"], task_id, "bob", user="bob")
+    assert res.status_code == 200, res.text
+    assert _get_task(client, project["id"], task_id)["assigned_user_id"] == "bob"
+
+
+def test_graph_push_that_omits_assigned_user_id_is_not_an_assignment(client):
+    """The field is dropped from a push that never mentions it (merge.py's
+    _OMIT_IF_UNSET), so a member's ordinary snapshot push must not be read as
+    "unassign everyone" and refused."""
+    ws, project, task_id = _setup(client)
+    client.patch(
+        f"/projects/{project['id']}/tasks/{task_id}/assignment",
+        json={"assigned_user_id": "bob"},
+        headers={"X-User-Id": "alice"},
+    )
+
+    res = _push_task(client, project["id"], "carol", task_id=task_id)
+    assert res == task_id
+    assert _get_task(client, project["id"], task_id)["assigned_user_id"] == "bob"

@@ -15,6 +15,10 @@ no recorded version is treated as older than any incoming write (so the first
 write always lands — this is what makes the migration backfill behave as LWW
 until the first field-scoped write).
 
+The *ownership* gate, unlike LWW, applies to a row's creation as well as to its
+updates (`_gate_creation`): a writer that invents an id must not be able to
+author a field it could not have changed a millisecond later.
+
 This module is intentionally pure and dependency-free so it is trivial to unit
 test and reason about. `stored` and `incoming` are plain dicts (JSON-safe);
 timestamps are ISO-8601 strings or `datetime`.
@@ -35,6 +39,17 @@ _RESERVED = frozenset({"id", "project_id", "updated_at", "deleted_at", "field_ve
 # this" from "the writer never touches this field at all", so these are
 # dropped from the incoming dict when the caller didn't explicitly set them.
 _OMIT_IF_UNSET = frozenset({"assigned_user_id"})
+
+# Fields a writer outside the declared domain may still seed on a *first* write
+# (see _gate_creation). `feature_tag` is declared "pmo" in FIELD_AUTHORITY, but
+# it is also where the pz author records the plan's task reference ("T012 [P]"):
+# app/generation/stage_apply.py::_apply_tasks writes it when it creates a task,
+# and both the regeneration match and the push-attribution path
+# (app/api/github.py) read it back. Gating a pz creation on it would therefore
+# delete the task-reference machinery rather than close a hole. The honest fix is
+# to re-declare that field's authority, which is a schema decision plan 0015 does
+# not own — this exemption is the narrow, named alternative.
+_CREATION_SEEDABLE = frozenset({"feature_tag"})
 
 
 def incoming_dump(item) -> dict:
@@ -68,6 +83,7 @@ def merge_entity(
     authority: dict[str, str],
     source: str,
     now: datetime,
+    defaults: dict | None = None,
 ) -> tuple[dict, list[str]]:
     """Merge `incoming` into `stored` field-by-field, returning the new row and
     the list of incoming field names that were silently dropped (rejected by
@@ -78,20 +94,25 @@ def merge_entity(
       absent from the map default to "pz".
     * `source` is the writer's domain ("pz" or "pmo").
     * `now` stamps both the row `updated_at` and each written field's version.
+    * `defaults` is the entity model's per-field default (schemas.FIELD_DEFAULTS),
+      used by the creation gate below to reset a field the writer may not author.
+      Omitting it makes that gate drop such a key outright instead — gated either
+      way, never ungated; see _gate_creation.
 
     A field is written only if (a) `source` is allowed to own it and (b) the
     incoming write is newer than the stored field version (LWW within a domain).
     """
     now_iso = now.isoformat()
 
-    # First write for this id: accept it wholesale, recording field versions for
-    # every data field the writer is allowed to own. Nothing is dropped here —
-    # there's no prior value to conflict with.
+    # First write for this id. There is no prior value to conflict with, so LWW
+    # has nothing to say — but ownership still does: this branch used to accept
+    # the row whole, which let a writer author, at creation, a field the gate
+    # below would refuse it a millisecond later (review finding 17, plan 0015).
     if not stored:
-        merged = dict(incoming)
+        merged, dropped = _gate_creation(incoming, authority, source, defaults)
         merged["updated_at"] = now_iso
-        merged["field_versions"] = _stamp_all(incoming, authority, source, now_iso)
-        return merged, []
+        merged["field_versions"] = _stamp_all(merged, authority, source, now_iso)
+        return merged, dropped
 
     merged = dict(stored)
     versions: dict = dict(stored.get("field_versions") or {})
@@ -125,6 +146,54 @@ def merge_entity(
 
     merged["field_versions"] = versions
     merged["updated_at"] = now_iso
+    return merged, dropped
+
+
+def _gate_creation(
+    incoming: dict, authority: dict[str, str], source: str, defaults: dict | None
+) -> tuple[dict, list[str]]:
+    """Apply the ownership gate to a row that does not exist yet.
+
+    Only *declared* ownership is enforced here, unlike the update path's
+    `authority.get(field, "pz")`. A field absent from the map is the row's own
+    structure rather than contested data — a discussion's `parent_node_type`, a
+    spec's `requirement_id`, the entity-level `source` a mirrored comment carries
+    — and it is required to construct the row the writer is creating. There is no
+    prior value to protect, so it is accepted; what is refused is authoring a
+    field the *other* domain is declared to own.
+
+    A refused field is reset to its model default rather than dropped from the
+    row, so all rows in one batch keep the same columns (PostgREST rejects a bulk
+    insert whose objects disagree). A field with no default is required: dropping
+    it would leave a row the model cannot construct, so the writer's value stands
+    unstamped (today that is only `Artifact.uri`, and no pmo writer creates an
+    artifact). Refusals are returned so the caller reports them as conflicts.
+    """
+    merged = dict(incoming)
+    dropped: list[str] = []
+    for field, domain in authority.items():
+        if field not in merged or field in _RESERVED or field in _CREATION_SEEDABLE:
+            continue
+        if domain == "shared" or domain == source:
+            continue
+        if defaults is None:
+            # A caller that passed no default map still gets a gate: drop the
+            # key rather than let a cross-domain value through. Fail closed — if
+            # the field was required the row then fails to construct, loudly,
+            # instead of quietly recording a write its writer does not own.
+            merged.pop(field)
+            dropped.append(field)
+            continue
+        if field not in defaults:
+            continue  # required field: keep it, but _stamp_all still won't stamp it
+        if merged[field] == defaults[field]:
+            # A full model dump carries every field, so the writer "sent" this
+            # one at its default without authoring anything. Resetting it would
+            # be a no-op and reporting it would make every creation look like a
+            # conflict, drowning the ones that are real.
+            continue
+        merged[field] = defaults[field]
+        dropped.append(field)
     return merged, dropped
 
 

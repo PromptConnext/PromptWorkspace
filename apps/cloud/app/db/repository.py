@@ -20,6 +20,7 @@ from app.db.merge import merge_entity
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    FIELD_DEFAULTS,
     Artifact,
     ArtifactKind,
     AssignedTask,
@@ -988,11 +989,12 @@ class InMemoryRepository(Repository):
             if not items:
                 continue
             authority = FIELD_AUTHORITY.get(etype, {})
+            defaults = FIELD_DEFAULTS.get(etype, {})
             for item in items:
                 stored = store[etype].get(item.id)
                 stored_dict = stored.model_dump(mode="json") if stored else None
                 merged, dropped = merge_entity(
-                    stored_dict, _incoming_dump(item), authority, source, now
+                    stored_dict, _incoming_dump(item), authority, source, now, defaults
                 )
                 store[etype][item.id] = model(**merged)
                 if dropped:

@@ -23,6 +23,7 @@ from app.db.repository import Repository
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
+    FIELD_DEFAULTS,
     Artifact,
     ArtifactKind,
     AssignedTask,
@@ -642,11 +643,14 @@ class SupabaseRepository(Repository):
             if not items:
                 continue
             authority = FIELD_AUTHORITY.get(etype, {})
+            defaults = FIELD_DEFAULTS.get(etype, {})
             rows = []
             for item in items:
                 stored = self._fetch_row(etype, item.id)
                 incoming = _incoming_dump(item)
-                merged, dropped = merge_entity(stored, incoming, authority, source, now)
+                merged, dropped = merge_entity(
+                    stored, incoming, authority, source, now, defaults
+                )
                 merged["project_id"] = project_id
                 rows.append(merged)
                 if dropped:

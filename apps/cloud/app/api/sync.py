@@ -27,7 +27,11 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api._guards import require_project, require_workspace
+from app.api._guards import (
+    _check_graph_write_permissions,
+    require_project,
+    require_workspace,
+)
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.preview_url import (
@@ -821,8 +825,35 @@ def push_graph(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> GraphUpsertResponse:
+    """A bounded compatibility endpoint (plan 0015 M1), pending plan 0012 M4.
+
+    ADR 0020 made the cloud authoritative for the task graph, which leaves this
+    route as the one door that writes every entity at once. It is kept, not
+    retired, because it still has exactly one real caller: the engine's manual
+    push (`POST /engine/projects/:id/cloud-sync` → `pushProjectSnapshot`,
+    apps/engine/src/routes/cloud.ts:419 → apps/engine/src/sync/loop.ts:322). Plan
+    0012's M1 disabled the *interval* push; its M4 — not yet done — deletes
+    `assembleSnapshot`/`pushProjectSnapshot` and replaces them with a status-write
+    queue. Until then the route stays, constrained: `apps/vscode`, `apps/mcp` and
+    `packages/pz-cloud` never call it (and must not — see
+    packages/pz-cloud/src/client.ts), so when 0012 M4 lands nothing calls it and
+    it can go. Retiring it does not touch the tracker mirror: `tracker_webhook`
+    reaches `repo.upsert_graph` in-process, never through this router.
+
+    Two things make it no weaker than the single-field routes beside it: the
+    writer's authority domain comes from this code path rather than the request
+    body (M2), and `_check_graph_write_permissions` applies the same role rules
+    `set_task_status`, `assign_task` and `require_stage_access` apply (M3).
+    """
     project = require_project(repo, project_id, user)
-    counts, conflicts = repo.upsert_graph(project_id, payload, source=payload.source)
+    _check_graph_write_permissions(repo, project, user, payload)
+    # The writer's domain is the authenticated path, never `payload.source`: a
+    # caller that declares its own authority domain can write any field it likes,
+    # tracker-exclusive ones included (plan 0015 M2). This route is the local
+    # author, so it is "pz" — hardcoded here exactly as every other in-process
+    # caller hardcodes its own domain ("pmo" only inside the signature-verified
+    # webhook, app/api/integrations.py).
+    counts, conflicts = repo.upsert_graph(project_id, payload, source="pz")
     cursor, _ = repo.changes_head(project_id)
     total = sum(counts.values())
     metrics = getattr(request.app.state, "metrics", None)
@@ -830,10 +861,9 @@ def push_graph(
         metrics["pushed"] += 1
         metrics["merged"] += total
     logger.info(
-        "graph push project=%s user=%s source=%s counts=%s",
+        "graph push project=%s user=%s source=pz counts=%s",
         project_id,
         user.id,
-        payload.source,
         counts,
     )
     # Embed-on-ingest (M9): enqueue only, never block this push on a model

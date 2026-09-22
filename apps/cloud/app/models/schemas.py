@@ -561,6 +561,29 @@ FIELD_AUTHORITY: dict[str, dict[str, str]] = {
 }
 
 
+def _declared_defaults(model: type[BaseModel]) -> dict:
+    """Each optional field's default, JSON-safe.
+
+    The creation gate in app/db/merge.py needs a value to put back when a writer
+    authors a field it does not own on a first write: substituting the default
+    keeps every row in one batch carrying the same columns (a PostgREST bulk
+    insert requires that) where dropping the key would not. A required field has
+    no entry — see the gate for what it does then.
+    """
+    defaults: dict = {}
+    for name, field in model.model_fields.items():
+        if field.is_required():
+            continue
+        value = field.get_default(call_default_factory=True)
+        defaults[name] = value.value if isinstance(value, Enum) else value
+    return defaults
+
+
+FIELD_DEFAULTS: dict[str, dict] = {
+    etype: _declared_defaults(model) for etype, model in ENTITY_TYPES.items()
+}
+
+
 class GraphUpsertRequest(BaseModel):
     """A delta (or full snapshot) pushed by the local engine. All lists optional."""
 
@@ -570,8 +593,15 @@ class GraphUpsertRequest(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
     discussions: list[Discussion] = Field(default_factory=list)
-    # Which authority domain is writing. The engine pushes "pz"; the Jira/
-    # ClickUp webhook path pushes "pmo". Governs field-level merge (M3).
+    # DEAD FIELD — accepted, never read (plan 0015 M2). The writer's authority
+    # domain is a property of the code path that holds the credential, not of the
+    # request body: `repo.upsert_graph`'s `source` argument is a hardcoded literal
+    # at every call site ("pz" from the sync route and the cloud's own writers,
+    # "pmo" only inside the signature-verified tracker webhook). It stays on the
+    # model because the engine's snapshot still sends `"source": "pz"`
+    # (apps/engine/src/sync/loop.ts) and an old binary must not get a 422 for it.
+    # Do not wire it to anything: a writer that names its own authority domain
+    # can write any field it likes.
     source: Literal["pz", "pmo"] = "pz"
 
 
