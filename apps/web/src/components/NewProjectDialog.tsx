@@ -6,7 +6,7 @@ import Link from "next/link";
 import { createProject, listGithubRepos } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
-import { DEPLOY_WORKFLOW_PATH, SEEDED_FILES } from "./project/seedFiles";
+import { DEPLOY_WORKFLOW_PATH } from "./project/seedFiles";
 import type { GithubRepo, GithubRepoList, Project } from "@/lib/types";
 
 // Maps error codes from POST /projects (import path) and the repo-listing
@@ -329,18 +329,37 @@ export function NewProjectDialog({
             </label>
 
             <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              {/* No file list here: which paths the seed writes depends on what
+                  is in the repository when the Tech Lead creates it (plan 0027
+                  M4), so the exact list is the create-repository panel's seed
+                  preview, read from the live tree — not a fixed list that
+                  would be wrong for any repository that already has a
+                  README. */}
               <p>
-                When your Tech Lead creates the repository for this project, PromptConnext adds
-                these files to <strong>{selected.full_name}</strong> in a single commit on{" "}
-                <strong>{selected.default_branch}</strong>. Anything already at these paths is
-                replaced; every other file is left untouched. Nothing is written to GitHub now.
+                Nothing is written to GitHub now. When your Tech Lead creates the repository for
+                this project, PromptConnext adds its planning documents to{" "}
+                <strong>{selected.full_name}</strong> in a single commit on{" "}
+                <strong>{selected.default_branch}</strong>.
               </p>
               <ul className="ml-4 mt-2 list-disc text-slate-600">
-                {SEEDED_FILES.map((path) => (
-                  <li key={path}>{path}</li>
-                ))}
-                <li>{DEPLOY_WORKFLOW_PATH} (if you choose a deployment template)</li>
+                <li>Existing files are never overwritten or deleted.</li>
+                <li>
+                  Where a document would land on a file that already exists — a README, say — it
+                  goes under <code>docs/promptzone/</code> instead.
+                </li>
+                <li>
+                  If a deployment template is chosen, its pipeline is added at{" "}
+                  <code>{DEPLOY_WORKFLOW_PATH}</code>. A repository that already has that file
+                  must rename or remove it first.
+                </li>
+                <li>
+                  Your Tech Lead sees the exact list of files before anything is written.
+                </li>
               </ul>
+              <p className="mt-2 text-slate-600">
+                Before planning, your Tech Lead analyzes the repository, so the plan and tasks
+                describe changes to your existing code.
+              </p>
             </div>
 
             <label className="mb-3 flex items-start gap-2 text-xs text-slate-600">
@@ -350,7 +369,7 @@ export function NewProjectDialog({
                 onChange={(e) => setConsent(e.target.checked)}
                 className="mt-0.5"
               />
-              I understand these files will be added to {selected.full_name}.
+              I understand PromptConnext will add files to {selected.full_name}.
             </label>
 
             {error && <p className="mb-2 text-sm text-red-600">{error}</p>}

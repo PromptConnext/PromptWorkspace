@@ -513,6 +513,114 @@ describe("Planner", () => {
     expect(screen.getByRole("button", { name: /generate tasks/i })).toBeDisabled();
   });
 
+  // Plan 0027: an imported project's plan and tasks wait on a codebase
+  // baseline. `analysis` is what GET /repo-analysis answers; `generate` is
+  // what a generation POST answers, when a test gets that far.
+  function mockImported(
+    analysisStatus: string | null,
+    generate?: { status: number; detail: string },
+  ) {
+    const byStage: Record<string, string> = { specify: "# Spec", plan: "# Plan" };
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/repo-analysis")) {
+        if (analysisStatus === null) {
+          return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            project_id: "p1",
+            status: analysisStatus,
+            required: true,
+            commit_sha: null,
+            snapshot: null,
+            baseline: analysisStatus === "baseline_ready" ? "# Baseline" : "",
+            updated_at: null,
+            stale: null,
+          }),
+        });
+      }
+      if (href.includes("/generate/") && generate) {
+        return Promise.resolve({
+          ok: false,
+          status: generate.status,
+          body: null,
+          json: async () => ({ detail: generate.detail }),
+        });
+      }
+      const match = href.match(/\/stage-documents\/(\w+)/);
+      if (match) {
+        const content = byStage[match[1]] ?? "";
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: match[1], content, updated_at: null }),
+        });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+  }
+
+  const IMPORTED = { repo_url: "https://github.com/acme/app", repo_default_branch: "main" };
+
+  it("holds an imported project's plan until the repository is analyzed, and points there", async () => {
+    mockImported("none");
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    expect(await screen.findByText("Codebase analysis")).toBeInTheDocument();
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate plan/i })).toBeDisabled();
+    });
+    const gates = screen.getAllByRole("button", { name: /go to codebase analysis/i });
+    expect(gates.length).toBeGreaterThan(0);
+
+    fireEvent.click(gates[0]);
+    expect(screen.getByRole("tab", { name: /foundation/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("opens the gate once the baseline exists", async () => {
+    mockImported("baseline_ready");
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByText(/analyzed — the plan and tasks are written against/i);
+    openTab(/tasks/i);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate tasks/i })).toBeEnabled();
+    });
+    expect(screen.queryByText(/analyze the repository first/i)).not.toBeInTheDocument();
+  });
+
+  it("shows no analysis panel for a project started from scratch", async () => {
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    expect(screen.queryByText("Codebase analysis")).not.toBeInTheDocument();
+    const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.some(([url]) => String(url).includes("/repo-analysis"))).toBe(false);
+  });
+
+  it("maps the cloud's repo_analysis_required refusal to words and a way there", async () => {
+    // The analysis read failed, so nothing gated up front — the cloud's 409
+    // is the only signal left.
+    mockImported(null, { status: 409, detail: "repo_analysis_required" });
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /tasks/i });
+    openTab(/tasks/i);
+    const button = await screen.findByRole("button", { name: /generate tasks/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    expect(
+      await screen.findByText(/analyze the repository first — this project was imported/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("repo_analysis_required")).not.toBeInTheDocument();
+  });
+
   it("generates tasks with no user input once the spec and plan exist", async () => {
     mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);

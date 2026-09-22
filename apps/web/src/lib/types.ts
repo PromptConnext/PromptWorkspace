@@ -409,6 +409,69 @@ export interface StageDocumentSaved extends StageDocumentOut {
   retired_count?: number | null;
 }
 
+// Plan 0027: the read of an imported repository the Plan and Tasks stages
+// are written against (apps/cloud/app/models/schemas.py::RepoSnapshot).
+export interface RepoStack {
+  // "node" | "python" | "go", another language name, or null when nothing
+  // recognisable was found.
+  runtime: string | null;
+  manifests: string[];
+  languages: string[];
+}
+
+export interface RepoExcerpt {
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
+export interface RepoSnapshot {
+  commit_sha: string;
+  default_branch: string;
+  // Files after vendored/build/binary/secret filtering.
+  file_count: number;
+  // GitHub cut the recursive tree listing short (a very large repository).
+  tree_truncated: boolean;
+  tree_summary: string;
+  stack: RepoStack;
+  excerpts: RepoExcerpt[];
+  paths: string[];
+}
+
+export type RepoAnalysisStatus = "none" | "snapshot_ready" | "baseline_ready" | "failed";
+
+/** GET/PATCH /projects/{id}/repo-analysis, and the SSE `snapshot`/`done`
+ *  payloads of its POST (apps/cloud/app/api/repo_analysis.py). */
+export interface RepoAnalysisOut {
+  project_id: string;
+  status: RepoAnalysisStatus;
+  // True while the analysis gates planning: an imported project before
+  // `repo_created`. The Planner shows its panel only then.
+  required: boolean;
+  commit_sha: string | null;
+  snapshot: RepoSnapshot | null;
+  baseline: string;
+  updated_at: string | null;
+  // null is "couldn't check", not "fresh".
+  stale: boolean | null;
+}
+
+export interface RepoAnalysisDoneEvent extends RepoAnalysisOut {
+  // Stored and usable, but the model stopped at its output limit.
+  truncated: boolean;
+}
+
+/** GET /projects/{id}/repository/seed-preview (plan 0027 M4): the seed
+ *  commit, computed against the repository's live tree. `write` already
+ *  holds relocated files at their new path. */
+export interface SeedPreview {
+  write: string[];
+  relocated: { from: string; to: string }[];
+  skipped: string[];
+  // Non-empty means create-repository refuses with deploy_workflow_conflict.
+  conflicts: string[];
+}
+
 // A built-in (or, later, workspace-defined) compliance template offered by
 // the Policy Scope picker (GET /policy-templates). `body` is the full
 // template text, included so the picker can offer a preview with no second

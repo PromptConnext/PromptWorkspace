@@ -1,12 +1,11 @@
 // apps/web/src/components/project/CreateRepositoryPanel.tsx
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
-import { createRepository } from "@/lib/api";
+import { createRepository, getSeedPreview } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
-import type { Project } from "@/lib/types";
+import type { Project, SeedPreview } from "@/lib/types";
 
 // Mirrors apps/engine/src/routes/projects.ts's slug derivation so the
 // prefilled name matches what a desktop-side project creation would produce.
@@ -55,6 +54,21 @@ const DETAIL_MESSAGES: Record<string, string> = {
   deployment_preview_url_not_configured:
     "PromptZone hosting isn't fully configured on this server, so there is no preview address to " +
     "give the pipeline. Contact your administrator.",
+  // Plan 0027 M4: the platform never merges into, or silently skips, a
+  // workflow the imported repository already has — the project would look
+  // deployable and not be. The seed preview below names the file first.
+  deploy_workflow_conflict:
+    "The imported repository already has a .github/workflows/deploy.yml, and the deployment " +
+    "template needs that path. PromptConnext never overwrites or merges into an existing workflow — " +
+    "rename or remove that file on GitHub, then try again.",
+  // The seed preview's refusals for an imported project (sync.py::seed_preview).
+  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptConnext recognises.",
+  repo_owner_out_of_scope:
+    "The imported repository isn't under the workspace's connected GitHub account any more — the " +
+    "connection may have been changed since the import.",
+  imported_repo_not_found:
+    "The imported repository can't be found on GitHub — it may have been renamed, moved or deleted.",
+  github_unreachable: "GitHub couldn't be reached. Try again in a moment.",
 };
 
 /** `github_not_configured` is the one failure whose fix is a whole other form,
@@ -98,6 +112,66 @@ function describeError(message: string, workspaceId?: string): ReactNode {
   return DETAIL_MESSAGES[message] ?? message;
 }
 
+/** The seed commit for an imported repository, as the cloud computed it
+ *  against the repository's live tree (plan 0027 M4) — what will actually be
+ *  written, not the fixed list a new repository gets. */
+function SeedPreviewList({ preview }: { preview: SeedPreview }) {
+  const relocatedTo = new Set(preview.relocated.map((r) => r.to));
+  const added = preview.write.filter((path) => !relocatedTo.has(path));
+  return (
+    <div className="mt-2 space-y-2 text-xs text-slate-600">
+      {added.length > 0 && (
+        <div>
+          <p className="text-slate-500">Added in one commit:</p>
+          <ul className="ml-4 mt-1 list-disc">
+            {added.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview.relocated.length > 0 && (
+        <div>
+          <p className="text-slate-500">
+            Already in the repository, so PromptConnext&apos;s version is written beside it:
+          </p>
+          <ul className="ml-4 mt-1 list-disc">
+            {preview.relocated.map((r) => (
+              <li key={r.from}>
+                {r.from} → {r.to}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview.skipped.length > 0 && (
+        <div>
+          <p className="text-slate-500">Already in the repository and left as they are:</p>
+          <ul className="ml-4 mt-1 list-disc">
+            {preview.skipped.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview.conflicts.length > 0 && (
+        <div className="rounded bg-red-50 p-2 text-red-700">
+          <p>
+            These already exist and can&apos;t be written around — the deployment template needs
+            exactly these paths, and PromptConnext never overwrites or merges into an existing
+            workflow. Rename or remove them on GitHub, then check again:
+          </p>
+          <ul className="ml-4 mt-1 list-disc">
+            {preview.conflicts.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CreateRepositoryPanel({
   projectId,
   projectName,
@@ -137,6 +211,42 @@ export function CreateRepositoryPanel({
   const [isPrivate, setIsPrivate] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<ReactNode | null>(null);
+  const importedRepo = project?.repo_url;
+
+  // An imported repository gets the seed preview instead of a fixed list.
+  // Re-read when the template or policy scope changes (both add or remove
+  // seeded paths) and after a failed create, since the repository on GitHub
+  // may have changed under the preview.
+  const [preview, setPreview] = useState<SeedPreview | null>(null);
+  const [previewError, setPreviewError] = useState<ReactNode | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const previewKey = JSON.stringify([
+    project?.deployment_config ?? null,
+    project?.policy_scope ?? null,
+  ]);
+  useEffect(() => {
+    if (!importedRepo) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    getSeedPreview(projectId, authHeaders())
+      .then((result) => {
+        if (!cancelled) setPreview(result);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setPreview(null);
+        setPreviewError(describeError(err.message, workspaceId));
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, importedRepo, previewKey, previewNonce]);
 
   async function handleCreate() {
     setCreating(true);
@@ -150,13 +260,15 @@ export function CreateRepositoryPanel({
       onCreated();
     } catch (err) {
       setError(describeError((err as Error).message, workspaceId));
+      if (importedRepo) setPreviewNonce((n) => n + 1);
     } finally {
       setCreating(false);
     }
   }
 
-  const disabled = creating || constitutionReady !== true || tasksReady !== true;
-  const importedRepo = project?.repo_url;
+  const hasConflicts = (preview?.conflicts.length ?? 0) > 0;
+  const disabled =
+    creating || constitutionReady !== true || tasksReady !== true || hasConflicts;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -176,15 +288,24 @@ export function CreateRepositoryPanel({
             </a>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Existing files are kept; these are added or replaced in one commit:
+            No file already in the repository is overwritten. Where one of PromptConnext&apos;s
+            documents would land on an existing file, it goes under docs/promptzone/ instead.
           </p>
-          <ul className="ml-4 mt-1 list-disc text-xs text-slate-600">
-            {SEEDED_FILES.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-            {project && hasPolicyScope(project) && <li>docs/policy-scope.md</li>}
-            {project && hasDeploymentTemplate(project) && <li>{DEPLOY_WORKFLOW_PATH}</li>}
-          </ul>
+          {previewLoading && !preview && (
+            <p className="mt-2 text-xs text-slate-500">Checking the repository…</p>
+          )}
+          {previewError && <div className="mt-2 text-xs text-red-600">{previewError}</div>}
+          {preview && <SeedPreviewList preview={preview} />}
+          {(preview || previewError) && (
+            <button
+              type="button"
+              disabled={previewLoading}
+              onClick={() => setPreviewNonce((n) => n + 1)}
+              className="mt-2 text-xs text-slate-500 underline hover:text-slate-700 disabled:opacity-60"
+            >
+              {previewLoading ? "Checking…" : "Check again"}
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -213,6 +334,13 @@ export function CreateRepositoryPanel({
         <p className="mb-2 text-xs text-amber-700">
           Fill in <strong>Project rules</strong> above first — that document seeds AGENTS.md in
           the new repo.
+        </p>
+      )}
+
+      {hasConflicts && (
+        <p className="mb-2 text-xs text-amber-700">
+          The repository can&apos;t be created until the conflicting files above are renamed or
+          removed on GitHub.
         </p>
       )}
 

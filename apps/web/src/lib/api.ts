@@ -13,6 +13,8 @@ import type {
   PolicyTemplateOut,
   PrefillOut,
   Project,
+  RepoAnalysisOut,
+  SeedPreview,
   StageDocumentOut,
   StageDocumentSaved,
   StageKind,
@@ -312,6 +314,34 @@ export function createRepository(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+// Plan 0027. Member-readable and answers `status: "none"` rather than 404
+// when the repository was never analyzed. The analysis itself is a POST that
+// streams (useRepoAnalysis.ts), so it has no wrapper here.
+export function getRepoAnalysis(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis`, authHeaders);
+}
+
+// Admin-only. A non-empty baseline opens the Plan/Tasks gate on its own —
+// a hand-written one counts as much as a generated one — and clearing it
+// closes the gate again. 409 repo_analysis_not_found before any analysis.
+export function patchRepoAnalysis(
+  projectId: string,
+  baseline: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ baseline }),
+  });
+}
+
+// Admin-only dry run of create-repository's seed commit against the
+// repository's live tree, so the Tech Lead consents to paths rather than to
+// a promise. Non-empty `conflicts` means the real call will refuse.
+export function getSeedPreview(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<SeedPreview>(`/projects/${projectId}/repository/seed-preview`, authHeaders);
 }
 
 // Enqueue-only: returns as soon as the embed jobs are queued, with no

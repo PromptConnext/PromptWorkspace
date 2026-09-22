@@ -125,4 +125,118 @@ describe("CreateRepositoryPanel", () => {
       "/w/ws1/settings",
     );
   });
+
+  // Plan 0027 M4: an imported repository gets the cloud's seed preview, read
+  // from the live tree, in place of the fixed list a new repository gets.
+  describe("imported repository", () => {
+    const project = {
+      id: "p1",
+      name: "Widget App",
+      workspace_id: "ws1",
+      owner_id: "u1",
+      onboarding_state: "",
+      stage_state: {},
+      lifecycle_status: "tech_review",
+      repo_url: "https://github.com/acme/widget",
+      repo_default_branch: "main",
+      created_at: "2026-09-01T00:00:00Z",
+      updated_at: "2026-09-01T00:00:00Z",
+    } as const;
+
+    function mockPreview(
+      preview: Record<string, unknown>,
+      createResponse?: { ok: boolean; status?: number; detail?: string },
+    ) {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/repository/seed-preview")) {
+          return Promise.resolve({ ok: true, json: async () => preview });
+        }
+        if (href.includes("/lifecycle/create-repository")) {
+          return Promise.resolve({
+            ok: createResponse?.ok ?? true,
+            status: createResponse?.status ?? 200,
+            json: async () => ({ detail: createResponse?.detail }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch;
+    }
+
+    it("renders what will be added, moved aside and left alone", async () => {
+      mockPreview({
+        write: ["docs/promptzone/README.md", "docs/scope.md", "AGENTS.md"],
+        relocated: [{ from: "README.md", to: "docs/promptzone/README.md" }],
+        skipped: ["Dockerfile"],
+        conflicts: [],
+      });
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      expect(await screen.findByText("README.md → docs/promptzone/README.md")).toBeInTheDocument();
+      expect(screen.getByText("docs/scope.md")).toBeInTheDocument();
+      expect(screen.getByText("AGENTS.md")).toBeInTheDocument();
+      expect(screen.getByText("Dockerfile")).toBeInTheDocument();
+      // A relocated file is listed once, under its move — not again as an add.
+      expect(screen.queryByText("docs/promptzone/README.md")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /create repository/i })).toBeEnabled();
+    });
+
+    it("disables creation while the preview reports a conflicting workflow", async () => {
+      mockPreview({
+        write: ["AGENTS.md"],
+        relocated: [],
+        skipped: [],
+        conflicts: [".github/workflows/deploy.yml"],
+      });
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      expect(await screen.findByText(".github/workflows/deploy.yml")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /create repository/i })).toBeDisabled();
+      expect(screen.getByText(/can't be created until the conflicting files/i)).toBeInTheDocument();
+    });
+
+    it("maps deploy_workflow_conflict from create-repository to words", async () => {
+      mockPreview(
+        { write: ["AGENTS.md"], relocated: [], skipped: [], conflicts: [] },
+        { ok: false, status: 409, detail: "deploy_workflow_conflict" },
+      );
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      const button = await screen.findByRole("button", { name: /create repository/i });
+      await screen.findByText("AGENTS.md");
+      fireEvent.click(button);
+
+      expect(
+        await screen.findByText(/already has a \.github\/workflows\/deploy\.yml/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("deploy_workflow_conflict")).not.toBeInTheDocument();
+    });
+  });
 });

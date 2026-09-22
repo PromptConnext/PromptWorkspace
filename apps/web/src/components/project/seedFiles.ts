@@ -1,9 +1,12 @@
 // Derived view: repo_seed.py's table of paths written at repo creation.
 // The create-repository endpoint returns only the Project, not a file list,
 // so this mirrors the cloud's fixed seed set for display purposes — in the
-// repo_created banner (Planner.tsx) and in the import gate's consent step
-// (NewProjectDialog.tsx), which is why this lives in its own module rather
-// than staying private to Planner.
+// repo_created banner (Planner.tsx) — which is why this lives in its own
+// module rather than staying private to Planner. It is the list for a NEW
+// repository only: an imported one keeps its existing files and gets the
+// platform's documents relocated around them (plan 0027 M4), so the import
+// consent step describes that rule and CreateRepositoryPanel shows the
+// cloud's live seed preview instead of this list.
 import type { Project } from "@/lib/types";
 
 // build_seed_files() — unconditional, every project.

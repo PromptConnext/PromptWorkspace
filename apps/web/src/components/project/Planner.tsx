@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiFetch,
+  getRepoAnalysis,
   getStageDocument,
   listDocuments,
   startTechReview,
@@ -27,11 +28,13 @@ import {
 } from "./stage-forms";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
+import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
 import type {
   DocumentOut,
   Project,
   ProjectionState,
+  RepoAnalysisOut,
   StageKind,
   WorkspaceMember,
 } from "@/lib/types";
@@ -137,7 +140,19 @@ const STAGE_ERROR_TEXT: Record<string, string> = {
   "tasks document contained no parseable '- [ ] T###' checklist lines":
     "Every line needs the `- [ ] T001 Description` shape — check the checklist formatting.",
   graph_write_failed: "Something went wrong applying this to the project — try saving again.",
+  // Plan 0027: an imported project's plan and tasks wait on a codebase
+  // baseline (app/api/generation.py). The section also offers the way there.
+  repo_analysis_required:
+    "Analyze the repository first — this project was imported, so the plan and tasks are written " +
+    "against its existing code.",
 };
+
+// Plan 0027's gate, said before the request rather than after its 409.
+const ANALYSIS_GATE_TEXT =
+  "Analyze the repository first — this project was imported, so the plan and tasks are written " +
+  "against its existing code. The analysis is on the Foundation tab.";
+const ANALYSIS_GATE_MEMBER_TEXT =
+  "Waiting on the codebase analysis — your Tech Lead runs it on the Foundation tab.";
 
 // One stepper section. The input surface is stage-shaped: `specify` and `plan`
 // get a structured form (STAGE_FIELDS), `tasks` gets no input at all because
@@ -152,6 +167,8 @@ function StageSection({
   note,
   onDocPresence,
   onOpenTasks,
+  analysisGate,
+  onOpenAnalysis,
   readOnly = false,
 }: {
   projectId: string;
@@ -168,6 +185,12 @@ function StageSection({
   /** Switches the page to its Tasks tab, so a document the graph rejected can
    *  be checked against the board it failed to move. */
   onOpenTasks?: () => void;
+  /** Why generation waits on the codebase analysis of an imported project
+   *  (plan 0027), when it does. Locks generation like `blockedBy`, but comes
+   *  with a way to the analysis panel. */
+  analysisGate?: string;
+  /** Switches to the Foundation tab's codebase analysis panel. */
+  onOpenAnalysis?: () => void;
   readOnly?: boolean;
 }) {
   const { authHeaders } = useAuth();
@@ -285,6 +308,20 @@ function StageSection({
           {blockedBy && (
             <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{blockedBy}</p>
           )}
+          {analysisGate && (
+            <div className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">
+              <p>{analysisGate}</p>
+              {onOpenAnalysis && (
+                <button
+                  type="button"
+                  onClick={onOpenAnalysis}
+                  className="mt-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:border-slate-400"
+                >
+                  Go to codebase analysis
+                </button>
+              )}
+            </div>
+          )}
           {fields && (
             <div className="mb-3">
               <StageInputForm
@@ -293,20 +330,22 @@ function StageSection({
                 fields={fields}
                 answers={answers}
                 onChange={setAnswers}
-                disabled={status === "generating" || Boolean(blockedBy)}
+                disabled={status === "generating" || Boolean(blockedBy) || Boolean(analysisGate)}
                 canPrefill={PREFILLABLE_STAGES.includes(stage)}
               />
             </div>
           )}
           <button
             type="button"
-            disabled={status === "generating" || !ready || Boolean(blockedBy)}
+            disabled={
+              status === "generating" || !ready || Boolean(blockedBy) || Boolean(analysisGate)
+            }
             onClick={() => generate(stage, userInput)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-60"
           >
             {status === "generating" ? "Generating…" : buttonLabel}
           </button>
-          {!ready && !blockedBy && (
+          {!ready && !blockedBy && !analysisGate && (
             <p className="mt-2 text-xs text-slate-500">
               Fill in the fields marked * to generate.
             </p>
@@ -320,6 +359,15 @@ function StageSection({
           {status === "error" && error && (
             <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">
               <p>{STAGE_ERROR_TEXT[error.error] ?? error.error}</p>
+              {error.error === "repo_analysis_required" && onOpenAnalysis && (
+                <button
+                  type="button"
+                  onClick={onOpenAnalysis}
+                  className="mt-2 rounded border border-red-300 bg-white px-2 py-1 text-xs"
+                >
+                  Go to codebase analysis
+                </button>
+              )}
               {error.retryable && (
                 <button
                   type="button"
@@ -575,6 +623,45 @@ export function Planner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, isTechLead, lifecycle, projectId]);
 
+  // Plan 0027. Read only for a project that could need it — one that names a
+  // repository before `repo_created`, i.e. an imported one — and owned here
+  // rather than in the panel, because the Plan and Tasks tabs gate on it
+  // too. Null while loading or after a failed read: neither locks anything,
+  // and the cloud's own 409 repo_analysis_required still stands behind it.
+  const [analysis, setAnalysis] = useState<RepoAnalysisOut | null>(null);
+  const analysisApplies = Boolean(project.repo_url) && lifecycle !== "repo_created";
+  useEffect(() => {
+    if (!analysisApplies) {
+      setAnalysis(null);
+      return;
+    }
+    let cancelled = false;
+    getRepoAnalysis(projectId, authHeaders())
+      .then((result) => {
+        if (!cancelled) setAnalysis(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, analysisApplies]);
+  const analysisRequired = analysis?.required === true;
+  const analysisGate =
+    analysisRequired && analysis?.status !== "baseline_ready"
+      ? isTechLead
+        ? ANALYSIS_GATE_TEXT
+        : ANALYSIS_GATE_MEMBER_TEXT
+      : undefined;
+
+  const openAnalysis = useCallback(() => {
+    setActive("foundation");
+    // After the tab's `hidden` lifts, or there is nothing laid out to scroll to.
+    requestAnimationFrame(() => {
+      document.getElementById(CODEBASE_ANALYSIS_ANCHOR)?.scrollIntoView?.({ behavior: "smooth" });
+    });
+  }, []);
+
   // Undefined means "not loaded yet" — only an explicit false locks, so an
   // in-flight fetch doesn't flash a lock message on a project that has one.
   function blockedBy(meta: StageMeta): string | undefined {
@@ -609,7 +696,14 @@ export function Planner({
           {project.repo_default_branch && (
             <p className="mt-1 text-emerald-800">Default branch: {project.repo_default_branch}</p>
           )}
-          <p className="mt-2 text-emerald-800">Seeded files:</p>
+          {/* The fixed list is exact for a new repository. An imported one
+              kept its own files (plan 0027 M4), and the Project records no
+              trace of which kind this was, so the difference is said rather
+              than guessed at. */}
+          <p className="mt-2 text-emerald-800">
+            Seeded files (in an imported repository, any that already existed were left untouched
+            and PromptConnext&apos;s version went under docs/promptzone/):
+          </p>
           <ul className="ml-4 list-disc text-emerald-800">
             {SEEDED_FILES.map((path) => (
               <li key={path}>{path}</li>
@@ -677,6 +771,17 @@ export function Planner({
         <div key={tab.key} hidden={active !== tab.key} className="space-y-4">
           {tab.key === "foundation" && (
             <>
+              {/* First on the tab for an imported project: it is the one
+                  input the later steps can't start without, and the tab a
+                  fresh import lands on. */}
+              {analysis && analysisRequired && (
+                <CodebaseAnalysisPanel
+                  projectId={projectId}
+                  analysis={analysis}
+                  canEdit={isTechLead}
+                  onChange={setAnalysis}
+                />
+              )}
               <SourceDocuments projectId={projectId} canUpload={!readOnly} />
               <PolicyScopePanel project={project} readOnly={readOnly} onChange={onChange} />
             </>
@@ -697,6 +802,8 @@ export function Planner({
                 note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
                 onOpenTasks={onOpenTasks}
+                analysisGate={stage === "plan" || stage === "tasks" ? analysisGate : undefined}
+                onOpenAnalysis={analysisRequired ? openAnalysis : undefined}
                 readOnly={stageReadOnly}
               />
             );
