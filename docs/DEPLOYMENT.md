@@ -56,6 +56,20 @@ cd apps/cloud
 
 Pick the width your embedding model actually produces (e.g. 1024 for BGE-m3 or Jina v3, 896 for KaLM-embedding-multilingual v2.5) — there is deliberately no default; omitting `--var embed_dim` stops the run rather than silently reapplying the 1536 ceiling this migration exists to remove. This `requires-vars` header convention is generic, not a one-off for 0023 — any future migration that needs a deploy-time value declares it the same way and gets the same fail-fast treatment; see the runner's docstring. **After 0023 runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
 
+**Migration 0031 is the one migration to apply _after_ the code deploy, not before.** Everything else in this directory adds or widens something, which is why the rule in §6 — apply migrations, then deploy the code that needs them — holds for all of them. 0031 is the exception because it *removes* privileges from the role the currently-running code writes as. Until plan 0014's paired code change is live, `app/dependencies.py::get_repository` hands every authenticated request a repository scoped to the caller's own JWT, so production graph reads and writes execute as `authenticated`; 0031 revokes exactly that. Apply it while the old code is still serving and every task write, stage-document save and comment fails with `permission denied for table ...` until the rollout finishes.
+
+Its partner **0030 has no such constraint and should be applied early** — on its own, ahead of the deploy, with the rest of the pending migrations. It only grants, only to `service_role`, which bypasses RLS anyway; it cannot break any version of the code, and it is what guarantees the new code's service-role client has the privileges it is about to start depending on. So the sequence for this pair is:
+
+```bash
+# 1. with everything else pending, before the deploy — safe on any code version
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply   # applies through 0030
+# 2. deploy apps/cloud, wait for the rollout to complete and /health to answer
+# 3. only now
+.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply   # applies 0031
+```
+
+The runner applies strictly in numeric order and only what is pending, so stopping after 0030 is just a matter of not having 0031 on disk yet at step 1 — or, more simply, running step 1 from the pre-deploy commit. Nothing enforces this ordering automatically; it is why both files say so in their own headers, and why it is written down here rather than only there. Rolling the code back after 0031 is applied requires re-granting `authenticated` on the seven tables first (`migrations/0006_grants.sql` and `migrations/0011_discussions.sql` are the shape to copy) — plan for forward-fix rather than rollback across this one.
+
 **Migration 0024** creates `pz_schema_migrations` itself — the table that makes all of the above possible. It records, per file: filename, a sha256 checksum of the file's exact bytes (so an edit to an already-applied file becomes detectable instead of silently drifting from what actually ran — this repo has already had an operator decline to let a migration file be touched post-application for exactly that reason), when the row was written, who wrote it, and a `source` of either `applied` (the runner executed the file and wrote the row in the same action) or `adopted` (an operator asserted the row's truth without that execution — see below).
 
 <details>
@@ -432,13 +446,15 @@ Manual is fine now; when ready, GitHub Actions is the natural fit:
 
 **Desktop (release on tag `v*`):** matrix build — `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 with the S3 action/CLI (secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists.
 
-**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job.
+**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job. One migration inverts that rule — **0031 must be applied after the code deploy, not before** (§2.2 has the sequence and the reason). A pre-deploy job that applied everything pending would take production down on the deploy that first carries it, so whatever automates this eventually has to be able to hold a migration back until the rollout completes.
 
 ---
 
 ## 7. Production checklist
 
 - [ ] `scripts/migrate.py apply` run against the target database, `schema_version` on `/health` matches — including 0023 with its required `--var embed_dim=<N>` (§2.2), followed by a reindex
+- [ ] **0031 applied only after the code deploy completed** (§2.2) — it revokes the seven graph tables from `authenticated`, the role the pre-plan-0014 code writes as, so applying it ahead of the rollout fails every graph write until the rollout finishes. 0030, its grant-only partner, is safe to apply with everything else beforehand and should be
+- [ ] After 0031: a plain member's own JWT is refused at the PostgREST data API for `pz_tasks`/`pz_stage_documents`/`pz_discussions` (`42501`). `pytest -m rls` asserts this against a disposable stack; `.github/workflows/cloud-contract.yml` runs it. On the production database the equivalent check is that `information_schema.role_table_grants` returns no `authenticated` or `anon` row for those seven tables
 - [ ] `pz_schema_migrations` reflects this database's real history — for a database that had migrations applied before the ledger existed, that means `scripts/migrate.py adopt` (§2.2) ran once, not that it was silently skipped
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`
 - [ ] service_role key set only in Railway variables — never in the repo or client

@@ -1,0 +1,218 @@
+"""Plan 0014 M4 — a member's own JWT, straight at PostgREST, must be refused.
+
+Each case below is one row of plan 0014's gap matrix — plus two for
+`pz_discussions`, which that matrix omitted — executed the way the matrix says
+a client could execute it: raw HTTP at the Supabase data API, with a real
+workspace member's real Supabase Auth token, never touching `apps/cloud`.
+Before migration 0031 every one of them **succeeded** — the graph-table
+policies test `pz_is_member` and nothing else, and `authenticated` held
+`select, insert, update, delete` outright (`migrations/0006_grants.sql`,
+`migrations/0011_discussions.sql`, `migrations/0019_stage_documents.sql`). The
+API's own refusals (`app/api/_guards.py`, `app/api/sync.py`'s
+`set_task_status`/`assign_task`, `ADMIN_ONLY_STAGES`, and plan 0015's
+`discussion_author_forbidden`/`discussion_forbidden`) were never in the path.
+
+WHY THE ASSERTION IS ON THE *GRANT*, NOT ON A POLICY
+An RLS policy that declines a row makes an `UPDATE` a no-op: PostgREST answers
+200 with an empty array, indistinguishable from "no row matched". A missing
+base grant makes Postgres refuse before policy evaluation runs at all, with
+SQLSTATE 42501, which is both loud and unconditional. That ordering — base
+GRANT checked before RLS — is exactly what `migrations/0006_grants.sql`'s own
+comment describes, and it is why plan 0014 chose Option A (revoke) over
+Option B (more policies). So every case asserts two things: the request was
+refused with 42501, *and* the row is unchanged when read back with the
+service-role key. The second assertion is the one that would still catch a
+future Supabase release changing how 42501 is surfaced over HTTP.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import httpx
+import pytest
+
+from tests.rls.conftest import INSUFFICIENT_PRIVILEGE, Fixture, Target
+
+pytestmark = pytest.mark.rls
+
+
+def _denied(res: httpx.Response) -> None:
+    """Assert a PostgREST response is a privilege refusal, not a silent no-op.
+
+    PostgREST maps 42501 to 401 or 403 depending on version (it moved to 403
+    in v12); both are accepted, the SQLSTATE is what is pinned. A 2xx here is
+    the vulnerability, and the message says so rather than leaving a reviewer
+    to decode an assertion on a status code.
+    """
+    assert res.status_code in (401, 403), (
+        f"expected a privilege refusal, got {res.status_code}: {res.text}"
+    )
+    body = res.json()
+    assert body.get("code") == INSUFFICIENT_PRIVILEGE, (
+        f"expected SQLSTATE {INSUFFICIENT_PRIVILEGE} (permission denied), got: {body}"
+    )
+
+
+def _read_task(http: httpx.Client, target: Target, task_id: str) -> dict:
+    """Read back as service_role — the one role that keeps its grants."""
+    res = http.get(
+        f"{target.rest}/pz_tasks",
+        headers=target.service_headers(),
+        params={"id": f"eq.{task_id}", "select": "*"},
+    )
+    assert res.status_code == 200, res.text
+    rows = res.json()
+    assert len(rows) == 1, f"task {task_id} not found: {rows}"
+    return rows[0]
+
+
+def test_member_cannot_verify_a_task_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Matrix row 2: `verified` is admin-only in `sync.py:593-600`
+    (`403 verified_requires_admin`), and was member-writable in Postgres."""
+    res = http.patch(
+        f"{target.rest}/pz_tasks",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{fixture.task_id}"},
+        json={"status": "verified"},
+    )
+    _denied(res)
+    assert _read_task(http, target, fixture.task_id)["status"] == "todo"
+
+
+def test_member_cannot_author_an_admin_only_stage_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Matrix row 1: `plan` is in `ADMIN_ONLY_STAGES`
+    (`app/api/_guards.py`), and `pz_stage_documents_write` tested only
+    `pz_is_member(workspace_id)`."""
+    res = http.post(
+        f"{target.rest}/pz_stage_documents",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "workspace_id": fixture.workspace_id,
+            "project_id": fixture.project_id,
+            "stage": "plan",
+            "content": "# authored by a plain member, around the API",
+            "created_by": fixture.member.id,
+        },
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_stage_documents",
+        headers=target.service_headers(),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's direct stage-document write landed"
+
+
+def test_member_cannot_steal_a_task_assignment_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Matrix row 3: reassignment is admin-only unless it is a self-assign or
+    self-unassign (`sync.py:550-554`). The task is the admin's; a member
+    pointing `assigned_user_id` at themselves is the steal that rule exists to
+    stop, and no row-level predicate existed for it."""
+    res = http.patch(
+        f"{target.rest}/pz_tasks",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{fixture.task_id}"},
+        json={"assigned_user_id": fixture.member.id},
+    )
+    _denied(res)
+    assert _read_task(http, target, fixture.task_id)["assigned_user_id"] == fixture.admin.id
+
+
+def test_member_cannot_forge_a_comment_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """pz_discussions, which plan 0014's matrix omitted and the first pass
+    missed. `create_discussion` never takes `author` from the client, and
+    plan 0015 carried that rule onto the graph door
+    (`discussion_author_forbidden` / `discussion_forbidden`) — but both live
+    in Python, and 0011_discussions.sql granted `authenticated` full DML
+    behind a membership-only policy. So a member could post a comment
+    attributed to the admin, straight at PostgREST. Same bypass class as the
+    other six; it needed the grant, not a new rule."""
+    res = http.post(
+        f"{target.rest}/pz_discussions",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "project_id": fixture.project_id,
+            "parent_node_type": "tasks",
+            "parent_node_id": fixture.task_id,
+            # The forgery: a statement attributed to somebody who never made it.
+            "author": fixture.admin.id,
+            "body": "Signed off by me, the admin.",
+            "source": "pz",
+        },
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's forged comment landed"
+
+
+def test_member_cannot_overwrite_another_members_comment_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """The other half of plan 0015's discussion rules: `body` and `author` are
+    "shared" authority, so a direct UPDATE could rewrite an existing comment's
+    text and reassign its authorship. The comment here is the admin's, written
+    on the service key the way apps/cloud writes it."""
+    discussion_id = str(uuid.uuid4())
+    seed = http.post(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        json={
+            "id": discussion_id,
+            "project_id": fixture.project_id,
+            "parent_node_type": "tasks",
+            "parent_node_id": fixture.task_id,
+            "author": fixture.admin.id,
+            "body": "Original, by the admin.",
+            "source": "pz",
+        },
+    )
+    assert seed.status_code in (200, 201), seed.text
+
+    res = http.patch(
+        f"{target.rest}/pz_discussions",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{discussion_id}"},
+        json={"body": "Rewritten by somebody else.", "author": fixture.member.id},
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        params={"id": f"eq.{discussion_id}", "select": "body,author"},
+    )
+    assert check.json() == [{"body": "Original, by the admin.", "author": fixture.admin.id}]
+
+
+def test_member_cannot_read_graph_tables_directly_either(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """`revoke all` takes SELECT too, so the data API stops being a read path
+    for these tables as well. Recorded as its own case because it is a real
+    behaviour change beyond the three writes the plan names: a client that
+    read `pz_tasks` over PostgREST today would break, and plan 0014's
+    recommendation rests on the claim that no such client exists
+    (`apps/web/src/lib/auth.tsx` uses supabase-js for sessions only; every
+    graph read goes through `apiFetch`). If that claim ever stops holding,
+    this is the case that says where to look.
+    """
+    res = http.get(
+        f"{target.rest}/pz_tasks",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{fixture.task_id}", "select": "*"},
+    )
+    _denied(res)
