@@ -74,6 +74,12 @@ const DETAIL_MESSAGES: Record<string, string> = {
   repo_moved_during_seed:
     "Someone pushed to the repository's default branch while it was being set up, so nothing was " +
     "written. Check the file list again and retry.",
+  // Any other refused ref update — branch protection or a ruleset. Retrying
+  // can't help, unlike repo_moved_during_seed.
+  default_branch_protected:
+    "GitHub refused the setup commit on the default branch, usually because of branch protection " +
+    "or a ruleset. Nothing was written. Ask a repository admin to lift the rule or exempt the " +
+    "connected token's user, then retry.",
   // Create-repository and the seed preview alike: a directory GitHub won't
   // list in full leaves no complete answer to "is this path free".
   repo_tree_too_large:

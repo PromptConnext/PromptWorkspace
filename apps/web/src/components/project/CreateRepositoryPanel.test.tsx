@@ -242,6 +242,30 @@ describe("CreateRepositoryPanel", () => {
       await waitFor(() => expect(previewCalls()).toBe(2));
     });
 
+    it("maps default_branch_protected", async () => {
+      mockPreview(
+        { write: ["AGENTS.md"], relocated: [], skipped: [], conflicts: [] },
+        { ok: false, status: 409, detail: "default_branch_protected" },
+      );
+      render(
+        <CreateRepositoryPanel
+          projectId="p1"
+          projectName="Widget App"
+          onCreated={vi.fn()}
+          constitutionReady
+          tasksReady
+          project={project}
+        />,
+      );
+
+      const button = await screen.findByRole("button", { name: /create repository/i });
+      await screen.findByText("AGENTS.md");
+      fireEvent.click(button);
+
+      expect(await screen.findByText(/branch protection/i)).toBeInTheDocument();
+      expect(screen.queryByText("default_branch_protected")).not.toBeInTheDocument();
+    });
+
     it("maps repo_tree_too_large when the preview itself is refused", async () => {
       global.fetch = vi.fn((url: RequestInfo | URL) => {
         if (url.toString().includes("/repository/seed-preview")) {
