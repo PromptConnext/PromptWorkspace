@@ -48,6 +48,7 @@ from app.models.schemas import (
     ProjectGraph,
     PullRequest,
     RagChunkHit,
+    RepoAnalysis,
     RepoWebhook,
     Requirement,
     Role,
@@ -99,6 +100,7 @@ _CODE_MATCH_RPC = "pz_code_match_chunks"
 _DOCUMENTS = "pz_documents"
 _GENERATION_RUNS = "pz_generation_runs"
 _STAGE_DOCUMENTS = "pz_stage_documents"
+_REPO_ANALYSES = "pz_repo_analyses"
 _REPO_WEBHOOKS = "pz_repo_webhooks"
 _WORKSPACE_INTEGRATIONS = "pz_workspace_integrations"
 _DEPLOYMENTS = "pz_deployments"
@@ -154,6 +156,10 @@ _SERVICE_ONLY_TABLES = frozenset(
         # external_key) triple.
         "pz_workspace_integrations",
         "pz_task_links",
+        # Plan 0027, migration 0034: born service-only. Excerpts of a
+        # customer's source and the admin-only baseline — the rule that only
+        # an admin analyses or edits lives in app/api/repo_analysis.py alone.
+        "pz_repo_analyses",
     }
 )
 
@@ -1491,6 +1497,22 @@ class SupabaseRepository(Repository):
             _dump(doc), on_conflict="project_id,stage"
         ).execute()
         return doc
+
+    def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
+        res = (
+            self._table(_REPO_ANALYSES)
+            .select("*")
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return RepoAnalysis(**rows[0]) if rows else None
+
+    def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
+        stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
+        self._table(_REPO_ANALYSES).upsert(_dump(stored), on_conflict="project_id").execute()
+        return stored
 
 
 def _dump(model) -> dict:

@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 from app.db.repository import Repository
+from app.deployments.preview_url import repo_full_name_from_url
 from app.models.schemas import Project
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
@@ -80,6 +81,23 @@ def enqueue_project_backfill(app: Any, repo: Repository, project: Project) -> in
     enqueued = 0
     for node_type, node_id in _iter_backfill_targets(repo, project):
         enqueue(app, EmbedJob(project.workspace_id, project.id, node_type, node_id))
+        enqueued += 1
+
+    # 4. the repository's code (plan 0027 M5). Push-driven indexing only ever
+    # sees files a push touched, so a reindex is the one way to reach the rest
+    # — most visibly an imported repository's existing code, and any project
+    # whose files were pushed while no model connection resolved. One job per
+    # repository, expanded into per-file jobs by the worker
+    # (app/rag/queue.py::_process_code_tree_job): listing a tree is a GitHub
+    # call, and this sweep runs on a request thread. Not part of
+    # `_iter_backfill_targets`, because a file is not a graph node and
+    # `count_indexable_nodes` counts nodes.
+    full_name = repo_full_name_from_url(project.repo_url)
+    if full_name is not None and project.lifecycle_status == "repo_created":
+        enqueue(
+            app,
+            EmbedJob(project.workspace_id, project.id, "code_tree", full_name, repo=full_name),
+        )
         enqueued += 1
     return enqueued
 

@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from app.imports.snapshot import CODE_INDEX_MAX_FILES, indexable_code_paths
 from app.integrations.github_auth import resolve_token
 from app.rag.chunker import chunk_text
 from app.rag.code_chunker import chunk_code
@@ -52,7 +53,8 @@ class EmbedJob:
     project_id: str
     node_type: str
     node_id: str
-    # Only set when node_type == "code_file" (M11) — code isn't fetched via
+    # Only set when node_type == "code_file" (M11) or "code_tree" (plan 0027,
+    # `repo` only — see `_process_code_tree_job`) — code isn't fetched via
     # get_node()/node_text() like every other node_type, since the fetched
     # content must never be persisted (ADR 0011: no source at rest), only
     # used transiently within this one job.
@@ -222,6 +224,9 @@ async def _process_job(app: Any, job: EmbedJob) -> None:
     if job.node_type == "code_file":
         await _process_code_file_job(app, job)
         return
+    if job.node_type == "code_tree":
+        await _process_code_tree_job(app, job)
+        return
 
     queue: EmbedQueue = app.state.embed_queue
     repo = app.state.repository
@@ -344,3 +349,57 @@ async def _process_code_file_job(app: Any, job: EmbedJob) -> None:
         job.workspace_id, job.project_id, job.repo, job.path, job.sha, line_ranges, vectors
     )
     queue.clear_failure(job.project_id)
+
+
+async def _process_code_tree_job(app: Any, job: EmbedJob) -> None:
+    """Expand one repository into a `code_file` job per indexable file at
+    its default branch's current head (plan 0027 M5).
+
+    This is how a reindex reaches code: the sweep in app/rag/backfill.py is
+    synchronous and has no business calling GitHub, so it enqueues this one
+    job per repository and the listing happens here, off the request path,
+    like every other fetch this queue does. The same no-connection and
+    no-token drops apply as for a single file — checked once here rather than
+    once per file after a fan-out that could never succeed.
+    """
+    queue: EmbedQueue = app.state.embed_queue
+    repo = app.state.repository
+    if repo.get_model_connection(job.workspace_id) is None:
+        logger.info("skip code sweep: no model connection workspace=%s", job.workspace_id)
+        queue.record_failure(
+            job,
+            "no_model_connection",
+            "No embedding model configured for this workspace — the repository was "
+            "not indexed.",
+        )
+        return
+    resolved = resolve_token(app, repo.get_workspace(job.workspace_id))
+    project = repo.get_project(job.project_id)
+    if resolved is None or project is None:
+        queue.record_failure(
+            job,
+            "github_not_connected",
+            "No usable GitHub token for this workspace — the repository can't be listed "
+            "to index.",
+        )
+        return
+    token, _ = resolved
+
+    github_client = app.state.github_client
+    head_sha = await github_client.get_branch_head(
+        token, job.repo, project.repo_default_branch or "main"
+    )
+    paths, _truncated = await github_client.get_tree(token, job.repo, head_sha)
+    for path in indexable_code_paths(paths, CODE_INDEX_MAX_FILES):
+        enqueue(
+            app,
+            EmbedJob(
+                job.workspace_id,
+                job.project_id,
+                "code_file",
+                node_id=f"{job.repo}:{path}",
+                repo=job.repo,
+                path=path,
+                sha=head_sha,
+            ),
+        )

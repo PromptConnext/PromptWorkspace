@@ -22,10 +22,16 @@ Derived views, one SeedFile per non-empty input:
                                       users, since that's the exact path it reads
   docs/policy-scope.md               the project's policy scope, full template bodies +
                                       custom text — only when a scope was selected
+
+Those are the paths for a repository the platform created. A repository the
+user imported already has content, and the seed must never overwrite any of
+it (plan 0027 M4): `fit_to_existing_repo` at the bottom of this module moves
+the derived views under `docs/promptzone/` and drops whatever still collides.
 """
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -164,7 +170,10 @@ def build_seed_files(project: Project, stage_docs: dict[str, str | None]) -> lis
 
 
 def build_deployment_files(
-    project: Project, preview_url: str | None, plan_text: str | None = None
+    project: Project,
+    preview_url: str | None,
+    plan_text: str | None = None,
+    detected_runtime: str | None = None,
 ) -> list[SeedFile]:
     """The deployment template's scaffold, workflow and `docs/deployment.md`
     (ADR 0021), or an empty list when no template was selected.
@@ -174,7 +183,9 @@ def build_deployment_files(
     backing services are read off it by a keyword scan, which then *selects*
     among hand-written files. Nothing here generates a file, so this function
     stays as pure and as deterministic as it was — the same plan text seeds
-    the same tree.
+    the same tree. `detected_runtime` is the imported repository's own
+    manifests' answer to the same question (plan 0027); see
+    `derive_stack_profile` for why it wins.
 
     Kept separate from `build_seed_files` rather than folded into it, for two
     reasons. These files are *verbatim scaffold* rather than derived views
@@ -198,7 +209,7 @@ def build_deployment_files(
         # transition: the repo and its AI context are still worth having.
         return []
 
-    profile = derive_stack_profile(plan_text)
+    profile = derive_stack_profile(plan_text, detected_runtime)
     files = [
         SeedFile(path, content, executable=executable)
         for path, content, executable in template_files(template.id, profile)
@@ -219,3 +230,112 @@ def build_deployment_files(
         )
     )
     return files
+
+
+# --------------------------------------------------------------------------- #
+# Seeding a repository that already has content (plan 0027 M4)
+# --------------------------------------------------------------------------- #
+
+# Where every derived document goes in an imported repository: one folder the
+# platform owns, so nothing it writes can land on a file the team wrote.
+PROMPTZONE_DOCS_DIR = "docs/promptzone"
+
+# Derived views that are always relocated into PROMPTZONE_DOCS_DIR for an
+# imported repository, whether or not the original path is taken: a repo with
+# no README today may well grow one, and a platform file squatting on the
+# conventional path would be in the way.
+_ALWAYS_RELOCATED = frozenset(
+    {
+        "README.md",
+        "docs/scope.md",
+        "docs/architecture.md",
+        "docs/tasks.md",
+        "docs/conventions.md",
+        "docs/policy-scope.md",
+    }
+)
+
+# Written where tools look for them — AGENTS.md at the root, the constitution
+# where the engine's `withConstitution()` reads it — but only if the path is
+# free. A team's own AGENTS.md is their agents' instructions; ours goes beside
+# it instead.
+_RELOCATE_IF_TAKEN = {
+    "AGENTS.md": f"{PROMPTZONE_DOCS_DIR}/AGENTS.md",
+    ".specify/memory/constitution.md": f"{PROMPTZONE_DOCS_DIR}/constitution.md",
+}
+
+_WORKFLOWS_DIR = ".github/workflows/"
+
+
+@dataclass(frozen=True)
+class SeedPlan:
+    """What a seed commit into an existing repository will do, before it
+    does it — the same object the commit is built from and the seed preview
+    reports, so the two cannot disagree."""
+
+    files: list[SeedFile]
+    # (original path, path actually written)
+    relocated: list[tuple[str, str]]
+    # Paths not written because a file is already there.
+    skipped: list[str]
+    # Paths that cannot be skipped safely; a non-empty list means no commit.
+    conflicts: list[str]
+
+
+def fit_to_existing_repo(
+    seed_files: list[SeedFile],
+    deployment_files: list[SeedFile],
+    existing_paths: frozenset[str],
+) -> SeedPlan:
+    """Rewrite a seed so it never overwrites a file `existing_paths` names.
+
+    Derived documents move under `docs/promptzone/` (always, or only when
+    taken — see the two tables above), and anything still colliding after
+    that is dropped, including a `docs/promptzone/*` file a previous import
+    already left there. Deployment scaffold files that already exist are
+    skipped one at a time: the team's own `Dockerfile` stays theirs.
+
+    A workflow file is the exception, and it is a conflict rather than a
+    skip. Skipping `.github/workflows/deploy.yml` would leave a project whose
+    secrets, variables and preview state all say "deployable" with the
+    team's unrelated workflow behind them — and merging into it is what ADR
+    0024 forbids outright. So the caller refuses (`deploy_workflow_conflict`)
+    and the Tech Lead either picks no template or moves that file first.
+    """
+    files: list[SeedFile] = []
+    relocated: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    conflicts: list[str] = []
+
+    for seed_file in seed_files:
+        target = seed_file.path
+        if target in _ALWAYS_RELOCATED:
+            target = f"{PROMPTZONE_DOCS_DIR}/{posixpath.basename(target)}"
+        elif target in _RELOCATE_IF_TAKEN and target in existing_paths:
+            target = _RELOCATE_IF_TAKEN[target]
+        if target in existing_paths:
+            skipped.append(target)
+            continue
+        if target != seed_file.path:
+            relocated.append((seed_file.path, target))
+            seed_file = SeedFile(target, seed_file.content, seed_file.executable)
+        files.append(seed_file)
+
+    for seed_file in deployment_files:
+        if seed_file.path.startswith("docs/"):
+            # The template's `docs/deployment.md` is a derived document like
+            # the ones above, not scaffold, so it moves with them.
+            target = f"{PROMPTZONE_DOCS_DIR}/{posixpath.basename(seed_file.path)}"
+            if target in existing_paths:
+                skipped.append(target)
+            else:
+                relocated.append((seed_file.path, target))
+                files.append(SeedFile(target, seed_file.content, seed_file.executable))
+        elif seed_file.path not in existing_paths:
+            files.append(seed_file)
+        elif seed_file.path.startswith(_WORKFLOWS_DIR):
+            conflicts.append(seed_file.path)
+        else:
+            skipped.append(seed_file.path)
+
+    return SeedPlan(files=files, relocated=relocated, skipped=skipped, conflicts=conflicts)

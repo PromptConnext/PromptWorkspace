@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from app.deployments.registry import get_template, template_files
 from app.integrations.deploy_providers import PROVIDERS
-from app.integrations.repo_seed import build_deployment_files, build_seed_files
+from app.integrations.repo_seed import (
+    build_deployment_files,
+    build_seed_files,
+    fit_to_existing_repo,
+)
 from app.models.schemas import DeploymentConfig, PolicyScope, Project
 
 
@@ -284,3 +288,54 @@ def test_next_vercels_pull_request_check_cannot_reach_the_deploy_token():
     check = workflow.index("  check:")
     deploy = workflow.index("  deploy:")
     assert "secrets." not in workflow[check:deploy]
+
+
+# --------------------------------------------------------------------------- #
+# fit_to_existing_repo (plan 0027 M4)
+# --------------------------------------------------------------------------- #
+
+
+def _seed_and_deploy():
+    project = _project(deployment_config=DeploymentConfig(template_id="github-pages"))
+    seed = build_seed_files(project, {"constitution": "# C\n\nRules.", "specify": "# S\n\nScope."})
+    return seed, build_deployment_files(project, None)
+
+
+def test_fitting_into_an_empty_tree_relocates_only_the_derived_docs():
+    seed, deploy = _seed_and_deploy()
+    plan = fit_to_existing_repo(seed, deploy, frozenset())
+    paths = {f.path for f in plan.files}
+    assert "AGENTS.md" in paths
+    assert ".specify/memory/constitution.md" in paths
+    assert "README.md" not in paths and "docs/promptzone/README.md" in paths
+    assert ".github/workflows/deploy.yml" in paths
+    assert ("docs/deployment.md", "docs/promptzone/deployment.md") in plan.relocated
+    assert plan.skipped == [] and plan.conflicts == []
+
+
+def test_fitting_never_writes_an_existing_path():
+    seed, deploy = _seed_and_deploy()
+    existing = frozenset(
+        {
+            "AGENTS.md",
+            ".specify/memory/constitution.md",
+            "docs/promptzone/scope.md",
+            "site/index.html",
+        }
+    )
+    plan = fit_to_existing_repo(seed, deploy, existing)
+    paths = {f.path for f in plan.files}
+    assert not paths & existing
+    assert ("AGENTS.md", "docs/promptzone/AGENTS.md") in plan.relocated
+    assert (".specify/memory/constitution.md", "docs/promptzone/constitution.md") in plan.relocated
+    assert set(plan.skipped) == {"docs/promptzone/scope.md", "site/index.html"}
+    # The content travels with the move.
+    moved = next(f for f in plan.files if f.path == "docs/promptzone/AGENTS.md")
+    assert "Rules." in moved.content
+
+
+def test_an_existing_workflow_is_a_conflict_not_a_skip():
+    seed, deploy = _seed_and_deploy()
+    plan = fit_to_existing_repo(seed, deploy, frozenset({".github/workflows/deploy.yml"}))
+    assert plan.conflicts == [".github/workflows/deploy.yml"]
+    assert ".github/workflows/deploy.yml" not in plan.skipped

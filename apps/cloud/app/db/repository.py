@@ -43,6 +43,7 @@ from app.models.schemas import (
     PullRequest,
     RagChunk,
     RagChunkHit,
+    RepoAnalysis,
     RepoWebhook,
     Requirement,
     Role,
@@ -707,6 +708,15 @@ class Repository(abc.ABC):
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
     ) -> StageDocument: ...
 
+    # -- repository analysis (plan 0027) ---------------------------------- #
+    @abc.abstractmethod
+    def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None: ...
+
+    @abc.abstractmethod
+    def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
+        """Replace the project's one current analysis. `updated_at` is stamped
+        here, not trusted from the caller."""
+
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
 
@@ -748,6 +758,8 @@ class InMemoryRepository(Repository):
         self._generation_runs: dict[str, GenerationRun] = {}
         # project_id -> stage -> StageDocument (Planner editable-markdown)
         self._stage_documents: dict[str, dict[str, StageDocument]] = {}
+        # project_id -> RepoAnalysis (plan 0027)
+        self._repo_analyses: dict[str, RepoAnalysis] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -1696,6 +1708,15 @@ class InMemoryRepository(Repository):
         )
         store[stage] = doc
         return copy.deepcopy(doc)
+
+    def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
+        analysis = self._repo_analyses.get(project_id)
+        return copy.deepcopy(analysis) if analysis else None
+
+    def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
+        stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
+        self._repo_analyses[analysis.project_id] = stored
+        return copy.deepcopy(stored)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

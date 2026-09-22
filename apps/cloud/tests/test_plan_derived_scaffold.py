@@ -74,6 +74,21 @@ def test_word_boundaries_keep_incidental_words_from_scoring():
     assert profile == DEFAULT_PROFILE
 
 
+def test_an_imported_repos_manifests_override_the_plans_runtime():
+    """Plan 0027: a `package.json` at the root is better evidence than a plan
+    that mentions Python. Services still come from the plan."""
+    plan = "A Python service with FastAPI, storing bookings in PostgreSQL."
+    profile = derive_stack_profile(plan, detected_runtime="node")
+    assert profile == StackProfile(runtime="node", services=("postgres",))
+    assert derive_stack_profile(None, detected_runtime="go").runtime == "go"
+
+
+def test_a_detected_runtime_without_a_scaffold_is_ignored():
+    plan = "A Python service with FastAPI."
+    assert derive_stack_profile(plan, detected_runtime="rust").runtime == "python"
+    assert derive_stack_profile(None, detected_runtime="rust") == DEFAULT_PROFILE
+
+
 # --------------------------------------------------------------------------- #
 # Selecting the files
 # --------------------------------------------------------------------------- #

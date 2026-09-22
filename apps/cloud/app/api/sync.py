@@ -16,6 +16,7 @@ Endpoints:
   GET   /sync/projects/{id}/graph                    pull the graph (?since= cursor)
   PATCH /projects/{id}/tasks/{tid}/assignment        set/clear the pz assignee
   PATCH /projects/{id}/tasks/{tid}/status            set status (+ closing commit)
+  GET   /projects/{id}/repository/seed-preview       admin — what the seed would write
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api._guards import (
     _check_graph_write_permissions,
+    require_admin,
     require_project,
     require_workspace,
 )
@@ -41,6 +43,7 @@ from app.deployments.preview_url import (
 )
 from app.deployments.registry import PREVIEW_ENVIRONMENT
 from app.deployments.registry import get_template as get_deployment_template
+from app.imports.snapshot import CODE_INDEX_MAX_FILES, indexable_code_paths
 from app.integrations.deploy_providers import (
     PLATFORM_R2,
     ProviderCredentialError,
@@ -56,7 +59,12 @@ from app.integrations.github import (
     new_webhook_secret,
 )
 from app.integrations.github_auth import resolve_token
-from app.integrations.repo_seed import build_deployment_files, build_seed_files
+from app.integrations.repo_seed import (
+    SeedFile,
+    build_deployment_files,
+    build_seed_files,
+    fit_to_existing_repo,
+)
 from app.models.schemas import (
     ENTITY_TYPES,
     ChangesHead,
@@ -67,8 +75,10 @@ from app.models.schemas import (
     Project,
     ProjectCreate,
     ProjectGraph,
+    RelocatedFile,
     RepoWebhook,
     Role,
+    SeedPreviewOut,
     Task,
     TaskAssignmentUpdate,
     TaskStatus,
@@ -336,12 +346,7 @@ async def create_repository(
 
     # Step 2: assemble seed files before any external mutation. Cheap and
     # pure (app/integrations/repo_seed.py) — fail fast on nothing external.
-    stage_docs = {
-        stage: (doc.content if doc else None)
-        for stage, doc in (
-            (s, repo.get_stage_document(project_id, s)) for s in _SEED_STAGES
-        )
-    }
+    stage_docs = _seed_stage_docs(repo, project_id)
     seed_files = build_seed_files(project, stage_docs)
 
     # Step 3: the deployment provider, still before any external mutation.
@@ -352,15 +357,24 @@ async def create_repository(
         deployment = await _resolve_deployment_provisioning(request.app, project, workspace)
     except ProviderCredentialError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
+    deployment_files: list[SeedFile] = []
     if deployment is not None:
-        seed_files = seed_files + build_deployment_files(
-            project, deployment["preview_url"], stage_docs.get("plan")
+        deployment_files = build_deployment_files(
+            project,
+            deployment["preview_url"],
+            stage_docs.get("plan"),
+            _detected_runtime(repo, project),
         )
+    if not project.repo_url:
+        seed_files = seed_files + deployment_files
 
     github_client = request.app.state.github_client
 
     name = body.name or _slugify(project.name)
     description = f"PromptZone-managed repository for project {project.id}"
+    # (head sha, file paths) of an imported repository's own content; None
+    # for a repository this project created, which is seeded exactly as before.
+    existing_tree: tuple[str, list[str]] | None = None
 
     if project.repo_url:
         # Step 4, import variant: the project already names a repository the
@@ -382,6 +396,21 @@ async def create_repository(
         created = await _adopt_repo(
             github_client, token, imported_full_name, "imported_repo_not_found"
         )
+        # Plan 0027 M4: the repository has content of its own, and the seed
+        # must not overwrite any of it. Read from the live tree, not the
+        # stored analysis — a file pushed since then is just as much the
+        # team's — and still before any mutation, so a workflow conflict
+        # refuses with nothing written.
+        existing_tree = await _existing_tree(github_client, token, created, description)
+        if existing_tree is None:
+            seed_files = seed_files + deployment_files
+        else:
+            seed_plan = fit_to_existing_repo(
+                seed_files, deployment_files, frozenset(existing_tree[1])
+            )
+            if seed_plan.conflicts:
+                raise HTTPException(status_code=409, detail="deploy_workflow_conflict")
+            seed_files = seed_plan.files
     else:
         try:
             created = await github_client.create_org_repo(
@@ -559,14 +588,19 @@ async def create_repository(
     # github.py::create_commit_with_files — this is what collapses the
     # partial-seed window to a single atomic ref update, and it is also what
     # keeps a forty-file scaffold inside one HTTP request.
+    #
+    # An imported repository that already carries every file this seed would
+    # write (docs/promptzone/* left by an earlier import) gets no commit at all:
+    # there is nothing to add, and an empty seed is not an error.
     try:
-        await github_client.create_commit_with_files(
-            token,
-            full_name,
-            default_branch,
-            seed_files,
-            "chore: seed project context from PromptZone",
-        )
+        if seed_files:
+            await github_client.create_commit_with_files(
+                token,
+                full_name,
+                default_branch,
+                seed_files,
+                "chore: seed project context from PromptZone",
+            )
     except GithubWriteError as exc:
         # Do NOT advance the lifecycle — an unseeded repo must leave
         # repo_url unset so a retry re-enters at repo creation and adopts.
@@ -609,7 +643,146 @@ async def create_repository(
                 url=preview_url,
             ),
         )
-    return repo.update_project_lifecycle_status(project_id, "repo_created")
+    updated = repo.update_project_lifecycle_status(project_id, "repo_created")
+    if existing_tree is not None:
+        _enqueue_initial_code_index(request.app, repo, project, full_name, *existing_tree)
+    return updated
+
+
+def _enqueue_initial_code_index(
+    app, repo: Repository, project: Project, full_name: str, head_sha: str, paths: list[str]
+) -> int:
+    """A repository created here starts with a handful of seeded files and is
+    indexed push by push from then on. An imported one arrives with its whole
+    history already written, and nothing would ever push most of it again —
+    so it gets one initial sweep at `repo_created` (plan 0027 M5), capped at
+    CODE_INDEX_MAX_FILES so a monorepo cannot flood the embed queue.
+
+    One `code_file` job per indexable path, pinned to the pre-seed head —
+    the same job the push webhook enqueues (app/api/github.py::_handle_push),
+    so the worker path is shared rather than parallel. Skipped outright for a
+    workspace with no model connection, which is the condition the worker
+    itself would drop every one of these jobs for."""
+    if repo.get_model_connection(project.workspace_id) is None:
+        return 0
+    selected = indexable_code_paths(paths, CODE_INDEX_MAX_FILES)
+    for path in selected:
+        enqueue(
+            app,
+            EmbedJob(
+                project.workspace_id,
+                project.id,
+                "code_file",
+                node_id=f"{full_name}:{path}",
+                repo=full_name,
+                path=path,
+                sha=head_sha,
+            ),
+        )
+    return len(selected)
+
+
+def _seed_stage_docs(repo: Repository, project_id: str) -> dict[str, str | None]:
+    return {
+        stage: (doc.content if doc else None)
+        for stage, doc in ((s, repo.get_stage_document(project_id, s)) for s in _SEED_STAGES)
+    }
+
+
+def _detected_runtime(repo: Repository, project: Project) -> str | None:
+    """What an imported repository's manifests say it is written in, from its
+    stored analysis (plan 0027) — None for every other project."""
+    if not project.repo_url:
+        return None
+    analysis = repo.get_repo_analysis(project.id)
+    return analysis.snapshot.stack.runtime if analysis is not None else None
+
+
+async def _existing_tree(
+    github_client, token: str, repo_row: dict, own_description: str
+) -> tuple[str, list[str]] | None:
+    """(head sha, file paths) of an adopted repository's default branch, or
+    None when the repository is one this project created itself.
+
+    The second case is the crash-window retry `create_repository`'s docstring
+    describes — `repo_url` recorded before the seed commit landed — and it
+    reaches the adopt branch exactly like an import does. Its content is the
+    platform's own (GitHub's auto-init README at most), so it keeps the full,
+    unrelocated seed it always had; the description this project writes at
+    creation is the same provenance signal the name-collision retry uses.
+    """
+    if repo_row.get("description") == own_description:
+        return None
+    full_name = repo_row["full_name"]
+    branch = repo_row.get("default_branch") or "main"
+    try:
+        head_sha = await github_client.get_branch_head(token, full_name, branch)
+        paths, _truncated = await github_client.get_tree(token, full_name, head_sha)
+    except GithubWriteError as exc:
+        logger.warning("reading the tree of %s failed: %s", full_name, exc)
+        if getattr(exc, "status_code", None) in (401, 403):
+            raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+    return head_sha, paths
+
+
+@router.get("/projects/{project_id}/repository/seed-preview", response_model=SeedPreviewOut)
+async def seed_preview(
+    project_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> SeedPreviewOut:
+    """What `create_repository` would commit, without committing it (plan 0027
+    M4) — so the Tech Lead consents to a list of paths, not to a promise.
+
+    Built by the same builders and the same `fit_to_existing_repo` the real
+    seed uses, against the same live tree. The one thing done differently is
+    the deployment provider: resolving it can mint a platform credential,
+    which a preview must never do, so the template's files are built without
+    a preview URL — that changes one document's text, never a path.
+    """
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+    if project.lifecycle_status == "repo_created":
+        raise HTTPException(status_code=409, detail="repo_already_created")
+
+    stage_docs = _seed_stage_docs(repo, project_id)
+    seed_files = build_seed_files(project, stage_docs)
+    deployment_files = build_deployment_files(
+        project, None, stage_docs.get("plan"), _detected_runtime(repo, project)
+    )
+    if not project.repo_url:
+        return SeedPreviewOut(write=[f.path for f in seed_files + deployment_files])
+
+    workspace = repo.get_workspace(project.workspace_id)
+    resolved = resolve_token(request.app, workspace)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    token, github_config = resolved
+    owner = github_config.get("owner")
+    if not owner:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    imported_full_name = repo_full_name_from_url(project.repo_url)
+    if imported_full_name is None:
+        raise HTTPException(status_code=409, detail="repo_url_unrecognized")
+    if imported_full_name.split("/")[0].lower() != owner.lower():
+        raise HTTPException(status_code=400, detail="repo_owner_out_of_scope")
+
+    github_client = request.app.state.github_client
+    adopted = await _adopt_repo(github_client, token, imported_full_name, "imported_repo_not_found")
+    description = f"PromptZone-managed repository for project {project.id}"
+    existing_tree = await _existing_tree(github_client, token, adopted, description)
+    if existing_tree is None:
+        return SeedPreviewOut(write=[f.path for f in seed_files + deployment_files])
+
+    plan = fit_to_existing_repo(seed_files, deployment_files, frozenset(existing_tree[1]))
+    return SeedPreviewOut(
+        write=[f.path for f in plan.files],
+        relocated=[RelocatedFile(from_path=a, to_path=b) for a, b in plan.relocated],
+        skipped=plan.skipped,
+        conflicts=plan.conflicts,
+    )
 
 
 async def _resolve_deployment_provisioning(app, project: Project, workspace) -> dict | None:

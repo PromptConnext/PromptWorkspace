@@ -198,6 +198,46 @@ def test_member_cannot_overwrite_another_members_comment_directly(
     assert check.json() == [{"body": "Original, by the admin.", "author": fixture.admin.id}]
 
 
+def test_member_cannot_write_a_repo_analysis_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Plan 0027, migration 0034: `pz_repo_analyses` is born service-only.
+    Analysing a repository and editing its baseline are admin-only in
+    `app/api/repo_analysis.py` and nowhere else, and the baseline is what an
+    imported project's plan and tasks are generated against — so a member
+    planting one straight through PostgREST would open the planning gate and
+    steer every later stage. 0006_grants.sql's default privileges would have
+    granted exactly that; the migration's revoke is what this pins."""
+    res = http.post(
+        f"{target.rest}/pz_repo_analyses",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "project_id": fixture.project_id,
+            "workspace_id": fixture.workspace_id,
+            "commit_sha": "c0ffee",
+            "snapshot": {},
+            "baseline": "# planted by a member, around the API",
+            "status": "baseline_ready",
+            "created_by": fixture.member.id,
+        },
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_repo_analyses",
+        headers=target.service_headers(),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's direct repo-analysis write landed"
+
+    read = http.get(
+        f"{target.rest}/pz_repo_analyses",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    _denied(read)
+
+
 def test_member_cannot_read_graph_tables_directly_either(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:

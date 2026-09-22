@@ -72,17 +72,31 @@ def _score(text: str, keywords: tuple[str, ...]) -> int:
     return sum(len(re.findall(rf"\b{re.escape(kw)}\b", text)) for kw in keywords)
 
 
-def derive_stack_profile(plan_text: str | None) -> StackProfile:
+def derive_stack_profile(
+    plan_text: str | None, detected_runtime: str | None = None
+) -> StackProfile:
     """The stack profile a plan describes, or `DEFAULT_PROFILE` for a project
     whose plan is missing, empty or unrecognisable.
+
+    `detected_runtime` is what an imported repository's manifests say it is
+    written in (app/imports/snapshot.py, plan 0027). When it names a runtime
+    this template has a scaffold for, it wins over the plan's keywords: a
+    `package.json` at the root is better evidence than a plan that mentions
+    Python twice. Services still come from the plan — the manifests say what
+    the code is built with, not what it should run beside. A runtime with no
+    scaffold ("rust", "java") is ignored rather than trusted, so the result is
+    still one the template can seed.
 
     Never raises and never returns a runtime the template has no scaffold for:
     repository creation must not fail on a partially-planned project, which is
     the same contract `build_seed_files` already keeps.
     """
+    known = {runtime for runtime, _ in _RUNTIME_KEYWORDS}
+    override = detected_runtime if detected_runtime in known else None
+
     text = (plan_text or "").lower()
     if not text.strip():
-        return DEFAULT_PROFILE
+        return StackProfile(runtime=override) if override else DEFAULT_PROFILE
 
     best_runtime = DEFAULT_PROFILE.runtime
     best_score = 0
@@ -94,4 +108,4 @@ def derive_stack_profile(plan_text: str | None) -> StackProfile:
     services = tuple(
         name for name, keywords in _SERVICE_KEYWORDS if _score(text, keywords) > 0
     )
-    return StackProfile(runtime=best_runtime, services=services)
+    return StackProfile(runtime=override or best_runtime, services=services)

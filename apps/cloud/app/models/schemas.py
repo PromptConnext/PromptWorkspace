@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def new_id() -> str:
@@ -1195,3 +1195,107 @@ class GenerationRun(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# Repository analysis (plan 0027) — what the platform read out of an imported
+# repository before planning against it. One current analysis per project,
+# not a Spec Kit stage: the `stage` Literal on StageDocument is closed on
+# purpose (app/integrations/repo_seed.py's docstring), and the baseline is an
+# *input* to planning rather than a planning output.
+# --------------------------------------------------------------------------- #
+RepoAnalysisStatus = Literal["snapshot_ready", "baseline_ready", "failed"]
+
+
+class RepoStack(BaseModel):
+    # One of the runtimes app/deployments/plan_profile.py can scaffold for
+    # ("node", "python", "go"), another language name when the manifests
+    # point elsewhere, or None when nothing recognisable was found.
+    runtime: str | None = None
+    # Root-level manifests and build files found, e.g. "package.json".
+    manifests: list[str] = Field(default_factory=list)
+    # Most common source languages by file count, most common first.
+    languages: list[str] = Field(default_factory=list)
+
+
+class RepoExcerpt(BaseModel):
+    path: str
+    content: str
+    truncated: bool = False
+
+
+class RepoSnapshot(BaseModel):
+    """Deterministic read of one commit of the repository
+    (app/imports/snapshot.py). Secret-shaped files (`.env*`, keys,
+    certificates) are excluded before anything is listed or fetched, so none
+    of this ever carried a credential into a prompt or into this row."""
+
+    commit_sha: str
+    default_branch: str
+    # Files after vendored/build/binary/secret filtering, before the path cap.
+    file_count: int = 0
+    # GitHub truncated the recursive tree listing (a very large repository).
+    tree_truncated: bool = False
+    # Per-directory file counts, one line per directory, capped.
+    tree_summary: str = ""
+    stack: RepoStack = Field(default_factory=RepoStack)
+    excerpts: list[RepoExcerpt] = Field(default_factory=list)
+    # The filtered file paths, capped — enough for the Planner to show and for
+    # a reader to know what was looked at. The no-overwrite check at repository
+    # creation does NOT read this: it reads the live tree, so a file pushed
+    # after the analysis still cannot be overwritten.
+    paths: list[str] = Field(default_factory=list)
+
+
+class RepoAnalysis(BaseModel):
+    project_id: str
+    workspace_id: str
+    commit_sha: str
+    snapshot: RepoSnapshot
+    baseline: str = ""
+    status: RepoAnalysisStatus = "snapshot_ready"
+    created_by: str
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class RepoAnalysisOut(BaseModel):
+    """GET/PATCH/SSE-`done` shape. A project with no analysis yet answers
+    200 with `status: "none"` rather than 404, the way a stage document that
+    was never saved answers with empty content."""
+
+    project_id: str
+    status: Literal["none", "snapshot_ready", "baseline_ready", "failed"]
+    # True while the analysis gates planning: an imported project before
+    # `repo_created`. The Planner shows the analysis panel only then.
+    required: bool
+    commit_sha: str | None = None
+    snapshot: RepoSnapshot | None = None
+    baseline: str = ""
+    updated_at: datetime | None = None
+    # The default branch has moved past `commit_sha`. None when that could not
+    # be checked (GitHub unreachable, token missing) or there is nothing to
+    # compare — "unknown" is not the same fact as "fresh".
+    stale: bool | None = None
+
+
+class RepoAnalysisBaselineUpdate(BaseModel):
+    baseline: str = Field(max_length=100_000)
+
+
+class RelocatedFile(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_path: str = Field(alias="from")
+    to_path: str = Field(alias="to")
+
+
+class SeedPreviewOut(BaseModel):
+    """GET /projects/{id}/repository/seed-preview (plan 0027 M4). `write` is
+    every path the seed commit will write, relocated ones at their new path;
+    `conflicts` non-empty means create-repository will refuse with
+    `deploy_workflow_conflict`."""
+
+    write: list[str]
+    relocated: list[RelocatedFile] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
