@@ -325,8 +325,45 @@ class TaskLink(BaseModel):
     task_id: str
     project_id: str
     provider: str  # "jira" | "clickup"
+    # Which provider *account* `external_key` belongs to — the normalized site
+    # base URL for Jira (see WorkspaceIntegration). Part of the primary key
+    # since migration 0032, because an issue key is unique per site and not per
+    # provider: two tenants each running a project keyed "PZ" both produce
+    # "PZ-1". Empty only on rows mirrored before that migration, which is a
+    # value no configured account can ever equal, so they no longer resolve.
+    account_key: str = ""
     external_key: str  # e.g. Jira issue key "PZ-42"
     external_url: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkspaceIntegration(BaseModel):
+    """One workspace's binding to one tracker *account*, with that account's own
+    webhook signing secret.
+
+    Its own row rather than a key inside `Workspace.integration_config` for the
+    same two reasons `RepoWebhook` is not a field on `Project`: `Workspace` is
+    serialized directly by several routes (`response_model=Workspace`), so a
+    ciphertext secret stored there could leak by accident, and
+    `(provider, account_key)` as a unique constraint makes the account →
+    workspace mapping unique *by construction* — which is precisely what
+    routing an inbound delivery on `(provider, external_key)` alone did not
+    guarantee.
+
+    `integration_config[provider]` keeps holding the non-secret settings
+    (`base_url`, `project_key`, `status_map`); only the account identity and the
+    secret live here.
+
+    Never returned by an API route.
+    """
+
+    workspace_id: str
+    provider: str  # "jira" | "clickup"
+    # The normalized provider account: scheme + lowercased host, no trailing
+    # slash (app/integrations/account.py::normalize_account_key). Never empty.
+    account_key: str
+    webhook_secret_ref: str  # ciphertext (app/secrets.py), never plaintext
+    created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
 

@@ -14,6 +14,7 @@ from app.integrations.clickup import ClickUpAdapter
 from app.integrations.jira import JiraAdapter
 from app.main import create_app
 from app.models.schemas import AcceptanceCriterion, Task, TaskStatus
+from tests._tracker import account_secret
 
 JIRA_CONFIG = {"base_url": "https://acme.atlassian.net", "project_key": "PZ"}
 
@@ -89,14 +90,16 @@ def test_clickup_adapter_conforms_to_interface():
 # --------------------------------------------------------------------------- #
 # End-to-end through the API
 # --------------------------------------------------------------------------- #
-JIRA_WEBHOOK_SECRET = "webhook-secret-please-change-0123456789"
+# There is no longer a process-wide JIRA_WEBHOOK_SECRET (plan 0019). The inbound
+# secret is minted per Jira site by `configure_integration` and held as
+# ciphertext, so a test that wants to sign a delivery has to read the site's own
+# secret back out of the repository — see `account_secret` below.
 
 
 @pytest.fixture
 def jira_client(monkeypatch) -> TestClient:
     monkeypatch.setenv("JIRA_EMAIL", "bot@acme.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "token-123")
-    monkeypatch.setenv("JIRA_WEBHOOK_SECRET", JIRA_WEBHOOK_SECRET)
     get_settings.cache_clear()
     app = create_app()
     with TestClient(app) as c:
@@ -140,7 +143,9 @@ def _bootstrap(client, monkeypatch):
     )
     assert link.status_code == 200, link.text
     assert link.json()["external_key"] == "PZ-1"
-    return pid
+    # Stamped from the workspace's own integration row, never from the caller.
+    assert link.json()["account_key"] == "https://acme.atlassian.net"
+    return ws["id"], pid
 
 
 def test_configure_integration_requires_admin(jira_client):
@@ -177,19 +182,23 @@ def test_configure_rejects_non_allowlisted_base_url(jira_client):
 
 
 def test_webhook_updates_only_pmo_fields(jira_client, monkeypatch):
-    pid = _bootstrap(jira_client, monkeypatch)
+    ws_id, pid = _bootstrap(jira_client, monkeypatch)
 
     # Jira says: assignee=Bob, status=Done. Only assignee (pmo) must land;
     # status (pz) must stay in_progress — proving the M3 boundary end-to-end.
+    # `issue.self` is what identifies the sending site (plan 0019 M2) and so
+    # which account's secret the signature is checked against.
     payload = {
         "webhookEvent": "jira:issue_updated",
         "issue": {
             "key": "PZ-1",
+            "self": "https://acme.atlassian.net/rest/api/3/issue/10001",
             "fields": {"assignee": {"displayName": "Bob"}, "status": {"name": "Done"}},
         },
     }
     raw = json.dumps(payload).encode()
-    sig = hmac.new(JIRA_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    secret = account_secret(jira_client, ws_id)
+    sig = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     res = jira_client.post(
         "/api/webhooks/jira",
         content=raw,
@@ -207,7 +216,17 @@ def test_webhook_updates_only_pmo_fields(jira_client, monkeypatch):
 
 def test_webhook_rejects_forged_signature(jira_client, monkeypatch):
     _bootstrap(jira_client, monkeypatch)
-    payload = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PZ-1", "fields": {}}}
+    # A *recognized* site with a bad signature, so this stays a test of
+    # signature verification rather than of account routing (which
+    # tests/test_tracker_account_identity.py covers).
+    payload = {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {
+            "key": "PZ-1",
+            "self": "https://acme.atlassian.net/rest/api/3/issue/10001",
+            "fields": {},
+        },
+    }
     raw = json.dumps(payload).encode()
     res = jira_client.post(
         "/api/webhooks/jira",
@@ -215,3 +234,31 @@ def test_webhook_rejects_forged_signature(jira_client, monkeypatch):
         headers={"X-Hub-Signature-256": "sha256=forged", "Content-Type": "application/json"},
     )
     assert res.status_code == 401
+    assert res.json()["detail"] == "invalid_signature"
+
+
+def test_providers_advertises_only_available_providers(jira_client):
+    """Plan 0019 M4 / finding 14: ClickUp is registered but has no credential or
+    account-identity path, so it must not be advertised as configurable."""
+    body = jira_client.get("/integrations/providers").json()
+    assert body["providers"] == ["jira"]
+
+
+def test_configuring_an_unavailable_provider_is_refused(jira_client):
+    ws = jira_client.post(
+        "/workspaces", json={"name": "W"}, headers={"X-User-Id": "alice"}
+    ).json()
+    res = jira_client.post(
+        f"/workspaces/{ws['id']}/integrations/clickup",
+        json={"base_url": "https://api.clickup.com", "project_key": "list-9"},
+        headers={"X-User-Id": "alice"},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"] == "provider_unavailable:clickup"
+    # An unknown name is still a 404, so a typo and a known gap stay distinct.
+    unknown = jira_client.post(
+        f"/workspaces/{ws['id']}/integrations/linear",
+        json={"base_url": "https://example.atlassian.net", "project_key": "PZ"},
+        headers={"X-User-Id": "alice"},
+    )
+    assert unknown.status_code == 404

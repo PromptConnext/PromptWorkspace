@@ -9,6 +9,6 @@ fields *out*; the tracker pushes `pmo` fields *in* via a `source="pmo"` upsert,
 so inbound writes can only ever touch pmo fields.
 """
 
-from app.integrations.registry import get_adapter, list_providers
+from app.integrations.registry import get_adapter, is_available, list_providers
 
-__all__ = ["get_adapter", "list_providers"]
+__all__ = ["get_adapter", "is_available", "list_providers"]
