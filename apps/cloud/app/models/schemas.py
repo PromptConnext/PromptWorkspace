@@ -367,6 +367,36 @@ class WorkspaceIntegration(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class TrackerIntegrationOut(BaseModel):
+    """What an admin sees after binding a workspace to a tracker account.
+
+    `webhook_secret` is plaintext and is populated on exactly two responses:
+    the one that *mints* a secret (a first bind, or a rebind to a different
+    account) and an explicit rotate. Every other response — a re-save of the
+    same account's settings, and every read anywhere in the API — leaves it
+    `None`. This is the one-time-reveal pattern, and the reason it exists is
+    that Jira's own webhook UI works the same way: the admin pastes the secret
+    into Jira by hand, and Atlassian likewise never shows it again ("You can't
+    retrieve your secret after you generate it - if you lose it, you have to
+    get a new one"). Unlike GitHub, the cloud cannot register a Jira webhook on
+    the admin's behalf — that needs a Connect/OAuth app, not the API token this
+    integration authenticates with — so *something* has to be transcribed, and
+    a reveal that happens once beats a reveal route that answers forever.
+
+    `WorkspaceIntegration` itself is still never serialized by a route: this is
+    a separate, deliberately narrow projection of it, for the same reason
+    `RepoWebhook` is not a field on `Project`.
+    """
+
+    workspace_id: str
+    provider: str
+    account_key: str
+    webhook_secret: str | None = None
+    # Where the admin pastes that secret, and which header we read the digest
+    # from — spelled out because getting either wrong fails as a silent 401.
+    signature_header: str = ""
+
+
 class JiraIntegrationConfig(BaseModel):
     """Non-secret Jira settings stored on the workspace. The API token +
     webhook secret live in the server env, never here (ADR 0010 §5)."""

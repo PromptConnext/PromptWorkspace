@@ -163,6 +163,53 @@ def test_member_cannot_write_a_tracker_binding(
     assert rows[0]["webhook_secret_ref"] == _SECRET
 
 
+def test_member_cannot_plant_a_task_link(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """`account_key` is a tenant boundary now, so `pz_task_links` stops being
+    member-writable.
+
+    Before this migration, `0006_grants.sql` gave `authenticated` full DML here
+    and `0005_tracker_links.sql`'s policy tested workspace membership and
+    nothing else — so a member could POST a row into *their own* project naming
+    a victim's `account_key`. `_resolve_link`'s workspace check means the
+    planted row is dropped rather than acted on, so it was never a cross-tenant
+    write; but it still occupied the victim's (provider, account_key,
+    external_key) triple and suppressed their legitimate mirror. There is no
+    ownership predicate that would have caught it, because the row is in a
+    project the member genuinely belongs to. Revoking is the fix.
+    """
+    victim_site = "https://victim.atlassian.net"
+    planted = http.post(
+        f"{target.rest}/pz_task_links",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "task_id": fixture.task_id,
+            "project_id": fixture.project_id,
+            "provider": "jira",
+            "account_key": victim_site,
+            "external_key": "PZ-1",
+        },
+    )
+    _denied(planted)
+
+    # Reads go too — `revoke all` is not write-only.
+    read = http.get(
+        f"{target.rest}/pz_task_links",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    _denied(read)
+
+    check = http.get(
+        f"{target.rest}/pz_task_links",
+        headers=target.service_headers(),
+        params={"account_key": f"eq.{victim_site}", "select": "account_key"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member planted a link under another tenant's account"
+
+
 def test_task_links_are_keyed_by_account(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:

@@ -115,6 +115,20 @@ grant select, insert, update, delete on pz_workspace_integrations to service_rol
 -- the webhook path depend on.
 grant select, insert, update, delete on pz_task_links to service_role;
 
+-- ...and pz_task_links becomes service-only, exactly as the seven graph tables
+-- did in 0031. This is not tidying: `account_key` is, as of this migration, a
+-- tenant boundary the inbound webhook routes on, while the table's policy from
+-- 0005_tracker_links.sql:30-32 tests workspace membership and nothing else and
+-- 0006_grants.sql handed `authenticated` insert/update/delete outright. A
+-- member could therefore POST a row into their own project naming a *victim's*
+-- account_key. `_resolve_link`'s workspace check means the planted row is
+-- dropped rather than acted on, so it is not a cross-tenant write — but the
+-- planted row still occupies the victim's (provider, account_key, external_key)
+-- triple and suppresses their legitimate mirror. Only the server writes here;
+-- app/db/supabase_repository.py's _SERVICE_ONLY_TABLES is the paired change.
+revoke all on pz_task_links from authenticated;
+revoke all on pz_task_links from anon;
+
 alter table pz_workspace_integrations enable row level security;
 
 -- Mirrors pz_task_links' own policy in 0005_tracker_links.sql:27-32, narrowed

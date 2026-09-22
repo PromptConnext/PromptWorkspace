@@ -20,12 +20,20 @@ def normalize_account_key(url: str) -> str:
     """Reduce any URL on a provider account to that account's identity: scheme
     plus lowercased host, no port-less/trailing-slash variation, no path.
 
-    `https://Acme.atlassian.net/`, `https://acme.atlassian.net` and the
-    `issue.self` link `https://acme.atlassian.net/rest/api/3/issue/10002` all
-    normalize to `https://acme.atlassian.net`. Returns `""` for anything that is
-    not an absolute http(s) URL with a host — callers treat that as "no account
+    `https://Acme.atlassian.net/`, `https://acme.atlassian.net`,
+    `https://acme.atlassian.net:443` and the `issue.self` link
+    `https://acme.atlassian.net/rest/api/3/issue/10002` all normalize to
+    `https://acme.atlassian.net`. Returns `""` for anything that is not an
+    absolute http(s) URL with a host — callers treat that as "no account
     identity", never as a wildcard, and `pz_workspace_integrations.account_key`
     carries a `<> ''` check constraint so an empty key can never match a row.
+
+    The default port is dropped rather than kept, and that is not cosmetic: an
+    admin who saves `https://acme.atlassian.net:443` would otherwise get an
+    account_key no Jira payload can ever produce (Jira's `self` links are
+    port-less), so every delivery would fail to route — and a later re-save
+    without the port would look like a *different* account and silently rotate
+    the secret out from under the webhook already registered on the Jira side.
     """
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in ("http", "https"):
@@ -33,7 +41,9 @@ def normalize_account_key(url: str) -> str:
     host = (parsed.hostname or "").lower()
     if not host:
         return ""
-    netloc = f"{host}:{parsed.port}" if parsed.port else host
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port
+    netloc = host if port in (None, default_port) else f"{host}:{port}"
     return f"{parsed.scheme}://{netloc}"
 
 

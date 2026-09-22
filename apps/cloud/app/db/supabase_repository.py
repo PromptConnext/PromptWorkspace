@@ -138,12 +138,18 @@ _SERVICE_ONLY_TABLES = frozenset(
         "pz_agent_runs",
         "pz_stage_documents",
         "pz_discussions",
-        # Not a graph table, but the same posture for the same reason: migration
-        # 0032 hands `authenticated` a column-level SELECT on this table's
-        # non-secret columns and nothing else, so the server must reach it —
-        # including to write it, and including to read `webhook_secret_ref` —
-        # on the service-role client.
+        # Not graph tables, but the same posture for the same reason. Migration
+        # 0032 hands `authenticated` a column-level SELECT on
+        # pz_workspace_integrations' non-secret columns and nothing else, so the
+        # server must reach it — including to write it, and including to read
+        # `webhook_secret_ref` — on the service-role client. pz_task_links is
+        # revoked outright by the same migration, because its `account_key` is
+        # now a tenant boundary the webhook routes on and its only policy tested
+        # workspace membership: a member could otherwise plant a row naming
+        # another tenant's account and squat their (provider, account_key,
+        # external_key) triple.
         "pz_workspace_integrations",
+        "pz_task_links",
     }
 )
 

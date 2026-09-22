@@ -74,14 +74,26 @@ class _CountingSend:
         return {"key": self.key}
 
 
+class Site:
+    """One configured Jira site, from the admin's point of view."""
+
+    def __init__(self, workspace_id: str, project_id: str, secret: str) -> None:
+        self.workspace_id = workspace_id
+        self.project_id = project_id
+        # The plaintext the configure response revealed once — what a real admin
+        # pastes into Jira's webhook "Secret" field. Every delivery below signs
+        # with this rather than with anything read back out of the database, so
+        # the cases exercise the operator's actual path.
+        self.secret = secret
+
+
 def _site(
     client: TestClient, monkeypatch, user: dict, base_url: str, task_id: str = "t1"
-) -> tuple[str, str]:
+) -> Site:
     """One workspace bound to one Jira site, with one task mirrored to `PZ-1`.
 
     `task_id` is a parameter because task ids are globally unique in this schema
-    (`CrossProjectWrite`), so the two sites cannot both call their task `t1`.
-    Returns (workspace_id, project_id)."""
+    (`CrossProjectWrite`), so the two sites cannot both call their task `t1`."""
     ws = client.post("/workspaces", json={"name": base_url}, headers=user).json()
     pid = client.post(
         "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=user
@@ -106,6 +118,14 @@ def _site(
         headers=user,
     )
     assert cfg.status_code == 200, cfg.text
+    body = cfg.json()
+    assert body["account_key"] == base_url
+    # The one-time reveal. Without it the admin has nothing to paste into Jira
+    # and every inbound delivery 401s forever.
+    secret = body["webhook_secret"]
+    assert secret, f"configure revealed no webhook secret: {body}"
+    # And it is the secret actually stored, not a decorative one.
+    assert secret == account_secret(client, ws["id"])
 
     import app.api.integrations as integ
 
@@ -116,42 +136,49 @@ def _site(
     assert link.status_code == 200, link.text
     assert link.json()["external_key"] == ISSUE_KEY
     assert link.json()["account_key"] == base_url
-    return ws["id"], pid
+    return Site(ws["id"], pid, secret)
 
 
-def _two_sites(client: TestClient, monkeypatch):
+def _two_sites(client: TestClient, monkeypatch) -> tuple[Site, Site]:
     """Two workspaces, two Jira sites, one identical issue key.
 
     Owned by two different users so a leak would also be a cross-tenant leak,
     not merely a cross-project one.
     """
-    ws_a, pid_a = _site(client, monkeypatch, ALICE, SITE_A, task_id="task-a")
-    ws_b, pid_b = _site(client, monkeypatch, BOB, SITE_B, task_id="task-b")
-    assert pid_a != pid_b
+    a = _site(client, monkeypatch, ALICE, SITE_A, task_id="task-a")
+    b = _site(client, monkeypatch, BOB, SITE_B, task_id="task-b")
+    assert a.project_id != b.project_id
+    assert a.secret != b.secret
     # Distinct rows under the new three-column key, not one shared row.
     links = client.app.state.repository._task_links
     assert len(links) == 2, links
-    return (ws_a, pid_a), (ws_b, pid_b)
+    return a, b
 
 
-def _deliver(client: TestClient, signing_workspace_id: str, payload: dict, site: str):
-    """POST a webhook as `site`, signed with `signing_workspace_id`'s secret.
+def _deliver(client: TestClient, secret: str, payload: dict, site: str, header: str | None = None):
+    """POST a webhook as `site`, signed with `secret`.
 
     The two are separable on purpose: a case can claim to be site A while
     holding only site B's secret, which is the forgery the per-account secret
     has to refuse.
+
+    Signed into `X-Hub-Signature` by default — the header Jira Cloud actually
+    sends (WebSub's; the algorithm rides in the value as `sha256=<hex>`), not
+    GitHub's `X-Hub-Signature-256`.
     """
     payload = {
         **payload,
         "issue": {**payload["issue"], "self": f"{site}/rest/api/3/issue/10001"},
     }
     raw = json.dumps(payload).encode()
-    secret = account_secret(client, signing_workspace_id)
     sig = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     return client.post(
         "/api/webhooks/jira",
         content=raw,
-        headers={"X-Hub-Signature-256": f"sha256={sig}", "Content-Type": "application/json"},
+        headers={
+            header or "X-Hub-Signature": f"sha256={sig}",
+            "Content-Type": "application/json",
+        },
     )
 
 
@@ -171,21 +198,21 @@ def _issue_updated(assignee: str) -> dict:
 # 1. Two sites, identical issue keys, no cross-project update
 # --------------------------------------------------------------------------- #
 def test_identical_issue_keys_on_two_sites_do_not_cross_update(jira_client, monkeypatch):
-    (ws_a, pid_a), (ws_b, pid_b) = _two_sites(jira_client, monkeypatch)
+    a, b = _two_sites(jira_client, monkeypatch)
 
     # Site A's own delivery for its own PZ-1.
-    res = _deliver(jira_client, ws_a, _issue_updated("From site A"), SITE_A)
+    res = _deliver(jira_client, a.secret, _issue_updated("From site A"), SITE_A)
     assert res.status_code == 200, res.text
     assert res.json()["applied"] == 1
-    assert _assignee(jira_client, pid_a, ALICE) == "From site A"
-    assert _assignee(jira_client, pid_b, BOB) is None  # untouched
+    assert _assignee(jira_client, a.project_id, ALICE) == "From site A"
+    assert _assignee(jira_client, b.project_id, BOB) is None  # untouched
 
     # And the reverse: site B's delivery lands only on B.
-    res = _deliver(jira_client, ws_b, _issue_updated("From site B"), SITE_B)
+    res = _deliver(jira_client, b.secret, _issue_updated("From site B"), SITE_B)
     assert res.status_code == 200, res.text
     assert res.json()["applied"] == 1
-    assert _assignee(jira_client, pid_b, BOB) == "From site B"
-    assert _assignee(jira_client, pid_a, ALICE) == "From site A"  # still A's value
+    assert _assignee(jira_client, b.project_id, BOB) == "From site B"
+    assert _assignee(jira_client, a.project_id, ALICE) == "From site A"  # still A's value
 
 
 def test_site_a_secret_cannot_sign_for_site_b(jira_client, monkeypatch):
@@ -196,24 +223,28 @@ def test_site_a_secret_cannot_sign_for_site_b(jira_client, monkeypatch):
     mirrored first. Now the payload claims site B while holding site A's secret,
     and the signature is checked against *B's* key, so it fails.
     """
-    (ws_a, pid_a), (_ws_b, pid_b) = _two_sites(jira_client, monkeypatch)
-    res = _deliver(jira_client, ws_a, _issue_updated("Forged"), SITE_B)
+    a, b = _two_sites(jira_client, monkeypatch)
+    res = _deliver(jira_client, a.secret, _issue_updated("Forged"), SITE_B)
     assert res.status_code == 401
     assert res.json()["detail"] == "invalid_signature"
-    assert _assignee(jira_client, pid_a, ALICE) is None
-    assert _assignee(jira_client, pid_b, BOB) is None
+    assert _assignee(jira_client, a.project_id, ALICE) is None
+    assert _assignee(jira_client, b.project_id, BOB) is None
 
 
-def test_unconfigured_site_is_rejected_before_any_link_lookup(jira_client, monkeypatch):
+def test_unconfigured_site_is_dropped_before_any_link_lookup(jira_client, monkeypatch):
     """Route-before-verify, from the refused end.
 
     A payload whose host matches no `pz_workspace_integrations` row has no
-    secret to be checked against and no account to be attributed to, so it is
-    dropped with a 401 before `find_task_link_by_key` is ever called — the same
+    secret to be checked against and no account to be attributed to, so nothing
+    is trusted and `find_task_link_by_key` is never called — the same
     "unrecognized identity, untrusted payload" rule `github_webhook` applies to
     an unknown `repo_full_name`.
+
+    It is *acked*, not refused, for `github_webhook`'s reason: a delivery from
+    an unconfigured site is usually a hook a disconnected workspace left behind,
+    and a 401 makes Jira retry it on a backoff indefinitely.
     """
-    (ws_a, pid_a), (_ws_b, pid_b) = _two_sites(jira_client, monkeypatch)
+    a, b = _two_sites(jira_client, monkeypatch)
 
     called: list[tuple] = []
     repo = jira_client.app.state.repository
@@ -226,12 +257,12 @@ def test_unconfigured_site_is_rejected_before_any_link_lookup(jira_client, monke
     monkeypatch.setattr(repo, "find_task_link_by_key", _spy)
 
     # A third site nobody configured, signed with a secret it does hold — A's.
-    res = _deliver(jira_client, ws_a, _issue_updated("Intruder"), "https://site-c.atlassian.net")
-    assert res.status_code == 401
-    assert res.json()["detail"] == "unknown_tracker_account"
+    res = _deliver(jira_client, a.secret, _issue_updated("Intruder"), "https://site-c.atlassian.net")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"received": True, "matched": False}
     assert called == [], f"link lookup ran for an unrecognized account: {called}"
-    assert _assignee(jira_client, pid_a, ALICE) is None
-    assert _assignee(jira_client, pid_b, BOB) is None
+    assert _assignee(jira_client, a.project_id, ALICE) is None
+    assert _assignee(jira_client, b.project_id, BOB) is None
 
 
 def test_a_link_outliving_its_binding_is_not_reattributed(jira_client, monkeypatch):
@@ -246,26 +277,26 @@ def test_a_link_outliving_its_binding_is_not_reattributed(jira_client, monkeypat
     disconnect-tracker route to arrange this through the API, and the branch is
     otherwise unreachable from a test.
     """
-    ws_a, pid_a = _site(jira_client, monkeypatch, ALICE, SITE_A, task_id="task-a")
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A, task_id="task-a")
     repo = jira_client.app.state.repository
     # A stops using site A (the settings blob stays; only the binding goes).
-    repo._workspace_integrations.pop((ws_a, "jira"))
+    repo._workspace_integrations.pop((a.workspace_id, "jira"))
     # B picks it up, and is issued its own fresh secret.
     ws_b = jira_client.post("/workspaces", json={"name": "B"}, headers=BOB).json()["id"]
-    assert (
-        jira_client.post(
-            f"/workspaces/{ws_b}/integrations/jira",
-            json={"base_url": SITE_A, "project_key": PROJECT_KEY},
-            headers=BOB,
-        ).status_code
-        == 200
+    rebind = jira_client.post(
+        f"/workspaces/{ws_b}/integrations/jira",
+        json={"base_url": SITE_A, "project_key": PROJECT_KEY},
+        headers=BOB,
     )
+    assert rebind.status_code == 200, rebind.text
+    b_secret = rebind.json()["webhook_secret"]
+    assert b_secret and b_secret != a.secret
 
     # B's own, correctly signed delivery for what B believes is its PZ-1.
-    res = _deliver(jira_client, ws_b, _issue_updated("From site A, now B's"), SITE_A)
+    res = _deliver(jira_client, b_secret, _issue_updated("From site A, now B's"), SITE_A)
     assert res.status_code == 200, res.text
     assert res.json()["applied"] == 0, "B's delivery was applied to A's task"
-    assert _assignee(jira_client, pid_a, ALICE) is None
+    assert _assignee(jira_client, a.project_id, ALICE) is None
 
 
 def test_two_workspaces_cannot_bind_the_same_site(jira_client, monkeypatch):
@@ -285,21 +316,116 @@ def test_two_workspaces_cannot_bind_the_same_site(jira_client, monkeypatch):
     assert res.json()["detail"] == f"tracker_account_already_bound:{SITE_A}"
 
 
-def test_reconfiguring_the_same_site_keeps_its_secret(jira_client, monkeypatch):
-    """A saved settings change must not silently invalidate the webhook the
-    admin already registered on the Jira side."""
-    ws_a, _pid_a = _site(jira_client, monkeypatch, ALICE, SITE_A)
-    before = account_secret(jira_client, ws_a)
+def test_reconfiguring_the_same_site_keeps_its_secret_and_reveals_nothing(
+    jira_client, monkeypatch
+):
+    """The other half of one-time reveal.
+
+    A saved settings change must not silently invalidate the webhook the admin
+    already registered on the Jira side — and, because nothing was minted, the
+    response must not hand the secret out a second time. That is what makes the
+    reveal *one-time* rather than a reveal route wearing a POST's clothes.
+    """
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A)
     res = jira_client.post(
-        f"/workspaces/{ws_a}/integrations/jira",
+        f"/workspaces/{a.workspace_id}/integrations/jira",
         json={"base_url": f"{SITE_A}/", "project_key": PROJECT_KEY, "status_map": {}},
         headers=ALICE,
     )
     assert res.status_code == 200, res.text
-    assert account_secret(jira_client, ws_a) == before
+    assert res.json()["webhook_secret"] is None, "a re-save revealed the secret again"
+    assert a.secret not in res.text
+    # The stored secret is unchanged, so the already-registered hook still works.
+    assert account_secret(jira_client, a.workspace_id) == a.secret
+    assert _deliver(jira_client, a.secret, _issue_updated("still fine"), SITE_A).status_code == 200
     # The trailing slash normalizes away rather than creating a second account.
-    integration = jira_client.app.state.repository.get_workspace_integration(ws_a, "jira")
+    integration = jira_client.app.state.repository.get_workspace_integration(
+        a.workspace_id, "jira"
+    )
     assert integration.account_key == SITE_A
+
+
+@pytest.mark.parametrize("suffix", ["", "/", ":443", ":443/"])
+def test_default_port_and_trailing_slash_normalize_to_one_account(
+    jira_client, monkeypatch, suffix
+):
+    """`https://site-a.atlassian.net:443` must be the same account as the
+    port-less form. Jira's own `issue.self` links carry no port, so keeping one
+    would produce an account_key no delivery could ever match — and a later
+    re-save without it would look like a different account and rotate the secret
+    out from under the registered webhook."""
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A)
+    res = jira_client.post(
+        f"/workspaces/{a.workspace_id}/integrations/jira",
+        json={"base_url": f"{SITE_A}{suffix}", "project_key": PROJECT_KEY},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["account_key"] == SITE_A
+    assert res.json()["webhook_secret"] is None, f"{suffix!r} was treated as a new account"
+
+
+def test_rotate_issues_a_new_secret_and_retires_the_old(jira_client, monkeypatch):
+    """The recovery path for a lost or leaked secret.
+
+    There is deliberately no route that answers with a stored secret, and
+    `unique (provider, account_key)` means an admin cannot simply rebind the
+    same site to escape a lost one. Rotation is how you get out.
+    """
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A)
+    assert _deliver(jira_client, a.secret, _issue_updated("before"), SITE_A).status_code == 200
+
+    res = jira_client.post(
+        f"/workspaces/{a.workspace_id}/integrations/jira/webhook-secret/rotate", headers=ALICE
+    )
+    assert res.status_code == 200, res.text
+    rotated = res.json()["webhook_secret"]
+    assert rotated and rotated != a.secret
+    assert res.json()["account_key"] == SITE_A
+
+    # The new one verifies...
+    fresh = _deliver(jira_client, rotated, _issue_updated("after"), SITE_A)
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["applied"] == 1
+    # ...and the old one no longer does.
+    stale = _deliver(jira_client, a.secret, _issue_updated("stale"), SITE_A)
+    assert stale.status_code == 401
+    assert stale.json()["detail"] == "invalid_signature"
+    assert _assignee(jira_client, a.project_id, ALICE) == "after"
+
+
+def test_rotate_is_admin_only_and_needs_an_existing_binding(jira_client, monkeypatch):
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A)
+    assert (
+        jira_client.post(
+            f"/workspaces/{a.workspace_id}/integrations/jira/webhook-secret/rotate", headers=BOB
+        ).status_code
+        == 403
+    )
+    unbound = jira_client.post("/workspaces", json={"name": "U"}, headers=ALICE).json()["id"]
+    res = jira_client.post(
+        f"/workspaces/{unbound}/integrations/jira/webhook-secret/rotate", headers=ALICE
+    )
+    assert res.status_code == 404
+    assert res.json()["detail"] == "integration_not_configured"
+
+
+def test_jira_sends_x_hub_signature_not_the_github_spelling(jira_client, monkeypatch):
+    """Jira Cloud signs into `X-Hub-Signature` (WebSub); the algorithm rides in
+    the value as `sha256=<hex>`. This route used to read GitHub's
+    `X-Hub-Signature-256`, so a real delivery carried no signature the handler
+    could find and was refused every time. Both spellings are accepted now, and
+    the Jira one is the case that would have failed before."""
+    a = _site(jira_client, monkeypatch, ALICE, SITE_A)
+    jira = _deliver(jira_client, a.secret, _issue_updated("via websub"), SITE_A)
+    assert jira.status_code == 200, jira.text
+    assert jira.json()["applied"] == 1
+    legacy = _deliver(
+        jira_client, a.secret, _issue_updated("via github spelling"), SITE_A,
+        header="X-Hub-Signature-256",
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["applied"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -320,18 +446,18 @@ def test_identical_comment_ids_on_two_sites_produce_two_discussions(jira_client,
     getting comment `10001` used to produce the same `jira-comment-10001` — and
     the second delivery's upsert overwrote the first workspace's discussion row.
     """
-    (ws_a, pid_a), (ws_b, pid_b) = _two_sites(jira_client, monkeypatch)
+    a, b = _two_sites(jira_client, monkeypatch)
 
-    res_a = _deliver(jira_client, ws_a, _comment_created("10001", "A's comment"), SITE_A)
+    res_a = _deliver(jira_client, a.secret, _comment_created("10001", "A's comment"), SITE_A)
     assert res_a.status_code == 200, res_a.text
     assert res_a.json()["applied"] == 1
 
-    res_b = _deliver(jira_client, ws_b, _comment_created("10001", "B's comment"), SITE_B)
+    res_b = _deliver(jira_client, b.secret, _comment_created("10001", "B's comment"), SITE_B)
     assert res_b.status_code == 200, res_b.text
     assert res_b.json()["applied"] == 1
 
-    a = jira_client.get(f"/sync/projects/{pid_a}/graph", headers=ALICE).json()["discussions"]
-    b = jira_client.get(f"/sync/projects/{pid_b}/graph", headers=BOB).json()["discussions"]
+    a = jira_client.get(f"/sync/projects/{a.project_id}/graph", headers=ALICE).json()["discussions"]
+    b = jira_client.get(f"/sync/projects/{b.project_id}/graph", headers=BOB).json()["discussions"]
     assert len(a) == 1 and len(b) == 1
     assert a[0]["body"] == "A's comment"  # not overwritten by B's delivery
     assert b[0]["body"] == "B's comment"
@@ -343,12 +469,13 @@ def test_identical_comment_ids_on_two_sites_produce_two_discussions(jira_client,
 def test_comment_redelivery_is_still_idempotent_per_site(jira_client, monkeypatch):
     """The account_key in the id must not cost the determinism it was there
     for: the same site re-delivering the same comment still upserts one row."""
-    (ws_a, pid_a), _b = _two_sites(jira_client, monkeypatch)
-    first = _deliver(jira_client, ws_a, _comment_created("10001", "first"), SITE_A)
+    a, _b = _two_sites(jira_client, monkeypatch)
+    first = _deliver(jira_client, a.secret, _comment_created("10001", "first"), SITE_A)
     assert first.status_code == 200, first.text
-    again = _deliver(jira_client, ws_a, _comment_created("10001", "edited"), SITE_A)
+    again = _deliver(jira_client, a.secret, _comment_created("10001", "edited"), SITE_A)
     assert again.status_code == 200, again.text
-    rows = jira_client.get(f"/sync/projects/{pid_a}/graph", headers=ALICE).json()["discussions"]
+    graph = jira_client.get(f"/sync/projects/{a.project_id}/graph", headers=ALICE).json()
+    rows = graph["discussions"]
     assert len(rows) == 1
     assert rows[0]["body"] == "edited"
 

@@ -33,7 +33,7 @@ from app.models.schemas import (
     Discussion,
     GraphUpsertRequest,
     TaskLink,
-    Workspace,
+    TrackerIntegrationOut,
     WorkspaceIntegration,
     utcnow,
 )
@@ -43,8 +43,30 @@ from app.rag.source import RAG_NODE_TYPES
 logger = logging.getLogger("promptconnext.integrations")
 router = APIRouter(tags=["integrations"])
 
-# Provider-specific webhook signature headers.
-_SIGNATURE_HEADER = {"jira": "x-hub-signature-256", "clickup": "x-signature"}
+# Provider-specific webhook signature headers, most-canonical first.
+#
+# Jira Cloud sends `X-Hub-Signature`, not GitHub's `X-Hub-Signature-256`: the
+# header is WebSub's, and the algorithm travels in the *value* as
+# `sha256=<hex>` rather than in the header name (Atlassian, "Webhooks — Jira
+# Cloud platform": the signature is "formatted as `method=signature`, as
+# defined by WebSub"). This code read the GitHub name, which meant
+# `request.headers.get(...)` was None for every real Jira delivery and
+# `verify_signature` refused it — the inbound path could never have worked
+# against a real site, under the old shared secret or the new per-account one.
+# The `-256` spelling is still accepted because it costs nothing and some
+# senders (and this repo's own older tests) use it.
+_SIGNATURE_HEADERS = {
+    "jira": ("x-hub-signature", "x-hub-signature-256"),
+    "clickup": ("x-signature",),
+}
+
+
+def _signature_of(request: Request, provider: str) -> str | None:
+    for header in _SIGNATURE_HEADERS.get(provider, ()):
+        value = request.headers.get(header)
+        if value:
+            return value
+    return None
 
 
 def _validate_base_url(adapter, base_url: str) -> None:
@@ -77,7 +99,44 @@ def _outbound_auth(settings, provider: str) -> tuple | dict | None:
 # --------------------------------------------------------------------------- #
 # Configure
 # --------------------------------------------------------------------------- #
-@router.post("/workspaces/{workspace_id}/integrations/{provider}", response_model=Workspace)
+def _integration_out(
+    integration: WorkspaceIntegration, *, webhook_secret: str | None = None
+) -> TrackerIntegrationOut:
+    """Project a binding for the admin. `webhook_secret` is passed only by the
+    two call sites that just minted one; everything else leaves it None."""
+    return TrackerIntegrationOut(
+        workspace_id=integration.workspace_id,
+        provider=integration.provider,
+        account_key=integration.account_key,
+        webhook_secret=webhook_secret,
+        signature_header=_SIGNATURE_HEADERS.get(integration.provider, ("",))[0],
+    )
+
+
+def _mint_secret(request: Request, integration_fields: dict) -> tuple[WorkspaceIntegration, str]:
+    """A fresh secret, encrypted for storage and returned once in plaintext.
+
+    `require_rag()` guards the encryption itself, not the feature: with
+    DATA_BACKEND=supabase and no RAG_KEY_ENCRYPTION_KEY, `build_secret_store`
+    falls back to `MemorySecretStore`, which is base64 — reversible by anyone
+    who can read the row, and not encryption in any sense. A webhook signing
+    secret stored that way is a secret in name only, so this refuses rather
+    than storing one. Same guard, same reason, as the model-connection route
+    (app/api/assistant.py).
+    """
+    request.app.state.settings.require_rag()
+    plaintext = new_webhook_secret()
+    integration = WorkspaceIntegration(
+        **integration_fields,
+        webhook_secret_ref=request.app.state.secret_store.encrypt(plaintext),
+    )
+    return integration, plaintext
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/{provider}",
+    response_model=TrackerIntegrationOut,
+)
 def configure_integration(
     workspace_id: str,
     provider: str,
@@ -85,7 +144,7 @@ def configure_integration(
     request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> Workspace:
+) -> TrackerIntegrationOut:
     adapter = get_adapter(provider)
     if adapter is None:
         raise HTTPException(status_code=404, detail=f"unknown_provider:{provider}")
@@ -108,15 +167,15 @@ def configure_integration(
     existing = repo.get_workspace_integration(workspace_id, provider)
     if existing is not None and existing.account_key == account_key:
         # Re-saving settings for the same site keeps its secret, so the webhook
-        # already registered on the Jira side goes on validating. Only a change
-        # of account mints a new one.
+        # already registered on the Jira side goes on validating — and, because
+        # nothing was minted, this response reveals nothing. Only a change of
+        # account mints, and only a mint reveals.
         integration = existing.model_copy(update={"updated_at": utcnow()})
+        revealed: str | None = None
     else:
-        integration = WorkspaceIntegration(
-            workspace_id=workspace_id,
-            provider=provider,
-            account_key=account_key,
-            webhook_secret_ref=request.app.state.secret_store.encrypt(new_webhook_secret()),
+        integration, revealed = _mint_secret(
+            request,
+            {"workspace_id": workspace_id, "provider": provider, "account_key": account_key},
         )
     try:
         repo.upsert_workspace_integration(integration)
@@ -132,7 +191,57 @@ def configure_integration(
     # project_key, status_map). Only the account identity and the secret moved.
     merged = dict(ws.integration_config)
     merged[provider] = config
-    return repo.update_workspace(workspace_id, integration_config=merged)
+    repo.update_workspace(workspace_id, integration_config=merged)
+    return _integration_out(integration, webhook_secret=revealed)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/{provider}/webhook-secret/rotate",
+    response_model=TrackerIntegrationOut,
+)
+def rotate_webhook_secret(
+    workspace_id: str,
+    provider: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> TrackerIntegrationOut:
+    """Mint a replacement secret for an existing binding and reveal it once.
+
+    Needed because the reveal at configure time happens exactly once and there
+    is deliberately no route that answers with a stored secret. Without this,
+    an admin who lost the secret could only recover by unbinding and
+    rebinding — and `unique (provider, account_key)` makes that worse than it
+    sounds: the row would have to be deleted before the same site could be
+    claimed again, and there is no delete route either. Rotation is the
+    supported recovery path, and it is also how you respond to a suspected
+    leak. The previous secret stops verifying the moment this returns, so the
+    Jira-side webhook must be updated with the new one.
+    """
+    if get_adapter(provider) is None:
+        raise HTTPException(status_code=404, detail=f"unknown_provider:{provider}")
+    require_admin(repo, workspace_id, user)
+    existing = repo.get_workspace_integration(workspace_id, provider)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="integration_not_configured")
+
+    integration, revealed = _mint_secret(
+        request,
+        {
+            "workspace_id": workspace_id,
+            "provider": provider,
+            "account_key": existing.account_key,
+            "created_at": existing.created_at,
+        },
+    )
+    repo.upsert_workspace_integration(integration)
+    logger.info(
+        "rotated %s webhook secret for workspace %s account %s",
+        provider,
+        workspace_id,
+        existing.account_key,
+    )
+    return _integration_out(integration, webhook_secret=revealed)
 
 
 # --------------------------------------------------------------------------- #
@@ -263,8 +372,21 @@ async def tracker_webhook(
         else None
     )
     if integration is None:
+        # Acked, not refused — `github_webhook`'s shape for an unrecognized
+        # `repo_full_name`, and for its reason: a delivery from a site nobody
+        # has configured is usually a hook left behind by a disconnected
+        # workspace, not an attack, and answering 401 makes Jira retry it on a
+        # backoff forever. Nothing is trusted and nothing is looked up.
+        #
+        # This narrows, but does not close, the fact that a caller can still
+        # tell a configured site (401 on a bad signature) from an unconfigured
+        # one (200). That distinction is inherent to routing before verifying —
+        # the account has to be resolved before there is a key to check against
+        # — and `github_webhook` has exactly the same property. What made it
+        # worth acting on was the writable `account_key` on pz_task_links, which
+        # migration 0032 now revokes.
         logger.warning("tracker webhook for unknown %s account %r", provider, account_key)
-        raise HTTPException(status_code=401, detail="unknown_tracker_account")
+        return {"received": True, "matched": False}
 
     try:
         secret = request.app.state.secret_store.decrypt(integration.webhook_secret_ref)
@@ -276,7 +398,7 @@ async def tracker_webhook(
         )
         raise HTTPException(status_code=401, detail="invalid_signature") from None
 
-    signature = request.headers.get(_SIGNATURE_HEADER.get(provider, ""))
+    signature = _signature_of(request, provider)
     if not adapter.verify_signature(raw, signature, secret):
         raise HTTPException(status_code=401, detail="invalid_signature")
 
