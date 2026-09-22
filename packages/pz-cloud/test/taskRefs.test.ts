@@ -6,6 +6,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   branchNameForTask,
@@ -17,6 +19,77 @@ import {
   taskRefFromFeatureTag,
   taskRefsInSubject,
 } from "../src/taskRefs.ts";
+
+// The shared specification artifact (plan 0024 M1). This module is the
+// reference implementation, so these cases are what the engine's vendored
+// copy and the cloud's hand-written Python port are held to as well —
+// apps/engine/test/task-refs.test.ts and apps/cloud/tests/test_task_refs.py
+// read this same file. Prose: docs/contracts/task-ref-grammar.md.
+// Walked up from the working directory rather than resolved from the module's
+// own path: this package's tsconfig emits CommonJS (apps/vscode and apps/mcp
+// bundle it that way), so `import.meta.url` does not typecheck here even
+// though node runs the test as ESM. Walking also keeps the test working
+// whether it is invoked from this package or from the repository root.
+const CASES_REL = join("docs", "contracts", "task-ref-cases.json");
+
+function findCases(): string {
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = join(dir, CASES_REL);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error(`could not find ${CASES_REL} above ${process.cwd()}`);
+    dir = parent;
+  }
+}
+
+const CASES = findCases();
+
+type CaseTable = {
+  normalize: { name: string; tag: string | null; expect: string | null }[];
+  commits: {
+    name: string;
+    subject: string;
+    branch_name: string | null;
+    branch_ref: string | null;
+    expect: string[];
+    expect_server: string[];
+  }[];
+  collisions: { name: string; feature_tags: (string | null)[]; blocked: string[] }[];
+};
+
+const table = JSON.parse(readFileSync(CASES, "utf8")) as CaseTable;
+
+test("the shared case table is not silently empty", () => {
+  assert.ok(table.normalize.length > 0);
+  assert.ok(table.commits.length > 0);
+  assert.ok(table.collisions.length > 0);
+});
+
+for (const c of table.normalize) {
+  test(`contract/normalize: ${c.name}`, () => {
+    assert.equal(taskRefFromFeatureTag(c.tag), c.expect);
+    assert.equal(normalizeTaskRef(c.tag), c.expect);
+  });
+}
+
+for (const c of table.commits) {
+  test(`contract/commit: ${c.name}`, () => {
+    assert.equal(taskRefFromBranch(c.branch_name), c.branch_ref);
+    // This package is what the editor consumes, so `expect` — the answer for
+    // a caller that resolved a branch ref — is its row. `expect_server` is
+    // pinned too, because the asymmetry is a property of this same function
+    // called with null, not of a different grammar.
+    assert.deepEqual(refsForCommit(c.subject, c.branch_ref), c.expect);
+    assert.deepEqual(refsForCommit(c.subject, null), c.expect_server);
+  });
+}
+
+for (const c of table.collisions) {
+  test(`contract/collision: ${c.name}`, () => {
+    assert.deepEqual([...collidingRefs(c.feature_tags)].sort(), [...c.blocked].sort());
+  });
+}
 
 test("normalises padded and unpadded refs to the same key", () => {
   assert.equal(normalizeTaskRef("T001"), "T1");

@@ -3,6 +3,7 @@
   GET   /deployment-templates                          list the built-in templates
   PATCH /projects/{id}/deployment-config               admin — select a template
   GET   /projects/{id}/deployment                      member — status + live URL
+  POST  /projects/{id}/deployments/{id}/reattribute    admin — recompute one build
   POST  /projects/{id}/deployment/repair-webhook       admin — widen hook events
 
 Two authorization postures on purpose, and the split is the feature:
@@ -28,6 +29,7 @@ from pydantic import BaseModel
 from app.api._guards import require_admin, require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.attribution import freeze_build_tasks
 from app.deployments.preview_url import repo_full_name_from_url
 from app.deployments.registry import BUILTIN_TEMPLATES, get_template, template_files
 from app.integrations.deploy_providers import (
@@ -61,6 +63,13 @@ router = APIRouter(tags=["deployments"])
 # Terminal states: a deploy in any other state is still moving, and is what
 # the web app's poller counts to decide whether to keep polling.
 _TERMINAL_STATES = frozenset({"live", "failed", "inactive"})
+
+# How far back the reattribute endpoint will look for a build. There is no
+# list-deployments-by-id on the repository and adding one for a correction
+# path nobody reaches twice a year is not worth the interface; a hundred rows
+# is far past anything the Preview tab shows (ten) and past any build a human
+# is still arguing about.
+_REATTRIBUTE_SCAN_LIMIT = 100
 
 
 class CredentialFieldOut(BaseModel):
@@ -140,6 +149,15 @@ class DeploymentOut(BaseModel):
     # Frozen at terminal state (pz_deployment_tasks). Empty for a build still
     # in flight, and empty for a build whose tasks have since been deleted.
     tasks: list[BuildTaskOut] = []
+    # "uncomputed" | "frozen". `tasks` alone cannot tell a reader which of two
+    # very different facts an empty list means — "this build closed nothing"
+    # or "nobody ever worked out what this build closed". The second is the
+    # one that matters: _commits_in_build swallows every exception and falls
+    # back to the head commit alone, so a build frozen while the workspace PAT
+    # was broken is legitimately incomplete. An evidence chain whose gaps are
+    # invisible is not evidence, so the gap ships on the wire.
+    attribution_state: str
+    attributed_at: str | None = None
     created_at: str
     updated_at: str
 
@@ -196,6 +214,8 @@ def _deployment_out(
         # rendered as a dangling id: the record of what shipped survives, the
         # thing that no longer exists does not get a name.
         tasks=[tasks_by_id[task_id] for task_id in frozen if task_id in tasks_by_id],
+        attribution_state=row.attribution_state,
+        attributed_at=row.attributed_at.isoformat() if row.attributed_at else None,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -364,6 +384,95 @@ def get_deployment_status(
             if last_error
             else None
         ),
+    )
+
+
+class ReattributeOut(BaseModel):
+    """What the correction actually did, in the caller's terms."""
+
+    deployment_id: str
+    attribution_state: str
+    # Before and after, so an admin can see whether the retry was worth it
+    # rather than being told "done" and having to go and look.
+    previous_task_ids: list[str]
+    task_ids: list[str]
+    changed: bool
+
+
+@router.post(
+    "/projects/{project_id}/deployments/{deployment_id}/reattribute",
+    response_model=ReattributeOut,
+)
+async def reattribute_deployment(
+    project_id: str,
+    deployment_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> ReattributeOut:
+    """Recompute one build's frozen task set. The only thing that may.
+
+    A build's attribution is written once and never recomputed, because a
+    webhook redelivery rewriting what a reviewer relied on last Tuesday is the
+    defect plan 0024 M2 closes. That leaves exactly one case needing an
+    escape hatch, and this endpoint is named for it: attribution that froze
+    while the workspace PAT was missing or GitHub was unreachable, where
+    `_commits_in_build` swallowed the failure and fell back to the head commit
+    alone (app/deployments/attribution.py). The stored set is then honestly
+    incomplete, and no automatic path will ever widen it.
+
+    Admin-only, unlike the status read beside it. Reading which tasks are in a
+    build is the whole point of the feature and is membership-gated; *changing*
+    the record of what shipped is a correction to an audit trail, and the
+    person making it should be the same person who can change the deployment
+    configuration in the first place. A member who thinks a build is
+    mis-attributed asks an admin, which leaves a human in the loop where the
+    machine deliberately has none.
+
+    Idempotent in the way that matters: re-running it against a build whose
+    inputs have not changed recomputes the same set and reports
+    ``changed: false``.
+    """
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+
+    def find() -> Deployment | None:
+        # Scoped to this project on purpose: a deployment id from another
+        # workspace must 404 here rather than be corrected by an admin who has
+        # no business with it.
+        rows = repo.list_deployments(project_id, limit=_REATTRIBUTE_SCAN_LIMIT)
+        return next((r for r in rows if r.id == deployment_id), None)
+
+    if find() is None:
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+
+    previous = repo.list_deployment_tasks(deployment_id)
+    if not repo.clear_deployment_attribution(deployment_id):
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+
+    # Re-read: freeze_build_tasks returns early on a row that still says
+    # "frozen", and the copy fetched above was taken before the clear.
+    cleared = find()
+    if cleared is None:  # pragma: no cover - deleted between two reads
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+
+    task_ids = await freeze_build_tasks(request.app, repo, project, cleared)
+
+    after = find()
+    logger.info(
+        "reattributed deployment %s for project %s by %s: %d -> %d tasks",
+        deployment_id,
+        project_id,
+        user.id,
+        len(previous),
+        len(task_ids),
+    )
+    return ReattributeOut(
+        deployment_id=deployment_id,
+        attribution_state=after.attribution_state if after else "uncomputed",
+        previous_task_ids=previous,
+        task_ids=task_ids,
+        changed=previous != task_ids,
     )
 
 

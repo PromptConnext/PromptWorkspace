@@ -6,7 +6,10 @@ import type { DeploymentStatus } from "@/lib/types";
 
 afterEach(cleanup);
 
-function status(tasks: { id: string; title: string; ref: string | null }[]): DeploymentStatus {
+function status(
+  tasks: { id: string; title: string; ref: string | null }[],
+  attribution_state: "uncomputed" | "frozen" = "frozen",
+): DeploymentStatus {
   const deploy = {
     id: "d1",
     state: "live",
@@ -16,6 +19,8 @@ function status(tasks: { id: string; title: string; ref: string | null }[]): Dep
     run_url: "https://github.com/acme/rocket/actions/runs/1",
     frame_policy: "allow" as const,
     tasks,
+    attribution_state,
+    attributed_at: attribution_state === "frozen" ? new Date().toISOString() : null,
     created_at: new Date(Date.now() - 120_000).toISOString(),
     updated_at: new Date(Date.now() - 120_000).toISOString(),
   };
@@ -52,8 +57,27 @@ describe("BuildTasks", () => {
     expect(container.textContent).not.toContain("main");
   });
 
-  it("says so plainly when nothing is attributed", () => {
-    render(<BuildTasks status={status([])} />);
-    expect(screen.getByText(/no completed tasks/i)).toBeInTheDocument();
+  // Plan 0024 M3: an empty result and an uncomputed result are different
+  // facts and used to render as one sentence.
+  it("says a frozen build closed nothing", () => {
+    render(<BuildTasks status={status([], "frozen")} />);
+    expect(screen.getByText(/contains no completed tasks/i)).toBeInTheDocument();
+    expect(screen.queryByText(/haven't worked out/i)).not.toBeInTheDocument();
+  });
+
+  it("admits when it never worked out what the build contains", () => {
+    render(<BuildTasks status={status([], "uncomputed")} />);
+    expect(screen.getByText(/worked out which tasks are in this version/i)).toBeInTheDocument();
+    expect(screen.queryByText(/contains no completed tasks/i)).not.toBeInTheDocument();
+  });
+
+  it("does not list stale tasks for a build that was never attributed", () => {
+    // Defensive: if a row somehow carries task ids while still uncomputed,
+    // the honest answer is still "not worked out", not a half list.
+    render(
+      <BuildTasks status={status([{ id: "t1", title: "Add a retry", ref: "T1" }], "uncomputed")} />,
+    );
+    expect(screen.queryByText("Add a retry")).not.toBeInTheDocument();
+    expect(screen.getByText(/worked out which tasks are in this version/i)).toBeInTheDocument();
   });
 });

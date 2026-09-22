@@ -33,9 +33,23 @@ export function BuildTasks({
           {label} · {relativeTime(deploy.created_at)}
         </p>
       </header>
-      {deploy.tasks.length === 0 ? (
+      {/* Two empty states, because they are two different facts (plan 0024
+          M3). "This build closed nothing" is a complete answer. "Nobody ever
+          worked out what this build closed" is a hole in the evidence chain,
+          and it has a cause worth naming: attribution resolves the commit
+          range through the workspace's code-host token, and when that is
+          missing or the host is unreachable the server records what it can
+          and moves on rather than failing the webhook. Rendering both as one
+          sentence told a reviewer a gap was a zero. */}
+      {deploy.attribution_state !== "frozen" ? (
         <p className="mt-2 text-xs text-slate-500">
-          This version has no completed tasks recorded against it yet.
+          We haven&rsquo;t worked out which tasks are in this version. That usually means the
+          connection to the code host was unavailable when it published; an admin can record it
+          again.
+        </p>
+      ) : deploy.tasks.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-500">
+          This version contains no completed tasks.
         </p>
       ) : (
         <ul className="mt-3 flex flex-col gap-1">

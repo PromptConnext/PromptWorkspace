@@ -277,12 +277,46 @@ class Repository(abc.ABC):
     def get_latest_deployment(self, project_id: str) -> Deployment | None: ...
 
     @abc.abstractmethod
-    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
-        """Replace this build's frozen task set, order preserved.
+    def freeze_deployment_tasks(
+        self, deployment_id: str, task_ids: list[str], now: datetime
+    ) -> bool:
+        """Write this build's task set, once. Returns whether it wrote.
 
-        Replace rather than append: the resolver runs once per terminal state
-        and may run again after a reconciliation pass, and two passes must not
-        double the list."""
+        Freeze, not set. `False` means the deployment was already `frozen` (or
+        no longer exists) and nothing was touched — the normal, expected answer
+        to a webhook redelivery, not an error. Callers read the stored set back
+        rather than trusting the list they just computed, because on a `False`
+        the two can legitimately differ and the stored one is the record.
+
+        Three properties, all load-bearing, all required of every adapter:
+
+          * **Idempotent.** GitHub redelivers deliveries at will and the
+            reconciliation sweep re-visits terminal rows. A second pass must
+            not recompute — not because recomputing is expensive, but because
+            the graph may have changed underneath and rewriting what somebody
+            reviewed last Tuesday is the defect plan 0024 M2 closes.
+          * **Atomic.** The replace and the state stamp land together or not
+            at all. The previous shape issued a delete and an insert as two
+            calls, so a failure between them erased the record instead of
+            leaving it stale.
+          * **Ordered.** `position` preserves the caller's order so the
+            Preview tab's list reads the same way twice.
+
+        Replace rather than append is retained from the original contract, but
+        it is now a detail of the single write rather than a defence against a
+        second pass — there is no second pass.
+        """
+
+    @abc.abstractmethod
+    def clear_deployment_attribution(self, deployment_id: str) -> bool:
+        """Return a build to `uncomputed` so it can be attributed again.
+
+        The *only* way the frozen flag clears, and it exists for one named
+        case: attribution that froze while the workspace PAT was missing or
+        GitHub was unreachable, where the commit-range lookup was swallowed
+        and the set fell back to the head commit alone — honestly incomplete.
+        Reached solely from the admin-only reattribute endpoint, never from a
+        webhook or a sweep. Returns False when there is no such deployment."""
 
     @abc.abstractmethod
     def list_deployment_tasks(self, deployment_id: str) -> list[str]:
@@ -955,11 +989,21 @@ class InMemoryRepository(Repository):
         if existing is not None:
             # Preserve the original id and creation time: this is the same
             # deploy reporting again, not a new one.
+            #
+            # The attribution fields are preserved for a sharper reason: they
+            # are owned by freeze_deployment_tasks, not by the webhook payload
+            # this row was built from. Every caller constructs a fresh
+            # Deployment from the delivery, so without this a redelivery would
+            # write the model default ('uncomputed') straight over a frozen
+            # row and the next freeze would happily recompute — defeating the
+            # whole of plan 0024 M2 through the back door.
             deployment = deployment.model_copy(
                 update={
                     "id": existing.id,
                     "created_at": existing.created_at,
                     "updated_at": utcnow(),
+                    "attribution_state": existing.attribution_state,
+                    "attributed_at": existing.attributed_at,
                 }
             )
         by_key[deployment.external_key] = deployment
@@ -977,8 +1021,39 @@ class InMemoryRepository(Repository):
         rows = self.list_deployments(project_id, limit=1)
         return rows[0] if rows else None
 
-    def set_deployment_tasks(self, deployment_id: str, task_ids: list[str]) -> None:
+    def _find_deployment(self, deployment_id: str) -> Deployment | None:
+        """By id rather than by (project_id, external_key). The attribution
+        path only ever holds an id — it was handed a row, not a delivery."""
+        for by_key in self._deployments.values():
+            for row in by_key.values():
+                if row.id == deployment_id:
+                    return row
+        return None
+
+    def freeze_deployment_tasks(
+        self, deployment_id: str, task_ids: list[str], now: datetime
+    ) -> bool:
+        # The same guard the Postgres function enforces, deliberately
+        # duplicated rather than left to the production adapter's accident.
+        # Every test in apps/cloud/tests/ runs against this class, so a guard
+        # that lived only in SQL would be a contract no test could observe —
+        # which is how the unfrozen behaviour survived a green suite in the
+        # first place.
+        row = self._find_deployment(deployment_id)
+        if row is None or row.attribution_state == "frozen":
+            return False
         self._deployment_tasks[deployment_id] = list(task_ids)
+        row.attribution_state = "frozen"
+        row.attributed_at = now
+        return True
+
+    def clear_deployment_attribution(self, deployment_id: str) -> bool:
+        row = self._find_deployment(deployment_id)
+        if row is None:
+            return False
+        row.attribution_state = "uncomputed"
+        row.attributed_at = None
+        return True
 
     def list_deployment_tasks(self, deployment_id: str) -> list[str]:
         return list(self._deployment_tasks.get(deployment_id, []))

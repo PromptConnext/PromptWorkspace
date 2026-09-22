@@ -18,7 +18,14 @@ from app.db.merge import PLANNER_SEED_FIELDS
 from app.deployments.registry import WORKFLOW_PATH
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
-from app.models.schemas import DeploymentConfig, GraphUpsertRequest, RepoWebhook, Role, Task
+from app.models.schemas import (
+    DeploymentConfig,
+    GraphUpsertRequest,
+    RepoWebhook,
+    Role,
+    Task,
+    utcnow,
+)
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -788,7 +795,11 @@ def test_the_status_endpoint_names_the_tasks_in_each_build(client):
     )
     _post(client, "deployment_status", _deployment_status(project_id, state="success"))
     row = repository.get_latest_deployment(project_id)
-    repository.set_deployment_tasks(row.id, ["t1"])
+    # The webhook already froze this build (with nothing in it — there are no
+    # code artifacts here), so seeding a set means clearing first. That is the
+    # real correction path, not a test-only door.
+    repository.clear_deployment_attribution(row.id)
+    repository.freeze_deployment_tasks(row.id, ["t1"], utcnow())
 
     body = _status(client, project_id)
     assert body["last_deploy"]["tasks"] == [{"id": "t1", "title": "Add a retry", "ref": "T1"}]
@@ -798,7 +809,12 @@ def test_the_status_endpoint_names_the_tasks_in_each_build(client):
 def test_a_task_deleted_after_the_build_is_simply_omitted(client):
     _ws, project_id = _project(client)
     _post(client, "deployment_status", _deployment_status(project_id, state="success"))
-    row = client.app.state.repository.get_latest_deployment(project_id)
-    client.app.state.repository.set_deployment_tasks(row.id, ["gone"])
+    repository = client.app.state.repository
+    row = repository.get_latest_deployment(project_id)
+    repository.clear_deployment_attribution(row.id)
+    repository.freeze_deployment_tasks(row.id, ["gone"], utcnow())
     body = _status(client, project_id)
     assert body["last_deploy"]["tasks"] == []
+    # Frozen, and still frozen: "this build's tasks no longer exist" is not
+    # the same fact as "nobody worked out what this build contained".
+    assert body["last_deploy"]["attribution_state"] == "frozen"

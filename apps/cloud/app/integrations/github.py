@@ -1243,9 +1243,14 @@ class FakeGithubClient:
         return self.workflow_runs.get((repo, run_id))
 
     async def compare_commits(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        # Logged so a freeze test can assert the *absence* of a round trip:
+        # a redelivery against an already-frozen build must return the stored
+        # set without asking GitHub anything (plan 0024 M2).
+        self.call_log.append(f"compare_commits:{repo}:{base}...{head}")
         return list(self.comparisons.get((repo, base, head), []))
 
     async def list_commits(self, token: str, repo: str, sha: str, limit: int = 100) -> list[str]:
+        self.call_log.append(f"list_commits:{repo}:{sha}")
         return list(self.commit_lists.get((repo, sha), []))[:limit]
 
     async def verify_token(self, token: str, owner: str) -> TokenIdentity:

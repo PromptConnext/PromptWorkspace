@@ -527,6 +527,14 @@ class Deployment(BaseModel):
     # Measured server-side after a successful deploy: allow | deny | unknown.
     # The browser cannot read a cross-origin response header; the backend can.
     frame_policy: str | None = None
+    # uncomputed | frozen (migration 0033). Whether this build's task set in
+    # pz_deployment_tasks has been resolved yet — which is a different fact
+    # from the set being empty, and used to be indistinguishable from it. A
+    # frozen set is never recomputed: GitHub redelivers webhooks freely, and
+    # a redelivery must not rewrite what a reviewer already relied on. The
+    # only thing that clears this is the admin-only reattribute endpoint.
+    attribution_state: str = "uncomputed"
+    attributed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

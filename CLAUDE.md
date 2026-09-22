@@ -69,7 +69,7 @@ pnpm mcp         # apps/mcp esbuild watch (stdio MCP server; run `login` once, t
 
 Browser-only UI iteration (no Rust compile): run `pnpm engine` in one terminal and `pnpm --dir apps/desktop dev` (Vite on `:1420`) in another.
 
-**Engine** (`apps/engine`) — Node ≥ 24 is a hard requirement (`node:sqlite`, native TS). No build step; test suite: `node --test test/*.test.ts`.
+**Engine** (`apps/engine`) — Node ≥ 24 is a hard requirement (`node:sqlite`, native TS). No build step; test suite: `node --test test/*.test.ts`. `src/git/taskRefs.ts` is a **vendored byte-for-byte copy** of `packages/pz-cloud/src/taskRefs.ts` (the engine sits outside the `packages/*` dependency graph), and `test/task-refs.test.ts` asserts it has not drifted — same pattern as `apps/vscode/src/git/git.d.ts`, with a test rather than a typecheck as the tripwire. Don't edit the copy; re-vendor it. The grammar itself is specified once in prose at `docs/contracts/task-ref-grammar.md` and as data at `docs/contracts/task-ref-cases.json`, which the engine, `packages/pz-cloud` and `apps/cloud` test suites all read — including the deliberate asymmetry that the editor attributes a commit from its feature branch and the server never does.
 
 **Cloud** (`apps/cloud`):
 
