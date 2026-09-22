@@ -446,15 +446,15 @@ Using Railway's default `*.up.railway.app` URL is fine to start; add `api.<domai
 
 ---
 
-## 6. CI/CD recommendations
+## 6. CI/CD
 
-Manual is fine now; when ready, GitHub Actions is the natural fit:
+**Shipped.** `.github/workflows/ci.yml` runs on every `pull_request` and on `push` to `main`, gated by a computed path-diff so an unrelated change never runs an unrelated suite (a job-level `if:` reading a single `changes` job's output, not GitHub's workflow-level `paths:` filter, so one workflow can gate seven jobs individually). Seven jobs: `cloud` (`ruff check .` then `pytest`, plus the repository contract suite — see below), `engine`, `web`, `vscode`, `mcp`, `corp`, and `pz-cloud` (the shared library `apps/vscode` and `apps/mcp` both depend on — its own job exists so a change there is never invisible even if a consumer's path filter is narrower). `.github/workflows/cloud-contract.yml` is separate: it brings up a local Supabase stack (`supabase start` + `scripts/migrate.py apply`) and runs the `contract` and `rls` marked test suites — the only place the cloud's two Repository adapters (in-memory and Supabase) and the row-level-security grants are actually exercised against real Postgres — nightly, on demand, and on any change under `apps/cloud/app/db/**`, `apps/cloud/migrations/**`, or `apps/cloud/tests/{contract,rls}/**`.
 
-**Cloud (deploy on push to `main`, path-filtered to `apps/cloud/**`):** run `pytest` + `ruff`, then `railway up --service promptconnext-cloud` using a `RAILWAY_TOKEN` secret. Gate the production environment behind a manual approval (GitHub Environments).
+Neither workflow deploys. `railway up`/`vercel deploy` behind a manual approval gate (GitHub Environments) remains **not yet built** — Railway's own git-push auto-deploy and Vercel's own git integration are what actually ships `apps/cloud`/`apps/web`/`apps/corp` today; CI is verification only.
 
-**Desktop (release on tag `v*`):** matrix build — `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 with the S3 action/CLI (secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`) → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists.
+**Desktop (release on tag `v*`):** unchanged from before CI existed — `.github/workflows/desktop-build.yml`, matrix `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists. (`apps/desktop-theia`'s and its spike's CI workflows are retired — see the Layout section's notice in `CLAUDE.md` — but `apps/desktop-theia` itself is not yet deleted; don't confuse the two.)
 
-**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job. One migration inverts that rule — **0031 must be applied after the code deploy, not before** (§2.2 has the sequence and the reason). A pre-deploy job that applied everything pending would take production down on the deploy that first carries it, so whatever automates this eventually has to be able to hold a migration back until the rollout completes.
+**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job. Two migrations invert that rule — **0031 and 0032 must be applied after the code deploy, not before** (§2.2 has the sequence and the reason for each). A pre-deploy job that applied everything pending would take production down on the deploy that first carries either of them, so whatever automates this eventually has to be able to hold a migration back until the rollout completes — not just skip ahead to "whatever's pending."
 
 ---
 
