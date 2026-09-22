@@ -14,6 +14,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.merge import PLANNER_SEED_FIELDS
 from app.deployments.registry import WORKFLOW_PATH
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
@@ -783,6 +784,7 @@ def test_the_status_endpoint_names_the_tasks_in_each_build(client):
             ]
         ),
         source="pz",
+        seed_fields=PLANNER_SEED_FIELDS,  # the plan's reference, as the Planner writes it
     )
     _post(client, "deployment_status", _deployment_status(project_id, state="success"))
     row = repository.get_latest_deployment(project_id)

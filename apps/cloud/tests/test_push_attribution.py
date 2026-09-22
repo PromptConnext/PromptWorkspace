@@ -15,6 +15,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.merge import PLANNER_SEED_FIELDS
 from app.main import create_app
 from app.models.schemas import GraphUpsertRequest, RepoWebhook, Task, TaskStatus
 
@@ -45,6 +46,10 @@ def _project(client: TestClient) -> str:
             secret_ref=client.app.state.secret_store.encrypt(SECRET),
         )
     )
+    # Tasks carrying a plan reference, as the Planner writes them: `feature_tag`
+    # is declared to the tracker domain, so only a caller naming it in
+    # `seed_fields` may author it at creation (app/db/merge.py) — a graph push
+    # cannot, which is what stops a member forging attribution.
     repository.upsert_graph(
         project["id"],
         GraphUpsertRequest(
@@ -54,6 +59,7 @@ def _project(client: TestClient) -> str:
             ]
         ),
         source="pz",
+        seed_fields=PLANNER_SEED_FIELDS,
     )
     return project["id"]
 
@@ -135,6 +141,39 @@ def test_a_push_to_another_branch_is_ignored(client):
     project_id = _project(client)
     _push(client, [_commit("aaa111", "feat: T12")], ref="refs/heads/spike")
     assert client.app.state.repository.get_graph(project_id).artifacts == []
+
+
+def test_a_graph_push_cannot_forge_a_task_reference(client):
+    """Attribution is by reference: a commit saying "T12" is attributed to
+    whichever task carries that `feature_tag`. A member who could seed one on a
+    task of their own would capture another task's commits, or claim a reference
+    no real task holds — so only the Planner's writer may author the field, and
+    a push that tries has it dropped and reported (plan 0015, review round 2)."""
+    project_id = _project(client)
+    res = client.put(
+        f"/sync/projects/{project_id}/graph",
+        json={
+            "tasks": [
+                {
+                    "id": "forged",
+                    "project_id": project_id,
+                    "title": "Mine",
+                    "feature_tag": "T012",
+                }
+            ]
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert "feature_tag" in res.json()["conflicts"]["forged"]  # refused, not silent
+
+    forged = client.app.state.repository.get_task(project_id, "forged")
+    assert forged is not None and forged.feature_tag is None
+
+    # And the real task still owns the reference.
+    _push(client, [_commit("aaa111", "feat: add a retry T12")])
+    artifacts = client.app.state.repository.get_graph(project_id).artifacts
+    assert [(a.task_id, a.commit_sha) for a in artifacts] == [("t1", "aaa111")]
 
 
 def test_a_ref_no_task_carries_is_skipped(client):

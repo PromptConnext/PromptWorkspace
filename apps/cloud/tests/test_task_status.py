@@ -243,3 +243,275 @@ def test_status_patch_does_not_clobber_assignment(client):
     assert res.status_code == 200, res.text
     assert res.json()["assigned_user_id"] == "bob"
     assert _get_task(client, project["id"], task_id)["assigned_user_id"] == "bob"
+
+
+# --------------------------------------------------------------------------- #
+# The same rules at the other door (plan 0015 M4)
+# --------------------------------------------------------------------------- #
+# `PUT /sync/projects/{id}/graph` writes `status` too, so the rules above are
+# only real if the full-graph push refuses what this route refuses — and refuses
+# it with the *same* detail. A divergence between the two doors then shows up
+# here as a literal string mismatch rather than as a passing test.
+def _push(client, project_id, user, task, source=None):
+    body = {"tasks": [task]}
+    if source is not None:
+        body["source"] = source
+    return client.put(
+        f"/sync/projects/{project_id}/graph", json=body, headers={"X-User-Id": user}
+    )
+
+
+def _task_payload(project_id, task_id, **fields):
+    task = {"id": task_id, "project_id": project_id, "title": "Build login form"}
+    task.update(fields)
+    return task
+
+
+def test_graph_push_cannot_set_verified_without_admin(client):
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "bob",
+        _task_payload(project["id"], task_id, status="verified"),
+    )
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "verified_requires_admin"  # identical to the PATCH
+    assert _get_task(client, project["id"], task_id)["status"] == "todo"
+
+
+def test_graph_push_declaring_source_pmo_cannot_launder_a_verified_status(client):
+    """The request body used to pick its own authority domain; either value it
+    could pick now buys it nothing (plan 0015 M2)."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "bob",
+        _task_payload(project["id"], task_id, status="verified"),
+        source="pmo",
+    )
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "verified_requires_admin"
+    assert _get_task(client, project["id"], task_id)["status"] == "todo"
+
+
+def test_graph_push_cannot_close_someone_elses_task(client):
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        _task_payload(project["id"], task_id, status="implemented"),
+    )
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "status_forbidden"  # identical to the PATCH
+    assert _get_task(client, project["id"], task_id)["status"] == "todo"
+
+
+def test_graph_push_cannot_author_verified_on_a_task_it_creates(client):
+    """The gate reads the payload, not the stored row, so inventing a fresh id
+    is not a way around it (the first-write half of plan 0015 M3)."""
+    _ws_, project, _task_id = _setup(client)
+
+    res = _push(
+        client,
+        project["id"],
+        "bob",
+        _task_payload(project["id"], "task-new", status="verified", assigned_user_id="bob"),
+    )
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "verified_requires_admin"
+    assert [t["id"] for t in _graph(client, project["id"])["tasks"]] == ["task-1"]
+
+
+def test_graph_push_that_leaves_status_alone_is_still_accepted(client):
+    """The compatibility window plan 0015 M1 keeps open: an ordinary snapshot
+    push echoes the stored status and must not 403 for it."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        _task_payload(project["id"], task_id, status="todo"),
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_graph_push_cannot_forge_closure_evidence_on_someone_elses_task(client):
+    """An Artifact is the record that says a commit closed a task (ADR 0022), and
+    `set_task_status` writes one only under the status rule above. The graph door
+    writes Artifacts and AgentRuns too, so it answers the same way."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    forged = client.put(
+        f"/sync/projects/{project['id']}/graph",
+        json={
+            "artifacts": [
+                {
+                    "id": "a1",
+                    "project_id": project["id"],
+                    "task_id": task_id,
+                    "kind": "pr",
+                    "uri": "https://example.invalid/pr/1",
+                    "commit_sha": "f" * 40,
+                }
+            ]
+        },
+        headers={"X-User-Id": "carol"},
+    )
+    assert forged.status_code == 403, forged.text
+    assert forged.json()["detail"] == "status_forbidden"  # identical to the PATCH
+
+    runs = client.put(
+        f"/sync/projects/{project['id']}/graph",
+        json={
+            "agent_runs": [
+                {
+                    "id": "r1",
+                    "project_id": project["id"],
+                    "task_id": task_id,
+                    "action": "implement",
+                    "status": "succeeded",
+                    "evidence": {"commit": "f" * 40},
+                }
+            ]
+        },
+        headers={"X-User-Id": "carol"},
+    )
+    assert runs.status_code == 403, runs.text
+
+    graph = _graph(client, project["id"])
+    assert graph["artifacts"] == []
+    assert graph["agent_runs"] == []
+
+
+def test_the_assignee_may_still_push_their_own_evidence(client):
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = client.put(
+        f"/sync/projects/{project['id']}/graph",
+        json={
+            "artifacts": [
+                {
+                    "id": "a1",
+                    "project_id": project["id"],
+                    "task_id": task_id,
+                    "kind": "code",
+                    "uri": "git: T1",
+                    "commit_sha": "a" * 40,
+                }
+            ]
+        },
+        headers={"X-User-Id": "bob"},
+    )
+    assert res.status_code == 200, res.text
+    assert len(_graph(client, project["id"])["artifacts"]) == 1
+
+
+def test_evidence_for_a_task_created_in_the_same_push_is_allowed(client):
+    """The engine's snapshot carries a task and its artifacts together, and a
+    task being created has no assignee to usurp."""
+    _ws_, project, _task_id = _setup(client)
+
+    res = client.put(
+        f"/sync/projects/{project['id']}/graph",
+        json={
+            "tasks": [_task_payload(project["id"], "task-new")],
+            "artifacts": [
+                {
+                    "id": "a2",
+                    "project_id": project["id"],
+                    "task_id": "task-new",
+                    "kind": "code",
+                    "uri": "git: new",
+                    "commit_sha": "b" * 40,
+                }
+            ],
+        },
+        headers={"X-User-Id": "bob"},
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_graph_push_cannot_tombstone_someone_elses_task(client):
+    """The graph push is the only delete door in the system — there is no
+    dedicated route to compare against, so the rule is the status rule."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        _task_payload(project["id"], task_id, deleted_at="2026-09-22T00:00:00Z"),
+    )
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "delete_forbidden"
+    assert [t["id"] for t in _graph(client, project["id"])["tasks"]] == [task_id]
+
+
+def test_a_push_that_omits_acceptance_criteria_does_not_clear_them(client):
+    """A full model dump carries every field at its default, so an omitted
+    `acceptance_criteria` was written as `[]` — a non-assignee member deleting
+    what somebody else's task was required to satisfy, with no audit trail, by
+    sending a minimal payload. Nothing in the old gate saw a write at all,
+    because the payload's status matched the stored one."""
+    criteria = [{"text": "Rejects a bad password"}, {"text": "Locks after 5 tries"}]
+    _ws_, project, task_id = _setup(client, criteria=criteria)
+    _assign(client, project["id"], task_id, "bob")
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        {"id": task_id, "project_id": project["id"], "title": "Build login form"},
+    )
+    assert res.status_code == 200, res.text
+
+    pulled = _get_task(client, project["id"], task_id)
+    assert [c["text"] for c in pulled["acceptance_criteria"]] == [
+        "Rejects a bad password",
+        "Locks after 5 tries",
+    ]
+
+
+def test_a_push_that_omits_status_does_not_reset_it(client):
+    """The twin of the case above, and the reason the gate reads
+    `model_fields_set` rather than the dump: an omitted `status` is neither a
+    write to refuse nor a value to store — it used to be both, in turn."""
+    _ws_, project, task_id = _setup(client)
+    _assign(client, project["id"], task_id, "bob")
+    assert _set_status(client, project["id"], task_id, "implemented", user="bob").status_code == 200
+
+    res = _push(
+        client,
+        project["id"],
+        "carol",
+        {"id": task_id, "project_id": project["id"], "title": "Build login form"},
+    )
+    assert res.status_code == 200, res.text
+    assert _get_task(client, project["id"], task_id)["status"] == "implemented"
+
+
+def test_an_admin_may_still_set_verified_through_a_graph_push(client):
+    _ws_, project, task_id = _setup(client)
+
+    res = _push(
+        client,
+        project["id"],
+        "alice",
+        _task_payload(project["id"], task_id, status="verified"),
+    )
+    assert res.status_code == 200, res.text
+    assert _get_task(client, project["id"], task_id)["status"] == "verified"

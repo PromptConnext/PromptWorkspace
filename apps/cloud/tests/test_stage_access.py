@@ -126,3 +126,65 @@ def test_an_admin_may_author_the_plan(client: TestClient, project: str):
     )
 
     assert res.status_code == 200, res.text
+
+
+# --------------------------------------------------------------------------- #
+# The same rule at the other door (plan 0015 M4)
+# --------------------------------------------------------------------------- #
+# A `spec_documents` row *is* the `plan` stage's graph projection (the inverse of
+# app/generation/stage_apply.py's PROJECTION_NODE_TYPE), so writing one through
+# `PUT /sync/projects/{id}/graph` is authoring `plan` by another route. It has to
+# refuse the same caller the stage-document PATCH refuses, with the same detail.
+def _push_graph(client: TestClient, project: str, body: dict, headers: dict):
+    return client.put(f"/sync/projects/{project}/graph", json=body, headers=headers)
+
+
+def _spec_document(project: str) -> dict:
+    return {
+        "spec_documents": [
+            {
+                "id": "s1",
+                "project_id": project,
+                "requirement_id": "r1",
+                "content": "# Plan",
+            }
+        ]
+    }
+
+
+def test_a_member_cannot_author_the_plan_through_a_graph_push(client: TestClient, project: str):
+    res = _push_graph(client, project, _spec_document(project), BOB)
+
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "admin_required"
+    assert client.get(f"/sync/projects/{project}/graph", headers=BOB).json()["spec_documents"] == []
+
+
+def test_declaring_source_pmo_does_not_unlock_the_plan_stage(client: TestClient, project: str):
+    body = _spec_document(project) | {"source": "pmo"}
+
+    res = _push_graph(client, project, body, BOB)
+
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "admin_required"
+
+
+def test_an_admin_may_author_the_plan_through_a_graph_push(client: TestClient, project: str):
+    res = _push_graph(client, project, _spec_document(project), ALICE)
+
+    assert res.status_code == 200, res.text
+
+
+def test_a_member_may_still_push_the_specification_through_the_graph(
+    client: TestClient, project: str
+):
+    """`specify` is not admin-only, and a requirement is its projection — the
+    graph gate must not over-reach into the stages a member owns."""
+    res = _push_graph(
+        client,
+        project,
+        {"requirements": [{"id": "r1", "project_id": project, "title": "Log in"}]},
+        BOB,
+    )
+
+    assert res.status_code == 200, res.text

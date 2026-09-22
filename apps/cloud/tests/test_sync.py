@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from app.models.schemas import utcnow
+from app.models.schemas import GraphUpsertRequest, Task, TaskStatus, utcnow
 
 
 def _create_workspace(client, name="WS", user="alice"):
@@ -170,37 +170,87 @@ def test_graph_pull_keyset_pagination(client):
 # Milestone 3 — per-field conflict ownership (end-to-end through the API)
 # --------------------------------------------------------------------------- #
 def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
+    """The pmo writer is the tracker mirror, and it writes in-process.
+
+    It used to be reachable by putting `"source": "pmo"` in a push body, which is
+    the bypass plan 0015 M2 closed — a member could then write tracker-exclusive
+    fields with no tracker credential. The domain now comes from the code path:
+    the HTTP route is always "pz"; only `tracker_webhook`, behind a verified
+    signature, calls `upsert_graph(source="pmo")`.
+    """
     project = _create_project(client)
     pid = project["id"]
     headers = {"X-User-Id": "alice"}
 
-    # PromptConnext (default source="pz") sets an agent-driven status.
+    # PromptConnext (the HTTP push, always "pz") sets an agent-driven status.
     client.put(
         f"/sync/projects/{pid}/graph",
         json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "in_progress"}]},
         headers=headers,
     )
-    # An external tracker (source="pmo") tries to overwrite status (a pz field)
-    # and set assignee (a pmo field) in the same push.
-    client.put(
-        f"/sync/projects/{pid}/graph",
-        json={
-            "source": "pmo",
-            "tasks": [
-                {
-                    "id": "t1",
-                    "project_id": pid,
-                    "title": "X",
-                    "status": "verified",
-                    "assignee": "alice",
-                }
-            ],
-        },
-        headers=headers,
+    # The external tracker tries to overwrite status (a pz field) and set
+    # assignee (a pmo field) in the same write.
+    client.app.state.repository.upsert_graph(
+        pid,
+        GraphUpsertRequest(
+            tasks=[
+                Task(
+                    id="t1",
+                    project_id=pid,
+                    title="X",
+                    status=TaskStatus.verified,
+                    assignee="alice",
+                )
+            ]
+        ),
+        source="pmo",
     )
     task = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()["tasks"][0]
     assert task["status"] == "in_progress"  # pz field untouched by pmo
     assert task["assignee"] == "alice"  # pmo owns assignee
+
+
+def test_a_push_naming_another_projects_entity_is_refused(client):
+    """Entity ids are client-supplied, so a push can name a row it does not own.
+    Taking it would relocate that row into this project (plan 0015, review round
+    2); the repository refuses and the route says so rather than 500ing. The
+    cross-adapter statement of the same rule is tests/contract/
+    test_project_scoping.py — this asserts the HTTP answer."""
+    ws = _create_workspace(client)
+    headers = {"X-User-Id": "alice"}
+    project_a = _create_project(client, name="A", workspace_id=ws["id"])
+    project_b = _create_project(client, name="B", workspace_id=ws["id"])
+
+    client.put(
+        f"/sync/projects/{project_a['id']}/graph",
+        json={
+            "tasks": [
+                {
+                    "id": "t1",
+                    "project_id": project_a["id"],
+                    "title": "Theirs",
+                    "status": "implemented",
+                }
+            ]
+        },
+        headers=headers,
+    )
+
+    res = client.put(
+        f"/sync/projects/{project_b['id']}/graph",
+        json={"tasks": [{"id": "t1", "project_id": project_b["id"], "title": "Mine now"}]},
+        headers=headers,
+    )
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "entity_belongs_to_another_project"
+
+    a_tasks = client.get(f"/sync/projects/{project_a['id']}/graph", headers=headers).json()[
+        "tasks"
+    ]
+    assert [(t["title"], t["status"]) for t in a_tasks] == [("Theirs", "implemented")]
+    assert client.get(f"/sync/projects/{project_b['id']}/graph", headers=headers).json()[
+        "tasks"
+    ] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -220,29 +270,35 @@ def test_losing_push_surfaces_conflicts_in_response(client):
     assert res_a.status_code == 200, res_a.text
     assert res_a.json()["conflicts"] == {}  # first write for t1, nothing dropped
 
-    # Push B: a pmo writer races on the SAME field ("status" is pz-owned) —
-    # this write is rejected by the ownership gate, not just LWW-staleness,
-    # but either way it must surface as a conflict rather than vanish silently.
+    # The tracker mirror owns `assignee` and sets it (in-process, as the
+    # signature-verified webhook does — an HTTP push can no longer declare
+    # itself a pmo writer, plan 0015 M2).
+    client.app.state.repository.upsert_graph(
+        pid,
+        GraphUpsertRequest(tasks=[Task(id="t1", project_id=pid, title="X", assignee="jane")]),
+        source="pmo",
+    )
+
+    # Push B: the pz writer races on the SAME field ("assignee" is pmo-owned) —
+    # this write is rejected by the ownership gate, not just LWW-staleness, but
+    # either way it must surface as a conflict rather than vanish silently.
     res_b = client.put(
         f"/sync/projects/{pid}/graph",
-        json={
-            "source": "pmo",
-            "tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "verified"}],
-        },
+        json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "assignee": "hijacked"}]},
         headers=headers,
     )
     assert res_b.status_code == 200, res_b.text
     body_b = res_b.json()
-    # The pmo push's full model dump also carries other pz-owned fields at
-    # their default values (e.g. spec_id, acceptance_criteria), which the
-    # ownership gate drops too — assert on the field under test rather than
-    # the exact set, so this stays robust to the Task schema's field list.
+    # The push's full model dump also carries other pmo-owned fields at their
+    # default values (e.g. sprint), which the ownership gate drops too — assert
+    # on the field under test rather than the exact set, so this stays robust to
+    # the Task schema's field list.
     assert "t1" in body_b["conflicts"]
-    assert "status" in body_b["conflicts"]["t1"]
+    assert "assignee" in body_b["conflicts"]["t1"]
 
     # The losing write really did lose (data loss is real, just now visible).
     task = client.get(f"/sync/projects/{pid}/graph", headers=headers).json()["tasks"][0]
-    assert task["status"] == "in_progress"
+    assert task["assignee"] == "jane"
 
 
 # --------------------------------------------------------------------------- #

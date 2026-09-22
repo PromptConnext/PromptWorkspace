@@ -2,15 +2,14 @@
 
 Finding 17 of the review, in two halves.
 
-*First write.* `merge_entity` (app/db/merge.py:65) runs the full ownership gate
-on an update (app/db/merge.py:100-119) but takes a first write wholesale — `if
-not stored:` (app/db/merge.py:90) copies every incoming field regardless of the
-writer's domain and only *filters the version stamps*. So a `pmo` writer that
-invents a new task id authors `status` and `acceptance_criteria` on creation,
-which the same writer could not do a millisecond later. Closing that gap is plan
-0015's M3 ("close the related first-write gap finding 17 names"); this suite
-only states the contract and marks the case xfail so the fix is what removes the
-marker.
+*First write.* `merge_entity` used to run the full ownership gate on an update
+but take a first write wholesale: the `if not stored:` branch copied every
+incoming field regardless of the writer's domain and only *filtered the version
+stamps*. So a `pmo` writer that invented a new task id authored `status` and
+`acceptance_criteria` on creation, which the same writer could not do a
+millisecond later. Plan 0015's M3 closed that gap (`_gate_creation`,
+app/db/merge.py), which is what removed this case's `xfail`; the assertions below
+are unchanged from the ones that pinned the bug.
 
 *Concurrent writers.* Both adapters merge outside any transaction:
 `SupabaseRepository.upsert_graph` reads (`_fetch_row`,
@@ -77,14 +76,6 @@ def _write_together(repo: Repository, project_id: str, task_id: str) -> None:
         raise errors[0]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "finding 17 / plan 0015 M3: merge_entity accepts a first write wholesale, "
-        "so a pmo writer authors pz-owned fields on creation. Shared by both "
-        "adapters — when plan 0015 closes the gate, delete this marker."
-    ),
-    strict=True,
-)
 def test_a_pmo_writer_cannot_author_pz_fields_on_creation(repo: Repository) -> None:
     ws, admin = h.workspace(repo)
     proj = h.project(repo, ws, admin)

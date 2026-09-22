@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.db.merge import merge_entity
-from app.models.schemas import FIELD_AUTHORITY, utcnow
+from app.db.merge import PLANNER_SEED_FIELDS, merge_entity
+from app.models.schemas import (
+    FIELD_AUTHORITY,
+    FIELD_DEFAULTS,
+    GraphUpsertRequest,
+    Task,
+    utcnow,
+)
 
 TASK_AUTH = FIELD_AUTHORITY["tasks"]
 
@@ -153,3 +159,130 @@ def test_dropped_empty_on_clean_first_write():
     now = utcnow()
     _, dropped = merge_entity(None, _row(status="todo"), TASK_AUTH, "pz", now)
     assert dropped == []
+
+
+# --------------------------------------------------------------------------- #
+# The first write is gated too (plan 0015 M3 / review finding 17)
+# --------------------------------------------------------------------------- #
+def test_a_pmo_first_write_cannot_author_a_pz_field():
+    """The gate an update applies, applied to the insert: inventing a new id was
+    a way to author a field the writer could not have changed a millisecond
+    later. A gated field falls back to its model default rather than being
+    dropped from the row, so every row in one batch keeps the same columns."""
+    now = utcnow()
+    merged, dropped = merge_entity(
+        None,
+        _row(status="verified", acceptance_criteria=[{"text": "mine"}], assignee="jane"),
+        TASK_AUTH,
+        "pmo",
+        now,
+        defaults=FIELD_DEFAULTS["tasks"],
+    )
+    assert merged["status"] == "todo"  # Task.status's default
+    assert merged["acceptance_criteria"] == []
+    assert sorted(dropped) == ["acceptance_criteria", "status"]
+    # What the writer does own survives, stamped; what it doesn't is unstamped.
+    assert merged["assignee"] == "jane"
+    assert merged["field_versions"]["assignee"]["source"] == "pmo"
+    assert "status" not in merged["field_versions"]
+
+
+def test_only_a_caller_that_names_a_seed_field_may_author_it_at_creation():
+    """`feature_tag` is declared "pmo" but carries the plan's task reference,
+    which the Planner writes at creation (app/generation/stage_apply.py's
+    `_apply_tasks`, and the push-attribution path reads it back). It is authored
+    only by a caller that names it — a graph push names nothing, so it cannot
+    forge a reference."""
+    now = utcnow()
+    planner, dropped = merge_entity(
+        None,
+        _row(feature_tag="T012 [P]", status="in_progress"),
+        TASK_AUTH,
+        "pz",
+        now,
+        defaults=FIELD_DEFAULTS["tasks"],
+        seed_fields=PLANNER_SEED_FIELDS,
+    )
+    assert planner["feature_tag"] == "T012 [P]"
+    assert planner["status"] == "in_progress"
+    assert dropped == []
+
+    pushed, dropped = merge_entity(
+        None,
+        _row(feature_tag="T012 [P]", status="in_progress"),
+        TASK_AUTH,
+        "pz",
+        now,
+        defaults=FIELD_DEFAULTS["tasks"],
+    )
+    assert pushed["feature_tag"] is None  # the model default, not the forged ref
+    assert dropped == ["feature_tag"]
+
+
+def test_a_first_write_with_no_default_map_still_gates():
+    """The gate fails closed: a caller that passes no defaults gets the key
+    dropped, never an ungated cross-domain write."""
+    now = utcnow()
+    merged, dropped = merge_entity(None, _row(status="verified"), TASK_AUTH, "pmo", now)
+    assert "status" not in merged
+    assert dropped == ["status"]
+
+
+def test_a_first_write_keeps_a_gated_field_that_has_no_default():
+    """A required field has no default to fall back to, so dropping it would
+    leave a row the model cannot construct. The value stands, unstamped — today
+    that is only `Artifact.uri`, and no pmo writer creates an artifact."""
+    now = utcnow()
+    merged, dropped = merge_entity(
+        None,
+        {"id": "a1", "project_id": "p1", "task_id": "t1", "uri": "git:abc"},
+        FIELD_AUTHORITY["artifacts"],
+        "pmo",
+        now,
+        defaults=FIELD_DEFAULTS["artifacts"],
+    )
+    assert merged["uri"] == "git:abc"
+    assert "uri" not in dropped
+    assert "uri" not in merged["field_versions"]
+
+
+# --------------------------------------------------------------------------- #
+# The writer's domain comes from the route, not the request body (plan 0015 M2)
+# --------------------------------------------------------------------------- #
+def test_push_graph_ignores_a_client_declared_source(client):
+    """`GraphUpsertRequest.source` used to be passed straight to the merge as
+    the caller's authority domain, which let any project member write
+    tracker-exclusive fields with no tracker credential. The field is still
+    accepted (an older engine binary sends it) and now means nothing."""
+    ws = client.post("/workspaces", json={"name": "W"}, headers={"X-User-Id": "alice"}).json()
+    project = client.post(
+        "/projects",
+        json={"name": "P", "workspace_id": ws["id"]},
+        headers={"X-User-Id": "alice"},
+    ).json()
+    pid = project["id"]
+
+    # The tracker mirror — the only writer that owns `assignee` — writes
+    # in-process, the way the signature-verified webhook does.
+    client.app.state.repository.upsert_graph(
+        pid,
+        GraphUpsertRequest(tasks=[Task(id="t1", project_id=pid, title="X", assignee="Jira Name")]),
+        source="pmo",
+    )
+
+    res = client.put(
+        f"/sync/projects/{pid}/graph",
+        json={
+            "source": "pmo",  # the claim
+            "tasks": [{"id": "t1", "project_id": pid, "title": "X", "assignee": "Hijacked"}],
+        },
+        headers={"X-User-Id": "alice"},
+    )
+    assert res.status_code == 200, res.text  # accepted, not a 422
+    assert "assignee" in res.json()["conflicts"]["t1"]  # and reported as dropped
+
+    task = client.get(f"/sync/projects/{pid}/graph", headers={"X-User-Id": "alice"}).json()[
+        "tasks"
+    ][0]
+    assert task["assignee"] == "Jira Name"
+    assert task["field_versions"]["assignee"]["source"] == "pmo"

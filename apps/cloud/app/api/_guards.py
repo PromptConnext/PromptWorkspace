@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app.db.repository import Repository
 from app.dependencies import User
-from app.models.schemas import Project, Role, Workspace
+from app.models.schemas import GraphUpsertRequest, Project, Role, TaskStatus, Workspace
 from app.observability import tag_workspace
 
 # Every authorised request passes through one of the three guards below, which
@@ -52,6 +52,131 @@ def require_stage_access(repo: Repository, project: Project, stage: str, user: U
     """Authorization for *authoring* a stage, on top of project membership."""
     if stage in ADMIN_ONLY_STAGES:
         require_admin(repo, project.workspace_id, user)
+
+
+# Which Spec Kit stage a graph entity type is the projection of — the inverse of
+# app/generation/stage_apply.py's PROJECTION_NODE_TYPE, declared here rather than
+# imported so the guards stay clear of the generation package (and its RAG
+# queue). A push of one of these entities *is* an authoring of that stage, by a
+# different door; keep the two maps in step.
+GRAPH_ENTITY_STAGE: dict[str, str] = {
+    "requirements": "specify",
+    "spec_documents": "plan",
+    "tasks": "tasks",
+}
+
+
+def _check_graph_write_permissions(
+    repo: Repository, project: Project, user: User, payload: GraphUpsertRequest
+) -> None:
+    """The single-field routes' authorization, applied to a full-graph push.
+
+    `PUT /sync/projects/{id}/graph` writes the same fields `set_task_status`,
+    `assign_task` and the stage-authoring routes write, so plan 0015 closes the
+    gap by making the weaker door refuse what the stronger ones refuse — and
+    refuse it with the *identical* `detail`, which is what the cross-endpoint
+    tests pin (a divergence then reads as a string mismatch, not a green test).
+    This lives beside `require_stage_access` so a fourth route onto the graph
+    imports the gate instead of re-deriving it.
+
+    Membership is `require_project`'s job and is assumed done; this is the role
+    layer on top of it. Only the assignee-membership rule applies to admins; the
+    rest are non-admin restrictions.
+
+    A field the writer never set is not a write at all (app/db/merge.py's
+    `_NEVER_IMPLICIT`), so every rule below reads `model_fields_set` rather than
+    the dump — otherwise an ordinary snapshot push, which carries every field at
+    its default, would be refused for fields it never meant to touch.
+    """
+    # Applies to everyone: `assign_task` refuses a target who is not a member of
+    # the task's workspace (400 assignee_not_a_member), and an admin going
+    # through the graph door must not be able to park a task on a non-member.
+    targets = {
+        task.assigned_user_id
+        for task in payload.tasks
+        if "assigned_user_id" in task.model_fields_set and task.assigned_user_id is not None
+    }
+    if targets and not targets <= {m.user_id for m in repo.list_members(project.workspace_id)}:
+        raise HTTPException(status_code=400, detail="assignee_not_a_member")
+
+    if repo.get_membership(project.workspace_id, user.id) == Role.admin:
+        return
+
+    # 1. Stage authoring. A `spec_documents` row is the `plan` stage's graph
+    #    projection, so pushing one authors `plan` — which ADMIN_ONLY_STAGES
+    #    reserves for the Tech Lead. Raises the same 403 admin_required the
+    #    stage-document PATCH and the generation route raise.
+    for entity_type, stage in GRAPH_ENTITY_STAGE.items():
+        if stage in ADMIN_ONLY_STAGES and getattr(payload, entity_type):
+            require_stage_access(repo, project, stage, user)
+
+    for task in payload.tasks:
+        stored = repo.get_task(project.id, task.id)
+        fields_set = task.model_fields_set
+        owns_it = stored is not None and stored.assigned_user_id == user.id
+
+        # 2. Status, in `set_task_status`'s order: a member acts only on a task
+        #    assigned to them, and `verified` is a review state no member may
+        #    reach at all. Only an actual change is a write — a snapshot push
+        #    that echoes the stored status must not be refused for it, and a task
+        #    being created has no assignee to usurp.
+        if "status" in fields_set and (stored is None or stored.status != task.status):
+            if stored is not None and not owns_it:
+                raise HTTPException(status_code=403, detail="status_forbidden")
+            if task.status == TaskStatus.verified:
+                raise HTTPException(status_code=403, detail="verified_requires_admin")
+
+        # 3. Tombstones. A graph push is the *only* delete door in the system, so
+        #    there is no dedicated route to mirror — but retiring somebody's task
+        #    is at least as destructive as closing it, and gets the same rule.
+        if "deleted_at" in fields_set and (stored is None or stored.deleted_at != task.deleted_at):
+            if stored is not None and not owns_it:
+                raise HTTPException(status_code=403, detail="delete_forbidden")
+
+        # 4. Assignment, in `assign_task`'s shape: self-assign or self-unassign
+        #    only.
+        if "assigned_user_id" not in fields_set:
+            continue
+        target = task.assigned_user_id
+        current = stored.assigned_user_id if stored is not None else None
+        if target == current:
+            continue  # nothing changes
+        self_assign = target is not None and target == user.id
+        self_unassign = target is None and current == user.id
+        if not (self_assign or self_unassign):
+            raise HTTPException(status_code=403, detail="assignment_forbidden")
+
+    # 5. Evidence. An Artifact says "this commit closed this task" and an AgentRun
+    #    says "this model did this work on it" — both are the closure record ADR
+    #    0022 and ADR 0023 read. `set_task_status` writes an Artifact only under
+    #    the status rule above (its `body.artifact`), so the graph door applies
+    #    that same rule, with the same detail, to the task each one points at.
+    #    Evidence for a task created in this very push is allowed: nobody else
+    #    owns it yet. Evidence for a task that exists nowhere is not — a dangling
+    #    artifact is either a mistake or a forgery.
+    created_here = {task.id for task in payload.tasks}
+    for entity_type in ("artifacts", "agent_runs"):
+        for item in getattr(payload, entity_type):
+            target_task = repo.get_task(project.id, item.task_id)
+            if target_task is None:
+                if item.task_id in created_here:
+                    continue
+                raise HTTPException(status_code=403, detail="status_forbidden")
+            if target_task.assigned_user_id != user.id:
+                raise HTTPException(status_code=403, detail="status_forbidden")
+
+    # 6. Comments. `create_discussion` never takes `author` from the client and
+    #    always writes source="pz" (its module docstring says so in as many
+    #    words), because a comment is an attributed statement. The graph door
+    #    took both from the body, so a member could post as somebody else — and,
+    #    since `body`/`author` are "shared" authority, could overwrite an
+    #    existing comment's text and reassign its authorship to themselves.
+    for discussion in payload.discussions:
+        if discussion.author != user.id or discussion.source != "pz":
+            raise HTTPException(status_code=403, detail="discussion_author_forbidden")
+        stored_discussion = repo.get_node(project.id, "discussions", discussion.id)
+        if stored_discussion is not None and stored_discussion.author != user.id:
+            raise HTTPException(status_code=403, detail="discussion_forbidden")
 
 
 def require_project(repo: Repository, project_id: str, user: User) -> Project:

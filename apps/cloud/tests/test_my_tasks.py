@@ -7,6 +7,9 @@ match it against a local clone.
 
 from __future__ import annotations
 
+from app.db.merge import PLANNER_SEED_FIELDS
+from app.models.schemas import AcceptanceCriterion, GraphUpsertRequest, Task
+
 
 def _ws(client, name="Acme", user="alice"):
     res = client.post("/workspaces", json={"name": name}, headers={"X-User-Id": user})
@@ -149,10 +152,25 @@ def test_includes_project_and_workspace_context(client):
     ws = _ws(client)
     _invite_and_accept(client, ws["id"], "alice", "bob")
     project = _project(client, ws["id"], name="Alpha")
-    _push_task(client, project["id"], "alice", "t-1", extra={
-        "feature_tag": "T001",
-        "acceptance_criteria": [{"text": "Rejects a bad password"}],
-    })
+    # Seeded the way the Planner writes a task: `feature_tag` is tracker-owned,
+    # so only a caller naming it in `seed_fields` may author it at creation — a
+    # graph push cannot (plan 0015).
+    client.app.state.repository.upsert_graph(
+        project["id"],
+        GraphUpsertRequest(
+            tasks=[
+                Task(
+                    id="t-1",
+                    project_id=project["id"],
+                    title="Build login form",
+                    feature_tag="T001",
+                    acceptance_criteria=[AcceptanceCriterion(text="Rejects a bad password")],
+                )
+            ]
+        ),
+        source="pz",
+        seed_fields=PLANNER_SEED_FIELDS,
+    )
     _assign(client, project["id"], "t-1", "bob")
 
     row = _my_tasks(client)[0]
