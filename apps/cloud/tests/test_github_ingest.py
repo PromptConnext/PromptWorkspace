@@ -339,6 +339,40 @@ def test_push_removing_a_file_deletes_its_code_chunks(
     assert repo.code_vector_search(ws_id, pid, zero_vector, top_k=10) == []
 
 
+def test_push_never_indexes_a_secret_or_vendored_path(
+    client: TestClient, workspace_project_task: tuple[str, str, str]
+):
+    """The snapshot's filter applies to pushes too: a pushed `.env` is never
+    fetched, and one indexed before the filter existed loses its chunks."""
+    ws_id, pid, _task_id = workspace_project_task
+    repo = client.app.state.repository
+    repo.upsert_code_chunks(ws_id, pid, REPO, ".env", "sha-old", [(1, 2)], [[0.1] * 32])
+    fake = client.app.state.github_client
+    fake.set_file(REPO, "src/app.ts", "sha-head", "export const app = 1;\n")
+    fake.set_file(REPO, ".env", "sha-head", "API_KEY=live\n")
+    payload = {
+        "ref": "refs/heads/main",
+        "after": "sha-head",
+        "commits": [
+            {
+                "added": ["src/app.ts", "node_modules/x/index.js"],
+                "modified": [".env", "certs/prod.pem"],
+                "removed": [],
+            }
+        ],
+        "repository": {"full_name": REPO, "default_branch": "main"},
+    }
+    assert _post_webhook(client, "push", payload).status_code == 200
+
+    zero_vector = [0.0] * 32
+    assert _wait_until(
+        lambda: {h.path for h in repo.code_vector_search(ws_id, pid, zero_vector, top_k=10)}
+        == {"src/app.ts"}
+    )
+    fetched = {path for _repo, path, _sha in fake.fetched_files}
+    assert fetched == {"src/app.ts"}
+
+
 def test_a_two_digit_task_ref_now_links_a_pull_request(
     client: TestClient, workspace_project_task: tuple[str, str, str]
 ):

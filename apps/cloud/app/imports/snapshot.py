@@ -19,13 +19,15 @@ the model reading the snapshot never sees one, and neither does
 `pz_repo_analyses`. Repository content is still untrusted prompt input after
 that filter; the prompt that reads it treats it as data (app/generation/
 prompts.py::codebase_baseline_prompt), which is a separate defence against a
-separate problem.
+separate problem. And a file that passes the filter can still quote a key
+inline, so every excerpt goes through `redact_secrets` before it is stored.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import posixpath
+import re
 from collections import Counter
 
 from app.integrations.github import GithubWriteError
@@ -95,6 +97,7 @@ _SECRET_GLOBS = (
     "*.tfstate",
     "*.tfstate.*",
     "*.tfvars",
+    "*.tfvars.json",
     "id_rsa*",
     "id_dsa*",
     "id_ecdsa*",
@@ -111,7 +114,49 @@ _SECRET_GLOBS = (
     "*secret*.yml",
     "*secret*.yaml",
     "service-account*.json",
+    ".envrc",
+    "*.ppk",
+    "*.p8",
+    "*.keytab",
+    "*.ovpn",
+    "kubeconfig",
+    ".pgpass",
+    "wp-config.php",
+    "application*.properties",
+    "appsettings*.json",
+    "local.settings.json",
+    "serviceaccountkey.json",
+    "*firebase-adminsdk*.json",
 )
+
+# Globs matched against the whole lowercased path rather than the basename —
+# for files whose name alone is innocent (`config`, `database.yml`) and whose
+# directory is what makes them a credential store. Each also matches at any
+# depth.
+_SECRET_PATH_GLOBS = (
+    ".kube/config",
+    ".docker/config.json",
+    "config/database.yml",
+)
+
+# Values redacted out of an excerpt before it is stored or put in a prompt
+# (plan 0027): the path filter above keeps credential *files* out, but a
+# README or a workflow can still quote a key inline. Two shapes — the value of
+# an assignment whose key names a secret, and a token whose prefix announces
+# one — each replaced with `***`. A false positive costs a dependency version
+# in a prompt; a false negative stores a live key.
+# The key's tail is bounded, and nothing is matched before the keyword (a
+# `DB_` prefix stays in the text untouched either way), so a long run of word
+# characters — a minified bundle, a base64 blob — cannot make this quadratic.
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)((?:pass(?:word)?|secret|token|api[_-]?key|private[_-]?key|credential)"
+    r"[\w.-]{0,64}[\"']?[ \t]*[:=][ \t]*[\"']?)([^\s\"',;]+)"
+)
+_SECRET_TOKEN = re.compile(
+    r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}"
+    r"|xox[bp]-[A-Za-z0-9-]{10,})\b|(?<![\w-])sk-[A-Za-z0-9_-]{16,}"
+)
+REDACTED = "***"
 
 # Root-level manifests, in the order the runtime is decided from: the first
 # present wins. The runtime names that plan_profile.py can scaffold for come
@@ -176,8 +221,19 @@ CODE_INDEX_MAX_FILES = 500
 
 
 def is_secret_path(path: str) -> bool:
-    name = posixpath.basename(path).lower()
-    return any(fnmatch.fnmatchcase(name, glob) for glob in _SECRET_GLOBS)
+    lowered = path.lower()
+    name = posixpath.basename(lowered)
+    if any(fnmatch.fnmatchcase(name, glob) for glob in _SECRET_GLOBS):
+        return True
+    return any(
+        lowered == glob or lowered.endswith(f"/{glob}") for glob in _SECRET_PATH_GLOBS
+    )
+
+
+def redact_secrets(text: str) -> str:
+    """`text` with secret-shaped values replaced by `***`."""
+    text = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, text)
+    return _SECRET_TOKEN.sub(REDACTED, text)
 
 
 def is_excluded_path(path: str) -> bool:
@@ -269,6 +325,7 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
             content = await github_client.fetch_file_content(token, repo, path, head_sha)
         except GithubWriteError:
             continue
+        content = redact_secrets(content)
         limit = min(EXCERPT_FILE_CHARS, remaining)
         clipped = content[:limit]
         remaining -= len(clipped)
@@ -291,10 +348,13 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
 def indexable_code_paths(paths: list[str], limit: int) -> list[str]:
     """Paths worth a `code_file` embed job (plan 0027 M5): the snapshot's own
     filter, minus lockfiles and minified bundles that chunk into noise, capped
-    so a very large import cannot flood the embed queue."""
+    so a very large import cannot flood the embed queue. Source files come
+    first, so the cap is spent on code rather than on whatever sorts ahead of
+    it alphabetically (a `docs/` tree, fixtures, generated JSON)."""
     selected = [
         p
         for p in filter_paths(paths)
         if not p.endswith((".lock", "-lock.json", "-lock.yaml", ".min.js", ".min.css", ".map"))
     ]
+    selected.sort(key=lambda p: posixpath.splitext(p)[1].lower() not in _LANGUAGE_BY_EXTENSION)
     return selected[:limit]

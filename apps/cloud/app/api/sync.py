@@ -25,6 +25,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -53,6 +54,7 @@ from app.integrations.deploy_providers import (
 )
 from app.integrations.deploy_providers import get_provider as get_deploy_provider
 from app.integrations.github import (
+    GithubBranchMovedError,
     GithubWriteError,
     RepoAlreadyExistsError,
     ensure_hook_events,
@@ -64,6 +66,8 @@ from app.integrations.repo_seed import (
     build_deployment_files,
     build_seed_files,
     fit_to_existing_repo,
+    proper_prefixes,
+    seed_candidate_paths,
 )
 from app.models.schemas import (
     ENTITY_TYPES,
@@ -174,6 +178,7 @@ async def create_project(
         repo_url=found["html_url"],
         repo_default_branch=found.get("default_branch") or "main",
         repo_id=found["id"],
+        repo_origin="imported",
     )
 
 
@@ -372,9 +377,10 @@ async def create_repository(
 
     name = body.name or _slugify(project.name)
     description = f"PromptZone-managed repository for project {project.id}"
-    # (head sha, file paths) of an imported repository's own content; None
-    # for a repository this project created, which is seeded exactly as before.
-    existing_tree: tuple[str, list[str]] | None = None
+    # What an imported repository already holds at the head the seed will
+    # parent on; None for a repository this project created, which is seeded
+    # exactly as before.
+    existing_tree: _ExistingTree | None = None
 
     if project.repo_url:
         # Step 4, import variant: the project already names a repository the
@@ -401,12 +407,19 @@ async def create_repository(
         # stored analysis — a file pushed since then is just as much the
         # team's — and still before any mutation, so a workflow conflict
         # refuses with nothing written.
-        existing_tree = await _existing_tree(github_client, token, created, description)
+        existing_tree = await _existing_tree(
+            github_client,
+            token,
+            created,
+            project,
+            description,
+            seed_candidate_paths(seed_files, deployment_files),
+        )
         if existing_tree is None:
             seed_files = seed_files + deployment_files
         else:
             seed_plan = fit_to_existing_repo(
-                seed_files, deployment_files, frozenset(existing_tree[1])
+                seed_files, deployment_files, existing_tree.entries, existing_tree.dirs
             )
             if seed_plan.conflicts:
                 raise HTTPException(status_code=409, detail="deploy_workflow_conflict")
@@ -447,6 +460,10 @@ async def create_repository(
 
     full_name = created["full_name"]
     default_branch = created.get("default_branch") or "main"
+    # Server-side provenance (plan 0027): recorded on the create path only.
+    # An imported project already carries "imported" from POST /projects, and
+    # a retry through the adopt branch must not relabel either kind.
+    repo_origin = None if project.repo_url else "created"
 
     # Step 5: Actions secrets and variables, BEFORE the commit that starts
     # the first workflow run. Not best-effort — a pipeline seeded without its
@@ -547,7 +564,11 @@ async def create_repository(
                 elif not service_repo.release_pending_repo_webhook(binding, registration_owner):
                     raise RuntimeError("pending webhook registration claim changed before release")
                 repo.update_project_repo(
-                    project_id, created["html_url"], created["id"], default_branch
+                    project_id,
+                    created["html_url"],
+                    created["id"],
+                    default_branch,
+                    repo_origin=repo_origin,
                 )
                 raise HTTPException(status_code=409, detail="webhook_secret_repair_required")
 
@@ -592,6 +613,10 @@ async def create_repository(
     # An imported repository that already carries every file this seed would
     # write (docs/promptzone/* left by an earlier import) gets no commit at all:
     # there is nothing to add, and an empty seed is not an error.
+    #
+    # An imported repository's commit is pinned to the head its tree was
+    # checked at: a push landing in between could add a file the seed's tree
+    # would then replace, so a moved branch refuses rather than committing.
     try:
         if seed_files:
             await github_client.create_commit_with_files(
@@ -600,7 +625,11 @@ async def create_repository(
                 default_branch,
                 seed_files,
                 "chore: seed project context from PromptZone",
+                expected_base_sha=existing_tree.head_sha if existing_tree is not None else None,
             )
+    except GithubBranchMovedError as exc:
+        logger.warning("seeding %s refused: %s", full_name, exc)
+        raise HTTPException(status_code=409, detail="repo_moved_during_seed") from exc
     except GithubWriteError as exc:
         # Do NOT advance the lifecycle — an unseeded repo must leave
         # repo_url unset so a retry re-enters at repo creation and adopts.
@@ -618,7 +647,9 @@ async def create_repository(
         raise HTTPException(status_code=502, detail="github_seed_failed") from exc
 
     # Step 8: repo-write first, lifecycle flip last — see docstring.
-    repo.update_project_repo(project_id, created["html_url"], created["id"], default_branch)
+    repo.update_project_repo(
+        project_id, created["html_url"], created["id"], default_branch, repo_origin=repo_origin
+    )
     if deployment is not None:
         template = deployment["template"]
         # Resolved a second time for a template whose URL is derived from the
@@ -645,7 +676,9 @@ async def create_repository(
         )
     updated = repo.update_project_lifecycle_status(project_id, "repo_created")
     if existing_tree is not None:
-        _enqueue_initial_code_index(request.app, repo, project, full_name, *existing_tree)
+        _enqueue_initial_code_index(
+            request.app, repo, project, full_name, existing_tree.head_sha, existing_tree.blobs
+        )
     return updated
 
 
@@ -698,32 +731,90 @@ def _detected_runtime(repo: Repository, project: Project) -> str | None:
     return analysis.snapshot.stack.runtime if analysis is not None else None
 
 
-async def _existing_tree(
-    github_client, token: str, repo_row: dict, own_description: str
-) -> tuple[str, list[str]] | None:
-    """(head sha, file paths) of an adopted repository's default branch, or
-    None when the repository is one this project created itself.
+class _ExistingTree(NamedTuple):
+    """An adopted repository's content at the head the seed will parent on."""
 
-    The second case is the crash-window retry `create_repository`'s docstring
-    describes — `repo_url` recorded before the seed commit landed — and it
-    reaches the adopt branch exactly like an import does. Its content is the
-    platform's own (GitHub's auto-init README at most), so it keeps the full,
-    unrelocated seed it always had; the description this project writes at
-    creation is the same provenance signal the name-collision retry uses.
+    head_sha: str
+    # Readable files, for the initial code index.
+    blobs: list[str]
+    # Every non-directory entry (files, symlinks, submodule gitlinks) and
+    # every directory — what `fit_to_existing_repo` must not write over.
+    entries: frozenset[str]
+    dirs: frozenset[str]
+
+
+def _platform_created(project: Project, repo_row: dict, own_description: str) -> bool:
+    """Whether an adopted repository is one this project created itself —
+    the crash-window retry `create_repository`'s docstring describes, where
+    `repo_url` was recorded before the seed commit landed.
+
+    Decided by `project.repo_origin`, which only the server writes; the
+    repository description is a secondary check, never sufficient alone —
+    anyone with admin on an imported repository can set it to the string
+    this project would write, and the prize for doing so is a seed that
+    overwrites the repository's own README and AGENTS.md. A project with no
+    recorded origin (one that predates migration 0035) is treated as
+    imported: the relocated seed is the one that cannot destroy anything.
     """
-    if repo_row.get("description") == own_description:
+    return project.repo_origin == "created" and repo_row.get("description") == own_description
+
+
+async def _existing_tree(
+    github_client,
+    token: str,
+    repo_row: dict,
+    project: Project,
+    own_description: str,
+    candidates: set[str],
+) -> _ExistingTree | None:
+    """What an adopted repository's default branch holds, or None when the
+    repository is one this project created itself (`_platform_created`) —
+    that one keeps the full, unrelocated seed it always had.
+
+    GitHub truncates a recursive listing of a very large repository rather
+    than failing it, and an incomplete listing here would let the seed
+    overwrite a file it never saw. So when the listing is truncated, every
+    directory on the way to a path the seed could write (`candidates`) is
+    listed on its own, non-recursively: that yields every entry a candidate
+    could collide with — exactly, case-insensitively or through a prefix —
+    whatever the size of the rest of the repository.
+    """
+    if _platform_created(project, repo_row, own_description):
         return None
     full_name = repo_row["full_name"]
     branch = repo_row.get("default_branch") or "main"
     try:
         head_sha = await github_client.get_branch_head(token, full_name, branch)
-        paths, _truncated = await github_client.get_tree(token, full_name, head_sha)
+        listing, truncated = await github_client.get_tree_entries(token, full_name, head_sha)
+        entries = {e["path"] for e in listing if e["type"] != "tree"}
+        dirs = {e["path"] for e in listing if e["type"] == "tree"}
+        blobs = [e["path"] for e in listing if e["type"] == "blob"]
+        if truncated:
+            wanted = {prefix.lower() for path in candidates for prefix in proper_prefixes(path)}
+            pending = [("", head_sha)]
+            while pending:
+                directory, tree_sha = pending.pop()
+                children, children_truncated = await github_client.get_tree_entries(
+                    token, full_name, tree_sha, recursive=False
+                )
+                if children_truncated:
+                    # One directory too large for GitHub to list at all: there
+                    # is no complete answer to "is this path free", so no seed.
+                    raise HTTPException(status_code=409, detail="repo_tree_too_large")
+                for child in children:
+                    path = f"{directory}/{child['path']}" if directory else child["path"]
+                    if child["type"] == "tree":
+                        dirs.add(path)
+                        if path.lower() in wanted:
+                            pending.append((path, child["sha"]))
+                    else:
+                        entries.add(path)
     except GithubWriteError as exc:
         logger.warning("reading the tree of %s failed: %s", full_name, exc)
         if getattr(exc, "status_code", None) in (401, 403):
             raise HTTPException(status_code=400, detail="github_repo_not_in_token_scope") from exc
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
-    return head_sha, paths
+    return _ExistingTree(head_sha, blobs, frozenset(entries), frozenset(dirs))
 
 
 @router.get("/projects/{project_id}/repository/seed-preview", response_model=SeedPreviewOut)
@@ -772,11 +863,20 @@ async def seed_preview(
     github_client = request.app.state.github_client
     adopted = await _adopt_repo(github_client, token, imported_full_name, "imported_repo_not_found")
     description = f"PromptZone-managed repository for project {project.id}"
-    existing_tree = await _existing_tree(github_client, token, adopted, description)
+    existing_tree = await _existing_tree(
+        github_client,
+        token,
+        adopted,
+        project,
+        description,
+        seed_candidate_paths(seed_files, deployment_files),
+    )
     if existing_tree is None:
         return SeedPreviewOut(write=[f.path for f in seed_files + deployment_files])
 
-    plan = fit_to_existing_repo(seed_files, deployment_files, frozenset(existing_tree[1]))
+    plan = fit_to_existing_repo(
+        seed_files, deployment_files, existing_tree.entries, existing_tree.dirs
+    )
     return SeedPreviewOut(
         write=[f.path for f in plan.files],
         relocated=[RelocatedFile(from_path=a, to_path=b) for a, b in plan.relocated],

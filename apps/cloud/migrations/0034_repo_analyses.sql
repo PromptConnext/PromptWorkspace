@@ -20,8 +20,8 @@
 -- customer's source excerpts, which is why the table is service-only below.
 
 create table if not exists pz_repo_analyses (
-    project_id uuid primary key references pz_projects (id),
-    workspace_id uuid not null references pz_workspaces (id),
+    project_id uuid primary key references pz_projects (id) on delete cascade,
+    workspace_id uuid not null references pz_workspaces (id) on delete cascade,
     commit_sha text not null,
     snapshot jsonb not null default '{}'::jsonb,
     baseline text not null default '',

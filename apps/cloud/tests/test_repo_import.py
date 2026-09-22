@@ -620,10 +620,11 @@ def test_scratch_project_seed_is_unchanged(client: TestClient):
     assert not any(e.startswith("tree:") for e in fake.call_log)
 
 
-def test_a_repo_this_project_created_keeps_the_full_seed_on_retry(client: TestClient):
-    """The crash-window retry: repo_url recorded, lifecycle still tech_review.
-    That repository is the platform's own (its description says so), so the
-    retry must seed it exactly as the first attempt would have."""
+def _crash_window_project(
+    client: TestClient, *, origin: str | None, description: str | None = None
+) -> str:
+    """A from-scratch project whose repo_url was recorded before the seed
+    commit landed, the lifecycle still at tech_review."""
     ws_id = _workspace(client)
     _connect(client, ws_id, owner="acme")
     pid = client.post(
@@ -635,17 +636,179 @@ def test_a_repo_this_project_created_keeps_the_full_seed_on_retry(client: TestCl
         "full_name": "acme/fresh",
         "html_url": "https://github.com/acme/fresh",
         "default_branch": "main",
-        "description": f"PromptZone-managed repository for project {pid}",
+        "description": description or f"PromptZone-managed repository for project {pid}",
     }
     repository = client.app.state.repository
-    repository.update_project_repo(pid, "https://github.com/acme/fresh", 777, "main")
+    repository.update_project_repo(
+        pid, "https://github.com/acme/fresh", 777, "main", repo_origin=origin
+    )
     repository.update_project_lifecycle_status(pid, "tech_review")
+    return pid
+
+
+def test_a_repo_this_project_created_keeps_the_full_seed_on_retry(client: TestClient):
+    """The crash-window retry: repo_url recorded, lifecycle still tech_review.
+    The server recorded that it created this repository (and its description
+    agrees), so the retry must seed it exactly as the first attempt would
+    have."""
+    pid = _crash_window_project(client, origin="created")
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    written = client.app.state.github_client.commits[0]["paths"]
+    assert "README.md" in written
+    assert not any(p.startswith("docs/promptzone/") for p in written)
+
+
+def test_a_spoofed_description_does_not_earn_an_import_the_overwriting_seed(client: TestClient):
+    """An imported repository whose admin set its description to the exact
+    string the platform writes is still an import: `repo_origin` decides."""
+    pid = _imported_at_tech_review(client, ["README.md", "AGENTS.md"])
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.existing_repos["acme/storyapp"]["description"] = (
+        f"PromptZone-managed repository for project {pid}"
+    )
 
     res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
     assert res.status_code == 200, res.text
     written = fake.commits[0]["paths"]
-    assert "README.md" in written
-    assert not any(p.startswith("docs/promptzone/") for p in written)
+    assert "README.md" not in written and "AGENTS.md" not in written
+    assert "docs/promptzone/README.md" in written
+
+
+def test_a_legacy_project_without_an_origin_gets_the_non_destructive_seed(client: TestClient):
+    """Predates repo_origin: even with the platform's description, the retry
+    cannot tell a crash-window project from an import, so it relocates."""
+    pid = _crash_window_project(client, origin=None)
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    written = client.app.state.github_client.commits[0]["paths"]
+    assert "README.md" not in written
+    assert "docs/promptzone/README.md" in written
+
+
+def test_a_created_origin_with_a_changed_description_is_not_overwritten(client: TestClient):
+    pid = _crash_window_project(client, origin="created", description="Renamed by the team")
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert "README.md" not in client.app.state.github_client.commits[0]["paths"]
+
+
+def test_create_path_records_the_created_origin(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    pid = client.post(
+        "/projects", json={"name": "Fresh", "workspace_id": ws_id}, headers=ALICE
+    ).json()["id"]
+    assert client.get(f"/projects/{pid}", headers=ALICE).json()["repo_origin"] is None
+    client.app.state.repository.update_project_lifecycle_status(pid, "tech_review")
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert res.json()["repo_origin"] == "created"
+
+
+def test_import_records_the_imported_origin_and_keeps_it(client: TestClient):
+    pid = _imported_at_tech_review(client, ["README.md"])
+    assert client.get(f"/projects/{pid}", headers=ALICE).json()["repo_origin"] == "imported"
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.json()["repo_origin"] == "imported"
+
+
+# --------------------------------------------------------------------------- #
+# What counts as "already there" (security review of plan 0027)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_truncated_listing_still_protects_every_seed_path(client: TestClient):
+    """GitHub cut the recursive listing off before any of the files the seed
+    could collide with. The per-directory walk must find them anyway — the
+    fake's commit asserts nothing existing is overwritten."""
+    tree = [
+        "README.md",
+        "AGENTS.md",
+        "docs/promptzone/scope.md",
+        *(f"src/m{i}.js" for i in range(50)),
+    ]
+    pid = _imported_at_tech_review(client, tree)
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.tree_truncated = True
+    fake.truncated_listing["acme/storyapp"] = ["src/m0.js"]
+
+    preview = client.get(f"/projects/{pid}/repository/seed-preview", headers=ALICE).json()
+    assert {"from": "AGENTS.md", "to": "docs/promptzone/AGENTS.md"} in preview["relocated"]
+    assert "docs/promptzone/scope.md" in preview["skipped"]
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    written = fake.commits[0]["paths"]
+    assert "AGENTS.md" not in written and "docs/promptzone/scope.md" not in written
+    assert sorted(preview["write"]) == sorted(written)
+
+
+def test_a_truncated_listing_still_finds_a_workflow_conflict(client: TestClient):
+    pid = _imported_at_tech_review(
+        client, ["README.md", ".github/workflows/deploy.yml"], template="github-pages"
+    )
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.tree_truncated = True
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "deploy_workflow_conflict"
+
+
+@pytest.mark.parametrize("as_submodule", [True, False])
+def test_an_entry_at_docs_keeps_the_seed_out_of_docs(client: TestClient, as_submodule: bool):
+    pid = _imported_at_tech_review(client, ["README.md"] if as_submodule else ["README.md", "docs"])
+    fake: FakeGithubClient = client.app.state.github_client
+    if as_submodule:
+        fake.gitlinks["acme/storyapp"] = ["docs"]
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    written = fake.commits[0]["paths"]
+    assert not any(p.startswith("docs/") for p in written)
+    assert "AGENTS.md" in written
+
+
+def test_collisions_ignore_case(client: TestClient):
+    pid = _imported_at_tech_review(client, ["readme.md", "agents.md"])
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    written = client.app.state.github_client.commits[0]["paths"]
+    assert "AGENTS.md" not in written
+    assert "docs/promptzone/AGENTS.md" in written
+
+
+def test_a_workflow_differing_only_in_case_is_a_conflict(client: TestClient):
+    pid = _imported_at_tech_review(
+        client, ["README.md", ".github/workflows/Deploy.yml"], template="github-pages"
+    )
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "deploy_workflow_conflict"
+
+
+def test_a_push_between_the_check_and_the_commit_refuses_the_seed(client: TestClient):
+    pid = _imported_at_tech_review(client, ["README.md"])
+    fake: FakeGithubClient = client.app.state.github_client
+    fake.branch_heads["acme/storyapp"] = "checked-head"
+    fake.branch_head_on_commit["acme/storyapp"] = "someone-elses-push"
+
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == "repo_moved_during_seed"
+    assert fake.commits == []
+    project = client.get(f"/projects/{pid}", headers=ALICE).json()
+    assert project["lifecycle_status"] == "tech_review"
+
+    # The retry reads the new head and seeds against it.
+    res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
+    assert res.status_code == 200, res.text
 
 
 # --------------------------------------------------------------------------- #
@@ -725,3 +888,37 @@ def test_reindex_backfills_code_for_a_created_repository(client: TestClient):
     res = client.post(f"/projects/{pid}/assistant/reindex", headers=ALICE)
     assert res.status_code == 200, res.text
     assert _wait_until(lambda: "src/server.js" in _indexed_paths(client, ws_id, pid))
+
+
+def _backfill_app():
+    """Just enough of an app for `enqueue_project_backfill`: a queue and no
+    event loop, so jobs are delivered inline and never drained."""
+    from types import SimpleNamespace
+
+    from app.rag.queue import EmbedQueue
+
+    return SimpleNamespace(state=SimpleNamespace(embed_queue=EmbedQueue(), loop=None))
+
+
+def _code_tree_jobs(app) -> int:
+    queue = app.state.embed_queue._queue
+    return sum(1 for job in list(queue._queue) if job.node_type == "code_tree")
+
+
+def test_reindex_sweeps_code_only_with_a_model_connection_and_only_once(client: TestClient):
+    from app.rag.backfill import enqueue_project_backfill
+
+    pid = _imported_at_tech_review(client, ["README.md", "src/server.js"])
+    repository = client.app.state.repository
+    repository.update_project_repo(pid, "https://github.com/acme/storyapp", 1, "main")
+    project = repository.update_project_lifecycle_status(pid, "repo_created")
+
+    app = _backfill_app()
+    enqueue_project_backfill(app, repository, project)
+    assert _code_tree_jobs(app) == 0  # nothing could index it
+
+    _with_model_connection(client, pid)
+    enqueue_project_backfill(app, repository, project)
+    enqueue_project_backfill(app, repository, project)
+    assert _code_tree_jobs(app) == 1  # the second sweep finds one still queued
+    assert app.state.embed_queue.has_pending_code_tree("acme/storyapp")

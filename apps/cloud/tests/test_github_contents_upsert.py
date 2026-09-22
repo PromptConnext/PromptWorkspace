@@ -22,7 +22,7 @@ import json
 import httpx
 import pytest
 
-from app.integrations.github import GithubWriteError, HttpGithubClient
+from app.integrations.github import GithubBranchMovedError, GithubWriteError, HttpGithubClient
 
 REPO = "acme/make-story-time"
 EXISTING_SHA = "6515b55d5f456f846e8735f4c29c639180892a5d"
@@ -219,3 +219,124 @@ def test_sends_utf8_base64_content(monkeypatch):
     )
 
     assert base64.b64decode(captured[0]).decode("utf-8") == "ขอบเขต"
+
+
+# --------------------------------------------------------------------------- #
+# Seed commits pinned to an inspected head, and tree entries (plan 0027)
+# --------------------------------------------------------------------------- #
+
+
+def _git_data(head: str, ref_update_status: int = 200):
+    """Handler for the Git Data API calls `create_commit_with_files` makes.
+    Returns (handler, calls) — calls records (method, path) in order."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append((request.method, path))
+        if path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": head}})
+        if "/git/commits/" in path:
+            return httpx.Response(200, json={"tree": {"sha": "base-tree"}})
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": "blob-1"})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": "new-tree"})
+        if path.endswith("/git/commits"):
+            assert json.loads(request.content)["parents"] == [head]
+            return httpx.Response(201, json={"sha": "new-commit"})
+        if path.endswith("/git/refs/heads/main"):
+            if ref_update_status != 200:
+                return httpx.Response(ref_update_status, json={"message": "not a fast forward"})
+            return httpx.Response(200, json={"object": {"sha": "new-commit"}})
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    return handler, calls
+
+
+def _route(monkeypatch, handler) -> None:
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+
+def _seed_commit(expected_base_sha: str | None) -> str:
+    from app.integrations.repo_seed import SeedFile
+
+    return asyncio.run(
+        HttpGithubClient().create_commit_with_files(
+            "tok",
+            REPO,
+            "main",
+            [SeedFile("AGENTS.md", "rules")],
+            "chore: seed",
+            expected_base_sha=expected_base_sha,
+        )
+    )
+
+
+def test_a_seed_commit_on_the_inspected_head_lands(monkeypatch):
+    handler, _calls = _git_data(head="inspected")
+    _route(monkeypatch, handler)
+    assert _seed_commit("inspected") == "new-commit"
+
+
+def test_a_moved_branch_refuses_before_writing_anything(monkeypatch):
+    handler, calls = _git_data(head="someone-else")
+    _route(monkeypatch, handler)
+
+    with pytest.raises(GithubBranchMovedError):
+        _seed_commit("inspected")
+    assert all(method == "GET" for method, _path in calls)
+
+
+def test_a_branch_moving_during_the_commit_is_reported_as_moved(monkeypatch):
+    handler, _calls = _git_data(head="inspected", ref_update_status=422)
+    _route(monkeypatch, handler)
+
+    with pytest.raises(GithubBranchMovedError):
+        _seed_commit("inspected")
+
+
+def test_without_a_pin_a_rejected_ref_update_stays_a_plain_write_error(monkeypatch):
+    handler, _calls = _git_data(head="whatever", ref_update_status=422)
+    _route(monkeypatch, handler)
+
+    with pytest.raises(GithubWriteError) as exc:
+        _seed_commit(None)
+    assert not isinstance(exc.value, GithubBranchMovedError)
+
+
+def test_tree_entries_keep_directories_and_submodules(monkeypatch):
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "truncated": True,
+                "tree": [
+                    {"path": "docs", "type": "commit", "sha": "sub"},
+                    {"path": "src", "type": "tree", "sha": "t1"},
+                    {"path": "src/a.ts", "type": "blob", "sha": "b1"},
+                ],
+            },
+        )
+
+    _route(monkeypatch, handler)
+    client = HttpGithubClient()
+    entries, truncated = asyncio.run(client.get_tree_entries("tok", REPO, "head"))
+    assert truncated is True
+    assert [(e["path"], e["type"]) for e in entries] == [
+        ("docs", "commit"),
+        ("src", "tree"),
+        ("src/a.ts", "blob"),
+    ]
+    paths, _ = asyncio.run(client.get_tree("tok", REPO, "head"))
+    assert paths == ["src/a.ts"]
+    asyncio.run(client.get_tree_entries("tok", REPO, "t1", recursive=False))
+    assert seen[0] == {"recursive": "1"} and seen[-1] == {}

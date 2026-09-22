@@ -41,6 +41,7 @@ from app.deployments.registry import PREVIEW_ENVIRONMENT, WORKFLOW_PATH
 from app.deployments.registry import get_template as get_deployment_template
 from app.deployments.state import DEPLOY_STATE_BY_GITHUB as _DEPLOY_STATE_BY_GITHUB
 from app.deployments.state import refresh_deployment_state as _refresh_deployment_state
+from app.imports.snapshot import is_excluded_path
 from app.integrations.github import (
     GithubAuthError,
     GithubWriteError,
@@ -607,6 +608,14 @@ def _handle_push(
         repo.delete_code_chunks_for_path(project_id, repo_name, path)
 
     for path in event.changed_paths:
+        if is_excluded_path(path):
+            # The snapshot's own filter (app/imports/snapshot.py): a pushed
+            # `.env`, key or vendored bundle is never fetched or embedded.
+            # Its chunks are deleted rather than left alone, so one indexed
+            # before this filter existed does not outlive the next push of
+            # it — the same end state a removal reaches.
+            repo.delete_code_chunks_for_path(project_id, repo_name, path)
+            continue
         # Fetch + chunk + embed happens off the request path (app/rag/queue.py)
         # — never block a webhook response on a Git-host round trip.
         enqueue(

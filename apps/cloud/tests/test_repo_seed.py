@@ -10,6 +10,7 @@ from app.integrations.repo_seed import (
     build_deployment_files,
     build_seed_files,
     fit_to_existing_repo,
+    seed_candidate_paths,
 )
 from app.models.schemas import DeploymentConfig, PolicyScope, Project
 
@@ -339,3 +340,47 @@ def test_an_existing_workflow_is_a_conflict_not_a_skip():
     plan = fit_to_existing_repo(seed, deploy, frozenset({".github/workflows/deploy.yml"}))
     assert plan.conflicts == [".github/workflows/deploy.yml"]
     assert ".github/workflows/deploy.yml" not in plan.skipped
+
+
+def test_a_file_or_submodule_at_a_parent_path_blocks_everything_beneath_it():
+    """`docs` as a file, or as a submodule's gitlink, leaves no room for
+    `docs/promptzone/*` — writing there would replace the entry at `docs`."""
+    seed, deploy = _seed_and_deploy()
+    plan = fit_to_existing_repo(seed, deploy, frozenset({"docs"}))
+    paths = {f.path for f in plan.files}
+    assert not any(p.startswith("docs/") for p in paths)
+    assert "docs/promptzone/README.md" in plan.skipped
+    assert "docs/promptzone/deployment.md" in plan.skipped
+    # Unaffected paths are still written.
+    assert "AGENTS.md" in paths and ".github/workflows/deploy.yml" in paths
+
+
+def test_an_existing_directory_at_a_target_path_is_taken():
+    seed, deploy = _seed_and_deploy()
+    plan = fit_to_existing_repo(
+        seed, deploy, frozenset(), existing_dirs=frozenset({"AGENTS.md"})
+    )
+    assert ("AGENTS.md", "docs/promptzone/AGENTS.md") in plan.relocated
+    assert "AGENTS.md" not in {f.path for f in plan.files}
+
+
+def test_collisions_are_case_insensitive():
+    seed, deploy = _seed_and_deploy()
+    plan = fit_to_existing_repo(
+        seed,
+        deploy,
+        frozenset({"agents.md", "Docs/PromptZone/Scope.md", ".github/workflows/Deploy.yml"}),
+    )
+    paths = {f.path for f in plan.files}
+    assert "AGENTS.md" not in paths
+    assert ("AGENTS.md", "docs/promptzone/AGENTS.md") in plan.relocated
+    assert "docs/promptzone/scope.md" in plan.skipped
+    assert plan.conflicts == [".github/workflows/deploy.yml"]
+
+
+def test_candidate_paths_cover_every_target_fit_can_choose():
+    seed, deploy = _seed_and_deploy()
+    candidates = seed_candidate_paths(seed, deploy)
+    for existing in (frozenset(), frozenset({"AGENTS.md", ".specify/memory/constitution.md"})):
+        plan = fit_to_existing_repo(seed, deploy, existing)
+        assert {f.path for f in plan.files} <= candidates

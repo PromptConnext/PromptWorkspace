@@ -445,6 +445,7 @@ class SupabaseRepository(Repository):
         repo_url: str | None = None,
         repo_default_branch: str | None = None,
         repo_id: int | None = None,
+        repo_origin: str | None = None,
     ) -> Project:
         project = Project(
             name=name,
@@ -453,6 +454,7 @@ class SupabaseRepository(Repository):
             repo_url=repo_url,
             repo_default_branch=repo_default_branch,
             repo_id=repo_id,
+            repo_origin=repo_origin,
         )
         self._table(_PROJECTS).insert(_dump(project), returning="minimal").execute()
         return project
@@ -476,7 +478,13 @@ class SupabaseRepository(Repository):
         return project
 
     def update_project_repo(
-        self, project_id: str, repo_url: str, repo_id: int, default_branch: str
+        self,
+        project_id: str,
+        repo_url: str,
+        repo_id: int,
+        default_branch: str,
+        *,
+        repo_origin: str | None = None,
     ) -> Project:
         patch = {
             "repo_url": repo_url,
@@ -484,6 +492,8 @@ class SupabaseRepository(Repository):
             "repo_default_branch": default_branch,
             "updated_at": utcnow().isoformat(),
         }
+        if repo_origin is not None:
+            patch["repo_origin"] = repo_origin
         self._table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:

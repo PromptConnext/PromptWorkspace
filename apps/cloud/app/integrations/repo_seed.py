@@ -282,12 +282,43 @@ class SeedPlan:
     conflicts: list[str]
 
 
+def proper_prefixes(path: str) -> list[str]:
+    parts = path.split("/")
+    return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
+
+
+def seed_candidate_paths(
+    seed_files: list[SeedFile], deployment_files: list[SeedFile]
+) -> set[str]:
+    """Every path `fit_to_existing_repo` could decide to write for this seed,
+    relocations included — what the no-overwrite check has to know about
+    when the repository's full listing is not available (a truncated tree,
+    app/api/sync.py::_existing_tree)."""
+    candidates: set[str] = set()
+    for seed_file in [*seed_files, *deployment_files]:
+        candidates.add(seed_file.path)
+        candidates.add(f"{PROMPTZONE_DOCS_DIR}/{posixpath.basename(seed_file.path)}")
+        if seed_file.path in _RELOCATE_IF_TAKEN:
+            candidates.add(_RELOCATE_IF_TAKEN[seed_file.path])
+    return candidates
+
+
 def fit_to_existing_repo(
     seed_files: list[SeedFile],
     deployment_files: list[SeedFile],
     existing_paths: frozenset[str],
+    existing_dirs: frozenset[str] = frozenset(),
 ) -> SeedPlan:
-    """Rewrite a seed so it never overwrites a file `existing_paths` names.
+    """Rewrite a seed so it never overwrites anything `existing_paths` names.
+
+    `existing_paths` is every non-directory entry — files, symlinks and
+    submodule gitlinks alike — and `existing_dirs` the directories (those
+    implied by `existing_paths` are added here). A target counts as taken
+    when, compared case-insensitively (a checkout on macOS or Windows cannot
+    hold both `AGENTS.md` and `agents.md`), it is an existing entry, an
+    existing directory, or lies beneath an existing file or submodule — a
+    `docs` submodule blocks `docs/promptzone/scope.md` as surely as a file at
+    that exact path would.
 
     Derived documents move under `docs/promptzone/` (always, or only when
     taken — see the two tables above), and anything still colliding after
@@ -302,6 +333,19 @@ def fit_to_existing_repo(
     0024 forbids outright. So the caller refuses (`deploy_workflow_conflict`)
     and the Tech Lead either picks no template or moves that file first.
     """
+    entries = {p.lower() for p in existing_paths}
+    dirs = {d.lower() for d in existing_dirs}
+    for path in entries:
+        dirs.update(proper_prefixes(path))
+
+    def taken(path: str) -> bool:
+        lowered = path.lower()
+        return (
+            lowered in entries
+            or lowered in dirs
+            or any(prefix in entries for prefix in proper_prefixes(lowered))
+        )
+
     files: list[SeedFile] = []
     relocated: list[tuple[str, str]] = []
     skipped: list[str] = []
@@ -311,9 +355,9 @@ def fit_to_existing_repo(
         target = seed_file.path
         if target in _ALWAYS_RELOCATED:
             target = f"{PROMPTZONE_DOCS_DIR}/{posixpath.basename(target)}"
-        elif target in _RELOCATE_IF_TAKEN and target in existing_paths:
+        elif target in _RELOCATE_IF_TAKEN and taken(target):
             target = _RELOCATE_IF_TAKEN[target]
-        if target in existing_paths:
+        if taken(target):
             skipped.append(target)
             continue
         if target != seed_file.path:
@@ -326,12 +370,12 @@ def fit_to_existing_repo(
             # The template's `docs/deployment.md` is a derived document like
             # the ones above, not scaffold, so it moves with them.
             target = f"{PROMPTZONE_DOCS_DIR}/{posixpath.basename(seed_file.path)}"
-            if target in existing_paths:
+            if taken(target):
                 skipped.append(target)
             else:
                 relocated.append((seed_file.path, target))
                 files.append(SeedFile(target, seed_file.content, seed_file.executable))
-        elif seed_file.path not in existing_paths:
+        elif not taken(seed_file.path):
             files.append(seed_file)
         elif seed_file.path.startswith(_WORKFLOWS_DIR):
             conflicts.append(seed_file.path)

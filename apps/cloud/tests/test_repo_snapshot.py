@@ -14,6 +14,7 @@ import asyncio
 import pytest
 
 from app.imports.snapshot import (
+    CODE_INDEX_MAX_FILES,
     EXCERPT_FILE_CHARS,
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
@@ -23,6 +24,7 @@ from app.imports.snapshot import (
     filter_paths,
     indexable_code_paths,
     is_secret_path,
+    redact_secrets,
     summarize_tree,
 )
 from app.integrations.github import FakeGithubClient
@@ -47,6 +49,27 @@ REPO = "acme/storyapp"
         "config/credentials.json",
         "ops/service-account-prod.json",
         "SECRETS.yaml",
+        # Security review of plan 0027.
+        ".envrc",
+        "infra/prod.tfvars.json",
+        "keys/putty.ppk",
+        "apple/AuthKey_ABC123.p8",
+        "krb/service.keytab",
+        "vpn/office.ovpn",
+        "kubeconfig",
+        ".kube/config",
+        "home/ops/.kube/config",
+        ".docker/config.json",
+        ".pgpass",
+        "wp-config.php",
+        "config/database.yml",
+        "src/main/resources/application.properties",
+        "src/main/resources/application-prod.properties",
+        "appsettings.json",
+        "Api/appsettings.Development.json",
+        "local.settings.json",
+        "serviceAccountKey.json",
+        "firebase/myapp-firebase-adminsdk-x1y2z.json",
     ],
 )
 def test_secret_shaped_files_are_excluded(path: str):
@@ -182,3 +205,51 @@ def test_indexable_code_paths_drops_lockfiles_and_caps():
     paths = ["package-lock.json", "yarn.lock", "app.min.js", "src/a.ts", "src/b.ts", ".env"]
     assert indexable_code_paths(paths, limit=10) == ["src/a.ts", "src/b.ts"]
     assert indexable_code_paths(paths, limit=1) == ["src/a.ts"]
+
+
+@pytest.mark.parametrize(
+    "path", ["config.ts", "src/config/index.js", "database.yml", "docs/kube/config.md"]
+)
+def test_innocent_names_next_to_the_multi_segment_globs_survive(path: str):
+    assert not is_secret_path(path)
+
+
+@pytest.mark.parametrize(
+    ("text", "leaked"),
+    [
+        ("DB_PASSWORD=hunter2", "hunter2"),
+        ("password: 'hunter2'", "hunter2"),
+        ('"apiKey": "k-123456"', "k-123456"),
+        ("STRIPE_SECRET = sk_live_abc", "sk_live_abc"),
+        ("private_key: -----BEGIN", "-----BEGIN"),
+        ("AWS_CREDENTIALS=abc123", "abc123"),
+        ("clone with ghp_" + "a" * 36, "ghp_" + "a" * 36),
+        ("token github_pat_" + "b" * 40, "github_pat_" + "b" * 40),
+        ("id AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"),
+        ("openai sk-" + "c" * 32, "sk-" + "c" * 32),
+        ("slack xoxb-123456789012-abc", "xoxb-123456789012-abc"),
+        ("slack xoxp-123456789012-abc", "xoxp-123456789012-abc"),
+    ],
+)
+def test_secret_values_are_redacted(text: str, leaked: str):
+    redacted = redact_secrets(text)
+    assert leaked not in redacted
+    assert "***" in redacted
+
+
+def test_redaction_leaves_ordinary_text_alone():
+    text = "# App\n\nBuilt with scikit-learn and sk-learn docs; run `npm start`."
+    assert redact_secrets(text) == text
+
+
+def test_build_snapshot_redacts_excerpts():
+    fake = _fake_repo({"README.md": "# App\n\nexport API_KEY=abcdef123\n"})
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+    assert snapshot.excerpts[0].content == "# App\n\nexport API_KEY=***\n"
+
+
+def test_indexable_code_paths_spends_the_cap_on_source_first():
+    docs = [f"a-docs/page{i:04d}.md" for i in range(CODE_INDEX_MAX_FILES)]
+    selected = indexable_code_paths([*docs, "src/server.ts", "src/db.py"], CODE_INDEX_MAX_FILES)
+    assert selected[:2] == ["src/db.py", "src/server.ts"]
+    assert len(selected) == CODE_INDEX_MAX_FILES

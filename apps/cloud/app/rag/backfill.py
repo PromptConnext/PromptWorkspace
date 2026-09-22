@@ -92,8 +92,18 @@ def enqueue_project_backfill(app: Any, repo: Repository, project: Project) -> in
     # call, and this sweep runs on a request thread. Not part of
     # `_iter_backfill_targets`, because a file is not a graph node and
     # `count_indexable_nodes` counts nodes.
+    #
+    # Only when the sweep could index anything — the worker drops a code_tree
+    # job outright for a workspace with no model connection — and only once
+    # per repository at a time: a second reindex while the first sweep is
+    # still queued would fan the same tree out twice.
     full_name = repo_full_name_from_url(project.repo_url)
-    if full_name is not None and project.lifecycle_status == "repo_created":
+    if (
+        full_name is not None
+        and project.lifecycle_status == "repo_created"
+        and repo.get_model_connection(project.workspace_id) is not None
+        and not app.state.embed_queue.has_pending_code_tree(full_name)
+    ):
         enqueue(
             app,
             EmbedJob(project.workspace_id, project.id, "code_tree", full_name, repo=full_name),

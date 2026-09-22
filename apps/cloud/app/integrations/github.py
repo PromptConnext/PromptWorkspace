@@ -39,6 +39,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import posixpath
 import secrets
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -281,6 +282,13 @@ class GithubWriteError(RuntimeError):
         self.status_code = status_code
 
 
+class GithubBranchMovedError(GithubWriteError):
+    """The branch a seed commit was going to land on is no longer at the
+    commit the caller inspected (plan 0027). The no-overwrite check was made
+    against that commit's tree, so committing on top of anything else could
+    replace a file the check never saw — the caller refuses instead."""
+
+
 class GithubAuthError(GithubWriteError):
     """The supplied PAT was rejected (401/403). Distinguished from a generic
     write failure so the settings endpoint can answer 400 "bad token" rather
@@ -380,6 +388,10 @@ class GithubClient(Protocol):
 
     async def get_tree(self, token: str, repo: str, sha: str) -> tuple[list[str], bool]: ...
 
+    async def get_tree_entries(
+        self, token: str, repo: str, sha: str, *, recursive: bool = True
+    ) -> tuple[list[dict], bool]: ...
+
     async def list_repos(
         self,
         token: str,
@@ -406,6 +418,7 @@ class GithubClient(Protocol):
         branch: str,
         files: list[SeedFile],
         message: str,
+        expected_base_sha: str | None = None,
     ) -> str: ...
 
     async def put_actions_secret(self, token: str, repo: str, name: str, value: str) -> None: ...
@@ -671,19 +684,34 @@ class HttpGithubClient:
     async def get_tree(self, token: str, repo: str, sha: str) -> tuple[list[str], bool]:
         """Every file path in the tree at `sha`, and whether GitHub truncated
         the listing. Directories and submodules are dropped: a snapshot and
-        the no-overwrite check both care about files, and a submodule's path
-        cannot be read through the contents API anyway.
+        the code index both want files they can read, and a submodule's path
+        cannot be read through the contents API. The no-overwrite check
+        needs more than that and uses `get_tree_entries` instead.
 
         GitHub caps a recursive listing (100k entries / 7 MB) and says so with
         `truncated` rather than an error, so the flag is returned instead of
         raised — a partial listing of a very large repository is still a
         useful snapshot, as long as nobody mistakes it for the whole one."""
+        entries, truncated = await self.get_tree_entries(token, repo, sha)
+        return [e["path"] for e in entries if e["type"] == "blob"], truncated
+
+    async def get_tree_entries(
+        self, token: str, repo: str, sha: str, *, recursive: bool = True
+    ) -> tuple[list[dict], bool]:
+        """Every entry of the tree at `sha` — `{"path", "type", "sha"}` with
+        type `blob`, `tree` or `commit` (a submodule's gitlink) — and whether
+        GitHub truncated the listing. `sha` may be a commit or a tree.
+
+        Non-recursive, `path` is the entry's name within that one directory
+        and `sha` of a `tree` entry is what to list next; that is how the
+        seed walks only the directories it would write into when a recursive
+        listing came back truncated (app/api/sync.py::_existing_tree)."""
         resp = await _send(
             "GET",
             f"{GITHUB_API}/repos/{repo}/git/trees/{sha}",
             token=token,
             what=f"get_tree for {repo}",
-            params={"recursive": "1"},
+            params={"recursive": "1"} if recursive else None,
         )
         if resp.is_error:
             raise GithubWriteError(
@@ -691,8 +719,12 @@ class HttpGithubClient:
                 status_code=resp.status_code,
             )
         data = resp.json()
-        paths = [entry["path"] for entry in data.get("tree", []) if entry.get("type") == "blob"]
-        return paths, bool(data.get("truncated", False))
+        entries = [
+            {"path": entry["path"], "type": entry.get("type"), "sha": entry.get("sha")}
+            for entry in data.get("tree", [])
+            if entry.get("type") in ("blob", "tree", "commit")
+        ]
+        return entries, bool(data.get("truncated", False))
 
     async def list_repos(
         self,
@@ -888,6 +920,7 @@ class HttpGithubClient:
         branch: str,
         files: list[SeedFile],
         message: str,
+        expected_base_sha: str | None = None,
     ) -> str:
         """Write every seed file as ONE commit, through the Git Data API.
 
@@ -908,11 +941,22 @@ class HttpGithubClient:
         Never force-pushes: a non-fast-forward means someone else moved the
         branch, which is a transient conflict to retry, not something to
         overwrite.
+
+        `expected_base_sha` pins the parent to a commit the caller already
+        inspected (plan 0027: the no-overwrite check read that commit's
+        tree). If the branch has moved off it, by the time of this read or of
+        the final ref update, `GithubBranchMovedError` is raised and nothing
+        is committed — a push landing between the check and this write could
+        otherwise add a file the new tree then replaces.
         """
         if not files:
             raise GithubWriteError("create_commit_with_files called with no files")
 
         base_sha, base_tree = await self._read_branch_head(token, repo, branch)
+        if expected_base_sha is not None and base_sha != expected_base_sha:
+            raise GithubBranchMovedError(
+                f"{repo}@{branch} moved from {expected_base_sha} to {base_sha}", status_code=409
+            )
 
         # Blobs are independent of each other and of the tree, so they go out
         # concurrently — this is the whole reason a large scaffold stays fast.
@@ -977,6 +1021,11 @@ class HttpGithubClient:
             json={"sha": commit_sha, "force": False},
         )
         if ref_resp.is_error:
+            if expected_base_sha is not None and ref_resp.status_code == 422:
+                # Not a fast-forward: the branch moved after the read above.
+                raise GithubBranchMovedError(
+                    f"{repo}@{branch} moved during the seed commit", status_code=409
+                )
             raise GithubWriteError(
                 f"update_ref failed for {repo}: {ref_resp.status_code} {ref_resp.text}",
                 status_code=ref_resp.status_code,
@@ -1279,6 +1328,16 @@ class FakeGithubClient:
         self.tree_truncated = False
         self.branch_heads: dict[str, str] = {}
         self.get_tree_failure_status: int | None = None
+        # Submodule paths (gitlinks), per repo: listed by `get_tree_entries`
+        # as type `commit`, never by `get_tree`.
+        self.gitlinks: dict[str, list[str]] = {}
+        # With `tree_truncated`, the only paths a *recursive* entries listing
+        # returns — what GitHub happened to fit before cutting off. The
+        # non-recursive listings still see everything, as GitHub's do.
+        self.truncated_listing: dict[str, list[str]] = {}
+        # A push that lands between the seed's tree check and its commit: the
+        # branch head a commit into this repo finds instead of the one read.
+        self.branch_head_on_commit: dict[str, str] = {}
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
@@ -1392,6 +1451,38 @@ class FakeGithubClient:
             )
         return list(self.trees.get(repo, [])), self.tree_truncated
 
+    async def get_tree_entries(
+        self, token: str, repo: str, sha: str, *, recursive: bool = True
+    ) -> tuple[list[dict], bool]:
+        self.call_log.append(f"tree:{repo}")
+        if self.get_tree_failure_status is not None:
+            raise GithubWriteError(
+                f"fake get_tree failure for {repo}", status_code=self.get_tree_failure_status
+            )
+        types: dict[str, str] = {}
+        listed = (("blob", self.trees.get(repo, [])), ("commit", self.gitlinks.get(repo, [])))
+        for kind, paths in listed:
+            for path in paths:
+                parts = path.split("/")
+                for depth in range(1, len(parts)):
+                    types.setdefault("/".join(parts[:depth]), "tree")
+                types[path] = kind
+        entries = [
+            {"path": path, "type": kind, "sha": f"fake-tree:{path}" if kind == "tree" else None}
+            for path, kind in sorted(types.items())
+        ]
+        if recursive:
+            if self.tree_truncated:
+                visible = set(self.truncated_listing.get(repo, []))
+                return [e for e in entries if e["path"] in visible], True
+            return entries, False
+        directory = sha[len("fake-tree:") :] if sha.startswith("fake-tree:") else ""
+        return [
+            {**e, "path": posixpath.basename(e["path"])}
+            for e in entries
+            if posixpath.dirname(e["path"]) == directory
+        ], False
+
     async def list_repos(
         self,
         token: str,
@@ -1444,7 +1535,14 @@ class FakeGithubClient:
         branch: str,
         files: list[SeedFile],
         message: str,
+        expected_base_sha: str | None = None,
     ) -> str:
+        if repo in self.branch_head_on_commit:
+            self.branch_heads[repo] = self.branch_head_on_commit.pop(repo)
+        if expected_base_sha is not None and (
+            self.branch_heads.get(repo, "fake-head-0") != expected_base_sha
+        ):
+            raise GithubBranchMovedError(f"fake branch moved for {repo}", status_code=409)
         if self.fail_on_commit:
             raise GithubWriteError(
                 f"fake commit failure for {repo}", status_code=self.write_failure_status
@@ -1460,7 +1558,18 @@ class FakeGithubClient:
         # here it is a test failure instead, so a seed that overwrites a file
         # the imported repository already had cannot pass unnoticed (plan
         # 0027 M4).
-        overwritten = sorted({f.path for f in files} & set(self.trees.get(repo, [])))
+        # Case-insensitively, and through a path prefix: a file (or a
+        # submodule) at `docs` is just as much in the way of `docs/x.md`.
+        def prefixes(path: str) -> set[str]:
+            return {path.rsplit("/", depth)[0] for depth in range(1, path.count("/") + 1)}
+
+        existing = {p.lower() for p in (*self.trees.get(repo, []), *self.gitlinks.get(repo, []))}
+        existing_dirs = set().union(*(prefixes(p) for p in existing))
+        overwritten = sorted(
+            f.path
+            for f in files
+            if f.path.lower() in existing | existing_dirs or prefixes(f.path.lower()) & existing
+        )
         assert not overwritten, f"seed commit overwrites existing files in {repo}: {overwritten}"
         self.call_log.append(f"commit:{repo}")
         commit_sha = f"fake-commit-{len(self.commits) + 1}"

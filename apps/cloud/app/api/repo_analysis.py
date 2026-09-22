@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -45,6 +46,7 @@ from app.models.schemas import (
     RepoAnalysis,
     RepoAnalysisBaselineUpdate,
     RepoAnalysisOut,
+    Role,
 )
 from app.rag.budget import estimate_tokens
 
@@ -55,18 +57,37 @@ router = APIRouter(tags=["repo_analysis"])
 # prefill records "prefill:<stage>".
 _RUN_STAGE = "codebase_baseline"
 
+# `stale` costs a GitHub round trip, and the Planner asks on every render. One
+# answer per project per minute is plenty for "has the branch moved"; the app
+# is single-instance (CLAUDE.md, Deployment), so an in-process dict is the
+# whole cache. project_id -> (monotonic time, analysed commit, stale).
+_STALE_TTL_SECONDS = 60.0
+_stale_cache: dict[str, tuple[float, str, bool]] = {}
 
-def _out(project: Project, analysis: RepoAnalysis | None, stale: bool | None = None):
+
+def _out(
+    project: Project,
+    analysis: RepoAnalysis | None,
+    stale: bool | None = None,
+    *,
+    include_excerpts: bool = True,
+):
+    """`include_excerpts=False` empties `snapshot.excerpts` and nothing else:
+    they are verbatim file contents, which only the admins who ran the
+    analysis see — members get the same shape with an empty list."""
     if analysis is None:
         return RepoAnalysisOut(
             project_id=project.id, status="none", required=requires_repo_analysis(project)
         )
+    snapshot = analysis.snapshot
+    if not include_excerpts:
+        snapshot = snapshot.model_copy(update={"excerpts": []})
     return RepoAnalysisOut(
         project_id=project.id,
         status=analysis.status,
         required=requires_repo_analysis(project),
         commit_sha=analysis.commit_sha,
-        snapshot=analysis.snapshot,
+        snapshot=snapshot,
         baseline=analysis.baseline,
         updated_at=analysis.updated_at,
         stale=stale,
@@ -128,7 +149,7 @@ async def analyze_repository(
     """
     project = require_project(repo, project_id, user)
     require_admin(repo, project.workspace_id, user)
-    if not project.repo_url:
+    if not project.is_imported:
         raise HTTPException(status_code=409, detail="repo_not_imported")
     if project.lifecycle_status == "repo_created":
         raise HTTPException(status_code=409, detail="repo_already_created")
@@ -190,64 +211,102 @@ async def analyze_repository(
         )
         repo.upsert_repo_analysis(analysis.model_copy(update={"status": "failed"}))
 
+    prompt_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_content)
+
     async def stream():
-        yield (
-            "event: snapshot\n"
-            f"data: {_out(project, analysis).model_dump_json()}\n\n"
-        )
         parts: list[str] = []
         finish: list[str | None] = [None]
+        # `settled`: the run and the analysis have their final status. Set
+        # before the last event is yielded, so a client that disconnects on
+        # that very event cannot turn a stored baseline into `failed`.
+        # `recorded`: the budget has been charged for this run.
+        settled = False
+        recorded = False
         try:
-            async for delta in provider.stream(
-                system_prompt,
-                user_content,
-                conn.model,
-                api_key,
-                conn.base_url,
-                max_tokens=max_tokens,
-                on_finish=lambda reason: finish.__setitem__(0, reason),
-            ):
-                parts.append(delta)
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            _fail(0, 0)
-            message = (
-                "managed tier busy, try again later"
-                if status == 429
-                else f"model provider error ({status})"
+            yield (
+                "event: snapshot\n"
+                f"data: {_out(project, analysis).model_dump_json()}\n\n"
             )
-            payload = {"error": message, "retryable": status == 429}
-            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-            return
+            try:
+                async for delta in provider.stream(
+                    system_prompt,
+                    user_content,
+                    conn.model,
+                    api_key,
+                    conn.base_url,
+                    max_tokens=max_tokens,
+                    on_finish=lambda reason: finish.__setitem__(0, reason),
+                ):
+                    parts.append(delta)
+                    yield f"data: {json.dumps({'delta': delta})}\n\n"
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                settled = True
+                _fail(0, 0)
+                message = (
+                    "managed tier busy, try again later"
+                    if status == 429
+                    else f"model provider error ({status})"
+                )
+                payload = {"error": message, "retryable": status == 429}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
+            except httpx.HTTPError as exc:
+                # A connection that dropped or timed out mid-stream: whatever
+                # the model produced before it still cost the budget.
+                logger.warning("baseline stream for project %s failed: %s", project.id, exc)
+                completion_tokens = estimate_tokens("".join(parts))
+                budget.record(project.workspace_id, prompt_tokens + completion_tokens)
+                recorded = True
+                settled = True
+                _fail(prompt_tokens, completion_tokens)
+                payload = {"error": "model provider unreachable", "retryable": True}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
 
-        raw = "".join(parts)
-        prompt_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_content)
-        completion_tokens = estimate_tokens(raw)
-        budget.record(project.workspace_id, prompt_tokens + completion_tokens)
+            raw = "".join(parts)
+            completion_tokens = estimate_tokens(raw)
+            budget.record(project.workspace_id, prompt_tokens + completion_tokens)
+            recorded = True
 
-        baseline = _baseline_from(raw)
-        if not baseline:
-            _fail(prompt_tokens, completion_tokens)
-            payload = {"error": "the model returned an empty baseline", "retryable": True}
-            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-            return
+            baseline = _baseline_from(raw)
+            if not baseline:
+                settled = True
+                _fail(prompt_tokens, completion_tokens)
+                payload = {"error": "the model returned an empty baseline", "retryable": True}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
 
-        truncated = finish[0] == "length"
-        stored = repo.upsert_repo_analysis(
-            analysis.model_copy(update={"baseline": baseline, "status": "baseline_ready"})
-        )
-        repo.update_generation_run(
-            run.id,
-            status="truncated" if truncated else "succeeded",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        done = json.loads(_out(project, stored, stale=False).model_dump_json())
-        # Same meaning as on a stage generation: the baseline is stored and
-        # usable, but the model stopped at its output limit.
-        done["truncated"] = truncated
-        yield f"event: done\ndata: {json.dumps(done)}\n\n"
+            truncated = finish[0] == "length"
+            stored = repo.upsert_repo_analysis(
+                analysis.model_copy(update={"baseline": baseline, "status": "baseline_ready"})
+            )
+            repo.update_generation_run(
+                run.id,
+                status="truncated" if truncated else "succeeded",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+            settled = True
+            done = json.loads(_out(project, stored, stale=False).model_dump_json())
+            # Same meaning as on a stage generation: the baseline is stored and
+            # usable, but the model stopped at its output limit.
+            done["truncated"] = truncated
+            yield f"event: done\ndata: {json.dumps(done)}\n\n"
+        finally:
+            # Reached without a final status when the client disconnected
+            # mid-stream (the generator is closed at its current `yield`) or a
+            # write above raised. The tokens were spent either way, and an
+            # analysis left at `snapshot_ready` with a run left `running`
+            # would misreport what happened.
+            if not settled:
+                completion_tokens = estimate_tokens("".join(parts))
+                try:
+                    if not recorded:
+                        budget.record(project.workspace_id, prompt_tokens + completion_tokens)
+                    _fail(prompt_tokens, completion_tokens)
+                except Exception:  # noqa: BLE001 - never mask the original exit
+                    logger.exception("settling baseline run for project %s failed", project.id)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -260,17 +319,27 @@ async def get_repository_analysis(
     repo: Repository = Depends(get_repository),
 ) -> RepoAnalysisOut:
     """Member-readable, like a stage document: seeing what the plan was
-    written against is not privileged.
+    written against is not privileged. The snapshot's excerpts are the
+    exception — verbatim file contents, redacted but still the customer's
+    source — and reach admins only; a member gets `excerpts: []`.
 
     `stale` costs one branch-head read, and only while the analysis still
     matters (before `repo_created`). Push webhooks cannot answer it — the
     repository's hook is registered at `repo_created`, after the analysis has
-    stopped mattering — and a failed read reports `null`, not `false`.
+    stopped mattering — and a failed read reports `null`, not `false`. An
+    answer is reused for `_STALE_TTL_SECONDS` per project and analysed commit.
     """
     project = require_project(repo, project_id, user)
     analysis = repo.get_repo_analysis(project_id)
+    is_admin = repo.get_membership(project.workspace_id, user.id) == Role.admin
     if analysis is None or not requires_repo_analysis(project):
-        return _out(project, analysis)
+        return _out(project, analysis, include_excerpts=is_admin)
+
+    cached = _stale_cache.get(project_id)
+    now = time.monotonic()
+    if cached is not None and cached[1] == analysis.commit_sha:
+        if now - cached[0] < _STALE_TTL_SECONDS:
+            return _out(project, analysis, stale=cached[2], include_excerpts=is_admin)
 
     stale: bool | None = None
     try:
@@ -279,9 +348,11 @@ async def get_repository_analysis(
             token, full_name, project.repo_default_branch or "main"
         )
         stale = head != analysis.commit_sha
+        # Only an answer is cached; "could not check" is asked again next time.
+        _stale_cache[project_id] = (now, analysis.commit_sha, stale)
     except (HTTPException, GithubWriteError) as exc:
         logger.info("staleness check for project %s skipped: %s", project_id, exc)
-    return _out(project, analysis, stale=stale)
+    return _out(project, analysis, stale=stale, include_excerpts=is_admin)
 
 
 @router.patch("/projects/{project_id}/repo-analysis", response_model=RepoAnalysisOut)

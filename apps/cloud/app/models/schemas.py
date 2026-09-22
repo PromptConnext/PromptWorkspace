@@ -581,6 +581,12 @@ class Project(BaseModel):
     # provenance. Nullable: every project predating this field has a repo_url
     # with no recorded id.
     repo_id: int | None = None
+    # How the project came by its repository (plan 0027, migration 0035):
+    # "imported" by POST /projects, "created" by create_repository. Written by
+    # the server only — unlike the repository's description, which anyone
+    # with admin on the repository can edit. `None` for a project with no
+    # repository yet, or one that predates the field; see `is_imported`.
+    repo_origin: Literal["imported", "created"] | None = None
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
@@ -592,6 +598,18 @@ class Project(BaseModel):
     deployment_state: DeploymentState | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def is_imported(self) -> bool:
+        """Whether the repository is one the user brought (plan 0027). A
+        project with no recorded origin that names a repository before
+        `repo_created` predates `repo_origin`, and is treated as imported:
+        that is the non-destructive reading — its seed never overwrites, and
+        its planning waits on a baseline — whereas guessing "created" would
+        hand a real team's repository the overwriting seed."""
+        if self.repo_origin is not None:
+            return self.repo_origin == "imported"
+        return bool(self.repo_url) and self.lifecycle_status != "repo_created"
 
 
 # --------------------------------------------------------------------------- #

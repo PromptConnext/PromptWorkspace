@@ -102,6 +102,9 @@ class EmbedQueue:
         self._lock = threading.Lock()
         self._pending: dict[str, int] = {}
         self._failures: dict[str, JobFailure] = {}
+        # Repositories with a `code_tree` sweep reserved and not yet finished,
+        # so a second reindex does not fan the same tree out twice.
+        self._pending_trees: set[str] = set()
 
     async def get(self) -> EmbedJob:
         return await self._queue.get()
@@ -111,6 +114,8 @@ class EmbedQueue:
         the job physically reaches the asyncio queue."""
         with self._lock:
             self._pending[job.project_id] = self._pending.get(job.project_id, 0) + 1
+            if job.node_type == "code_tree" and job.repo is not None:
+                self._pending_trees.add(job.repo)
 
     def deliver(self, job: EmbedJob) -> None:
         """Event-loop thread only: hand an already-reserved job to the queue."""
@@ -119,6 +124,8 @@ class EmbedQueue:
     def complete(self, job: EmbedJob) -> None:
         """Mark one job finished — settled or failed, both leave the queue."""
         with self._lock:
+            if job.node_type == "code_tree" and job.repo is not None:
+                self._pending_trees.discard(job.repo)
             remaining = self._pending.get(job.project_id, 1) - 1
             if remaining > 0:
                 self._pending[job.project_id] = remaining
@@ -130,6 +137,10 @@ class EmbedQueue:
         """reserve + deliver for callers already on the event-loop thread."""
         self.reserve(job)
         self.deliver(job)
+
+    def has_pending_code_tree(self, repo: str) -> bool:
+        with self._lock:
+            return repo in self._pending_trees
 
     def pending_for(self, project_id: str) -> int:
         with self._lock:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.repository import Repository
-from app.models.schemas import RepoAnalysis, RepoExcerpt, RepoSnapshot, RepoStack
+from app.models.schemas import RepoAnalysis, RepoExcerpt, RepoSnapshot, RepoStack, new_id
 
 from . import _helpers as h
 
@@ -82,3 +82,34 @@ def test_analyses_are_per_project(repo: Repository) -> None:
 
     repo.upsert_repo_analysis(_analysis(one.id, ws.id, admin))
     assert repo.get_repo_analysis(other.id) is None
+
+
+def test_repo_origin_round_trips_and_survives_a_repo_update(repo: Repository) -> None:
+    """Migration 0035: recorded at import, kept by an update that names no
+    origin, and set by the create path's update."""
+    ws, admin = h.workspace(repo)
+    imported = repo.create_project(
+        ws.id,
+        admin,
+        "imported",
+        repo_url="https://github.com/acme/imported",
+        repo_default_branch="main",
+        repo_id=int(new_id().replace("-", "")[:12], 16),
+        repo_origin="imported",
+    )
+    assert repo.get_project(imported.id).repo_origin == "imported"
+    repo.update_project_repo(
+        imported.id, "https://github.com/acme/imported", imported.repo_id, "main"
+    )
+    assert repo.get_project(imported.id).repo_origin == "imported"
+
+    created = h.project(repo, ws, admin)
+    assert repo.get_project(created.id).repo_origin is None
+    repo.update_project_repo(
+        created.id,
+        "https://github.com/acme/created",
+        int(new_id().replace("-", "")[:12], 16),
+        "main",
+        repo_origin="created",
+    )
+    assert repo.get_project(created.id).repo_origin == "created"
