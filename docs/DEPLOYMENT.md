@@ -157,10 +157,38 @@ budget are all **in-process**. Until a shared backplane (e.g. Redis) exists:
 - Railway routes all traffic to the single replica, so session affinity is a non-issue at 1 instance — but revisit before ever raising the replica count.
 - Vertical scaling (more memory/CPU on the one instance) is the only safe lever.
 
+**What breaks first, if the replica count ever does leave 1.** The order matters because the four components fail differently, not equally. The **daily token budget** (`apps/cloud/app/rag/budget.py`, plus the global managed limiter built in `apps/cloud/app/main.py`) goes first, because its failure costs money: it is a dict keyed by workspace, so split across N replicas each workspace gets N times its daily cap and the managed-Typhoon bill multiplies to match. **Presence** (`apps/cloud/app/ws/manager.py`) is second — two people on the same project connected to different replicas simply do not see each other, which is a wrong answer rather than an error, and the kind of thing users report. The **rate limiter** (`apps/cloud/app/ratelimit.py`) and the **embed queue** (`apps/cloud/app/rag/queue.py`) come last, not because they matter least but because they degrade *silently*: every client's effective request limit becomes N times the configured one, and a job enqueued on one replica is invisible to the other, so the index-status panel's `pending_jobs` becomes a coin flip. Fix them in that same order if a backplane is ever genuinely needed — a shared counter for the budget and the managed limiter, then pub/sub fan-out for presence, then the request limiter, then the queue, which by that point wants a real job broker rather than a Redis list.
+
+**What to watch.** `GET /health` carries a `capacity` block (`apps/cloud/app/capacity.py`), ordered by that same priority — it is read-only introspection over the four components, not a second copy of their state:
+
+```json
+"capacity": {
+  "instance_id": "9f2a…",
+  "instance_started_at": "2026-09-22T01:20:04.118Z",
+  "budget":   { "managed_daily_limit": 200000, "busiest_workspace_tokens": 4000,
+                "headroom_tokens": 196000, "headroom_fraction": 0.98,
+                "workspaces_charged_today": 2 },
+  "presence": { "rooms": 1, "connections": 2 },
+  "queue":    { "depth": 0, "projects": 0 }
+}
+```
+
+The budget block reports headroom against `MANAGED_DAILY_TOKEN_BUDGET` — the cap whose overrun spends the platform's money (ADR 0027), as opposed to a BYO workspace overrunning its own key — and deliberately names no workspace or project: `/health` is unauthenticated, so it reports the shape of the load and not whose it is.
+
+**The alarm.** Nothing in this repository talks to an uptime-monitoring service; wire the following into whichever one you already use (Better Uptime, UptimeRobot, Pingdom, a Railway-side check), polling `/health` every 60 s:
+
+- **Two concurrent polls returning different `instance_id`s ⇒ more than one instance is serving traffic.** Page on it: that is the condition all four components above break under, and it is the closest thing to a replica-count alarm that exists, because **a process cannot count its own peers.** There is no discovery mechanism here, no registry, and nothing the container platform guarantees to set to the current replica count, so the service does not report a `replicas` field rather than report a guess. `instance_id` is minted once per process, which makes "how many replicas?" answerable from outside by comparison alone.
+- **`instance_id` changed between two sequential polls ⇒ the single instance restarted.** Not an error by itself (a deploy does this), but it drops every queued embed job and empties every presence room, so an unexplained change is worth an alert.
+- **`capacity.queue.depth` non-zero and not decreasing across 3 consecutive polls ⇒ the embed worker is stuck or jobs are being discarded.** A legitimate backfill sweep queues hundreds and drains steadily, so test the trend, not the value. Confirm the cause with `GET /projects/{id}/assistant/index-status`, whose `last_error` distinguishes "still draining" from "thrown away for want of a model connection".
+- **`capacity.budget.headroom_fraction` below `0.1` ⇒ the busiest workspace is about to start getting 429s** from the Planner and the assistant, and on the managed tier that number is also the day's spend. Below `0.0`-adjacent values it is already blocked.
+- **`capacity.presence.connections` climbing toward `WS_MAX_CONNECTIONS_PER_PROJECT` × active projects** is the only saturation signal presence has; a room at capacity rejects new sockets with close code 1013.
+
+The rate limiter is the one component with no counter of its own: a bucket count measures how many clients have been seen, not how close anything is to a limit, and its multi-instance failure is caught by the `instance_id` check like everything else that degrades quietly.
+
 ### 2.6 Verify
 
 ```bash
-curl https://<service>.up.railway.app/health     # includes schema_version from migrations
+curl https://<service>.up.railway.app/health     # schema_version from migrations + the capacity block (§2.5)
 open https://<service>.up.railway.app/docs       # FastAPI docs
 ```
 
