@@ -134,8 +134,13 @@ class AuthUser:
     access_token: str
 
 
-@pytest.fixture(scope="session")
-def target() -> Target:
+def resolve_target() -> Target:
+    """The configured target, or `pytest.skip`/`pytest.fail` naming what is
+    missing. A plain function, not only a fixture, because
+    tests/contract/test_for_user_client_split.py needs the same three
+    variables — it is the one contract case that requires a real end-user JWT,
+    so it needs the anon key the rest of that suite has no use for.
+    """
     values = {
         _URL_VAR: os.environ.get(_URL_VAR, "").strip(),
         _ANON_VAR: os.environ.get(_ANON_VAR, "").strip(),
@@ -157,6 +162,11 @@ def target() -> Target:
         anon_key=values[_ANON_VAR],
         service_key=values[_SERVICE_VAR],
     )
+
+
+@pytest.fixture(scope="session")
+def target() -> Target:
+    return resolve_target()
 
 
 @pytest.fixture(scope="session")

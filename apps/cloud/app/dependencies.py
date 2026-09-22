@@ -113,15 +113,17 @@ def get_repository(
     """The shared repository, scoped to the caller's own JWT when running in
     supabase auth mode.
 
-    That scoping is real for workspaces, members, projects and the other
-    tables whose RLS policies express the rule the API expresses. It is *not*
-    what guards the six graph tables (pz_requirements, pz_spec_documents,
-    pz_tasks, pz_artifacts, pz_agent_runs, pz_stage_documents): calls against
-    those always use the service-role client, because migration 0030 revoked
-    them from `authenticated` entirely — the server is their only writer, and
-    app/api/_guards.py is their only enforcement (plan 0014). The routing is
-    in app/db/supabase_repository.py::_table, keyed by table name, so it holds
-    for both the scoped and unscoped repository this function can return.
+    That scoping is real for workspaces, members and the other tables whose
+    RLS policies still enforce workspace membership. It is *not* what guards
+    the seven graph tables (pz_requirements, pz_spec_documents, pz_tasks,
+    pz_artifacts, pz_agent_runs, pz_stage_documents, pz_discussions): calls
+    against those always use the service-role client, because migration 0031
+    revoked them from `authenticated` entirely — the server is their only
+    writer, and app/api/_guards.py is their only enforcement (plan 0014). The
+    routing is in app/db/supabase_repository.py::_table, keyed by table name,
+    so it holds for both the scoped and unscoped repository this function can
+    return. See _guards.py's module docstring for where the policies and the
+    guards still diverge outside that set (pz_projects).
 
     Un-authenticated call sites (inbound tracker webhooks, the tombstone GC
     loop) have no end-user token and correctly fall through to the shared,

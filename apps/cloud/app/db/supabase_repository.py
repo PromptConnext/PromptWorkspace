@@ -9,9 +9,9 @@ engine lives in `app/db/merge.py`; this repo reads the stored row, merges, and
 writes the result back.
 
 Auth: two clients, and which one a call uses is decided by the table it
-names, not by the call site (`_table` below). The six graph tables in
+names, not by the call site (`_table` below). The seven graph tables in
 `_SERVICE_ONLY_TABLES` always go through the service-role client, because
-migration 0030 revoked them from `authenticated` and `anon` outright — the
+migration 0031 revoked them from `authenticated` and `anon` outright — the
 server is their only writer (plan 0014, Option A). Everything else goes
 through `_client`, which `for_user` swaps onto the caller's own JWT so
 Postgres RLS really does scope those tables per request.
@@ -102,11 +102,19 @@ _REPO_WEBHOOKS = "pz_repo_webhooks"
 _DEPLOYMENTS = "pz_deployments"
 _DEPLOYMENT_TASKS = "pz_deployment_tasks"
 
-# The six tables migration 0030 revoked from `authenticated` and `anon`
+# The seven tables migration 0031 revoked from `authenticated` and `anon`
 # (plan 0014, Option A). `authenticated` can no longer touch them at all, so
 # every call against one must carry the service-role key or fail with
 # `permission denied for table ...` — including calls made on behalf of a
 # signed-in user, which is every graph write in production.
+#
+# pz_discussions belongs here for the same reason as the other six, though
+# plan 0014's matrix didn't enumerate it: plan 0015's rules that a comment is
+# an attributed statement — nobody may post as somebody else
+# (discussion_author_forbidden) or overwrite another member's
+# (discussion_forbidden) — live in app/api/_guards.py and nowhere else, while
+# 0011_discussions.sql granted `authenticated` full DML behind a
+# membership-only policy. Same bypass class, same fix.
 #
 # Membership and role are still enforced, by app/api/_guards.py and
 # app/api/sync.py, before any of these methods is reached. What changes is
@@ -127,6 +135,7 @@ _SERVICE_ONLY_TABLES = frozenset(
         "pz_artifacts",
         "pz_agent_runs",
         "pz_stage_documents",
+        "pz_discussions",
     }
 )
 
@@ -148,16 +157,17 @@ class SupabaseRepository(Repository):
 
     def for_user(self, token: str) -> SupabaseRepository:
         """Return a *new* repository whose PostgREST calls carry the caller's
-        JWT so RLS applies per request — for every table except the six in
+        JWT so RLS applies per request — for every table except the seven in
         `_SERVICE_ONLY_TABLES`, which keep the service-role client.
 
-        The carve-out is not an optimisation. Migration 0030 left
+        The carve-out is not an optimisation. Migration 0031 left
         `authenticated` with no privilege at all on those tables, so a scoped
         client reaching one gets `permission denied for table ...`, not a
         narrower view. Scoping stays real, and still worth having, for the
         tables outside that set — pz_workspaces, pz_workspace_members,
-        pz_projects, pz_invitations, pz_documents and the rest — where the
-        policies do express the rule the API expresses.
+        pz_projects, pz_invitations, pz_documents and the rest — where RLS at
+        least enforces workspace membership, and on the two membership tables
+        the admin rule too.
 
         Must not mutate `self._client` in place: `app.state.repository` is one
         shared instance across all concurrent requests (see

@@ -1,14 +1,16 @@
 """Plan 0014 M4 — a member's own JWT, straight at PostgREST, must be refused.
 
-Each case below is one of the three rows of plan 0014's gap matrix, executed
-the way the matrix says a client could execute it: raw HTTP at the Supabase
-data API, with a real workspace member's real Supabase Auth token, never
-touching `apps/cloud`. Before migration 0030 all three **succeeded** — the
-graph-table policies test `pz_is_member` and nothing else, and `authenticated`
-held `select, insert, update, delete` outright (`migrations/0006_grants.sql`,
-`migrations/0019_stage_documents.sql`). The API's own refusals
-(`app/api/_guards.py`, `app/api/sync.py`'s `set_task_status`/`assign_task`,
-`ADMIN_ONLY_STAGES`) were never in the path.
+Each case below is one row of plan 0014's gap matrix — plus two for
+`pz_discussions`, which that matrix omitted — executed the way the matrix says
+a client could execute it: raw HTTP at the Supabase data API, with a real
+workspace member's real Supabase Auth token, never touching `apps/cloud`.
+Before migration 0031 every one of them **succeeded** — the graph-table
+policies test `pz_is_member` and nothing else, and `authenticated` held
+`select, insert, update, delete` outright (`migrations/0006_grants.sql`,
+`migrations/0011_discussions.sql`, `migrations/0019_stage_documents.sql`). The
+API's own refusals (`app/api/_guards.py`, `app/api/sync.py`'s
+`set_task_status`/`assign_task`, `ADMIN_ONLY_STAGES`, and plan 0015's
+`discussion_author_forbidden`/`discussion_forbidden`) were never in the path.
 
 WHY THE ASSERTION IS ON THE *GRANT*, NOT ON A POLICY
 An RLS policy that declines a row makes an `UPDATE` a no-op: PostgREST answers
@@ -24,6 +26,8 @@ future Supabase release changing how 42501 is surfaced over HTTP.
 """
 
 from __future__ import annotations
+
+import uuid
 
 import httpx
 import pytest
@@ -120,6 +124,78 @@ def test_member_cannot_steal_a_task_assignment_directly(
     )
     _denied(res)
     assert _read_task(http, target, fixture.task_id)["assigned_user_id"] == fixture.admin.id
+
+
+def test_member_cannot_forge_a_comment_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """pz_discussions, which plan 0014's matrix omitted and the first pass
+    missed. `create_discussion` never takes `author` from the client, and
+    plan 0015 carried that rule onto the graph door
+    (`discussion_author_forbidden` / `discussion_forbidden`) — but both live
+    in Python, and 0011_discussions.sql granted `authenticated` full DML
+    behind a membership-only policy. So a member could post a comment
+    attributed to the admin, straight at PostgREST. Same bypass class as the
+    other six; it needed the grant, not a new rule."""
+    res = http.post(
+        f"{target.rest}/pz_discussions",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "project_id": fixture.project_id,
+            "parent_node_type": "tasks",
+            "parent_node_id": fixture.task_id,
+            # The forgery: a statement attributed to somebody who never made it.
+            "author": fixture.admin.id,
+            "body": "Signed off by me, the admin.",
+            "source": "pz",
+        },
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's forged comment landed"
+
+
+def test_member_cannot_overwrite_another_members_comment_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """The other half of plan 0015's discussion rules: `body` and `author` are
+    "shared" authority, so a direct UPDATE could rewrite an existing comment's
+    text and reassign its authorship. The comment here is the admin's, written
+    on the service key the way apps/cloud writes it."""
+    discussion_id = str(uuid.uuid4())
+    seed = http.post(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        json={
+            "id": discussion_id,
+            "project_id": fixture.project_id,
+            "parent_node_type": "tasks",
+            "parent_node_id": fixture.task_id,
+            "author": fixture.admin.id,
+            "body": "Original, by the admin.",
+            "source": "pz",
+        },
+    )
+    assert seed.status_code in (200, 201), seed.text
+
+    res = http.patch(
+        f"{target.rest}/pz_discussions",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"id": f"eq.{discussion_id}"},
+        json={"body": "Rewritten by somebody else.", "author": fixture.member.id},
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pz_discussions",
+        headers=target.service_headers(),
+        params={"id": f"eq.{discussion_id}", "select": "body,author"},
+    )
+    assert check.json() == [{"body": "Original, by the admin.", "author": fixture.admin.id}]
 
 
 def test_member_cannot_read_graph_tables_directly_either(

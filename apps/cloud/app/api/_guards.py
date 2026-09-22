@@ -1,18 +1,30 @@
 """Shared authorization guards: workspace membership & admin role.
 
 These checks are the only enforcement of admin-only stage authoring, task
-ownership, and admin-only verification (docs/plans/0014-row-level-security-
-parity.md). Postgres RLS on the graph tables was previously assumed to
-re-check the same rules; it never did — every policy there tested workspace
-membership and nothing else — and as of migration 0030 the `authenticated`
-role has no grant on those tables at all, so RLS does not run for them
-either. This module is not "primary" among layers that also enforce these
-rules. It is the entire enforcement.
+ownership, admin-only verification, and comment attribution
+(docs/plans/0014-row-level-security-parity.md). Postgres RLS on the graph
+tables was previously assumed to re-check the same rules; it never did —
+every policy there tested workspace membership and nothing else — and as of
+migration 0031 the `authenticated` role has no grant on those seven tables at
+all, so RLS does not run for them either. This module is not "primary" among
+layers that also enforce these rules. It is the entire enforcement.
 
-Membership itself is still checked in both places for the tables outside that
-set (workspaces, members, projects), where the policies and the guards do
-agree; `app/db/supabase_repository.py::for_user` still scopes those to the
-caller's JWT per request.
+Outside that set, `app/db/supabase_repository.py::for_user` still scopes
+calls to the caller's JWT, and RLS still enforces workspace membership. The
+policies and these guards agree fully on only two tables: pz_workspaces
+(`pz_ws_write`) and pz_workspace_members (`pz_members_write`), whose policies
+genuinely test `pz_is_admin`.
+
+Two known divergences remain, both outside plan 0014's scope and neither
+closed here:
+  * pz_projects — `pz_projects_rw` is membership-only, while the writes that
+    matter are admin-gated in the API alone (deployment_config and
+    policy_scope via app/api/deployments.py's require_admin, lifecycle_status
+    via app/api/sync.py). A member reaching PostgREST directly can still set
+    those fields.
+  * pz_discussions — closed as of migration 0031, which added it to the
+    service-only set; named here because plan 0014's own matrix omitted it
+    and a reader comparing the two will look for it.
 """
 
 from __future__ import annotations
