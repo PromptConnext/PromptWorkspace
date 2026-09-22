@@ -1,0 +1,141 @@
+{
+  "$schema_note": "Not a package. A committed specification artifact, read as data by three separate test suites (packages/pz-cloud/test/taskRefs.test.ts, apps/engine/test/task-refs.test.ts, apps/cloud/tests/test_task_refs.py). No workspace entry, no build step, no dependency edge between apps. Prose statement of the rule: docs/contracts/task-ref-grammar.md.",
+  "$normalize_note": "taskRefFromFeatureTag / task_ref_from_feature_tag. The cloud stores feature_tag zero-padded and may append a parallel marker, so both sides normalise numerically before they meet.",
+  "normalize": [
+    { "name": "padded three-digit tag", "tag": "T001", "expect": "T1" },
+    { "name": "unpadded tag", "tag": "T1", "expect": "T1" },
+    { "name": "four-digit padding", "tag": "T0001", "expect": "T1" },
+    { "name": "two significant digits", "tag": "T012", "expect": "T12" },
+    { "name": "parallel marker is not part of the ref", "tag": "T001 [P]", "expect": "T1" },
+    { "name": "no tag at all", "tag": null, "expect": null },
+    { "name": "empty tag", "tag": "", "expect": null },
+    { "name": "not a task tag", "tag": "SPRINT12", "expect": null }
+  ],
+
+  "$commits_note": "refsForCommit / refs_for_commit, driven exactly as the real call sites drive it. `branch_name` is the raw branch a watcher reads; `branch_ref` is what taskRefFromBranch must return for it, and is what gets passed to refsForCommit. `expect` is the editor's answer (a resolved branch ref is passed). `expect_server` is the server's answer for the SAME commit, because both cloud call sites and the engine pass null for the branch ref — a documented product rule, not a bug. See the grammar doc's asymmetry section.",
+  "commits": [
+    {
+      "name": "T12 attributes — the ref the engine's \\bT\\d{3}\\b silently ignored",
+      "subject": "T12: add retry",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": ["T12"],
+      "expect_server": ["T12"]
+    },
+    {
+      "name": "T0003 attributes — padding beyond three digits was ignored too",
+      "subject": "T0003: add retry",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": ["T3"],
+      "expect_server": ["T3"]
+    },
+    {
+      "name": "T001 and T1 collide to one key and de-duplicate",
+      "subject": "T001 and T1: sweep",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": ["T1"],
+      "expect_server": ["T1"]
+    },
+    {
+      "name": "a revert yields nothing from the subject",
+      "subject": "Revert \"T12: add retry\"",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "a revert yields nothing from the branch either, on the task's own branch",
+      "subject": "Revert \"T12: add retry\"",
+      "branch_name": "T12-add-retry",
+      "branch_ref": "T12",
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "SPRINT12 is not a task ref — no word boundary before the T",
+      "subject": "SPRINT12 rollout is done",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "TEST-12 is not a task ref — the T is not followed by a digit",
+      "subject": "TEST-12 flaked again",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "feature/t12_retry resolves from the branch — editor only",
+      "subject": "tidy up imports",
+      "branch_name": "feature/t12_retry",
+      "branch_ref": "T12",
+      "expect": ["T12"],
+      "expect_server": []
+    },
+    {
+      "name": "the subject wins over the branch",
+      "subject": "T5: unrelated fix",
+      "branch_name": "T12-add-retry",
+      "branch_ref": "T12",
+      "expect": ["T5"],
+      "expect_server": ["T5"]
+    },
+    {
+      "name": "a subject naming eleven tasks stops at ten",
+      "subject": "T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11: sweep",
+      "branch_name": null,
+      "branch_ref": null,
+      "expect": ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"],
+      "expect_server": ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"]
+    },
+    {
+      "name": "a branch that names no task attributes nothing",
+      "subject": "tidy up imports",
+      "branch_name": "release/v1.2",
+      "branch_ref": null,
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "T12abc is not a whole branch segment",
+      "subject": "tidy up imports",
+      "branch_name": "T12abc",
+      "branch_ref": null,
+      "expect": [],
+      "expect_server": []
+    },
+    {
+      "name": "a lowercase branch is the same ref spelled differently",
+      "subject": "tidy up imports",
+      "branch_name": "t12-add-retry",
+      "branch_ref": "T12",
+      "expect": ["T12"],
+      "expect_server": []
+    }
+  ],
+
+  "$collisions_note": "collidingRefs / colliding_refs. A project holding two tasks whose tags normalise to the same key may attribute neither — a wrong attribution is worse than a missing one, because it is invisible.",
+  "collisions": [
+    {
+      "name": "a project holding both T012 and T12 blocks that ref",
+      "feature_tags": ["T012", "T12", "T003"],
+      "blocked": ["T12"]
+    },
+    {
+      "name": "distinct tags collide on nothing",
+      "feature_tags": ["T001", "T002", null],
+      "blocked": []
+    },
+    {
+      "name": "the parallel marker does not create a distinct ref",
+      "feature_tags": ["T001 [P]", "T1"],
+      "blocked": ["T1"]
+    }
+  ]
+}

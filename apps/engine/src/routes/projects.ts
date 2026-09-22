@@ -13,6 +13,7 @@ import { resolveAdapter } from "../agent/adapters/index.ts";
 import { AgentError } from "../agent/errors.ts";
 import { loadActiveWorkspace, loadCloudSession } from "../cloudClient.ts";
 import { ensureCloudProject, writeCloudLink } from "../sync/loop.ts";
+import { collidingRefs, refsForCommit, taskRefFromFeatureTag } from "../git/taskRefs.ts";
 
 export const projects = new Hono();
 
@@ -745,9 +746,25 @@ projects.post("/engine/projects/:id/stages/:stage/approve", async (c) => {
 });
 
 // Git truth-keeping (ADR 0007): developers implement in the integrated
-// terminal with their own tools; a commit subject mentioning a task ref
-// ("T003: add filter") marks that task done and attaches the commit as an
-// artifact. The graph stays honest without anyone updating a tracker.
+// terminal with their own tools; a commit subject naming a task ref
+// ("T003: add filter", "T12: add retry") attaches that commit to the task as a
+// code artifact. Those artifacts are what `assembleSnapshot` pushes and what
+// the cloud's build attribution has to work from, so a commit this misses is a
+// build that can never say what is in it.
+//
+// The grammar is NOT defined here. It is the vendored copy at
+// ../git/taskRefs.ts, byte-identical to packages/pz-cloud/src/taskRefs.ts and
+// held that way by apps/engine/test/task-refs.test.ts, so the engine, the
+// extension and the cloud resolve a commit to the same task. Writing a third
+// grammar here is what produced the defect plan 0024 M1 closes: /\bT\d{3}\b/
+// could not see a project numbering its tasks T12, and the textual
+// `feature_tag.split(" ")[0]` lookup could not match "T12" to a stored "T012"
+// even once the regex was widened. Both sides normalise numerically instead.
+//
+// This function does NOT write task status. ADR 0022 put status with the
+// client that observed the publication; the engine reads a local log and
+// cannot tell a commit that was pushed from one that was not, so it must not
+// guess. Attribution only.
 function syncTasksFromGit(projectId: string, projectPath: string): void {
   let log: string;
   try {
@@ -767,7 +784,18 @@ function syncTasksFromGit(projectId: string, projectPath: string): void {
     )
     .all(projectId) as { id: string; feature_tag: string }[];
   if (tasks.length === 0) return;
-  const byRef = new Map(tasks.map((t) => [t.feature_tag.split(" ")[0], t]));
+
+  // A project holding both "T012" and "T12" normalises them to one key. Those
+  // refs are dropped entirely rather than resolved to whichever row this query
+  // happened to return first — a wrong attribution is worse than a missing one
+  // because nobody reviewing a build's task list goes looking for it.
+  const blocked = collidingRefs(tasks.map((t) => t.feature_tag));
+  const byRef = new Map<string, { id: string }>();
+  for (const task of tasks) {
+    const ref = taskRefFromFeatureTag(task.feature_tag);
+    if (ref === null || blocked.has(ref)) continue;
+    byRef.set(ref, task);
+  }
 
   const hasArtifact = db.prepare(
     "SELECT 1 FROM artifacts WHERE task_id = ? AND commit_sha = ? LIMIT 1",
@@ -775,18 +803,21 @@ function syncTasksFromGit(projectId: string, projectPath: string): void {
   const insertArtifact = db.prepare(
     "INSERT INTO artifacts (id, task_id, kind, uri, commit_sha) VALUES (?, ?, 'code', ?, ?)",
   );
-  const markDone = db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?");
 
   for (const line of log.split("\n")) {
     const [sha, subject = ""] = line.split("\t");
     if (!sha) continue;
-    for (const ref of subject.match(/\bT\d{3}\b/g) ?? []) {
+    // Null branch ref, like both cloud call sites and for the same reason:
+    // this walks 300 historic commits in one pass, and there is no per-commit
+    // branch to recover after the fact. Attributing all of them to whatever
+    // branch happens to be checked out now would be worse than attributing
+    // none. Documented in docs/contracts/task-ref-grammar.md.
+    for (const ref of refsForCommit(subject, null)) {
       const task = byRef.get(ref);
       if (!task) continue;
       if (!hasArtifact.get(task.id, sha)) {
         insertArtifact.run(randomUUID(), task.id, `git: ${subject.slice(0, 100)}`, sha);
       }
-      markDone.run(task.id);
     }
   }
 }
