@@ -293,7 +293,7 @@ describe("Planner", () => {
     await screen.findByRole("tab", { name: /specify/i });
     openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
-    openTab(/plan/i);
+    openTab(/repository/i);
     expect(screen.getByRole("button", { name: /create repository/i })).toBeInTheDocument();
   });
 
@@ -308,8 +308,9 @@ describe("Planner", () => {
     );
 
     await screen.findByRole("tab", { name: /plan/i });
-    openTab(/plan/i);
-    const create = screen.getByRole("button", { name: /create repository/i });
+    openTab(/2 · plan/i);
+    // The panel lives on the last tab and stays mounted while hidden.
+    const create = screen.getByRole("button", { name: /create repository/i, hidden: true });
     await waitFor(() => expect(create).toBeDisabled());
 
     // Saving the rules is what unblocks it. The panel used to read the

@@ -108,6 +108,9 @@ const TABS: TabMeta[] = [
   { key: "specify", label: "1 · Specify", stages: ["specify"] },
   { key: "plan", label: "2 · Plan", stages: ["constitution", "plan"] },
   { key: "tasks", label: "3 · Tasks", stages: ["tasks"] },
+  // Last on purpose: creating the repository seeds it with the documents the
+  // earlier steps produced, so it can only be the final act.
+  { key: "repository", label: "4 · Repository", stages: [] },
 ];
 
 const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
@@ -608,7 +611,7 @@ export function Planner({
   // to remember to press; both transitions are fire-and-forget because the
   // cloud rejects an out-of-order one and nothing here depends on the result.
   useEffect(() => {
-    if (active !== "plan" || !isTechLead || advanced.current) return;
+    if ((active !== "plan" && active !== "repository") || !isTechLead || advanced.current) return;
     if (lifecycle !== "planning" && lifecycle !== "pending_tech_review") return;
     advanced.current = true;
     (async () => {
@@ -796,7 +799,11 @@ export function Planner({
           {tab.stages.map((stage) => {
             const meta = STAGE_META[stage];
             const authorGated = ADMIN_ONLY_STAGES.includes(stage) && !isTechLead;
-            const stageReadOnly = readOnly || authorGated;
+            // Tasks stay generatable after `repo_created`: they are graph rows
+            // the board works from, not part of the seeded repository, and the
+            // cloud does not refuse the stage there. Freezing them stranded a
+            // project that reached the repo with no task graph.
+            const stageReadOnly = (readOnly && stage !== "tasks") || authorGated;
             return (
               <StageSection
                 key={stage}
@@ -829,13 +836,18 @@ export function Planner({
               Open the task board
             </button>
           )}
+          {tab.key === "repository" && !isTechLead && !readOnly && (
+            <p className="rounded bg-slate-50 p-3 text-xs text-slate-600">
+              Your Tech Lead creates the repository once the tasks are generated.
+            </p>
+          )}
           {/* Beside CreateRepositoryPanel because it configures exactly
               that act: the template is seeded by repo creation and frozen
               afterwards, so choosing it anywhere later would be too late.
               Rendered for the whole Tech Lead step rather than only in
               `tech_review`, so a frozen project still shows what it deployed
               with. */}
-          {tab.key === "plan" && isTechLead && (
+          {tab.key === "repository" && isTechLead && (
             <DeploymentTemplatePanel
               project={project}
               workspaceId={project.workspace_id}
@@ -846,7 +858,7 @@ export function Planner({
           {/* Creating the repository is a technical act on technical
               artifacts, so it lives with the Tech Lead's own step rather than
               at the bottom of a page a business user also reads. */}
-          {tab.key === "plan" && isTechLead && lifecycle === "tech_review" && (
+          {tab.key === "repository" && isTechLead && lifecycle === "tech_review" && (
             <CreateRepositoryPanel
               projectId={projectId}
               projectName={project.name}

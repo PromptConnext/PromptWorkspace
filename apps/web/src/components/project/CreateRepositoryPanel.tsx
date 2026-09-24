@@ -362,8 +362,7 @@ export function CreateRepositoryPanel({
 
       {constitutionReady === true && tasksReady === false && (
         <p className="mb-2 text-xs text-amber-700">
-          Generate <strong>Tasks</strong> first — the Planner locks once the repository exists, so
-          there will be no way to generate them afterward.
+          Generate <strong>Tasks</strong> first — the repository is seeded with them.
         </p>
       )}
 

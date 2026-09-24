@@ -90,7 +90,7 @@ describe("CreateRepositoryPanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /create repository/i })).toBeDisabled();
     });
-    expect(screen.getByText(/first — the planner locks once the repository exists/i)).toBeInTheDocument();
+    expect(screen.getByText(/first — the repository is seeded with them/i)).toBeInTheDocument();
   });
 
   it("renders a human sentence for github_not_configured", async () => {
