@@ -16,7 +16,7 @@ from app.db.repository import Repository
 from app.dependencies import get_repository
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
-from app.models.schemas import DeploymentConfig, RepoWebhook
+from app.models.schemas import DeploymentConfig, RepoWebhook, Role
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -710,6 +710,17 @@ def test_create_repository_forbidden_for_non_member():
 
         res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=BOB)
         assert res.status_code == 403
+
+
+def test_create_repository_forbidden_for_a_non_admin_member():
+    with _client() as client:
+        fake = _wire_github(client)
+        ws, pid = _project_in_tech_review(client)
+        client.app.state.repository.add_member(ws["id"], "bob", Role.member, invited_by="alice")
+
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=BOB)
+        assert res.status_code == 403
+        assert fake.commits == []
 
 
 # --------------------------------------------------------------------------- #

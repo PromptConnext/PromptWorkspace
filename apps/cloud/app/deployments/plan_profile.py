@@ -26,6 +26,12 @@ Go project, which the first implementation task replaces anyway.
 So this is deliberately dumb, in the same spirit as
 `repo_seed.py::_conventions_section`: a best-effort read, not a parse. When
 the plan says nothing recognisable, `DEFAULT_PROFILE` applies.
+
+Keywords cannot read negation or emphasis — "we will NOT use Redis" adds
+Redis, and a Python backend whose plan also describes a TypeScript client
+scores as Node. `stack_judge.py` asks a typed model the same two questions
+when one is configured, pins the answer so both properties above still hold
+for the seed, and falls back to this scan for any dimension it is unsure of.
 """
 
 from __future__ import annotations
@@ -51,6 +57,10 @@ _SERVICE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("postgres", ("postgres", "postgresql", "psql", "relational database")),
     ("redis", ("redis", "cache layer", "job queue", "message queue")),
 )
+
+
+RUNTIMES: tuple[str, ...] = tuple(name for name, _ in _RUNTIME_KEYWORDS)
+SERVICES: tuple[str, ...] = tuple(name for name, _ in _SERVICE_KEYWORDS)
 
 
 @dataclass(frozen=True)

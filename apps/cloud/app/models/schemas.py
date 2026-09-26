@@ -458,6 +458,28 @@ class PolicyScopeUpdate(BaseModel):
 # Different lifetimes, different writers, different authorization. Keeping
 # them in one blob would mean a member PATCH and a webhook write racing for
 # the same column.
+class StackJudgment(BaseModel):
+    """A TypeSafe read of which runtime and services a project's plan calls
+    for (app/deployments/stack_judge.py), pinned so that the seed preview and
+    the real seed — and any retry of it — select the same files.
+
+    Raw probabilities, not decisions: the thresholds that turn these into a
+    profile live in code (`stack_judge.apply_judgment`), so tightening one
+    needs no second model call. Valid only while `input_sha256` matches the
+    state it was asked about; a changed plan is simply asked again.
+    """
+
+    input_sha256: str
+    model: str
+    # The chosen option ("node" | "python" | "go" | "other") and how
+    # concentrated the distribution behind it was.
+    runtime: str
+    runtime_confidence: float
+    # Service name -> probability the plan needs it run alongside the app.
+    services: dict[str, float] = Field(default_factory=dict)
+    judged_at: datetime = Field(default_factory=utcnow)
+
+
 class DeploymentConfig(BaseModel):
     # Bare slug for a built-in (never contains ":"); a future workspace-owned
     # template resolves through the same field as `ws:<uuid>`. See
@@ -470,6 +492,9 @@ class DeploymentConfig(BaseModel):
     # template_id at repo_created, because they are part of what the seeded
     # pipeline was built against.
     provider_values: dict[str, str] = Field(default_factory=dict)
+    # Server-only: never accepted from DeploymentConfigUpdate, so a PATCH that
+    # changes the template also drops it and the next seed asks again.
+    stack_judgment: StackJudgment | None = None
 
 
 class DeploymentConfigUpdate(BaseModel):

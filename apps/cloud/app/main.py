@@ -39,6 +39,7 @@ from app.documents.storage import build_document_store
 from app.generation.managed import build_managed_connection, build_managed_embed_connection
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
+from app.integrations.typesafe import HttpTypeSafeClient
 from app.observability import init_sentry
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
@@ -176,6 +177,15 @@ async def lifespan(app: FastAPI):
     # Git-host integration (M11): one client instance, same wiring pattern —
     # tests override app.state.github_client with FakeGithubClient.
     app.state.github_client = HttpGithubClient()
+    # TypeSafe typed judgments (app/deployments/stack_judge.py). None when no
+    # key is configured, which every caller treats as "use the keyword path".
+    app.state.typesafe_client = (
+        HttpTypeSafeClient(
+            settings.typesafe_api_key, settings.typesafe_base_url, settings.typesafe_model
+        )
+        if settings.typesafe_api_key
+        else None
+    )
     # Per-(workspace, user) budget on the repo-listing route (import picker).
     # It reads with the workspace's own shared PAT, so a chatty client here
     # burns the same budget that repo creation, code indexing and the

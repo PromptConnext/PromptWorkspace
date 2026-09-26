@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     # workspace per day and then 429'd the rest of the 3S flow.
     managed_daily_token_budget: int = 200_000
 
+    # TypeSafe System One (app/integrations/typesafe.py): typed judgments over
+    # free text where a keyword scan used to stand in — today, which runtime
+    # and services a project's plan calls for (app/deployments/stack_judge.py).
+    # Optional: unset means no client is built and every caller keeps its
+    # deterministic keyword path, which is also what the test suite runs.
+    typesafe_api_key: str = ""
+    typesafe_base_url: str = "https://api.typesafe.ai/v1"
+    typesafe_model: str = "jev-latest"
+
     # Managed embeddings for the assistant (plan 0008 M1): Typhoon is
     # generation-only, so a keyless (no BYO) workspace needs a separate
     # platform-hosted embedding model to ground content questions. Any

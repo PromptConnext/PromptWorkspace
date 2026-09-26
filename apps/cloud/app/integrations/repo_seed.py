@@ -35,7 +35,7 @@ import posixpath
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.deployments.plan_profile import derive_stack_profile
+from app.deployments.plan_profile import StackProfile, derive_stack_profile
 from app.deployments.registry import get_template as get_deployment_template
 from app.deployments.registry import (
     is_composed_scaffold,
@@ -174,6 +174,7 @@ def build_deployment_files(
     preview_url: str | None,
     plan_text: str | None = None,
     detected_runtime: str | None = None,
+    profile: StackProfile | None = None,
 ) -> list[SeedFile]:
     """The deployment template's scaffold, workflow and `docs/deployment.md`
     (ADR 0021), or an empty list when no template was selected.
@@ -185,7 +186,10 @@ def build_deployment_files(
     stays as pure and as deterministic as it was — the same plan text seeds
     the same tree. `detected_runtime` is the imported repository's own
     manifests' answer to the same question (plan 0027); see
-    `derive_stack_profile` for why it wins.
+    `derive_stack_profile` for why it wins. `profile`, when given, is an
+    already-resolved selection (a pinned model judgment, see
+    app/deployments/stack_judge.py) and replaces the scan; it is still one of
+    the scaffolds this template ships, so nothing here is generated either way.
 
     Kept separate from `build_seed_files` rather than folded into it, for two
     reasons. These files are *verbatim scaffold* rather than derived views
@@ -209,7 +213,7 @@ def build_deployment_files(
         # transition: the repo and its AI context are still worth having.
         return []
 
-    profile = derive_stack_profile(plan_text, detected_runtime)
+    profile = profile or derive_stack_profile(plan_text, detected_runtime)
     files = [
         SeedFile(path, content, executable=executable)
         for path, content, executable in template_files(template.id, profile)

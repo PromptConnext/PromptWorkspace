@@ -37,13 +37,21 @@ from app.api._guards import (
 )
 from app.db.repository import CrossProjectWrite, Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.deployments.plan_profile import StackProfile
 from app.deployments.preview_url import (
     platform_preview_url,
     repo_full_name_from_url,
     resolves_before_repo,
 )
-from app.deployments.registry import PREVIEW_ENVIRONMENT
+from app.deployments.registry import PREVIEW_ENVIRONMENT, is_composed_scaffold
 from app.deployments.registry import get_template as get_deployment_template
+from app.deployments.stack_judge import (
+    apply_judgment,
+    fingerprint,
+    judge,
+    judgment_state,
+    unanswered,
+)
 from app.imports.snapshot import CODE_INDEX_MAX_FILES, indexable_code_paths
 from app.integrations.deploy_providers import (
     PLATFORM_R2,
@@ -336,6 +344,10 @@ async def create_repository(
     hook on a repo with no workflow — which a retry overwrites.
     """
     project = require_project(repo, project_id, user)
+    # Admin-only, like the seed preview that shows what this commits: it
+    # writes the admin-owned deployment configuration (the pinned stack
+    # judgment) and spends platform-held credentials on the workspace's behalf.
+    require_admin(repo, project.workspace_id, user)
     if project.lifecycle_status == "repo_created":
         return project
     if project.lifecycle_status != "tech_review":
@@ -370,6 +382,7 @@ async def create_repository(
             deployment["preview_url"],
             stage_docs.get("plan"),
             _detected_runtime(repo, project),
+            await _stack_profile(request.app, repo, project, stage_docs.get("plan")),
         )
     if not project.repo_url:
         seed_files = seed_files + deployment_files
@@ -739,6 +752,53 @@ def _detected_runtime(repo: Repository, project: Project) -> str | None:
     return analysis.snapshot.stack.runtime if analysis is not None else None
 
 
+async def _stack_profile(
+    app, repo: Repository, project: Project, plan_text: str | None
+) -> StackProfile | None:
+    """The composed scaffold's selection from a pinned TypeSafe judgment
+    (app/deployments/stack_judge.py), or None to let `build_deployment_files`
+    run its keyword scan as it always has.
+
+    Asks the model only when no stored judgment answers the current plan (and,
+    for an imported repository, its analysed manifests), and stores the answer
+    before returning it — so the seed preview pins what `create_repository`
+    will select, and a retry after a partial failure selects it again. Both
+    callers run before the project is frozen at `repo_created`.
+    """
+    config = project.deployment_config
+    if config is None or not is_composed_scaffold(config.template_id):
+        return None
+    analysis = repo.get_repo_analysis(project.id) if project.repo_url else None
+    snapshot = analysis.snapshot if analysis is not None else None
+    state = judgment_state(plan_text, snapshot)
+    if state is None:
+        return None
+    input_sha256 = fingerprint(state, plan_text)
+    judgment = config.stack_judgment
+    if judgment is None or judgment.input_sha256 != input_sha256:
+        client = getattr(app.state, "typesafe_client", None)
+        if client is None:
+            return None
+        # A failed call is pinned too (as "keywords decide"), so a preview
+        # that fell back and a seed whose call succeeds cannot disagree.
+        judgment = await judge(client, state, input_sha256) or unanswered(input_sha256)
+        # The call can take seconds. Write back only onto the configuration
+        # it was asked for: an admin PATCH in the meantime wins, and this
+        # request uses the judgment without pinning it.
+        current = repo.get_project(project.id)
+        stored = current.deployment_config if current is not None else None
+        if (
+            stored is not None
+            and stored.template_id == config.template_id
+            and stored.provider_values == config.provider_values
+        ):
+            repo.update_project_deployment_config(
+                project.id, stored.model_copy(update={"stack_judgment": judgment})
+            )
+    detected = snapshot.stack.runtime if snapshot is not None else None
+    return apply_judgment(judgment, plan_text, detected)
+
+
 class _ExistingTree(NamedTuple):
     """An adopted repository's content at the head the seed will parent on."""
 
@@ -853,7 +913,11 @@ async def seed_preview(
     stage_docs = _seed_stage_docs(repo, project_id)
     seed_files = build_seed_files(project, stage_docs)
     deployment_files = build_deployment_files(
-        project, None, stage_docs.get("plan"), _detected_runtime(repo, project)
+        project,
+        None,
+        stage_docs.get("plan"),
+        _detected_runtime(repo, project),
+        await _stack_profile(request.app, repo, project, stage_docs.get("plan")),
     )
     if not project.repo_url:
         return SeedPreviewOut(write=[f.path for f in seed_files + deployment_files])
