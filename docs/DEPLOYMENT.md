@@ -2,7 +2,7 @@
 
 How to ship the three deployable halves of PromptConnext:
 
-1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Railway** (public HTTPS).
+1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Northflank** today (public HTTPS; this guide's step-by-step still describes Railway — see the note below).
 2. **Web app** (`apps/web`, M8) — Next.js read-only workspace UI → **Vercel**.
 3. **Desktop app** (`apps/desktop` + `apps/engine`) — Tauri 2 bundle → installers published to **Cloudflare R2** for download.
 
@@ -26,9 +26,20 @@ Railway is used (not Vercel) for the cloud app because it's a long-lived contain
 
 The engine always runs locally as a sidecar — only the sync backend and the installer files are deployed.
 
+> **Where production actually runs (checked 2026-09-26).** The live cloud API is the Northflank service
+> `promptconnect-cloud-api` at `https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run` — the default cloud URL in `apps/vscode` and `apps/mcp`, and the
+> origin whose `/health` reports `env: production`. The Railway domain this guide was written against
+> (`promptconnextcloud-production.up.railway.app`) no longer answers. §2's Railway commands are kept as the
+> original setup record and as a working alternative for any Docker host; everything that is not a Railway
+> command — the Dockerfile, the environment-variable table in §2.4, the single-instance constraint, the
+> `/health` checks — applies to the Northflank service unchanged. Set variables in Northflank under the
+> service's **Environment** (runtime variables or a linked secret group) and redeploy/restart for them to
+> take effect. How the Northflank service is built and whether it auto-deploys on push to `main` is not
+> recorded in this repository — check the service's build settings before relying on either.
+
 ---
 
-## 2. Cloud app → Railway
+## 2. Cloud app → Railway (original setup; production is on Northflank)
 
 ### 2.1 Prerequisites
 
@@ -154,8 +165,9 @@ Production values:
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` | as needed | Only if the Jira mirror (M5) is in use — the *outbound* credential. There is no longer a `JIRA_WEBHOOK_SECRET`: since plan 0019 the *inbound* secret is generated per Atlassian site when an admin configures the integration and stored encrypted in `pz_workspace_integrations`, because one shared secret cannot tell two tenants apart and a Jira issue key is unique per site, not per provider. ClickUp is registered but not advertised or configurable (`provider_unavailable`) until it has a credential path of its own. |
 | `RAG_KEY_ENCRYPTION_KEY` | Fernet key | Required before any workspace configures a model connection (M9 RAG assistant); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, `POST /workspaces/{id}/model-connection` fails closed rather than storing a plaintext key. |
 | `WEB_APP_URL` | `https://<web-app>.vercel.app` | Base for every invitation accept link — both the URL emailed to the invitee and the `accept_url` handed to the admin who created the invite. **Required in production:** the default is `http://localhost:3000`, so leaving it unset mails invitees a link to their own machine and the invitation silently dead-ends. `{WEB_APP_URL}/invite/*` must also be allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs, as a `/**` wildcard — see [§2.8](#28-web-app-apps-web--vercel). |
-| `PUBLIC_API_URL` | **this** service's origin, e.g. `https://promptconnextcloud-production.up.railway.app` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
+| `PUBLIC_API_URL` | **this** service's origin, e.g. `https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
 | `DEPLOY_R2_*` | see `apps/cloud/.env.example` | Only for the platform-hosted deployment template (ADR 0021). `DEPLOY_R2_API_TOKEN` is account-wide and is used **only** to mint a per-workspace, bucket-scoped credential — only the minted one is ever written into a customer repository, because a repo secret is readable by anyone who can push to that repo. `DEPLOY_R2_PUBLIC_BASE_URL` is required for that template: without it there is no preview address to hand the pipeline and repo creation refuses with `deployment_preview_url_not_configured`. Leave the block empty to disable the template entirely (it then refuses with `deployment_provider_not_configured` rather than seeding a pipeline that could never succeed). **Never set `DEPLOY_R2_ALLOW_SHARED_KEY=true` outside local dev** — it seals one shared key into every repository. |
+| `TYPESAFE_API_KEY` | TypeSafe API key | **Optional.** Enables the typed judgment that picks the docker-compose template's runtime and services from a project's plan (`app/deployments/stack_judge.py`, ADR 0026's 2026-09-26 amendment). Unset keeps the keyword scan. `TYPESAFE_BASE_URL`/`TYPESAFE_MODEL` default correctly. Platform-held, like `MANAGED_MODEL_API_KEY`. |
 
 Railway injects `PORT` automatically; the Dockerfile already honors it.
 
