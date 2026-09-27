@@ -124,9 +124,12 @@ def codebase_baseline_prompt() -> str:
         [
             "You are the codebase-analysis engine inside PromptConnext.",
             "You are given a snapshot of an existing software repository: its directory "
-            "summary, the stack detected from its manifests, and excerpts of a fixed list of "
-            "files. Write a baseline document describing the codebase as it is today, so "
-            "that later planning describes changes to this code instead of a fresh build.",
+            "summary, the stack detected from its manifests, a test summary, excerpts of a "
+            "fixed list of files, and outlines of its source files (declaration and "
+            "TODO/stub lines, numbered, under each file's length). Write a baseline document "
+            "describing the codebase as it is today, so that later planning describes "
+            "changes to this code instead of a fresh build — including what it already "
+            "does, which planning uses to avoid rebuilding it.",
             UNTRUSTED_SECURITY_RULE,
             "Fill in the template completely. The template's HTML comments are guidance for "
             "you — omit them from the output. Say only what the material supports; where it "
@@ -173,10 +176,16 @@ def codebase_baseline_user_content(repo_full_name: str, snapshot) -> str:
         "",
         "[directories]",
         snapshot.tree_summary or "(empty)",
+        "",
+        "[tests]",
+        snapshot.test_summary or "(not recorded)",
     ]
     for excerpt in snapshot.excerpts:
         suffix = "\n...[truncated]" if excerpt.truncated else ""
         parts += ["", f"[file:{excerpt.path}]", excerpt.content + suffix]
+    for outline in snapshot.source_outlines:
+        suffix = "\n...[truncated]" if outline.truncated else ""
+        parts += ["", f"[outline:{outline.path}]", outline.content + suffix]
     return (
         f"Write the codebase baseline for the repository {repo_full_name} at commit "
         f"{snapshot.commit_sha} (branch {snapshot.default_branch}).\n\n"

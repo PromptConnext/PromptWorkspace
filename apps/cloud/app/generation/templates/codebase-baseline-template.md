@@ -8,6 +8,28 @@ from the snapshot" rather than guessing. -->
 
 <!-- What the software does and for whom, in two to four sentences. -->
 
+## Current State
+
+<!-- What the code already does. Planning reads this section to avoid
+generating work for things that exist, so be concrete and cite evidence: base
+every entry on the source outlines, the directory layout and the test summary,
+and end each bullet with at least one path. Group by user-visible capability
+or subsystem, not by file. -->
+
+### Implemented
+
+<!-- One bullet per capability with real code behind it — routes, handlers,
+models, jobs, screens: "- Story listing API — src/server.js, src/routes/stories.js".
+A declaration alone is weak evidence; prefer capabilities several outlined
+lines agree on. Note when a capability has no tests. -->
+
+### Partial or Stubbed
+
+<!-- One bullet per capability that is declared but unfinished: TODO/FIXME
+markers, NotImplementedError / unimplemented!, very short files, handlers
+with nothing behind them. Quote the marker and cite path:line. Write "None
+evident from the snapshot" when there are none. -->
+
 ## Stack
 
 <!-- Languages, frameworks, runtime versions and key libraries, as named by the

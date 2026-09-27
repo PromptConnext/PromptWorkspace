@@ -72,16 +72,17 @@ def _out(
     *,
     include_excerpts: bool = True,
 ):
-    """`include_excerpts=False` empties `snapshot.excerpts` and nothing else:
-    they are verbatim file contents, which only the admins who ran the
-    analysis see — members get the same shape with an empty list."""
+    """`include_excerpts=False` empties `snapshot.excerpts` and
+    `snapshot.source_outlines` and nothing else: both are verbatim file
+    contents, which only the admins who ran the analysis see — members get
+    the same shape with empty lists."""
     if analysis is None:
         return RepoAnalysisOut(
             project_id=project.id, status="none", required=requires_repo_analysis(project)
         )
     snapshot = analysis.snapshot
     if not include_excerpts:
-        snapshot = snapshot.model_copy(update={"excerpts": []})
+        snapshot = snapshot.model_copy(update={"excerpts": [], "source_outlines": []})
     return RepoAnalysisOut(
         project_id=project.id,
         status=analysis.status,

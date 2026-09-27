@@ -127,6 +127,13 @@ def _imported_project(client: TestClient) -> tuple[str, str]:
     fake.trees[REPO] = ["README.md", "package.json", "src/server.js", ".env", "keys/deploy.pem"]
     fake.set_file(REPO, "README.md", HEAD, README + "\n\n" + INJECTION)
     fake.set_file(REPO, "package.json", HEAD, '{"dependencies": {"express": "^4"}}')
+    fake.set_file(
+        REPO,
+        "src/server.js",
+        HEAD,
+        "app.get('/stories', listStories)\nfunction listStories(req, res) {}\n"
+        "// TODO: pagination\n",
+    )
     project = client.post(
         "/projects",
         json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": REPO},
@@ -375,17 +382,20 @@ def test_get_reuses_a_staleness_answer_within_the_ttl(client: TestClient, monkey
     assert head_reads() == reads + 1
 
 
-def test_get_shows_excerpts_to_admins_only(client: TestClient):
+def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):
     _, pid = _imported_project(client)
     _analyze(client, pid)
 
     admin = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()
     member = client.get(f"/projects/{pid}/repo-analysis", headers=BOB).json()
     assert [e["path"] for e in admin["snapshot"]["excerpts"]] == ["README.md", "package.json"]
+    assert [o["path"] for o in admin["snapshot"]["source_outlines"]] == ["src/server.js"]
     assert member["snapshot"]["excerpts"] == []
+    assert member["snapshot"]["source_outlines"] == []
     # Everything else in the snapshot is the same for both.
-    assert {k: v for k, v in member["snapshot"].items() if k != "excerpts"} == {
-        k: v for k, v in admin["snapshot"].items() if k != "excerpts"
+    withheld = {"excerpts", "source_outlines"}
+    assert {k: v for k, v in member["snapshot"].items() if k not in withheld} == {
+        k: v for k, v in admin["snapshot"].items() if k not in withheld
     }
     assert member["baseline"] == admin["baseline"]
 
@@ -575,3 +585,19 @@ def test_a_legacy_project_without_an_origin_is_gated_as_imported(client: TestCli
 def test_import_records_its_origin(client: TestClient):
     _, imported = _imported_project(client)
     assert client.get(f"/projects/{imported}", headers=ALICE).json()["repo_origin"] == "imported"
+
+
+def test_baseline_run_reads_outlines_and_asks_for_current_state(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    system_prompt, user_content = client.app.state.generation_provider.calls[-1]
+
+    assert "## Current State" in system_prompt
+    assert "### Implemented" in system_prompt
+    assert "### Partial or Stubbed" in system_prompt
+    assert system_prompt.index("## Current State") < system_prompt.index("## Stack")
+    # Outlines and the test summary sit inside the one untrusted block.
+    inside = user_content.split(UNTRUSTED_OPEN, 1)[1].split(UNTRUSTED_CLOSE, 1)[0]
+    assert "[outline:src/server.js]" in inside
+    assert "3: // TODO: pagination" in inside
+    assert "[tests]\nno test files found" in inside
