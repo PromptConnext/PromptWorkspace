@@ -235,6 +235,46 @@ EXCERPT_TOTAL_CHARS = 30_000
 # imported monorepo must not flood the embed queue every other project shares.
 CODE_INDEX_MAX_FILES = 500
 
+# Source outlines (plan 0028): the declaration and TODO/stub lines of a
+# spread-out selection of source files, so the baseline can say what the code
+# already does rather than only how it is laid out. Fetched with bounded
+# concurrency — 60 sequential GitHub reads would add seconds to every analysis.
+OUTLINE_MAX_FILES = 60
+OUTLINE_FILE_CHARS = 1_500
+OUTLINE_TOTAL_CHARS = 24_000
+OUTLINE_FETCH_CONCURRENCY = 8
+# Every line is clipped before it is matched, which is what keeps a minified
+# bundle that slipped past the filter from making any expression below slow.
+_OUTLINE_LINE_CHARS = 200
+
+_TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs", "e2e"})
+_OUTLINE_SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".d.ts")
+# A file with one of these stems is where a module says what it exposes —
+# outlined before its siblings.
+_OUTLINE_ENTRY_STEMS = frozenset(
+    {
+        "main", "index", "app", "server", "cli", "__main__", "manage", "urls",
+        "routes", "router", "api", "models", "schema", "schemas", "handlers",
+        "views", "controllers",
+    }
+)  # fmt: skip
+
+# A declaration: matched with `.match` against a stripped, clipped line. One
+# optional prefix per keyword, each ending in a word, so no two whitespace
+# runs can compete for the same characters.
+_OUTLINE_SIGNATURE = re.compile(
+    r"(?:export\s+(?:default\s+)?)?(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?"
+    r"(?:(?:def|class|function|interface|type|enum|struct|trait|impl|func|fun|fn|module"
+    r"|public|private|protected|internal|create\s+(?:table|view|function))\b"
+    r"|const\s+\w+\s*=\s*(?:async\s*)?\(|@[\w.]+\()",
+    re.IGNORECASE,
+)
+# A stub or unfinished-work marker. Case-sensitive on purpose: a to-do app is
+# full of `todo` identifiers, and none of them is a TODO.
+_OUTLINE_MARKER = re.compile(
+    r"\b(?:TODO|FIXME|XXX|HACK)\b|NotImplemented|unimplemented!|todo!\(|[Nn]ot implemented"
+)
+
 
 def is_secret_path(path: str) -> bool:
     lowered = path.lower()
@@ -327,6 +367,93 @@ def excerpt_paths(paths: list[str]) -> list[str]:
             if fnmatch.fnmatchcase(path, glob):
                 chosen.append(path)
     return chosen
+
+
+def is_test_path(path: str) -> bool:
+    parts = path.lower().split("/")
+    if any(part in _TEST_DIRS for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    stem = name.split(".", 1)[0]
+    return (
+        stem.startswith("test_")
+        or stem.endswith(("_test", "_spec"))
+        or stem == "conftest"
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def _outline_group(path: str) -> str:
+    """The bucket a path competes in for the outline cap: its first two
+    directories when it has them, so `packages/a` and `packages/b` of a
+    monorepo each get a share instead of `packages/` getting one."""
+    parts = path.split("/")
+    if len(parts) == 1:
+        return "(root)"
+    if len(parts) >= 3:
+        return "/".join(parts[:2])
+    return parts[0]
+
+
+def _outline_rank(path: str) -> tuple[bool, int, str]:
+    stem = posixpath.basename(path).split(".", 1)[0].lower()
+    return (stem not in _OUTLINE_ENTRY_STEMS, path.count("/"), path)
+
+
+def outline_paths(paths: list[str], limit: int = OUTLINE_MAX_FILES) -> list[str]:
+    """Source files to outline, round-robin across `_outline_group` buckets,
+    entry points and shallow files first within each. Deterministic in its
+    input *set*: the order `paths` arrives in does not matter."""
+    groups: dict[str, list[str]] = {}
+    for path in paths:
+        name = posixpath.basename(path).lower()
+        if posixpath.splitext(name)[1] not in _LANGUAGE_BY_EXTENSION:
+            continue
+        if name.endswith(_OUTLINE_SKIP_SUFFIXES) or is_test_path(path):
+            continue
+        groups.setdefault(_outline_group(path), []).append(path)
+    queues = [sorted(groups[key], key=_outline_rank) for key in sorted(groups)]
+    chosen: list[str] = []
+    depth = 0
+    while len(chosen) < limit and any(depth < len(queue) for queue in queues):
+        for queue in queues:
+            if depth < len(queue) and len(chosen) < limit:
+                chosen.append(queue[depth])
+        depth += 1
+    return chosen
+
+
+def outline_source(content: str) -> str:
+    """The declaration and marker lines of one source file, numbered, under a
+    `[N lines]` header — the file's length is itself a signal (a 12-line
+    module with one `def` is a stub). `""` when nothing is worth keeping, so
+    the caller can drop the file rather than store an empty outline. Redact
+    before calling: a kept line is stored and prompted verbatim."""
+    lines = content.splitlines()
+    kept = []
+    for number, raw in enumerate(lines, start=1):
+        line = raw[:_OUTLINE_LINE_CHARS].strip()
+        if line and (_OUTLINE_SIGNATURE.match(line) or _OUTLINE_MARKER.search(line)):
+            kept.append(f"{number}: {line}")
+    if not kept:
+        return ""
+    return f"[{len(lines)} lines]\n" + "\n".join(kept)
+
+
+def summarize_tests(paths: list[str]) -> str:
+    """How many source-language test files there are, by top-level
+    directory — enough for the baseline to say which parts are covered."""
+    tests = [
+        p
+        for p in paths
+        if is_test_path(p) and posixpath.splitext(p)[1].lower() in _LANGUAGE_BY_EXTENSION
+    ]
+    if not tests:
+        return "no test files found"
+    by_dir = Counter(p.split("/", 1)[0] + "/" if "/" in p else "(root)" for p in tests)
+    listed = ", ".join(f"{d} {n}" for d, n in sorted(by_dir.items()))
+    return f"{len(tests)} test file{'s' if len(tests) != 1 else ''}: {listed}"
 
 
 async def build_snapshot(github_client, token: str, repo: str, branch: str) -> RepoSnapshot:

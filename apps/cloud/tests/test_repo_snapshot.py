@@ -19,13 +19,18 @@ from app.imports.snapshot import (
     EXCERPT_FILE_CHARS,
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
+    OUTLINE_MAX_FILES,
     build_snapshot,
     detect_stack,
     excerpt_paths,
     filter_paths,
     indexable_code_paths,
     is_secret_path,
+    is_test_path,
+    outline_paths,
+    outline_source,
     redact_secrets,
+    summarize_tests,
     summarize_tree,
 )
 from app.integrations.github import FakeGithubClient
@@ -311,3 +316,127 @@ def test_redaction_is_linear_on_pathological_input(text: str):
     started = time.perf_counter()
     redact_secrets(text)
     assert time.perf_counter() - started < 2.0
+
+
+# --------------------------------------------------------------------------- #
+# Source outlines (plan 0028)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/test_api.py",
+        "src/__tests__/App.tsx",
+        "src/app.test.ts",
+        "src/app.spec.js",
+        "pkg/server_test.go",
+        "conftest.py",
+        "e2e/login.ts",
+    ],
+)
+def test_test_paths_are_recognised(path: str):
+    assert is_test_path(path)
+
+
+@pytest.mark.parametrize("path", ["src/testing_utils.py", "src/contest.ts", "app/latest.py"])
+def test_names_that_merely_contain_test_are_not_tests(path: str):
+    assert not is_test_path(path)
+
+
+def test_outline_paths_prefers_entry_points_and_skips_tests_and_non_source():
+    paths = [
+        "README.md",
+        "src/zeta.ts",
+        "src/index.ts",
+        "src/app.test.ts",
+        "src/types.d.ts",
+        "public/bundle.min.js",
+        "docs/guide.md",
+    ]
+    assert outline_paths(paths) == ["src/index.ts", "src/zeta.ts"]
+
+
+def test_outline_paths_spreads_a_monorepo_across_packages():
+    paths = [f"packages/a/src/m{i:03d}.ts" for i in range(200)] + [
+        "packages/b/src/index.ts",
+        "packages/c/main.py",
+    ]
+    chosen = outline_paths(paths, limit=10)
+    assert len(chosen) == 10
+    assert "packages/b/src/index.ts" in chosen
+    assert "packages/c/main.py" in chosen
+
+
+def test_outline_paths_is_capped_and_deterministic():
+    paths = [f"src/mod{i:04d}.py" for i in range(500)]
+    first = outline_paths(paths)
+    assert len(first) == OUTLINE_MAX_FILES
+    assert outline_paths(list(reversed(paths))) == first
+
+
+def test_outline_source_keeps_signatures_and_markers_with_line_numbers():
+    source = "\n".join(
+        [
+            "import express from 'express'",
+            "",
+            "export async function createStory(req, res) {",
+            "  const x = 1",
+            "  // TODO: validate the title",
+            "}",
+            "@app.get('/stories')",
+            "def list_stories():",
+            "    raise NotImplementedError",
+            "class StoryRepo:",
+        ]
+    )
+    assert outline_source(source) == "\n".join(
+        [
+            "[10 lines]",
+            "3: export async function createStory(req, res) {",
+            "5: // TODO: validate the title",
+            "7: @app.get('/stories')",
+            "8: def list_stories():",
+            "9: raise NotImplementedError",
+            "10: class StoryRepo:",
+        ]
+    )
+
+
+def test_outline_source_reads_sql_tables_and_other_languages():
+    source = "CREATE TABLE stories (id uuid);\nfunc Serve() {}\npub fn run() {}\nfun main() {}"
+    kept = outline_source(source).splitlines()[1:]
+    assert [line.split(": ", 1)[0] for line in kept] == ["1", "2", "3", "4"]
+
+
+def test_outline_source_is_empty_for_a_file_with_no_declarations():
+    assert outline_source("x = 1\ny = 2\n") == ""
+
+
+def test_outline_source_does_not_flag_an_ordinary_todo_variable():
+    assert outline_source("const todo = load()\nrender(todoList)\n") == ""
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "def f(" + "a" * 200_000,
+        "x = 1\n" * 100_000,
+        "@" + "a." * 100_000,
+        "export " + " " * 100_000 + "function f() {}",
+    ],
+)
+def test_outline_source_is_bounded_on_pathological_input(content: str):
+    started = time.perf_counter()
+    outline = outline_source(content)
+    assert time.perf_counter() - started < 2.0
+    assert all(len(line) <= 220 for line in outline.splitlines())
+
+
+def test_summarize_tests_counts_test_files_by_top_level_directory():
+    paths = ["tests/test_a.py", "tests/test_b.py", "src/app.test.ts", "src/app.ts", "README.md"]
+    assert summarize_tests(paths) == "3 test files: src/ 1, tests/ 2"
+
+
+def test_summarize_tests_says_when_there_are_none():
+    assert summarize_tests(["src/app.ts", "README.md"]) == "no test files found"
