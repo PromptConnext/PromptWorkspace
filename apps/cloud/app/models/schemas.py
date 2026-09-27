@@ -1289,6 +1289,13 @@ class RepoSnapshot(BaseModel):
     # creation does NOT read this: it reads the live tree, so a file pushed
     # after the analysis still cannot be overwritten.
     paths: list[str] = Field(default_factory=list)
+    # Declaration and TODO/stub lines of up to 60 source files (plan 0028),
+    # redacted, one RepoExcerpt per file whose outline is non-empty. Verbatim
+    # source lines, so withheld from members exactly as `excerpts` is.
+    source_outlines: list[RepoExcerpt] = Field(default_factory=list)
+    # "N test files: tests/ 12, src/ 3" or "no test files found". Empty on a
+    # snapshot stored before plan 0028.
+    test_summary: str = ""
 
 
 class RepoAnalysis(BaseModel):

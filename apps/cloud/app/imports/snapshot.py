@@ -25,6 +25,7 @@ inline, so every excerpt goes through `redact_secrets` before it is stored.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import posixpath
 import re
@@ -456,13 +457,47 @@ def summarize_tests(paths: list[str]) -> str:
     return f"{len(tests)} test file{'s' if len(tests) != 1 else ''}: {listed}"
 
 
+async def _outline_sources(github_client, token: str, repo: str, sha: str, paths: list[str]):
+    """Fetch `outline_paths(paths)` at most `OUTLINE_FETCH_CONCURRENCY` at a
+    time and outline each. `gather` keeps input order, so the result is as
+    deterministic as the selection; the total cap is spent in that order. A
+    file that fails to fetch, or has nothing to outline, is left out."""
+    semaphore = asyncio.Semaphore(OUTLINE_FETCH_CONCURRENCY)
+
+    async def read(path: str) -> tuple[str, str | None]:
+        async with semaphore:
+            try:
+                return path, await github_client.fetch_file_content(token, repo, path, sha)
+            except GithubWriteError:
+                return path, None
+
+    results = await asyncio.gather(*(read(p) for p in outline_paths(paths)))
+    outlines: list[RepoExcerpt] = []
+    remaining = OUTLINE_TOTAL_CHARS
+    for path, content in results:
+        if remaining <= 0:
+            break
+        if content is None:
+            continue
+        outline = outline_source(redact_secrets(content))
+        if not outline:
+            continue
+        clipped = outline[: min(OUTLINE_FILE_CHARS, remaining)]
+        remaining -= len(clipped)
+        outlines.append(
+            RepoExcerpt(path=path, content=clipped, truncated=len(clipped) < len(outline))
+        )
+    return outlines
+
+
 async def build_snapshot(github_client, token: str, repo: str, branch: str) -> RepoSnapshot:
     """Pin the branch head, list its tree, and read the fixed-list files.
 
     A file that fails to fetch is left out rather than failing the snapshot —
     one unreadable README must not block planning — but listing failures
     propagate as `GithubWriteError`, since without a tree there is nothing to
-    describe.
+    describe. Then outlines a spread of source files (plan 0028) the same way:
+    a failed fetch drops that file only.
     """
     head_sha = await github_client.get_branch_head(token, repo, branch)
     raw_paths, truncated = await github_client.get_tree(token, repo, head_sha)
@@ -485,6 +520,8 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
             RepoExcerpt(path=path, content=clipped, truncated=len(clipped) < len(content))
         )
 
+    source_outlines = await _outline_sources(github_client, token, repo, head_sha, paths)
+
     return RepoSnapshot(
         commit_sha=head_sha,
         default_branch=branch,
@@ -494,6 +531,8 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
         stack=detect_stack(paths),
         excerpts=excerpts,
         paths=paths[:MAX_PATHS],
+        source_outlines=source_outlines,
+        test_summary=summarize_tests(paths),
     )
 
 

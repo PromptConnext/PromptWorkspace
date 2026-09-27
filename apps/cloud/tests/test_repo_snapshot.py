@@ -33,7 +33,8 @@ from app.imports.snapshot import (
     summarize_tests,
     summarize_tree,
 )
-from app.integrations.github import FakeGithubClient
+from app.integrations.github import FakeGithubClient, GithubWriteError
+from app.models.schemas import RepoSnapshot
 
 REPO = "acme/storyapp"
 
@@ -177,7 +178,7 @@ def test_build_snapshot_pins_the_head_and_never_fetches_a_secret():
     assert "certs/prod.key" not in snapshot.paths
     assert ".env" not in snapshot.tree_summary
     fetched = {path for _repo, path, _sha in fake.fetched_files}
-    assert fetched == {"README.md", "package.json"}
+    assert fetched == {"README.md", "package.json", "src/index.ts"}
     assert all(sha == "abc123" for _repo, _path, sha in fake.fetched_files)
 
 
@@ -440,3 +441,70 @@ def test_summarize_tests_counts_test_files_by_top_level_directory():
 
 def test_summarize_tests_says_when_there_are_none():
     assert summarize_tests(["src/app.ts", "README.md"]) == "no test files found"
+
+
+def test_build_snapshot_outlines_source_files_and_summarises_tests():
+    fake = _fake_repo(
+        {
+            "package.json": "{}",
+            "src/index.ts": "export function start() {}\n// TODO: graceful shutdown\n",
+            "src/util.ts": "const a = 1\n",
+            "tests/start.test.ts": "describe('x', () => {})\n",
+        }
+    )
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert [o.path for o in snapshot.source_outlines] == ["src/index.ts"]
+    assert snapshot.source_outlines[0].content == (
+        "[2 lines]\n1: export function start() {}\n2: // TODO: graceful shutdown"
+    )
+    assert snapshot.test_summary == "1 test file: tests/ 1"
+    # Outlines are not excerpts: the stack judge reads excerpts only.
+    assert "src/index.ts" not in [e.path for e in snapshot.excerpts]
+
+
+def test_build_snapshot_redacts_source_before_outlining():
+    key = "sk-" + "a" * 40
+    fake = _fake_repo({"src/config.ts": f'const API_KEY = "{key}"  // TODO rotate\n'})
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    stored = snapshot.source_outlines[0].content
+    assert key not in stored
+    assert 'API_KEY = "***"' in stored
+
+
+def test_build_snapshot_caps_each_outline_and_the_total():
+    body = "\n".join(f"def f{i}(): pass" for i in range(2_000))
+    fake = _fake_repo({f"src/m{i:02d}/main.py": body for i in range(40)})
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert all(len(o.content) <= 1_500 for o in snapshot.source_outlines)
+    assert all(o.truncated for o in snapshot.source_outlines)
+    assert sum(len(o.content) for o in snapshot.source_outlines) <= 24_000
+
+
+def test_build_snapshot_skips_a_source_file_that_fails_to_fetch():
+    fake = _fake_repo({"src/a.py": "def a(): pass\n", "src/b.py": "def b(): pass\n"})
+    real_fetch = fake.fetch_file_content
+
+    async def flaky(token, repo, path, sha):
+        if path == "src/a.py":
+            raise GithubWriteError("boom", status_code=502)
+        return await real_fetch(token, repo, path, sha)
+
+    fake.fetch_file_content = flaky
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+    assert [o.path for o in snapshot.source_outlines] == ["src/b.py"]
+
+
+def test_build_snapshot_of_a_repository_with_no_source():
+    snapshot = asyncio.run(build_snapshot(_fake_repo({"README.md": "# Docs"}), "tok", REPO, "main"))
+    assert snapshot.source_outlines == []
+    assert snapshot.test_summary == "no test files found"
+
+
+def test_a_snapshot_stored_before_outlines_still_validates():
+    old = {"commit_sha": "abc123", "default_branch": "main", "excerpts": [], "paths": []}
+    snapshot = RepoSnapshot.model_validate(old)
+    assert snapshot.source_outlines == []
+    assert snapshot.test_summary == ""
