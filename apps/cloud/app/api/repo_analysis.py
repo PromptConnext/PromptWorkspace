@@ -320,9 +320,10 @@ async def get_repository_analysis(
     repo: Repository = Depends(get_repository),
 ) -> RepoAnalysisOut:
     """Member-readable, like a stage document: seeing what the plan was
-    written against is not privileged. The snapshot's excerpts are the
-    exception — verbatim file contents, redacted but still the customer's
-    source — and reach admins only; a member gets `excerpts: []`.
+    written against is not privileged. The snapshot's excerpts and source
+    outlines are the exception — verbatim file contents, redacted but still
+    the customer's source — and reach admins only; a member gets
+    `excerpts: []` and `source_outlines: []`.
 
     `stale` costs one branch-head read, and only while the analysis still
     matters (before `repo_created`). Push webhooks cannot answer it — the

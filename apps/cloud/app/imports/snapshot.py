@@ -9,8 +9,9 @@ prose over this material.
 
 Pure apart from the injected GitHub client, in the same spirit as
 app/integrations/repo_seed.py: the filters and the summary are plain functions
-of a path list, so they are tested without a network, and the one async
-function only sequences reads.
+of a path list, so they are tested without a network, and the two async
+functions only sequence reads — `build_snapshot` one file at a time,
+`_outline_sources` (plan 0028) with bounded concurrency.
 
 **Nothing secret-shaped is ever fetched.** `.env*`, private keys, certificates
 and credential files are dropped from the path list before anything else looks
@@ -20,7 +21,8 @@ the model reading the snapshot never sees one, and neither does
 that filter; the prompt that reads it treats it as data (app/generation/
 prompts.py::codebase_baseline_prompt), which is a separate defence against a
 separate problem. And a file that passes the filter can still quote a key
-inline, so every excerpt goes through `redact_secrets` before it is stored.
+inline, so every excerpt and every source outline goes through
+`redact_secrets` before it is stored.
 """
 
 from __future__ import annotations

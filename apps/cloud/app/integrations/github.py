@@ -626,6 +626,20 @@ class HttpGithubClient:
                 status_code=resp.status_code,
             )
         data = resp.json()
+        # A symlink, submodule or directory answers 200 without file content,
+        # and a file over 1 MB answers `encoding: "none"` with it empty. Each
+        # is "this path cannot be read", which callers already handle as a
+        # GithubWriteError — a bare KeyError failed a whole repository analysis.
+        if (
+            not isinstance(data, dict)
+            or data.get("type") != "file"
+            or data.get("encoding") == "none"
+            or "content" not in data
+        ):
+            kind = data.get("type") if isinstance(data, dict) else "dir"
+            raise GithubWriteError(
+                f"fetch_file_content: {repo}/{path} is not a readable file ({kind})"
+            )
         return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
 
     async def create_org_repo(
