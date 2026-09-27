@@ -1,6 +1,6 @@
 # Plan 0028 — Say what an imported codebase already does
 
-**Date:** 2026-09-27 · **Status:** Proposed · **Builds on:** [plan 0027](0027-brownfield-repo-import.md) (M1–M3) · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md) (2026-09-22 amendment), [0027](../decisions/0027-what-is-free.md)
+**Date:** 2026-09-27 · **Status:** Implemented 2026-09-27 (cloud; no web change) · **Builds on:** [plan 0027](0027-brownfield-repo-import.md) (M1–M3) · **ADR:** [0017](../decisions/0017-cloud-creates-project-repo-at-tech-review-exit.md) (2026-09-22 amendment), [0027](../decisions/0027-what-is-free.md)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

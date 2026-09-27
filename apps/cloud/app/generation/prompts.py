@@ -74,6 +74,13 @@ def driver_prompt(kind: StageKind, existing_codebase: bool = False) -> str:
             "An existing codebase is described in [codebase_baseline]; plan changes against "
             "it, reuse its modules and conventions, and do not re-scaffold the project."
         )
+        lines.append(
+            "When [codebase_baseline] has a Current State section, treat what it lists under "
+            "Implemented as already built: never plan or create a task to build it again — "
+            "change or extend it only where the specification requires, and name the existing "
+            "path the work touches. Finish an item listed under Partial or Stubbed only when "
+            "the specification needs it."
+        )
     lines += [
         "",
         "TEMPLATE:",

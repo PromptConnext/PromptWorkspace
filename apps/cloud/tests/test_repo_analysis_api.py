@@ -536,6 +536,7 @@ def test_scratch_project_prompts_are_unchanged(client: TestClient):
         system_prompt, user_content = provider.calls[-1]
         assert "[codebase_baseline]" not in user_content, stage
         assert "re-scaffold" not in system_prompt, stage
+        assert "Current State" not in system_prompt, stage
         assert "SECURITY" not in system_prompt, stage
         assert UNTRUSTED_OPEN not in user_content, stage
 
@@ -601,3 +602,35 @@ def test_baseline_run_reads_outlines_and_asks_for_current_state(client: TestClie
     assert "[outline:src/server.js]" in inside
     assert "3: // TODO: pagination" in inside
     assert "[tests]\nno test files found" in inside
+
+
+def test_plan_and_tasks_are_told_not_to_rebuild_what_exists(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    for stage in ("constitution", "specify", "plan", "tasks"):
+        assert _generate(client, pid, stage).status_code == 200
+        system_prompt, _ = provider.calls[-1]
+        told = "has a Current State section" in system_prompt
+        assert told == (stage in ("plan", "tasks")), stage
+
+
+def test_current_state_survives_the_tasks_cap(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    baseline = (
+        "# Codebase Baseline: storyapp\n\n## Purpose\n\nStories.\n\n"
+        "## Current State\n\n### Implemented\n\n- Story listing API — src/server.js\n\n"
+        "### Partial or Stubbed\n\n- Pagination — src/server.js:3 TODO\n\n"
+        "## Stack\n\n" + "Express details. " * 1_000
+    )
+    res = client.patch(f"/projects/{pid}/repo-analysis", json={"baseline": baseline}, headers=ALICE)
+    assert res.status_code == 200, res.text
+
+    # `tasks` reads the spec document `plan` writes, which reads `specify`'s.
+    for stage in ("specify", "plan", "tasks"):
+        assert _generate(client, pid, stage).status_code == 200, stage
+    _, user_content = client.app.state.generation_provider.calls[-1]
+    assert "- Story listing API — src/server.js" in user_content
+    assert "- Pagination — src/server.js:3 TODO" in user_content
