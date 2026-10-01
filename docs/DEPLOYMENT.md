@@ -293,22 +293,9 @@ already uses.
    addressed to the signed-in user via `GET /invitations/pending` — but the
    direct link is the intended path.)
 
-### 2.9 Corp app (`apps/corp`) → Vercel
+### 2.9 Corp app → Vercel
 
-`apps/corp` is the public marketing site + desktop-app download page — static/SEO-first, no backend of its own, so it deploys as a normal Vercel project like `apps/web`, on a separate project/domain.
-
-1. Import `apps/corp` as the project root in Vercel (monorepo → set "Root Directory" to `apps/corp`).
-2. Environment variables (Vercel → project → Settings → Environment Variables), mirroring `apps/corp/.env.example`:
-
-   | Variable | Value |
-   |---|---|
-   | `NEXT_PUBLIC_SITE_URL` | `https://<corp-domain>` (canonical/OG/sitemap base, no trailing slash) |
-   | `NEXT_PUBLIC_APP_URL` | `https://<web-app-domain>` (cloud sign-in/signup target) |
-   | `NEXT_PUBLIC_APP_VERSION` | display copy only; `/download` links version-free filenames, so a bump needs no corp redeploy. Leave empty to omit the version from the page |
-   | `NEXT_PUBLIC_DOWNLOAD_BASE_URL` | the R2 `installation/` prefix's public URL (§4); leave empty to render `/download`'s "coming soon" state |
-   | `CONTACT_WEBHOOK_URL` | optional; `/api/contact` logs server-side only if unset |
-
-3. No `apps/cloud` CORS entry needed — `apps/corp` never calls the engine or the cloud API.
+Moved 2026-10-01 to [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web), a standalone repo with its own `vercel.json`, `.env.example` and CI. Import that repo in Vercel at its root (no Root Directory override). Its deployment notes live in its README.
 
 ---
 
@@ -393,7 +380,7 @@ Three things to get right before the first release:
 - **Do not build a PAT-based publishing flow.** Global Azure DevOps PATs retire **2026-12-01**;
   use Entra ID workload identity federation with `vsce publish --azure-credential`.
 - **Marketplace Participation Policies §3(b)**: the listing and walkthrough may not promote our
-  other IDE offerings. That pitch belongs on `apps/corp`.
+  other IDE offerings. That pitch belongs on the corp site (promptconnext-corp-web).
 
 Bumping `version` in `apps/vscode/package.json` is the whole release process — installed
 extensions auto-update from the registry, so there is no manifest to assemble and no channel to
@@ -462,9 +449,9 @@ Using Railway's default `*.up.railway.app` URL is fine to start; add `api.<domai
 
 ## 6. CI/CD
 
-**Shipped.** `.github/workflows/ci.yml` runs on every `pull_request` and on `push` to `main`, gated by a computed path-diff so an unrelated change never runs an unrelated suite (a job-level `if:` reading a single `changes` job's output, not GitHub's workflow-level `paths:` filter, so one workflow can gate seven jobs individually). Seven jobs: `cloud` (`ruff check .` then `pytest`, plus the repository contract suite — see below), `engine`, `web`, `vscode`, `mcp`, `corp`, and `pz-cloud` (the shared library `apps/vscode` and `apps/mcp` both depend on — its own job exists so a change there is never invisible even if a consumer's path filter is narrower). `.github/workflows/cloud-contract.yml` is separate: it brings up a local Supabase stack (`supabase start` + `scripts/migrate.py apply`) and runs the `contract` and `rls` marked test suites — the only place the cloud's two Repository adapters (in-memory and Supabase) and the row-level-security grants are actually exercised against real Postgres — nightly, on demand, and on any change under `apps/cloud/app/db/**`, `apps/cloud/migrations/**`, or `apps/cloud/tests/{contract,rls}/**`.
+**Shipped.** `.github/workflows/ci.yml` runs on every `pull_request` and on `push` to `main`, gated by a computed path-diff so an unrelated change never runs an unrelated suite (a job-level `if:` reading a single `changes` job's output, not GitHub's workflow-level `paths:` filter, so one workflow can gate its jobs individually). Six jobs: `cloud` (`ruff check .` then `pytest`, plus the repository contract suite — see below), `engine`, `web`, `vscode`, `mcp`, and `pz-cloud` (the shared library `apps/vscode` and `apps/mcp` both depend on — its own job exists so a change there is never invisible even if a consumer's path filter is narrower). `.github/workflows/cloud-contract.yml` is separate: it brings up a local Supabase stack (`supabase start` + `scripts/migrate.py apply`) and runs the `contract` and `rls` marked test suites — the only place the cloud's two Repository adapters (in-memory and Supabase) and the row-level-security grants are actually exercised against real Postgres — nightly, on demand, and on any change under `apps/cloud/app/db/**`, `apps/cloud/migrations/**`, or `apps/cloud/tests/{contract,rls}/**`.
 
-Neither workflow deploys. `railway up`/`vercel deploy` behind a manual approval gate (GitHub Environments) remains **not yet built** — Railway's own git-push auto-deploy and Vercel's own git integration are what actually ships `apps/cloud`/`apps/web`/`apps/corp` today; CI is verification only.
+Neither workflow deploys. `railway up`/`vercel deploy` behind a manual approval gate (GitHub Environments) remains **not yet built** — Railway's own git-push auto-deploy and Vercel's own git integration are what actually ships `apps/cloud`/`apps/web` (and the separate corp-web repo) today; CI is verification only.
 
 **Desktop (release on tag `v*`):** unchanged from before CI existed — `.github/workflows/desktop-build.yml`, matrix `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists. (`apps/desktop-theia`'s and its spike's CI workflows are retired — see the Layout section's notice in `CLAUDE.md` — but `apps/desktop-theia` itself is not yet deleted; don't confuse the two.)
 
@@ -483,7 +470,7 @@ Neither workflow deploys. `railway up`/`vercel deploy` behind a manual approval 
 - [ ] service_role key set only in Railway variables — never in the repo or client
 - [ ] Replicas = 1 (in-process presence/rate-limit state)
 - [ ] `CORS_ORIGINS` includes the packaged app origin, excludes wildcards
-- [ ] `SENTRY_DSN` set on the cloud service and `NEXT_PUBLIC_SENTRY_DSN` on both Vercel projects (`apps/web`, `apps/corp`) — unset means the SDK never initialises and the instance runs blind; the cloud logs a startup warning to that effect
+- [ ] `SENTRY_DSN` set on the cloud service and `NEXT_PUBLIC_SENTRY_DSN` on both Vercel projects (`apps/web`, promptconnext-corp-web) — unset means the SDK never initialises and the instance runs blind; the cloud logs a startup warning to that effect
 - [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web/corp equivalent is `src/lib/sentry.ts` in each app, covered by `src/lib/sentry.test.ts`. The URL rules are the ones worth re-reading before adding a route: a credential in a path or fragment has no key name for a denylist to match, which is how `/invitations/{token}/accept` and Supabase's `#access_token=` recovery link both leaked in review
 - [ ] DMG uploaded to versioned R2 path + `checksums.txt` + `latest.json` updated
 - [ ] Download page includes the Gatekeeper workaround note (until signing exists)

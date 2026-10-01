@@ -8,7 +8,6 @@
     "engine": "pnpm --dir apps/engine start",
     "desktop": "pnpm --dir apps/desktop tauri dev",
     "web": "pnpm --dir apps/web dev",
-    "corp": "pnpm --dir apps/corp dev",
     "vscode": "pnpm --dir apps/vscode watch",
     "mcp": "pnpm --dir apps/mcp watch"
   },
@@ -27,11 +26,6 @@
         }
       },
       "styled-jsx": {
-        "dependencies": {
-          "@types/react": "19.2.17"
-        }
-      },
-      "next-intl": {
         "dependencies": {
           "@types/react": "19.2.17"
         }

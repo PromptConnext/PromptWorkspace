@@ -6,10 +6,9 @@ packages:
   # the retry queue and the task-ref grammar.
   - packages/*
 
-# apps/desktop (React 18), apps/web (React 19.0) and apps/corp (React 19.2)
-# share one pnpm store. Packages that reference React's types internally but
+# apps/desktop (React 18) and apps/web (React 19) share one pnpm store. Packages that reference React's types internally but
 # don't declare @types/react as a real dependency (styled-jsx via next,
-# @monaco-editor/react, next-intl) otherwise fall back to a single shared
+# @monaco-editor/react) otherwise fall back to a single shared
 # phantom-hoisted @types/react — which can only match one app, and which
 # re-hoists non-deterministically across installs. Each such package gets an
 # explicit, correctly scoped edge via `pnpm.packageExtensions` in the root

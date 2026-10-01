@@ -13,7 +13,6 @@ pnpm workspace (`apps/*`) plus one Python app. No monorepo build tool — the ap
 - `apps/desktop-theia` — Eclipse Theia + Electron shell (ADR 0016), at plumbing parity with `apps/desktop` and running the same engine sidecar. Also frozen and being retired; the planned M4 cutover to this shell is cancelled, not pending.
 - `apps/cloud` — FastAPI (Python ≥ 3.10) + Supabase/Postgres. **Optional** sync + collaboration backend: workspaces and membership, task-graph sync, the web Planner's stage generator (managed Typhoon), the RAG assistant, presence, and tracker integrations. Credentials never sync; source code never syncs (that's Git).
 - `apps/web` — Next.js 16 App Router / React 19. Team-member web UI against `apps/cloud`: Planner (authoring — PRD upload, stage generation, project creation), Graph, Tasks, Progress, Discussion. No Next API routes.
-- `apps/corp` — Next.js 16 / React 19 / `next-intl` (EN/TH) / Tailwind v4. Public marketing site and the desktop **download page**. Static, SEO-first, unauthenticated — talks to no engine and no cloud API. **Stale pricing:** the `/pricing` page still sells "the full desktop app, forever" as Free — that product is being retired (see above) and [ADR 0027](docs/decisions/0027-what-is-free.md) already redefines free as metered planning / paid provisioning; the page hasn't been rewritten yet ([plan 0022](docs/plans/0022-positioning-and-pricing.md)).
 - `apps/vscode` — VS Code extension (ADR 0019), bundled with esbuild. The developer surface for cloud-planned work: assigned tasks, the project's AI coding rules read from the clone, copy-task-context for any assistant, and task status closed from a commit. Talks straight to `apps/cloud` — **no sidecar, no engine, no local server**. Tests: `node --test test/unit/*.test.ts`.
 
 > **Retirement accepted, 2026-09-13.** [ADR 0019](docs/decisions/0019-desktop-as-vscode-extension.md) and
@@ -35,7 +34,6 @@ pnpm install
 pnpm desktop        # full app: Tauri window + vite + engine sidecar (first run compiles Rust)
 pnpm engine         # engine alone on 127.0.0.1:47131 (tokenless dev mode)
 pnpm web            # team web UI      → http://localhost:3000
-pnpm corp           # marketing + download → http://localhost:3002
 pnpm vscode         # extension: esbuild watch, then press F5 in apps/vscode
 ```
 
@@ -61,7 +59,7 @@ A zero-cost first model: install [Ollama](https://ollama.com), `ollama pull qwen
 
 ## Deploy
 
-`apps/cloud` → Railway or any container host (**not** Vercel — long-lived container, WebSocket presence, single instance). `apps/web` and `apps/corp` → Vercel, separate projects. `apps/desktop` → installers still built per-platform in CI (macOS arm64 + Windows x64) and published to R2, unsigned on macOS; packaging is host-platform-bound because the build machine's own Node binary is bundled. This pipeline is frozen product, not a maintained release channel — see the retirement notice above. Details in `docs/DEPLOYMENT.md` and `docs/BUILD_AND_DISTRIBUTE.md`.
+`apps/cloud` → Railway or any container host (**not** Vercel — long-lived container, WebSocket presence, single instance). `apps/web` → Vercel. The marketing site lives in [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web) (also Vercel). `apps/desktop` → installers still built per-platform in CI (macOS arm64 + Windows x64) and published to R2, unsigned on macOS; packaging is host-platform-bound because the build machine's own Node binary is bundled. This pipeline is frozen product, not a maintained release channel — see the retirement notice above. Details in `docs/DEPLOYMENT.md` and `docs/BUILD_AND_DISTRIBUTE.md`.
 
 ## Implementation is BYO-agent (ADR 0009)
 

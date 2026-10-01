@@ -76,7 +76,7 @@ jobs:
             # it has to be redeployed on every release or it points at a stale
             # build. Publish a version-free alias alongside it — the macOS
             # asset name is already version-stable, so this makes both download
-            # URLs constant and apps/corp never needs the version to build a
+            # URLs constant and the corp site (promptconnext-corp-web) never needs the version to build a
             # link. latest.json still carries the real version for the updater.
             case "$key" in
               *_x64-setup.exe)
@@ -143,6 +143,6 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           # Public base URL of the R2 installation/ prefix — same value the corp
-          # site uses for NEXT_PUBLIC_DOWNLOAD_BASE_URL, and the host of the
+          # site (promptconnext-corp-web) uses for NEXT_PUBLIC_DOWNLOAD_BASE_URL, and the host of the
           # updater endpoint in tauri.conf.json. No trailing slash.
           DOWNLOAD_PUBLIC_BASE_URL: ${{ secrets.DOWNLOAD_PUBLIC_BASE_URL }}

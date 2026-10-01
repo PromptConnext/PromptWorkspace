@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-PromptConnext is a pnpm workspace (`apps/*`) with a Python backend. Main applications are `engine` (Node/TypeScript orchestration), `desktop` (Tauri/React), `web` (Next.js team UI), `corp` (Next.js marketing), and `vscode` (editor extension). TypeScript source lives in each app’s `src/`; cloud code lives in `apps/cloud/app/`. `apps/desktop-theia/` and `spikes/` contain Theia shell work.
+PromptConnext is a pnpm workspace (`apps/*`) with a Python backend. Main applications are `engine` (Node/TypeScript orchestration), `desktop` (Tauri/React), `web` (Next.js team UI), and `vscode` (editor extension). TypeScript source lives in each app’s `src/`; cloud code lives in `apps/cloud/app/`. `apps/desktop-theia/` and `spikes/` contain Theia shell work. The marketing site moved out to [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web).
 
 Cloud migrations live in `apps/cloud/migrations/`; Supabase configuration is in `supabase/`. Desktop icons are in `apps/desktop/src-tauri/icons/`, and extension assets are in `apps/vscode/media/`. Read relevant architecture decisions in `docs/decisions/` before changing subsystem boundaries.
 
@@ -13,16 +13,16 @@ Use Node 24+, pnpm 9.11.0, and Python 3.10+ for cloud development. Desktop devel
 - `pnpm install`: install workspace dependencies.
 - `pnpm engine`: start the local engine; it runs TypeScript directly without a build step.
 - `pnpm desktop`: launch the Tauri application and sidecar.
-- `pnpm web` / `pnpm corp`: start Next.js on ports 3000 / 3002.
+- `pnpm web`: start Next.js on port 3000.
 - `pnpm vscode`: watch-build the extension.
-- `pnpm --dir apps/web build`: build the web application; desktop, corp, and vscode also provide `build` scripts.
-- `pnpm --dir apps/web typecheck`: check TypeScript; engine, corp, and vscode also expose `typecheck`.
+- `pnpm --dir apps/web build`: build the web application; desktop and vscode also provide `build` scripts.
+- `pnpm --dir apps/web typecheck`: check TypeScript; engine and vscode also expose `typecheck`.
 
 For cloud, create a virtual environment in `apps/cloud`, run `pip install -r requirements.txt`, then `uvicorn app.main:app --reload --port 8080`.
 
 ## Coding Style & Naming Conventions
 
-Match nearby code: TypeScript uses two-space indentation, double quotes, and semicolons; Python uses four spaces and snake_case. Use PascalCase for React components and camelCase for functions/hooks. Run `pnpm --dir apps/corp lint` for ESLint and `ruff check .` from `apps/cloud` (100-character lines). Preserve root pnpm React type overrides.
+Match nearby code: TypeScript uses two-space indentation, double quotes, and semicolons; Python uses four spaces and snake_case. Use PascalCase for React components and camelCase for functions/hooks. Run `ruff check .` from `apps/cloud` (100-character lines). Preserve root pnpm React type overrides.
 
 ## Testing Guidelines
 

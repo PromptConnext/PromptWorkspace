@@ -34,7 +34,6 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       vscode: ${{ steps.filter.outputs.vscode }}
       mcp: ${{ steps.filter.outputs.mcp }}
-      corp: ${{ steps.filter.outputs.corp }}
       pz_cloud: ${{ steps.filter.outputs.pz_cloud }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -93,7 +92,6 @@ jobs:
           # workspace:*, so a breaking change there must fail in both.
           emit vscode   'apps/vscode/' 'packages/pz-cloud/' "$root_re"
           emit mcp      'apps/mcp/' 'packages/pz-cloud/' "$root_re"
-          emit corp     'apps/corp/' "$root_re"
           emit pz_cloud 'packages/pz-cloud/' "$root_re"
 
   cloud:
@@ -191,29 +189,6 @@ jobs:
       - run: pnpm --dir apps/mcp typecheck
       - run: pnpm --dir apps/mcp test
       - run: pnpm --dir apps/mcp build
-
-  corp:
-    needs: changes
-    if: needs.changes.outputs.corp == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @promptconnext/corp...
-      - run: pnpm --dir apps/corp typecheck
-      # The only app with an ESLint config.
-      - run: pnpm --dir apps/corp lint
-      # It gained a test runner with plan 0021 M2 (it had none before): the
-      # error-reporting scrub in src/lib/sentry.ts decides what a visitor's
-      # contact-form submission and CONTACT_WEBHOOK_URL are allowed to leave
-      # this app, and that is not something to ship unverified. A job that
-      # doesn't run the suite is how plan 0021 §1 found 33 broken tests in
-      # apps/web, so the step lands with the suite.
-      - run: pnpm --dir apps/corp test
 
   # apps/vscode and apps/mcp already gate on packages/pz-cloud/**, so this job
   # is redundant for most changes. It exists so the shared library is still
