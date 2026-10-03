@@ -10,6 +10,12 @@ creates a document: everything that asks "does this stage have a document"
 Writing follows the stage's authoring rule (`require_stage_access`): the
 answers to `constitution` and `plan` are as admin-only as generating them.
 Reading is open to any member, like the documents themselves.
+
+PUT replaces the stage's answers wholesale, last writer wins — deliberately.
+There is no version check or 409: two members editing the same form at once
+is rare, the answers are a prompt rather than a record, and the loser's text
+is still on their screen to re-apply. Revisit with an `updated_at` precondition
+if concurrent editing becomes a real workflow.
 """
 
 from __future__ import annotations

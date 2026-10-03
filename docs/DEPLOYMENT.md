@@ -69,7 +69,13 @@ psql "$POOLER_URL" -c "select has_table_privilege('service_role','public.pw_task
 
 **`embed_dim` is required and must equal `MANAGED_EMBED_DIM`.** The baseline declares `migration-runner: requires-vars=embed_dim`, so `apply` refuses without it. The default for both environments is `1536` (OpenAI `text-embedding-3-small`; `gemini-embedding-001` truncated to 1536 also fits). Changing it later is destructive — embedded rows are deleted because a vector of one width cannot be reinterpreted at another — so choose the embedding model first. A workspace's own model connection (`POST /workspaces/{id}/model-connection`) must use the same `embed_dim`; a mismatch 409s with `embed_dim_mismatch`.
 
-If the privilege check prints `f`, run the grant SQL from `.github/workflows/cloud-contract.yml` (the "grant" step). `/health.schema_version` reports the stem of the last migration file, so a correctly applied database answers `"schema_version": "0003_pw_stage_inputs"` (the code reports the newest file it ships, so this moves with every additive migration).
+If the privilege check prints `f`, run the grant SQL from `.github/workflows/cloud-contract.yml` (the "grant" step).
+
+**Confirm what the database has applied from its ledger, not from `/health`.** `/health.schema_version` is the stem of the newest migration file in the deployed image — the version the *code* expects — and never reads the database, so it answers `"0003_pw_stage_inputs"` whether or not 0003 was applied (and because the API tolerates a missing `pw_stage_inputs`, nothing else looks wrong either). The proof is `python scripts/migrate.py --db-url "$POOLER_URL" status`, which must list every file on disk under `Applied` and print `Pending (0)`, or the ledger itself:
+
+```bash
+psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations order by filename"   # last row: 0003_pw_stage_inputs.sql
+```
 
 ### 2.3 Create the Northflank service
 
@@ -158,7 +164,7 @@ The rate limiter is the one component with no counter of its own: a bucket count
 
 ```bash
 API=https://workspace-api.promptconnext.com    # or https://promptworkspace-api.truthledgers.com
-curl -sSf $API/health | jq '{env, schema_version}'   # "production"/"staging", "0003_pw_stage_inputs"
+curl -sSf $API/health | jq '{env, schema_version}'   # "production"/"staging", "0003_pw_stage_inputs" (the code's expected version — not proof the DB has it; see §2.2)
 curl -si -X OPTIONS -H "Origin: https://workspace.promptconnext.com" -H "Access-Control-Request-Method: GET" $API/health | grep -i '^access-control-allow-origin'
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/webhooks/github   # 400/401 for an unsigned request, not 404
 ```
@@ -412,7 +418,7 @@ Neither workflow deploys: Vercel's git integration and Northflank's per-service 
 
 ## 7. Production checklist
 
-- [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `/health.schema_version` is `"0003_pw_stage_inputs"`; the service_role privilege check prints `t` (§2.2)
+- [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `scripts/migrate.py status` against the same URI prints `Pending (0)` with `0003_pw_stage_inputs.sql` under `Applied` (`/health.schema_version` only names the version the code expects, not what the DB has); the service_role privilege check prints `t` (§2.2)
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`, `RAG_KEY_ENCRYPTION_KEY` set (the service refuses to boot without it) and backed up offline
 - [ ] Secret key set only in the Northflank runtime variables — never in the repo or a client; clients get only the publishable key
 - [ ] Instances = 1 (in-process presence/rate-limit state)
