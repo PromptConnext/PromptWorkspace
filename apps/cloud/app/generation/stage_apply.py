@@ -353,7 +353,9 @@ def _apply_tasks(
         tag = f"{raw_ref} [P]" if row["parallel"] else raw_ref
         fields = {
             "title": title,
-            "acceptance_criteria": [AcceptanceCriterion(text=title)],
+            "acceptance_criteria": [
+                AcceptanceCriterion(text=text) for text in row["acceptance_criteria"]
+            ],
             "feature_tag": tag,
             "spec_id": spec_id,
         }

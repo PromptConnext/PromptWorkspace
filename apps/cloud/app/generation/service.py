@@ -63,8 +63,9 @@ class FakeGenerationProvider:
     real model that ignores the wrapper would hit. For the `tasks` stage
     (detected from the driver prompt's "task-breakdown" role, since the
     provider doesn't otherwise know which stage it's serving) it emits a
-    real `- [ ] T001 Description` checklist instead of echoing the prompt,
-    so parse_task_lines() has something to parse. Prefill requests (detected
+    real `- [ ] T001 Description` checklist, each task carrying an `  - AC:`
+    criterion, instead of echoing the prompt, so parse_task_lines() has
+    something to parse. Prefill requests (detected
     the same way, from the intake-form system prompt) get a JSON object keyed
     by the requested fields, each value quoting the source material so tests
     can tell a grounded draft from an invented one."""
@@ -89,7 +90,9 @@ class FakeGenerationProvider:
             doc = (
                 f"# {self._title}\n\n"
                 "- [ ] T001 [P] Implement the first task from the plan\n"
+                "  - AC: The first task's behaviour is observable\n"
                 "- [ ] T002 Implement the second task from the plan\n"
+                "  - AC: The second task's behaviour is observable\n"
             )
         else:
             doc = f"# {self._title}\n\n{user_content}"
