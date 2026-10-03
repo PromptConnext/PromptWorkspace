@@ -33,6 +33,7 @@ describe("useBoardUrlState", () => {
       sprint: null,
       spec: null,
       group: "sprint",
+      hideEmpty: false,
     });
     expect(result.current.openTaskId).toBe("t1");
   });
@@ -44,11 +45,11 @@ describe("useBoardUrlState", () => {
     expect(url()).toBe("/projects/p1?tab=tasks&q=login&assignee=unassigned");
   });
 
-  it("clears filters but keeps the grouping", () => {
-    at("tab=tasks&q=x&sprint=S1&group=assignee");
+  it("clears filters but keeps the grouping and hidden empty columns", () => {
+    at("tab=tasks&q=x&sprint=S1&group=assignee&empty=hide");
     const { result } = renderHook(() => useBoardUrlState());
     result.current.clearFilters();
-    expect(url()).toBe("/projects/p1?tab=tasks&group=assignee");
+    expect(url()).toBe("/projects/p1?tab=tasks&group=assignee&empty=hide");
   });
 
   it("opens and closes a task", () => {

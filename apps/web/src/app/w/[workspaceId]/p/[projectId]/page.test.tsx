@@ -6,6 +6,7 @@ import ProjectPage from "./page";
 const replace = vi.fn();
 let search = "";
 let refreshError: string | null = null;
+let graphLoaded = true;
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace }),
   usePathname: () => "/w/w1/p/p1",
@@ -18,7 +19,11 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
+vi.mock("@/components/TopBar", () => ({
+  TopBar: ({ crumbs }: { crumbs: { label: string; loading?: boolean }[] }) => (
+    <nav aria-label="crumbs">{crumbs.map((c) => (c.loading ? "[skeleton]" : c.label)).join(" / ")}</nav>
+  ),
+}));
 vi.mock("@/components/PresenceBar", () => ({ PresenceBar: () => null }));
 vi.mock("@/lib/workspace", () => ({ useWorkspaceName: () => "WS" }));
 vi.mock("@/components/project/GraphBrowser", () => ({
@@ -41,9 +46,9 @@ vi.mock("@/components/project/DiscussionThread", () => ({
 }));
 vi.mock("@/lib/hooks", () => ({
   useCloudGet: () => ({
-    data: { project: { name: "P" } },
+    data: graphLoaded ? { project: { name: "P" } } : null,
     error: null,
-    loading: false,
+    loading: !graphLoaded,
     refetch: vi.fn(),
     refreshing: false,
     refreshError,
@@ -56,6 +61,7 @@ beforeEach(() => {
   replace.mockReset();
   search = "";
   refreshError = null;
+  graphLoaded = true;
 });
 afterEach(cleanup);
 
@@ -168,5 +174,48 @@ describe("board freshness", () => {
       "Couldn't refresh — showing last loaded data.",
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+});
+
+describe("first load", () => {
+  function renderLoading(tab: string) {
+    graphLoaded = false;
+    search = `tab=${tab}`;
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+  }
+
+  it("shows the board skeleton on Tasks, busy and announced", () => {
+    renderLoading("tasks");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading project…");
+    expect(screen.getByRole("status").closest("[aria-busy='true']")).not.toBeNull();
+    // The board's own column shells, not a line of text.
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.queryByText(/Loading graph/)).not.toBeInTheDocument();
+    expect(screen.queryByText("board-view")).not.toBeInTheDocument();
+  });
+
+  it("shows a generic skeleton on other tabs", () => {
+    renderLoading("planner");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading project…");
+    expect(screen.queryByText("In Progress")).not.toBeInTheDocument();
+  });
+
+  it("holds the breadcrumb's place with a skeleton until the name arrives", () => {
+    renderLoading("tasks");
+    expect(screen.getByRole("navigation", { name: "crumbs" })).toHaveTextContent(
+      "WS / [skeleton]",
+    );
+    cleanup();
+    graphLoaded = true;
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    expect(screen.getByRole("navigation", { name: "crumbs" })).toHaveTextContent("WS / P");
   });
 });

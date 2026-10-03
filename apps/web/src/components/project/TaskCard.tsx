@@ -3,6 +3,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import { useMemo } from "react";
 import { authorityOf } from "@/lib/fieldAuthority";
+import { plainInlineCode, splitInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import type { Artifact, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
 import {
@@ -92,7 +93,7 @@ export function AssigneeControl({
   readOnly: boolean;
   onAssign: (task: Task, next: string | null) => void;
 }) {
-  const ref = taskRefLabel(task) ?? task.title;
+  const ref = taskRefLabel(task) ?? plainInlineCode(task.title);
   const allowed = useMemo(
     () => new Set(assignableUserIds(viewer, members.map((m) => m.user_id))),
     [viewer, members],
@@ -185,7 +186,7 @@ export function MoveMenu({
   viewer: Viewer;
   onMove: (task: Task, next: TaskStatus) => void;
 }) {
-  const ref = taskRefLabel(task) ?? task.title;
+  const ref = taskRefLabel(task) ?? plainInlineCode(task.title);
   return (
     <Select value={task.status} onValueChange={(next) => onMove(task, next as TaskStatus)}>
       <SelectTrigger
@@ -265,6 +266,26 @@ function ArtifactLinks({ artifacts }: { artifacts: Artifact[] }) {
   );
 }
 
+/** `text` with its `code` spans set in mono; shared by the card and the drawer. */
+export function InlineCodeText({ text }: { text: string }) {
+  return (
+    <>
+      {splitInlineCode(text).map((s, i) =>
+        s.code ? (
+          <code
+            key={i}
+            className="break-all rounded bg-slate-100 px-1 py-px font-mono text-[0.85em] text-slate-800"
+          >
+            {s.text}
+          </code>
+        ) : (
+          s.text
+        ),
+      )}
+    </>
+  );
+}
+
 export function CardBody({
   task,
   owner,
@@ -307,10 +328,12 @@ export function CardBody({
             onClick={() => onOpen(task)}
             className={`${titleClass} rounded text-left transition-colors hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
           >
-            {task.title}
+            <InlineCodeText text={task.title} />
           </button>
         ) : (
-          <p className={titleClass}>{task.title}</p>
+          <p className={titleClass}>
+            <InlineCodeText text={task.title} />
+          </p>
         )}
       </div>
       {!dragging && (trackerDiffers(task.assignee, owner) || task.sprint) && (
@@ -370,7 +393,7 @@ export function TaskCard({
   const owner = task.assigned_user_id
     ? members.find((m) => m.user_id === task.assigned_user_id)
     : undefined;
-  const ref = taskRefLabel(task) ?? task.title;
+  const ref = taskRefLabel(task) ?? plainInlineCode(task.title);
 
   // The whole body drags under a mouse or finger, but keyboard focus lands on
   // a dedicated handle: the title may be a button of its own, and a button

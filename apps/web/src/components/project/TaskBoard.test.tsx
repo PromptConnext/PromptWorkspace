@@ -659,4 +659,82 @@ describe("TaskBoard filters, lanes and drawer", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  it("hides a lane's empty columns on request, and keeps the choice past Clear", async () => {
+    nav.query = "tab=tasks&group=assignee&empty=hide";
+    board(MIXED);
+    await screen.findByText("Signup page");
+
+    const toggle = screen.getByRole("button", { name: "Hide Empty Columns" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const lane = screen.getByRole("region", { name: "dev, 1 task" });
+    expect(within(lane).getByRole("region", { name: "dev — To Do, 1 task" })).toBeInTheDocument();
+    expect(within(lane).queryByRole("region", { name: /In Progress/ })).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(nav.query).toBe("tab=tasks&group=assignee");
+    expect(
+      within(lane).getByRole("region", { name: "dev — In Progress, 0 tasks" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers Hide Empty Columns only when grouped", async () => {
+    board(MIXED);
+    await screen.findByText("Signup page");
+    expect(screen.queryByRole("button", { name: "Hide Empty Columns" })).not.toBeInTheDocument();
+  });
+
+  it("shows the hidden columns a dragged card can land in", async () => {
+    nav.query = "tab=tasks&group=assignee&empty=hide";
+    board(MIXED);
+    const handle = await screen.findByRole("button", { name: "Move task T002 · Signup page" });
+    const lane = screen.getByRole("region", { name: "dev, 1 task" });
+    expect(within(lane).queryByRole("region", { name: /Verified/ })).not.toBeInTheDocument();
+
+    handle.focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() =>
+      expect(
+        within(lane).getByRole("region", { name: "dev — Verified, 0 tasks" }),
+      ).toBeInTheDocument(),
+    );
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(within(lane).queryByRole("region", { name: /Verified/ })).not.toBeInTheDocument(),
+    );
+  });
+});
+
+describe("TaskBoard inline code titles", () => {
+  const CODED = task({
+    id: "t1",
+    feature_tag: "T001",
+    title: "Create structure: `src/consent/`, `src/auth/`",
+  });
+
+  it("sets code spans in <code> and names the controls without backticks", async () => {
+    board([CODED]);
+    // jsdom has no UA stylesheet to make <code> inline, so its computed name
+    // pads the spans; the text is what a browser names the button by.
+    const title = (await screen.findByText("src/consent/")).closest("button") as HTMLElement;
+    expect(title).toHaveTextContent("Create structure: src/consent/, src/auth/");
+    expect([...title.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "src/consent/",
+      "src/auth/",
+    ]);
+    expect(title).not.toHaveTextContent("`");
+    expect(
+      screen.getByRole("button", { name: "Move task T001 · Create structure: src/consent/, src/auth/" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders code spans in the drawer heading too", async () => {
+    nav.query = "tab=tasks&task=t1";
+    board([CODED]);
+    const dialog = await screen.findByRole("dialog");
+    const heading = within(dialog).getByRole("heading", { level: 2 });
+    expect(heading.querySelectorAll("code")).toHaveLength(2);
+    expect(heading).toHaveTextContent("Create structure: src/consent/, src/auth/");
+  });
 });

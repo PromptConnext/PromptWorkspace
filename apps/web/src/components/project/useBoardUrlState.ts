@@ -54,11 +54,13 @@ export function useBoardUrlState(): {
     [update],
   );
 
-  // Clears what narrows the list; the grouping is a layout choice and stays.
+  // Clears what narrows the list; the layout choices (grouping, hidden empty
+  // columns) stay.
   const clearFilters = useCallback(() => {
-    update((current) =>
-      writeBoardFilters(current, { ...EMPTY_FILTERS, group: parseBoardFilters(current).group }),
-    );
+    update((current) => {
+      const { group, hideEmpty } = parseBoardFilters(current);
+      return writeBoardFilters(current, { ...EMPTY_FILTERS, group, hideEmpty });
+    });
   }, [update]);
 
   const openTask = useCallback(

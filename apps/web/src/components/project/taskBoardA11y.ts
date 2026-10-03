@@ -1,4 +1,5 @@
 import type { Announcements, ScreenReaderInstructions } from "@dnd-kit/core";
+import { plainInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import type { Task, TaskStatus } from "@/lib/types";
 import { canMoveTo, moveDeniedReason } from "./taskPermissions";
@@ -34,7 +35,8 @@ export const STATUS_LABEL = Object.fromEntries(COLUMNS.map((c) => [c.status, c.l
 /** "T004 · Login form" — the reference people use, plus the words they recognise. */
 export function taskName(task: Task): string {
   const ref = taskRefLabel(task);
-  return ref ? `${ref} · ${task.title}` : task.title;
+  const title = plainInlineCode(task.title);
+  return ref ? `${ref} · ${title}` : title;
 }
 
 /**

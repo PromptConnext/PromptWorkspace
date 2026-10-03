@@ -10,6 +10,7 @@ import { GraphBrowser } from "@/components/project/GraphBrowser";
 import { Planner } from "@/components/project/Planner";
 import { PreviewPanel } from "@/components/project/PreviewPanel";
 import { TaskBoard } from "@/components/project/TaskBoard";
+import { BoardSkeleton } from "@/components/project/BoardColumn";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
 import { useCloudGet } from "@/lib/hooks";
@@ -103,6 +104,28 @@ function BoardFreshness({
   );
 }
 
+/**
+ * The first graph load can take seconds; a skeleton shaped like the tab
+ * about to appear reads as "on its way", where a line of text reads as stuck.
+ */
+function TabSkeleton({ tab }: { tab: Tab }) {
+  if (tab === "Tasks") return <BoardSkeleton label="Loading project…" />;
+  return (
+    <div aria-busy="true" className="flex flex-col gap-3">
+      <span className="sr-only" role="status">
+        Loading project…
+      </span>
+      {["h-8 w-1/3", "h-24 w-full", "h-24 w-full", "h-24 w-2/3"].map((size) => (
+        <div
+          key={size}
+          aria-hidden
+          className={`${size} animate-pulse rounded-lg bg-slate-100 motion-reduce:animate-none`}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ProjectWorkspace({
   workspaceId,
   projectId,
@@ -163,7 +186,7 @@ function ProjectWorkspace({
       <TopBar
         crumbs={[
           { label: workspaceName, href: `/w/${workspaceId}` },
-          { label: graph?.project.name ?? "Project" },
+          { label: graph?.project.name ?? "Project", loading: loading && !graph },
         ]}
       />
       {/* The board needs the full width (4 columns); other tabs read better narrow. */}
@@ -223,10 +246,6 @@ function ProjectWorkspace({
           </div>
         </div>
 
-        {/* Only the first load blocks; background refreshes keep the content up. */}
-        {loading && !graph && (
-          <p className="text-sm text-slate-500">Loading graph…</p>
-        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {tab !== "Tasks" && refreshError && graph && (
           <p className="mb-4 text-xs text-amber-700">
@@ -245,6 +264,8 @@ function ProjectWorkspace({
           id="project-tabpanel"
           aria-labelledby={`tab-${slugOf(tab)}`}
         >
+          {/* Only the first load blocks; background refreshes keep the content up. */}
+          {loading && !graph && <TabSkeleton tab={tab} />}
           {graph && (
             <>
               {tab === "Planner" && (

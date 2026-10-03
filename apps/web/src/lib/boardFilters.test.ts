@@ -46,6 +46,7 @@ describe("parseBoardFilters / writeBoardFilters", () => {
       sprint: "Sprint 3",
       spec: "s1",
       group: "sprint",
+      hideEmpty: true,
     };
     const written = writeBoardFilters(new URLSearchParams("tab=tasks&task=t9"), f);
     expect(written.get("tab")).toBe("tasks");
@@ -54,7 +55,7 @@ describe("parseBoardFilters / writeBoardFilters", () => {
   });
 
   it("deletes defaults instead of writing them", () => {
-    const start = new URLSearchParams("tab=tasks&q=x&assignee=me&sprint=S1&spec=s1&group=spec");
+    const start = new URLSearchParams("tab=tasks&q=x&assignee=me&sprint=S1&spec=s1&group=spec&empty=hide");
     const written = writeBoardFilters(start, { ...EMPTY_FILTERS, q: "   " });
     expect(written.toString()).toBe("tab=tasks");
   });
@@ -73,6 +74,7 @@ describe("parseBoardFilters / writeBoardFilters", () => {
 describe("hasActiveFilters", () => {
   it("ignores grouping and whitespace-only search", () => {
     expect(hasActiveFilters({ ...EMPTY_FILTERS, group: "assignee", q: "  " })).toBe(false);
+    expect(hasActiveFilters({ ...EMPTY_FILTERS, group: "assignee", hideEmpty: true })).toBe(false);
     expect(hasActiveFilters({ ...EMPTY_FILTERS, spec: "s1" })).toBe(true);
   });
 });
@@ -99,6 +101,14 @@ describe("applyBoardFilters", () => {
     expect(ids({ q: "t002" })).toEqual(["b"]);
     expect(ids({ q: "oauth" })).toEqual(["b"]);
     expect(ids({ q: "" })).toEqual(["a", "b", "c"]);
+  });
+
+  it("matches a title with inline code both raw and as displayed", () => {
+    const coded = [task({ id: "k", title: "Create `src/consent/`, `src/auth/` folders" })];
+    const q = (needle: string) =>
+      applyBoardFilters(coded, { ...EMPTY_FILTERS, q: needle }, "u1").map((t) => t.id);
+    expect(q("`src/auth/`")).toEqual(["k"]);
+    expect(q("src/consent/, src/auth/")).toEqual(["k"]);
   });
 
   it("filters by me, unassigned and a specific member", () => {

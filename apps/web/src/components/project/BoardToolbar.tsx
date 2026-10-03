@@ -238,6 +238,24 @@ export function BoardToolbar({
         </SelectContent>
       </Select>
 
+      {filters.group !== "none" && (
+        <button
+          type="button"
+          aria-pressed={filters.hideEmpty}
+          title="Hide columns a swimlane has no tasks in"
+          onClick={() => onChange({ hideEmpty: !filters.hideEmpty })}
+          className={[
+            "h-9 rounded-lg border px-3 text-sm font-medium shadow-sm transition-colors",
+            filters.hideEmpty
+              ? "border-slate-800 bg-slate-800 text-white hover:bg-slate-700"
+              : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50",
+            FOCUS_RING,
+          ].join(" ")}
+        >
+          Hide Empty Columns
+        </button>
+      )}
+
       {active && (
         <button
           type="button"

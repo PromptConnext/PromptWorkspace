@@ -1,3 +1,4 @@
+import { plainInlineCode } from "./inlineCode";
 import type { ProjectGraph, Task } from "./types";
 
 /**
@@ -22,6 +23,8 @@ export interface BoardFilters {
   sprint: string | null;
   spec: string | null;
   group: BoardGroup;
+  /** Swimlanes only: drop the columns a lane has no tasks in. */
+  hideEmpty: boolean;
 }
 
 export const EMPTY_FILTERS: BoardFilters = {
@@ -30,6 +33,7 @@ export const EMPTY_FILTERS: BoardFilters = {
   sprint: null,
   spec: null,
   group: "none",
+  hideEmpty: false,
 };
 
 const GROUPS: readonly BoardGroup[] = ["none", "assignee", "sprint", "spec"];
@@ -54,6 +58,7 @@ export function parseBoardFilters(params: URLSearchParams): BoardFilters {
     spec: nonEmpty(params.get("spec")),
     // A hand-edited or stale link degrades to the plain board, not an error.
     group: GROUPS.includes(group as BoardGroup) ? (group as BoardGroup) : "none",
+    hideEmpty: params.get("empty") === "hide",
   };
 }
 
@@ -72,10 +77,11 @@ export function writeBoardFilters(params: URLSearchParams, f: BoardFilters): URL
   set("sprint", f.sprint);
   set("spec", f.spec);
   set("group", f.group === "none" ? null : f.group);
+  set("empty", f.hideEmpty ? "hide" : null);
   return next;
 }
 
-/** Whether anything narrows the task list. Grouping only rearranges it. */
+/** Whether anything narrows the task list. Grouping and hiding empty columns only rearrange it. */
 export function hasActiveFilters(f: BoardFilters): boolean {
   return f.q.trim() !== "" || f.assignee !== null || f.sprint !== null || f.spec !== null;
 }
@@ -90,7 +96,9 @@ export function sprintOf(task: Task): string | null {
 }
 
 function matchesQuery(task: Task, needle: string): boolean {
+  // Raw or as displayed: "src/auth" finds "`src/auth/`" either way.
   if (task.title.toLowerCase().includes(needle)) return true;
+  if (plainInlineCode(task.title).toLowerCase().includes(needle)) return true;
   if (task.feature_tag?.toLowerCase().includes(needle)) return true;
   return task.acceptance_criteria.some((c) => c.text.toLowerCase().includes(needle));
 }

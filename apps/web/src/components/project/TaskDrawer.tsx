@@ -15,7 +15,7 @@ import type {
 } from "@/lib/types";
 import { memberFullName } from "./MemberChip";
 import { STATUS_LABEL } from "./taskBoardA11y";
-import { isHttpUrl } from "./TaskCard";
+import { InlineCodeText, isHttpUrl } from "./TaskCard";
 
 /**
  * A task's full record, as a right-side sheet over the board.
@@ -324,7 +324,7 @@ export function TaskDrawer({
               id={titleId}
               className="break-words text-base font-semibold leading-snug text-slate-900 [text-wrap:pretty]"
             >
-              {task.title}
+              <InlineCodeText text={task.title} />
             </h2>
           </div>
           <button

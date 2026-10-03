@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { applyBoardFilters, groupBoardTasks, specLabel, sprintOf } from "@/lib/boardFilters";
+import { plainInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
 import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
@@ -53,8 +54,9 @@ type MembersState =
 
 const NO_MEMBERS: WorkspaceMember[] = [];
 
-// Long enough to notice the toast and reach Undo; a confirmation, not a read.
-const UNDO_DURATION = 5000;
+// The toast only appears once the server confirms, which can itself take a
+// couple of seconds, so Undo gets a generous window (paused while hovered).
+const UNDO_DURATION = 8000;
 
 const NUMERIC = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -224,7 +226,7 @@ export function TaskBoard({
       isUndo: boolean;
     },
   ) {
-    const label = taskRefLabel(task) ?? task.title;
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
     const previous = task[field];
     const outcome = { saved: false };
     await board.mutate(task, {
@@ -262,7 +264,7 @@ export function TaskBoard({
   }
 
   function assign(task: Task, next: string | null, isUndo = false) {
-    const label = taskRefLabel(task) ?? task.title;
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
     return write(task, "assigned_user_id", next, {
       send: () => assignTask(projectId, task.id, next, authHeaders()),
       failed: `Couldn't assign ${label}`,
@@ -274,7 +276,7 @@ export function TaskBoard({
 
   async function move(task: Task, next: TaskStatus, isUndo = false) {
     if (next === task.status) return;
-    const label = taskRefLabel(task) ?? task.title;
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
     return write(task, "status", next, {
       send: () => setTaskStatus(projectId, task.id, next, authHeaders()),
       failed: `Couldn't move ${label} to ${STATUS_LABEL[next]}`,
@@ -304,7 +306,7 @@ export function TaskBoard({
     if (!canMoveTo(task, viewer, next)) {
       toast({
         variant: "error",
-        title: `Can't move ${taskRefLabel(task) ?? task.title} to ${STATUS_LABEL[next]}`,
+        title: `Can't move ${taskRefLabel(task) ?? plainInlineCode(task.title)} to ${STATUS_LABEL[next]}`,
         description: moveDeniedFor(task, viewer, next),
       });
       return;
@@ -350,9 +352,18 @@ export function TaskBoard({
 
   function columnsFor(tasks: Task[], lane: { key: string; label: string } | null) {
     return (
-      <div className={`${BOARD_ROW} ${activeTask ? "select-none" : ""}`}>
+      // Snap is off mid-drag so it can't fight dnd-kit's edge auto-scroll.
+      <div className={`${BOARD_ROW} ${activeTask ? "select-none snap-none" : ""}`}>
         {COLUMNS.map((column) => {
           const inColumn = tasks.filter((t) => t.status === column.status);
+          // An empty column comes back while a card that may land there is in
+          // hand, so hiding never takes a legal drop target away.
+          const hidden =
+            lane !== null &&
+            filters.hideEmpty &&
+            inColumn.length === 0 &&
+            !(activeTask && canMoveTo(activeTask, viewer, column.status));
+          if (hidden) return null;
           return (
             <BoardColumn
               key={column.status}

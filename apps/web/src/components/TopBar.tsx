@@ -6,7 +6,12 @@ import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
-export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[] }) {
+export function TopBar({
+  crumbs,
+}: {
+  /** `loading` shows a placeholder bar in place of a label not known yet. */
+  crumbs?: { label: string; href?: string; loading?: boolean }[];
+}) {
   const { user, signOut } = useAuth();
   const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace } = useWorkspace();
   const router = useRouter();
@@ -56,7 +61,14 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
         {crumbs?.map((c) => (
           <span key={c.label} className="flex items-center gap-2 text-slate-500">
             <span>/</span>
-            {c.href ? (
+            {c.loading ? (
+              <span
+                data-testid="crumb-skeleton"
+                className="inline-block h-3.5 w-24 animate-pulse rounded bg-slate-200 motion-reduce:animate-none"
+              >
+                <span className="sr-only">{c.label}</span>
+              </span>
+            ) : c.href ? (
               <Link href={c.href} className="hover:text-slate-900">
                 {c.label}
               </Link>
