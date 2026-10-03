@@ -5,426 +5,118 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
-  useDraggable,
-  useDroppable,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
-import { authorityOf } from "@/lib/fieldAuthority";
 import { useAuth } from "@/lib/auth";
+import { applyBoardFilters, groupBoardTasks, specLabel, sprintOf } from "@/lib/boardFilters";
+import { plainInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
-import type { ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
+import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
+import { BOARD_ROW, BoardColumn, BoardSkeleton } from "./BoardColumn";
+import { BoardToolbar } from "./BoardToolbar";
+import { memberShortName } from "./MemberChip";
 import {
-  assignableUserIds,
-  canAssign,
-  canMoveAnywhere,
-  canMoveTo,
-  moveDeniedReason,
-} from "./taskPermissions";
+  buildAnnouncements,
+  columnOf,
+  COLUMN_STATUSES,
+  COLUMNS,
+  explain,
+  laneDropId,
+  moveDeniedFor,
+  SCREEN_READER_INSTRUCTIONS,
+  STATUS_LABEL,
+} from "./taskBoardA11y";
+import { AssigneeControl, CardBody, LockNote, MoveMenu, TaskCard } from "./TaskCard";
+import { TaskDrawer } from "./TaskDrawer";
+import { canMoveAnywhere, canMoveTo, moveDeniedReason } from "./taskPermissions";
+import { useBoardShortcuts } from "./useBoardShortcuts";
+import { useBoardUrlState } from "./useBoardUrlState";
 import { useOptimisticTasks } from "./useOptimisticTasks";
-import type { OptimisticTasks } from "./useOptimisticTasks";
-
-interface Column {
-  status: TaskStatus;
-  label: string;
-  accent: string;
-}
-
-const COLUMNS: Column[] = [
-  { status: "todo", label: "To Do", accent: "bg-slate-400" },
-  { status: "in_progress", label: "In Progress", accent: "bg-blue-500" },
-  { status: "implemented", label: "Implemented", accent: "bg-violet-500" },
-  { status: "verified", label: "Verified", accent: "bg-emerald-500" },
-];
-
-const COLUMN_STATUSES = COLUMNS.map((c) => c.status);
-const STATUS_LABEL = Object.fromEntries(COLUMNS.map((c) => [c.status, c.label])) as Record<
-  TaskStatus,
-  string
->;
 
 /**
- * Unassigning is a choice the user makes, not the absence of one, so it has to
- * be a real item in the list. Radix refuses `value=""` on an item (it reserves
- * the empty string for "nothing selected"), hence a sentinel that
- * `handleChange` maps back to the null the assign endpoint expects.
+ * Members decide every permission on the board (`viewer.role` comes from the
+ * list), so "the list failed" can't be quietly treated as "nobody's here":
+ * that used to strip an admin of drag and verify without a word. Until the
+ * list resolves the board is a skeleton; if it fails, the board stays
+ * readable but every control is withheld behind an explained Retry.
  */
-const UNASSIGNED = "__unassigned__";
+type MembersState =
+  | { status: "loading" }
+  | { status: "ready"; members: WorkspaceMember[] }
+  | { status: "error"; retrying: boolean };
 
-const AUTHORITY_STYLE: Record<string, string> = {
-  pz: "bg-indigo-100 text-indigo-700",
-  pmo: "bg-amber-100 text-amber-700",
-  shared: "bg-slate-100 text-slate-600",
-};
+const NO_MEMBERS: WorkspaceMember[] = [];
 
-/**
- * Field ownership (ADR 0010) is worth surfacing — it explains why a value
- * can't be edited here — but "· pmo" is internal vocabulary. Carry the
- * meaning in colour plus a hover title instead of printing the domain name
- * at a business stakeholder.
- */
-const AUTHORITY_HINT: Record<string, string> = {
-  pz: "Managed in PromptWorkspace",
-  pmo: "Managed by the connected project tracker (Jira / ClickUp)",
-  shared: "Editable in PromptWorkspace and the connected tracker",
-};
+// The toast only appears once the server confirms, which can itself take a
+// couple of seconds, so Undo gets a generous window (paused while hovered).
+const UNDO_DURATION = 8000;
 
-function authorityHint(field: string): string {
-  return AUTHORITY_HINT[authorityOf("tasks", field)];
-}
+const NUMERIC = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-function authorityClass(field: string): string {
-  return `rounded px-1.5 py-0.5 text-[10px] ${AUTHORITY_STYLE[authorityOf("tasks", field)]}`;
-}
-
-function memberLabel(members: WorkspaceMember[], userId: string | null): string {
-  if (!userId) return "Unassigned";
-  return members.find((m) => m.user_id === userId)?.email ?? userId;
-}
-
-/**
- * A card is a few hundred pixels wide and an email address is not. The trigger
- * shows the local part only — `dev-user`, not `dev-user@promptworkspace.local` —
- * with the full address kept in the option list and the hover title, where
- * there is room to disambiguate two people who share a first name.
- */
-function shortLabel(full: string): string {
-  if (full === "Unassigned") return full;
-  const at = full.indexOf("@");
-  return at > 0 ? full.slice(0, at) : full;
-}
-
-/**
- * What the toast says when a write bounces. The endpoints answer in machine
- * vocabulary (`assignment_forbidden`, `verified_requires_admin`) because their
- * other caller is the VS Code extension; a person reading a toast needs the
- * sentence, and the raw code only as the technical detail underneath.
- */
-const FRIENDLY_DETAIL: Record<string, string> = {
-  assignment_forbidden: "You can only assign tasks to yourself.",
-  assignee_not_a_member: "That person is no longer a member of this workspace.",
-  status_forbidden: "You can only move tasks assigned to you.",
-  verified_requires_admin: "Only a workspace admin can mark a task verified.",
-  task_not_found: "This task no longer exists — refresh the board.",
-};
-
-function explain(error: Error): string {
-  return FRIENDLY_DETAIL[error.message] ?? error.message;
-}
-
-function AssigneeControl({
-  task,
-  members,
-  viewer,
-  onAssign,
-}: {
-  task: Task;
-  members: WorkspaceMember[];
-  viewer: { userId: string; role: string | undefined };
-  onAssign: (task: Task, next: string | null) => void;
-}) {
-  const editable = canAssign(task, viewer);
-  const allowed = useMemo(
-    () => new Set(assignableUserIds(viewer, members.map((m) => m.user_id))),
-    [viewer, members],
-  );
-
-  const current = memberLabel(members, task.assigned_user_id);
-
-  if (!editable) {
-    return (
-      <span
-        className={`${authorityClass("assigned_user_id")} block truncate`}
-        title={`${authorityHint("assigned_user_id")} — assigned to ${current}`}
-      >
-        @{shortLabel(current)}
-      </span>
-    );
-  }
-
-  return (
-    <Select
-      value={task.assigned_user_id ?? UNASSIGNED}
-      onValueChange={(next) => onAssign(task, next === UNASSIGNED ? null : next)}
-    >
-      <SelectTrigger
-        aria-label="Assignee"
-        size="sm"
-        className="w-full min-w-0 overflow-hidden"
-        title={current}
-      >
-        <SelectValue>
-          <span className="block w-full truncate text-left">{shortLabel(current)}</span>
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-        {members
-          .filter((m) => allowed.has(m.user_id))
-          .map((m) => (
-            <SelectItem key={m.user_id} value={m.user_id}>
-              {m.email ?? m.user_id}
-            </SelectItem>
-          ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/**
- * The keyboard and screen-reader path to the same move dragging performs.
- * dnd-kit does announce a drag, but a picker is the control someone who never
- * reaches for a pointer expects to find, and it costs one Select.
- */
-function StatusControl({
-  task,
-  viewer,
-  onMove,
-}: {
-  task: Task;
-  viewer: { userId: string; role: string | undefined };
-  onMove: (task: Task, next: TaskStatus) => void;
-}) {
-  const movable = canMoveAnywhere(task, viewer, COLUMN_STATUSES);
-  if (!movable) {
-    return (
-      <span
-        className="block truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500"
-        title={moveDeniedReason(task, viewer)}
-      >
-        {STATUS_LABEL[task.status]}
-      </span>
-    );
-  }
-  return (
-    <Select value={task.status} onValueChange={(next) => onMove(task, next as TaskStatus)}>
-      <SelectTrigger aria-label="Status" size="sm" className="w-full min-w-0 overflow-hidden">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {COLUMNS.map((c) => (
-          <SelectItem
-            key={c.status}
-            value={c.status}
-            disabled={c.status !== task.status && !canMoveTo(task, viewer, c.status)}
-          >
-            {c.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function CardBody({
-  task,
-  dragging,
-  saving,
-}: {
-  task: Task;
-  dragging?: boolean;
-  saving?: boolean;
-}) {
-  const ref = taskRefLabel(task);
-  return (
-    <>
-      {/* A 2px bar, not a spinner: the write is optimistic, so the card is
-          already showing the new value and must stay readable and clickable
-          while it settles. */}
-      <span
-        aria-hidden
-        className={`absolute inset-x-0 top-0 h-0.5 rounded-t bg-blue-400 transition-opacity ${
-          saving ? "animate-pulse opacity-100" : "opacity-0"
-        }`}
-      />
-      <div className="flex items-start gap-2">
-        {ref && (
-          <span className="mt-0.5 shrink-0 font-mono text-[10px] font-semibold text-slate-400">
-            {ref}
-          </span>
-        )}
-        <p className="flex-1 text-sm font-medium leading-snug text-slate-900">{task.title}</p>
-      </div>
-      {!dragging && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {task.assignee && (
-            <span className={authorityClass("assignee")} title={authorityHint("assignee")}>
-              @{task.assignee}
-            </span>
-          )}
-          {task.sprint && (
-            <span className={authorityClass("sprint")} title={authorityHint("sprint")}>
-              {task.sprint}
-            </span>
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-function TaskCard({
-  task,
-  members,
-  viewer,
-  board,
-  onAssign,
-  onMove,
-}: {
-  task: Task;
-  members: WorkspaceMember[];
-  viewer: { userId: string; role: string | undefined };
-  board: OptimisticTasks;
-  onAssign: (task: Task, next: string | null) => void;
-  onMove: (task: Task, next: TaskStatus) => void;
-}) {
-  const draggable = canMoveAnywhere(task, viewer, COLUMN_STATUSES);
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: task.id,
-    disabled: !draggable,
-  });
-  const saving = board.savingIds.has(task.id);
-
-  return (
-    <div
-      ref={setNodeRef}
-      className={[
-        "relative rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition-shadow",
-        // The card stays in place, greyed, while its clone follows the pointer —
-        // a column that reflows mid-drag makes the drop target guesswork.
-        isDragging ? "opacity-40" : "hover:shadow-md",
-      ].join(" ")}
-    >
-      <div
-        // Only spread dnd-kit's attributes when the card can actually move —
-        // they carry role="button" and tabIndex, and a focusable button that
-        // refuses every key is worse than plain text.
-        {...(draggable ? { ...listeners, ...attributes } : {})}
-        title={draggable ? undefined : moveDeniedReason(task, viewer)}
-        className={draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default"}
-      >
-        <CardBody task={task} saving={saving} />
-      </div>
-      <div className="mt-2 flex items-center gap-1.5">
-        {/* Who owns it is the field people scan and change most, so it takes the
-            slack; the status picker only ever holds four short labels. */}
-        <div className="min-w-0 flex-1">
-          <AssigneeControl task={task} members={members} viewer={viewer} onAssign={onAssign} />
-        </div>
-        <div className="w-[6.5rem] shrink-0">
-          <StatusControl task={task} viewer={viewer} onMove={onMove} />
-        </div>
-      </div>
-      {task.acceptance_criteria.length > 0 && (
-        <details className="mt-2 text-xs text-slate-500">
-          <summary className="cursor-pointer select-none text-[11px] text-slate-400 hover:text-slate-600">
-            {task.acceptance_criteria.length} acceptance{" "}
-            {task.acceptance_criteria.length === 1 ? "criterion" : "criteria"}
-          </summary>
-          <ul className="mt-1 list-inside list-disc">
-            {task.acceptance_criteria.map((c, i) => (
-              <li key={i}>{c.text}</li>
-            ))}
-          </ul>
-        </details>
-      )}
-    </div>
-  );
-}
-
-function BoardColumn({
-  column,
-  tasks,
-  activeTask,
-  viewer,
-  children,
-}: {
-  column: Column;
-  tasks: Task[];
-  activeTask: Task | null;
-  viewer: { userId: string; role: string | undefined };
-  children: React.ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: column.status });
-  // Highlight only where the card in hand can actually land, so an illegal
-  // move is refused before the drop rather than rolled back after it.
-  const receptive =
-    activeTask !== null &&
-    activeTask.status !== column.status &&
-    canMoveTo(activeTask, viewer, column.status);
-
-  return (
-    <section
-      ref={setNodeRef}
-      aria-label={column.label}
-      className={[
-        "flex flex-col rounded-lg border p-2 transition-colors",
-        isOver && receptive
-          ? "border-blue-400 bg-blue-50"
-          : receptive
-            ? "border-dashed border-slate-300 bg-slate-100/80"
-            : "border-transparent bg-slate-100/70",
-      ].join(" ")}
-    >
-      <header className="flex items-center gap-2 px-1 pb-2">
-        <span className={`h-1.5 w-1.5 rounded-full ${column.accent}`} aria-hidden />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          {column.label}
-        </h3>
-        <span className="rounded-full bg-slate-200 px-1.5 text-[10px] font-medium text-slate-600">
-          {tasks.length}
-        </span>
-      </header>
-      <div className="flex min-h-16 flex-col gap-2">
-        {children}
-        {tasks.length === 0 && (
-          <p className="rounded-lg border border-dashed border-slate-300 px-2 py-4 text-center text-[11px] text-slate-400">
-            {receptive ? "Drop here" : "No tasks"}
-          </p>
-        )}
-      </div>
-    </section>
-  );
+function countLabel(n: number): string {
+  return `${n} ${n === 1 ? "task" : "tasks"}`;
 }
 
 export function TaskBoard({
   graph,
   workspaceId,
   projectId,
+  onOpenPlanner,
 }: {
   graph: ProjectGraph;
   workspaceId: string;
   projectId: string;
   /** Accepted for call-site compatibility; the board reconciles locally. */
   onChange?: () => void;
+  /** Shown as "Go to Planner" on the empty board. */
+  onOpenPlanner?: () => void;
 }) {
   const { user, authHeaders } = useAuth();
   const { toast } = useToast();
-  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [membersState, setMembersState] = useState<MembersState>({ status: "loading" });
+  const [membersAttempt, setMembersAttempt] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Collapsed swimlanes, keyed `${group}:${laneKey}` so "Unassigned" folded
+  // under Assignee doesn't fold "No sprint" when the grouping changes.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const searchRef = useRef<HTMLInputElement>(null);
+  const { filters, setFilters, clearFilters, openTaskId, openTask, closeTask } = useBoardUrlState();
   const board = useOptimisticTasks(graph.tasks);
+  // Undo, Retry and the drag announcer run after later renders; they read the
+  // current rows and writes rather than the ones captured when they were made.
+  const tasksRef = useRef(board.tasks);
+  tasksRef.current = board.tasks;
+  const savingRef = useRef(board.savingIds);
+  savingRef.current = board.savingIds;
 
   useEffect(() => {
     let cancelled = false;
     listMembers(workspaceId, authHeaders())
       .then((m) => {
-        if (!cancelled) setMembers(m);
+        if (!cancelled) setMembersState({ status: "ready", members: m });
       })
       .catch(() => {
-        if (!cancelled) setMembers([]);
+        if (!cancelled) setMembersState({ status: "error", retrying: false });
       });
     return () => {
       cancelled = true;
     };
     // authHeaders() is stable per user/token (useCallback in AuthProvider).
+    // Keyed on the id, not the user object: a re-render that hands back an
+    // equal user must not refetch and silently overwrite a failure the
+    // viewer is looking at.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, user]);
+  }, [workspaceId, user?.id, membersAttempt]);
+
+  const members = membersState.status === "ready" ? membersState.members : NO_MEMBERS;
+  const readOnly = membersState.status !== "ready";
 
   const viewer = useMemo(
     () => ({
@@ -434,41 +126,163 @@ export function TaskBoard({
     [user, members],
   );
 
+  const sprints = useMemo(
+    () =>
+      [...new Set(graph.tasks.map(sprintOf).filter((s): s is string => s !== null))].sort(
+        NUMERIC.compare,
+      ),
+    [graph.tasks],
+  );
+
+  // Only specs some task points at: a filter option that empties the board is
+  // a dead end.
+  const specs = useMemo(
+    () =>
+      [...new Set(graph.tasks.map((t) => t.spec_id).filter((id): id is string => id !== null))]
+        .map((id) => ({ id, label: specLabel(graph, id) ?? "Unknown spec" }))
+        .sort((a, b) => NUMERIC.compare(a.label, b.label)),
+    [graph],
+  );
+
+  const membersLoading = membersState.status === "loading";
+
+  useBoardShortcuts({
+    onSearch: () => searchRef.current?.focus(),
+    onToggleMine: () => setFilters({ assignee: filters.assignee === "me" ? null : "me" }),
+    enabled: !membersLoading && graph.tasks.length > 0,
+  });
+
+  // A `?task=` link to a task that has since been deleted (or never existed
+  // here) quietly drops the param rather than showing an empty drawer. Waits
+  // for members, since the board — and with it the drawer — isn't up before.
+  const openStale =
+    openTaskId !== null && !membersLoading && !board.tasks.some((t) => t.id === openTaskId);
+  useEffect(() => {
+    if (openStale) closeTask();
+  }, [openStale, closeTask]);
+
+  const artifactsByTask = useMemo(() => {
+    const byTask = new Map<string, Artifact[]>();
+    for (const a of graph.artifacts) {
+      if (a.deleted_at) continue;
+      const list = byTask.get(a.task_id);
+      if (list) list.push(a);
+      else byTask.set(a.task_id, [a]);
+    }
+    return byTask;
+  }, [graph.artifacts]);
+
+  const announcements = useMemo(
+    () => buildAnnouncements((id) => tasksRef.current.find((t) => t.id === id), viewer),
+    [viewer],
+  );
+
   const sensors = useSensors(
-    // A card holds two Selects. Without a distance threshold the pointer-down
-    // that opens one of them would start a drag instead.
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // Mouse and touch rather than one PointerSensor: a pointer sensor claims a
+    // finger the moment it lands, which turns scrolling the board on a phone
+    // into dragging cards. Touch waits for a deliberate press instead. The
+    // mouse keeps a distance threshold so a click on the card's own controls
+    // never starts a drag.
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
     useSensor(KeyboardSensor),
   );
 
-  function assign(task: Task, next: string | null) {
-    const label = taskRefLabel(task) ?? task.title;
-    board.mutate(task, {
-      patch: { assigned_user_id: next },
-      request: () => assignTask(projectId, task.id, next, authHeaders()),
+  function latest(task: Task): Task {
+    return tasksRef.current.find((t) => t.id === task.id) ?? task;
+  }
+
+  function memberName(userId: string): string {
+    return memberShortName(members.find((m) => m.user_id === userId));
+  }
+
+  /**
+   * The one write path behind assign and move: optimistic patch, error toast
+   * with Retry, success toast with Undo. `again` re-enters the caller's own
+   * write so a retry or an undo gets that write's copy and request.
+   *
+   * `board.mutate` reports failure through onError but resolves either way, so
+   * success is read off the request itself. An undo is a write like any other
+   * but doesn't offer to undo itself. Undo only reverts what this write set:
+   * if the field has moved on since (a later edit, or a refresh carrying
+   * someone else's) or another write to the task is still out, it leaves the
+   * task alone rather than clobber or race it.
+   */
+  async function write<F extends "assigned_user_id" | "status">(
+    task: Task,
+    field: F,
+    next: Task[F],
+    {
+      send,
+      failed,
+      done,
+      again,
+      isUndo,
+    }: {
+      send: () => Promise<Task>;
+      failed: string;
+      done: string;
+      again: (task: Task, value: Task[F], isUndo: boolean) => void;
+      isUndo: boolean;
+    },
+  ) {
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
+    const previous = task[field];
+    const outcome = { saved: false };
+    await board.mutate(task, {
+      patch: { [field]: next },
+      request: async () => {
+        const row = await send();
+        outcome.saved = true;
+        return row;
+      },
       onError: (err) =>
         toast({
           variant: "error",
-          title: `Couldn't assign ${label}`,
+          title: failed,
           description: explain(err),
-          action: { label: "Retry", onClick: () => assign(task, next) },
+          action: { label: "Retry", onClick: () => again(latest(task), next, isUndo) },
         }),
+    });
+    if (!outcome.saved || isUndo) return;
+    toast({
+      variant: "success",
+      title: done,
+      duration: UNDO_DURATION,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const current = latest(task);
+          if (current[field] !== next || savingRef.current.has(task.id)) {
+            toast({ variant: "info", title: `${label} changed since — not undone` });
+            return;
+          }
+          again(current, previous, true);
+        },
+      },
     });
   }
 
-  function move(task: Task, next: TaskStatus) {
+  function assign(task: Task, next: string | null, isUndo = false) {
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
+    return write(task, "assigned_user_id", next, {
+      send: () => assignTask(projectId, task.id, next, authHeaders()),
+      failed: `Couldn't assign ${label}`,
+      done: next ? `Assigned ${label} to ${memberName(next)}` : `Unassigned ${label}`,
+      again: (t, value, undo) => void assign(t, value, undo),
+      isUndo,
+    });
+  }
+
+  async function move(task: Task, next: TaskStatus, isUndo = false) {
     if (next === task.status) return;
-    const label = taskRefLabel(task) ?? task.title;
-    board.mutate(task, {
-      patch: { status: next },
-      request: () => setTaskStatus(projectId, task.id, next, authHeaders()),
-      onError: (err) =>
-        toast({
-          variant: "error",
-          title: `Couldn't move ${label} to ${STATUS_LABEL[next]}`,
-          description: explain(err),
-          action: { label: "Retry", onClick: () => move(task, next) },
-        }),
+    const label = taskRefLabel(task) ?? plainInlineCode(task.title);
+    return write(task, "status", next, {
+      send: () => setTaskStatus(projectId, task.id, next, authHeaders()),
+      failed: `Couldn't move ${label} to ${STATUS_LABEL[next]}`,
+      done: `Moved ${label} to ${STATUS_LABEL[next]}`,
+      again: (t, value, undo) => void move(t, value, undo),
+      isUndo,
     });
   }
 
@@ -484,66 +298,269 @@ export function TaskBoard({
     if (!target) return;
     const task = board.tasks.find((t) => t.id === String(event.active.id));
     if (!task) return;
-    const next = String(target) as TaskStatus;
-    if (next === task.status) return;
+    // Only the column counts. A swimlane is a view of the assignee, sprint or
+    // spec, not a control for it: dropping into another lane changes status
+    // alone, never reassigns or re-plans the task.
+    const next = columnOf(target);
+    if (!next || next === task.status) return;
     if (!canMoveTo(task, viewer, next)) {
       toast({
         variant: "error",
-        title: `Can't move ${taskRefLabel(task) ?? task.title} to ${STATUS_LABEL[next]}`,
-        description:
-          next === "verified"
-            ? FRIENDLY_DETAIL.verified_requires_admin
-            : moveDeniedReason(task, viewer),
+        title: `Can't move ${taskRefLabel(task) ?? plainInlineCode(task.title)} to ${STATUS_LABEL[next]}`,
+        description: moveDeniedFor(task, viewer, next),
       });
       return;
     }
-    move(task, next);
+    void move(task, next);
   }
 
-  return (
-    <DndContext
-      sensors={sensors}
-      // Columns are tall and a card is smaller than the one it is leaving;
-      // requiring rect *intersection* makes the last few pixels before a
-      // neighbouring column a dead zone. Nearest corner always names a column.
-      collisionDetection={closestCorners}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
-    >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  if (graph.tasks.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+        <p className="text-sm font-medium text-slate-900">No tasks yet</p>
+        <p className="mt-1 text-sm text-slate-600">
+          Generate them from the Planner&apos;s Tasks stage.
+        </p>
+        {onOpenPlanner && (
+          <button
+            type="button"
+            onClick={onOpenPlanner}
+            className="mt-4 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+          >
+            Go to Planner
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (membersState.status === "loading") return <BoardSkeleton />;
+
+  // Everything below renders from this list, so narrowing it narrows every
+  // column and every lane.
+  const visibleTasks = applyBoardFilters(board.tasks, filters, viewer.userId);
+  // The optimistic row, so the drawer shows a pending move or assignment.
+  const openedTask = openTaskId ? (board.tasks.find((t) => t.id === openTaskId) ?? null) : null;
+
+  function toggleLane(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }
+
+  function columnsFor(tasks: Task[], lane: { key: string; label: string } | null) {
+    return (
+      // Snap is off mid-drag so it can't fight dnd-kit's edge auto-scroll.
+      <div className={`${BOARD_ROW} ${activeTask ? "select-none snap-none" : ""}`}>
         {COLUMNS.map((column) => {
-          const tasks = board.tasks.filter((t) => t.status === column.status);
+          const inColumn = tasks.filter((t) => t.status === column.status);
+          // An empty column comes back while a card that may land there is in
+          // hand, so hiding never takes a legal drop target away.
+          const hidden =
+            lane !== null &&
+            filters.hideEmpty &&
+            inColumn.length === 0 &&
+            !(activeTask && canMoveTo(activeTask, viewer, column.status));
+          if (hidden) return null;
           return (
             <BoardColumn
               key={column.status}
               column={column}
-              tasks={tasks}
+              tasks={inColumn}
               activeTask={activeTask}
               viewer={viewer}
+              lane={lane?.label}
+              dropId={lane === null ? column.status : laneDropId(lane.key, column.status)}
             >
-              {tasks.map((t) => (
+              {inColumn.map((t) => (
                 <TaskCard
                   key={t.id}
                   task={t}
                   members={members}
                   viewer={viewer}
-                  board={board}
-                  onAssign={assign}
-                  onMove={move}
+                  saving={board.savingIds.has(t.id)}
+                  readOnly={readOnly}
+                  artifacts={artifactsByTask.get(t.id)}
+                  onAssign={(task, next) => void assign(task, next)}
+                  onMove={(task, next) => void move(task, next)}
+                  onOpen={(task) => openTask(task.id)}
                 />
               ))}
             </BoardColumn>
           );
         })}
       </div>
-      <DragOverlay dropAnimation={null}>
-        {activeTask && (
-          <div className="relative w-64 rotate-1 rounded-lg border border-slate-300 bg-white p-3 shadow-xl">
-            <CardBody task={activeTask} dragging />
-          </div>
+    );
+  }
+
+  const lanes =
+    filters.group === "none"
+      ? null
+      : groupBoardTasks(visibleTasks, filters.group, {
+          memberLabel: (id) => memberName(id ?? ""),
+          specLabel: (id) => (id ? (specLabel(graph, id) ?? "Unknown spec") : "No spec"),
+        });
+
+  return (
+    <>
+      {membersState.status === "error" && (
+        <div
+          role="alert"
+          className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          <p className="min-w-0 flex-1">
+            Couldn&apos;t load workspace members, so assigning and moving tasks is paused. The
+            board is read-only until they load.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setMembersState({ status: "error", retrying: true });
+              setMembersAttempt((n) => n + 1);
+            }}
+            disabled={membersState.retrying}
+            className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {membersState.retrying ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+      <div className="mb-4">
+        <BoardToolbar
+          filters={filters}
+          onChange={setFilters}
+          onClear={clearFilters}
+          members={members}
+          sprints={sprints}
+          specs={specs}
+          viewerId={viewer.userId}
+          resultCount={visibleTasks.length}
+          totalCount={board.tasks.length}
+          searchInputRef={searchRef}
+        />
+      </div>
+      {visibleTasks.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-900">No tasks match these filters</p>
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="mt-4 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+          >
+            Clear Filters
+          </button>
+        </div>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          // Columns are tall and a card is smaller than the one it is leaving;
+          // requiring rect *intersection* makes the last few pixels before a
+          // neighbouring column a dead zone. Nearest corner always names a column.
+          collisionDetection={closestCorners}
+          accessibility={{ announcements, screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveId(null)}
+        >
+          {lanes === null ? (
+            columnsFor(visibleTasks, null)
+          ) : (
+            <div className="flex flex-col gap-5">
+              {lanes.map((lane) => {
+                const foldKey = `${filters.group}:${lane.key}`;
+                const open = !collapsed.has(foldKey);
+                return (
+                  <section
+                    key={lane.key}
+                    aria-label={`${lane.label}, ${countLabel(lane.tasks.length)}`}
+                  >
+                    <h3 className="mb-2">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => toggleLane(foldKey)}
+                        className="flex items-center gap-2 rounded px-1 text-sm font-semibold text-slate-800 transition-colors hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      >
+                        <ChevronIcon open={open} />
+                        <span>{lane.label}</span>
+                        <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-medium tabular-nums text-slate-700">
+                          {lane.tasks.length}
+                        </span>
+                      </button>
+                    </h3>
+                    {open && columnsFor(lane.tasks, lane)}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+          {/* dnd-kit sizes the overlay to the card being dragged; the clone just
+              fills it, so it doesn't change width as it leaves the column. */}
+          <DragOverlay dropAnimation={null}>
+            {activeTask && (
+              <div className="relative w-full rotate-1 rounded-lg border border-slate-300 bg-white p-3 shadow-xl">
+                <CardBody task={activeTask} dragging />
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
+      )}
+      <TaskDrawer
+        task={openedTask}
+        graph={graph}
+        members={members}
+        artifacts={openedTask ? artifactsByTask.get(openedTask.id) : undefined}
+        onClose={closeTask}
+        // The card's own controls and write path, so a change made here gets
+        // the same permission rules, optimistic update and Undo toast.
+        renderAssignee={(t) => (
+          <AssigneeControl
+            task={t}
+            members={members}
+            owner={members.find((m) => m.user_id === t.assigned_user_id)}
+            viewer={viewer}
+            readOnly={readOnly}
+            onAssign={(task, next) => void assign(task, next)}
+          />
         )}
-      </DragOverlay>
-    </DndContext>
+        renderMove={
+          readOnly
+            ? undefined
+            : (t) => (
+                <span className="flex items-center gap-2">
+                  <span className="text-slate-700">{STATUS_LABEL[t.status]}</span>
+                  {canMoveAnywhere(t, viewer, COLUMN_STATUSES) ? (
+                    <MoveMenu
+                      task={t}
+                      viewer={viewer}
+                      onMove={(task, next) => void move(task, next)}
+                    />
+                  ) : (
+                    <LockNote reason={moveDeniedReason(t, viewer)} />
+                  )}
+                </span>
+              )
+        }
+      />
+    </>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className={`h-3.5 w-3.5 text-slate-500 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
   );
 }
