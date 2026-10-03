@@ -63,15 +63,20 @@ def strip_template_scaffolding(doc: str) -> str:
     return text.strip()
 
 
-_H1_RE = re.compile(r"^# (.+)$", re.MULTILINE)
+_H1_RE = re.compile(r"^# (.+)$")
+_FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+_BARE_STAGE_TITLE_RE = re.compile(
+    r"^(?:Feature Specification|Implementation Plan|Tasks|Project Constitution)$", re.I
+)
 _H1_PREFIX_RE = re.compile(r"^(?:Feature Specification|Implementation Plan|Tasks)\s*:\s*", re.I)
 _BRANCH_LINE_RE = re.compile(r"(\*\*(?:Feature )?Branch\*\*:\s*`)([^`\n]*)(`)")
 _BRACKET_BRANCH_RE = re.compile(r"\[###-[^\]\n]*\]")
 
 
 def _h1_feature_name(doc: str) -> str | None:
-    m = _H1_RE.search(doc)
-    if not m:
+    first = next((ln for ln in doc.split("\n") if ln.strip()), "")
+    m = _H1_RE.match(first)
+    if not m or _BARE_STAGE_TITLE_RE.match(m.group(1).strip()):
         return None
     name = _H1_PREFIX_RE.sub("", m.group(1)).strip()
     if not name or "[" in name or "$" in name:
@@ -81,6 +86,18 @@ def _h1_feature_name(doc: str) -> str | None:
 
 def _kebab(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def _sub_outside_fences(pattern: str, repl: str, text: str) -> str:
+    out: list[str] = []
+    in_fence = False
+    for line in text.split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        elif not in_fence:
+            line = re.sub(pattern, lambda _m: repl, line)
+        out.append(line)
+    return "\n".join(out)
 
 
 def fix_template_placeholders(doc: str) -> str:
@@ -105,7 +122,7 @@ def fix_template_placeholders(doc: str) -> str:
     if derived:
         text = text.replace("[###-feature-name]", derived).replace("[###-feature]", derived)
     if name:
-        text = re.sub(r"\[FEATURE(?: NAME)?\](?!\()", lambda _m: name, text)
+        text = _sub_outside_fences(r"\[FEATURE(?: NAME)?\](?!\()", name, text)
     return text
 
 

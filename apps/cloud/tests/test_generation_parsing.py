@@ -146,3 +146,22 @@ def test_unambiguous_markers_untouched():
 def test_tasks_lines_unaffected():
     doc = "# Tasks: Task Tracker\n\n- [ ] T001 [P] [US1] Create model in src/a.py\n"
     assert fix_template_placeholders(doc) == doc
+
+
+def test_bare_stage_title_h1_is_not_a_feature_name():
+    doc = "# Implementation Plan\n\n**Branch**: `[###-feature-name]`\n"
+    assert fix_template_placeholders(doc) == doc
+    const = "# Project Constitution\n\nBuild [FEATURE] now.\n"
+    assert fix_template_placeholders(const) == const
+
+
+def test_h1_inside_code_fence_is_not_a_feature_name():
+    doc = "Intro\n\n```bash\n# install deps\n```\n\n**Branch**: `[###-feature-name]`\n"
+    assert fix_template_placeholders(doc) == doc
+
+
+def test_feature_placeholder_untouched_inside_code_fence():
+    doc = _spec("001-x") + "\nUse [FEATURE] here.\n\n```\nrun [FEATURE NAME]\n```\n"
+    out = fix_template_placeholders(doc)
+    assert "run [FEATURE NAME]" in out
+    assert "Use [FEATURE] here." not in out
