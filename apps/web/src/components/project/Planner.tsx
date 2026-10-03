@@ -910,7 +910,7 @@ export function Planner({
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
         />
       ) : (
-      <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 overflow-x-auto overscroll-x-contain border-b border-slate-200">
+      <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-slate-200">
         {TABS.map((tab) => {
           const done = tabDone(tab.key);
           const current = active === tab.key;
