@@ -26,3 +26,21 @@ export function parseSseLine(line: string, prev: SseParseState): SseParseState {
   }
   return prev && { ...prev, fresh: false };
 }
+
+/**
+ * The live preview of a stage generation, minus the ```file:<path> wrapper the
+ * model is asked to put round the document (apps/cloud/app/generation/
+ * prompts.py). The server unwraps the final document itself; this only keeps
+ * the wrapper out of what the author watches arrive. A first line that is
+ * still being streamed ("```fi…") is held back until it is complete, and a
+ * closing fence — or the start of one — is dropped from the end.
+ */
+export function stripStreamFence(text: string): string {
+  let out = text.replace(/^\s+/, "");
+  if (out.startsWith("```")) {
+    const newline = out.indexOf("\n");
+    if (newline < 0) return "";
+    if (/^```file:/.test(out)) out = out.slice(newline + 1);
+  }
+  return out.replace(/\n`{1,3}\s*$/, "\n").replace(/^`{1,3}\s*$/, "");
+}
