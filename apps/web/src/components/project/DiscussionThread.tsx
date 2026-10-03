@@ -132,7 +132,7 @@ export function DiscussionThread({
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
                 <span>{labels.get(`${d.parent_node_type}:${d.parent_node_id}`) ?? d.parent_node_type}</span>
                 <span className={`rounded px-1.5 py-0.5 font-medium ${SOURCE_STYLE[d.source]}`}>
-                  {d.source === "pmo" ? "Jira" : "PromptConnext"}
+                  {d.source === "pmo" ? "Jira" : "PromptWorkspace"}
                 </span>
               </div>
               <p className="mt-1 font-medium">{d.author}</p>

@@ -1,6 +1,6 @@
 """Discussion authoring API (M12).
 
-  POST /projects/{id}/discussions   member — create a pz-native comment
+  POST /projects/{id}/discussions   member — create a pw-native comment
 
 The one deliberate exception to the "read-first, authoring stays on
 desktop" rule (M8): comments are collaboration data, not planning
@@ -9,7 +9,7 @@ endpoint — discussions ride the existing `GET /sync/projects/{id}/graph`
 (`ProjectGraph.discussions`), same as every other entity.
 
 `author` is always the authenticated caller, never client-supplied, and
-`source` is always "pz" here — the only other writer of pz_discussions rows
+`source` is always "pz" here — the only other writer of pw_discussions rows
 is the Jira comment mirror (app/api/integrations.py), which pushes
 source="pmo" through the same repo.upsert_graph() path this endpoint uses.
 """

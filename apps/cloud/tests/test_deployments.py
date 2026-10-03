@@ -693,7 +693,7 @@ def test_reported_url_outside_the_provisioned_prefix_is_ignored(client):
     _post(
         client,
         "deployment_status",
-        _deployment_status(pid, state="success", url="https://attacker.test/looks-like-promptzone"),
+        _deployment_status(pid, state="success", url="https://attacker.test/looks-like-promptworkspace"),
     )
     body = _status(client, pid)
     assert body["url"] is None

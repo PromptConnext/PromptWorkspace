@@ -1,6 +1,6 @@
 // VENDORED — DO NOT EDIT.
 //
-// Source: packages/pz-cloud/src/taskRefs.ts
+// Source: packages/cloud-client/src/taskRefs.ts
 // Copied: 2026-09-22 (plan 0024 M1)
 //
 // Everything below this header is a byte-for-byte copy of that file, and

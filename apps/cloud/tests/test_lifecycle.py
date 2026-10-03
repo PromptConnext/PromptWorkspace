@@ -286,7 +286,7 @@ def test_create_repository_retry_adopts_existing_repo_without_duplicate_create()
             "full_name": "acme/rocket-ship",
             "html_url": "https://github.com/acme/rocket-ship",
             "default_branch": "main",
-            "description": f"PromptZone-managed repository for project {pid}",
+            "description": f"PromptWorkspace-managed repository for project {pid}",
         }
 
         res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
@@ -398,7 +398,7 @@ def test_create_repository_retry_is_502_when_github_is_unwell():
 class _CallerScopedRepository:
     """Stands in for what an authenticated request actually gets: a Supabase
     client carrying the caller's JWT, i.e. the `authenticated` role. Migration
-    0020 revokes pz_repo_webhooks from that role, so this write is the one
+    0020 revokes pw_repo_webhooks from that role, so this write is the one
     operation such a client can never perform."""
 
     def __init__(self, inner: Repository) -> None:
@@ -410,7 +410,7 @@ class _CallerScopedRepository:
 
     def create_repo_webhook_if_absent(self, webhook):
         self.blocked += 1
-        raise RuntimeError("permission denied for table pz_repo_webhooks")
+        raise RuntimeError("permission denied for table pw_repo_webhooks")
 
 
 def test_create_repository_writes_the_webhook_binding_with_the_service_key():
@@ -657,7 +657,7 @@ def test_create_repository_retries_when_webhook_binding_cannot_be_persisted():
         original = service_repo.create_repo_webhook_if_absent
 
         def _explode(_webhook):
-            raise RuntimeError("permission denied for table pz_repo_webhooks")
+            raise RuntimeError("permission denied for table pw_repo_webhooks")
 
         service_repo.create_repo_webhook_if_absent = _explode
 
@@ -800,10 +800,10 @@ def test_deploy_credentials_reach_the_repo_as_secrets_and_variables():
 
         assert _create_repo(client, pid).status_code == 200
         repo_name = "acme/rocket-ship"
-        assert fake.secrets[(repo_name, "PZ_R2_ACCESS_KEY_ID")]
-        assert fake.secrets[(repo_name, "PZ_R2_SECRET_ACCESS_KEY")]
-        assert fake.variables[(repo_name, "PZ_PROJECT_ID")] == pid
-        assert fake.variables[(repo_name, "PZ_ENVIRONMENT")] == "preview"
+        assert fake.secrets[(repo_name, "PROMPTWORKSPACE_R2_ACCESS_KEY_ID")]
+        assert fake.secrets[(repo_name, "PROMPTWORKSPACE_R2_SECRET_ACCESS_KEY")]
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_PROJECT_ID")] == pid
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_ENVIRONMENT")] == "preview"
 
 
 def test_deployment_state_starts_at_awaiting_first_deploy():
@@ -824,7 +824,7 @@ def test_secret_write_403_reports_the_new_token_scope_and_leaves_lifecycle_untou
     workspace PAT carries and no introspection endpoint can reveal earlier."""
     with _client() as client:
         fake = _wire_github(client)
-        fake.fail_on_secret_write = "PZ_R2_ACCESS_KEY_ID"
+        fake.fail_on_secret_write = "PROMPTWORKSPACE_R2_ACCESS_KEY_ID"
         _ws, pid = _project_in_tech_review(client)
         _with_template(client, pid)
 
@@ -931,15 +931,15 @@ def test_a_docker_compose_project_seeds_the_runtime_its_plan_describes():
         repo_name = "acme/rocket-ship"
 
         # This project's placement on the shared host, not the workspace's.
-        assert fake.variables[(repo_name, "PZ_APP_SLUG")] == "rocket"
-        assert fake.variables[(repo_name, "PZ_HOST_PORT")] == "8081"
-        assert fake.variables[(repo_name, "PZ_SSH_HOST")] == "box.example.com"
-        assert fake.secrets[(repo_name, "PZ_SSH_KEY")] == "PRIVATE KEY"
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_APP_SLUG")] == "rocket"
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_HOST_PORT")] == "8081"
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_SSH_HOST")] == "box.example.com"
+        assert fake.secrets[(repo_name, "PROMPTWORKSPACE_SSH_KEY")] == "PRIVATE KEY"
 
         # Nobody mints the URL of a customer's own server, so the one the Tech
         # Lead named is what the workflow health-checks and what the Preview
         # tab opens — the same value on both sides.
-        assert fake.variables[(repo_name, "PZ_PREVIEW_URL")] == "https://rocket.example.com"
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_PREVIEW_URL")] == "https://rocket.example.com"
         state = client.app.state.repository.get_project(pid).deployment_state
         assert state.url == "https://rocket.example.com"
         assert state.state == "awaiting_first_deploy"
@@ -964,8 +964,8 @@ def test_a_github_pages_project_provisions_with_no_credential_at_all():
         # No secret exists to write: the deploy runs on the token GitHub gives
         # the workflow. Only the two bookkeeping variables are set.
         assert not [key for key in fake.secrets if key[0] == repo_name]
-        assert fake.variables[(repo_name, "PZ_PROJECT_ID")] == pid
-        assert fake.variables[(repo_name, "PZ_ENVIRONMENT")] == "preview"
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_PROJECT_ID")] == pid
+        assert fake.variables[(repo_name, "PROMPTWORKSPACE_ENVIRONMENT")] == "preview"
 
         # Resolved after creation, because before it there was no repository
         # to derive it from.

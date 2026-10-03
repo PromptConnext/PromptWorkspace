@@ -98,7 +98,7 @@ export function GithubConnectionForm({ workspaceId }: { workspaceId: string }) {
     <section className="mb-10 rounded-xl border border-slate-200 bg-white p-5">
       <h2 className="mb-1 text-sm font-medium text-slate-900">GitHub connection</h2>
       <p className="mb-4 text-xs text-slate-500">
-        PromptConnext creates a repository for each project and commits its plan, specification
+        PromptWorkspace creates a repository for each project and commits its plan, specification
         and agent context. Provide a{" "}
         <a
           href="https://github.com/settings/personal-access-tokens"

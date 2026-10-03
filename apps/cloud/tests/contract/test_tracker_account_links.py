@@ -1,7 +1,7 @@
 """A tracker link is keyed by account on either adapter (plan 0019).
 
 The contract suite had no tracker coverage at all, and plan 0019 changes the
-*key shape* of `pz_task_links` in both implementations at once — the in-memory
+*key shape* of `pw_task_links` in both implementations at once — the in-memory
 dict gains a third tuple element, the Supabase upsert gains a third `on_conflict`
 column and a third `.eq()` filter. Those are two independent edits that a
 memory-only test cannot tell apart from one: if the Supabase `on_conflict` list
@@ -9,7 +9,7 @@ had been left at two columns, every case in `tests/test_tracker_account_identity
 .py` would still pass while the real table silently merged two tenants' `PZ-1`
 into one row. Stating it here runs it against both.
 
-`pz_workspace_integrations` is in the same file for the same reason: its unique
+`pw_workspace_integrations` is in the same file for the same reason: its unique
 `(provider, account_key)` constraint is the mechanism of the whole plan, and the
 two adapters enforce it by different means — the migration's constraint on one
 side, an explicit scan on the other — so "two workspaces cannot claim one Jira
@@ -157,7 +157,7 @@ def test_an_unconfigured_account_resolves_to_nothing(repo: Repository) -> None:
     """What the webhook route's first step depends on: an unrecognized account
     has no row, so the delivery is refused before its payload is trusted. The
     empty-string case is explicit because `''` is the pre-0032 backfill value on
-    `pz_task_links.account_key` and must never resolve."""
+    `pw_task_links.account_key` and must never resolve."""
     unknown = repo.find_workspace_integration_by_account("jira", "https://nobody.atlassian.net")
     assert unknown is None
     assert repo.find_workspace_integration_by_account("jira", "") is None

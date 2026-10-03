@@ -61,7 +61,7 @@ def test_pages_needs_no_credential_from_anyone():
     assert template.provider_credential_kind is None
     assert template.required_secrets == ()
     assert PROVIDERS[template.provider].credential_owner == "host"
-    # Not "platform": PromptZone is not the one serving the site.
+    # Not "platform": PromptWorkspace is not the one serving the site.
     assert PROVIDERS[template.provider].credential_owner != "platform"
 
 
@@ -78,7 +78,7 @@ def test_the_pages_workflow_opens_its_own_preview_deployment():
     nothing — and widening the filter would let a repo's own staging workflow
     report itself as the business user's preview."""
     workflow = _workflow(TEMPLATE)
-    assert "vars.PZ_ENVIRONMENT" in workflow
+    assert "vars.PROMPTWORKSPACE_ENVIRONMENT" in workflow
     assert workflow.index("Open deployment") < workflow.index("Deploy to Pages")
     assert "environment_url" in workflow
 
@@ -239,7 +239,7 @@ def test_the_host_owned_provider_refuses_a_connection_in_its_own_words(client):
     )
     assert res.status_code == 400
     # Its own code rather than the platform-owned one: both mean "nothing to
-    # connect", but only one of them means PromptZone is hosting it.
+    # connect", but only one of them means PromptWorkspace is hosting it.
     assert res.json()["detail"] == "provider_is_host_owned"
 
 
@@ -248,7 +248,7 @@ def test_the_picker_is_told_who_owns_each_credential(client):
     assert templates["github-pages"]["provider_credential_owner"] == "host"
     assert templates["static-r2"]["provider_credential_owner"] == "platform"
     assert templates["next-vercel"]["provider_credential_owner"] == "customer"
-    # Pages needs no account, but "managed by PromptZone" would be a lie, so
+    # Pages needs no account, but "managed by PromptWorkspace" would be a lie, so
     # the boolean the picker used to lean on is False for it.
     assert templates["github-pages"]["provider_is_platform_owned"] is False
     assert templates["static-r2"]["provider_is_platform_owned"] is True

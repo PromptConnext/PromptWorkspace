@@ -1,4 +1,4 @@
-// Pluggable coding-agent adapters (ADR 0009). PromptConnext orchestrates external
+// Pluggable coding-agent adapters (ADR 0009). PromptWorkspace orchestrates external
 // agent CLIs instead of shipping its own coding-agent runtime. Each adapter
 // knows how to detect its CLI, launch it headless in the project workspace,
 // and turn its output into a readable stream. Result capture (changed files →
@@ -21,7 +21,7 @@ export type AgentAdapter = {
   id: string;
   label: string;
   // true  → the agent uses its own account/model (dev's Codex/Gemini auth)
-  // false → PromptConnext routes it to the connected BYO model via the façade
+  // false → PromptWorkspace routes it to the connected BYO model via the façade
   bringsOwnModel: boolean;
   detect(): boolean;
   buildSpawn(opts: BuildSpawnOptions): SpawnPlan;

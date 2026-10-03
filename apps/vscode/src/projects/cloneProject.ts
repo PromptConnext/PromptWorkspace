@@ -10,8 +10,8 @@
 // looking, never by `typeof`, and its absence degrades to the clipboard.
 
 import * as vscode from "vscode";
-import type { LoggerLike } from "@promptconnext/pz-cloud";
-import type { StorageLike } from "@promptconnext/pz-cloud";
+import type { LoggerLike } from "@promptworkspace/cloud-client";
+import type { StorageLike } from "@promptworkspace/cloud-client";
 import { writePendingClone } from "./knownClones.ts";
 import { safeRepoUrl, type ProjectRow } from "./roster.ts";
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import abc
 
-_BUCKET = "pz-documents"
+_BUCKET = "pw-documents"
 
 
 class DocumentStore(abc.ABC):
@@ -50,8 +50,9 @@ class MemoryDocumentStore(DocumentStore):
 
 
 class SupabaseDocumentStore(DocumentStore):
-    """Production store: Supabase Storage, bucket `pz-documents` (see
-    migrations/0013_documents.sql for the bucket + RLS policy). Objects are
+    """Production store: Supabase Storage, bucket `pw-documents` (see
+    migrations/0002_pw_baseline.sql, section 0013_documents.sql for the bucket + RLS policy).
+    Objects are
     keyed `<workspace_id>/<document_id>/<filename>` so the RLS policy can
     check the workspace segment of the path directly."""
 

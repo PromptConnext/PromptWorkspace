@@ -5,7 +5,7 @@ this push": a build that lands three pushes' worth of work is one version to
 the stakeholder reading the Preview tab, and three entries would be three lies
 about what they are looking at.
 
-Frozen, not derived. `pz_deployment_tasks` records the answer at terminal
+Frozen, not derived. `pw_deployment_tasks` records the answer at terminal
 state so a force-push, a reassignment or a later edit cannot rewrite what
 somebody reviewed last Tuesday.
 """
@@ -17,7 +17,7 @@ import logging
 from app.integrations.github_auth import resolve_token
 from app.models.schemas import ArtifactKind, Deployment, utcnow
 
-logger = logging.getLogger("promptconnext.deploy")
+logger = logging.getLogger("promptworkspace.deploy")
 
 # Terminal states worth freezing. A failed build still names what was in it —
 # "the version that did not publish contained these three tasks" is exactly

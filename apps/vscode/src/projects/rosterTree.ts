@@ -12,7 +12,7 @@ import type { GitBridge } from "../git/gitBridge.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import { buildRoster, type ProjectRow, type WorkspaceRow } from "./roster.ts";
 import { readKnownClones } from "./knownClones.ts";
-import type { StorageLike } from "@promptconnext/pz-cloud";
+import type { StorageLike } from "@promptworkspace/cloud-client";
 import type { RosterStore } from "./rosterStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
 
@@ -109,7 +109,7 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
           : vscode.TreeItemCollapsibleState.Collapsed,
       );
       item.id = `workspace:${node.row.workspaceId}`;
-      item.contextValue = "promptconnext.workspace";
+      item.contextValue = "promptworkspace.workspace";
       item.iconPath = new vscode.ThemeIcon("organization");
       return item;
     }
@@ -125,7 +125,7 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
     // The context value IS the action: package.json binds Clone to
     // remote-only, Open to local, and web-only to no-repo, so a row can never
     // offer an action its state cannot honour.
-    item.contextValue = `promptconnext.project.${row.localState}`;
+    item.contextValue = `promptworkspace.project.${row.localState}`;
     item.tooltip = this.tooltip(row);
     return item;
   }

@@ -343,7 +343,7 @@ describe("Planner", () => {
     );
     expect(screen.getByText(/repository created/i)).toBeInTheDocument();
     expect(screen.getByText("https://github.com/acme/widget")).toBeInTheDocument();
-    expect(screen.getByText(/clone this repo and open it in the promptconnext vs code extension/i)).toBeInTheDocument();
+    expect(screen.getByText(/clone this repo and open it in the promptworkspace vs code extension/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
   });
 

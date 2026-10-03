@@ -5,7 +5,7 @@
 //     .venv/bin/uvicorn app.main:app --port 8081
 //   node apps/vscode/scripts/seed-local.mjs
 //
-// Override with PZ_API if you run the cloud elsewhere.
+// Override with PROMPTWORKSPACE_API if you run the cloud elsewhere.
 //
 // The memory backend keeps everything in process, so restarting uvicorn wipes
 // it and you re-run this. That is the point: it costs nothing to start over.
@@ -19,8 +19,8 @@
 //   127.0.0.1, not localhost — uvicorn binds IPv4 only, macOS resolves
 //   `localhost` to ::1 first, and an unrelated IPv6 listener answers instead.
 
-const API = process.env.PZ_API ?? "http://127.0.0.1:8081";
-const USER = process.env.PZ_USER ?? "dev-user";
+const API = process.env.PROMPTWORKSPACE_API ?? "http://127.0.0.1:8081";
+const USER = process.env.PROMPTWORKSPACE_USER ?? "dev-user";
 
 async function call(method, path, body) {
   const res = await fetch(`${API}${path}`, {
@@ -41,7 +41,7 @@ const health = await call("GET", "/health").catch((err) => {
       "Start it with:\n" +
       "  cd apps/cloud && DATA_BACKEND=memory AUTH_MODE=stub \\\n" +
       "    .venv/bin/uvicorn app.main:app --port 8081\n" +
-      "\nOr point this script elsewhere with PZ_API=http://127.0.0.1:<port>\n",
+      "\nOr point this script elsewhere with PROMPTWORKSPACE_API=http://127.0.0.1:<port>\n",
   );
   throw err;
 });
@@ -104,17 +104,17 @@ console.log("Extension settings (Cmd-, in the Extension Development Host):\n");
 console.log(
   JSON.stringify(
     {
-      "promptconnext.cloudApiUrl": API,
-      "promptconnext.supabaseUrl": "",
-      "promptconnext.supabaseAnonKey": "",
-      "promptconnext.projectId": project.id,
+      "promptworkspace.cloudApiUrl": API,
+      "promptworkspace.supabaseUrl": "",
+      "promptworkspace.supabaseAnonKey": "",
+      "promptworkspace.projectId": project.id,
     },
     null,
     2,
   ),
 );
 console.log(
-  `\nSign in with PromptConnext: Sign In and enter "${USER}" — with no Supabase\n` +
+  `\nSign in with PromptWorkspace: Sign In and enter "${USER}" — with no Supabase\n` +
     "configured the cloud is in stub auth mode, so the browser handoff is skipped.\n\n" +
     "Then commit `T1: whatever` in the linked folder. T1, T01 and T001 all mean\n" +
     "the same task; T012 is seeded so you can check that T12 finds it too.",

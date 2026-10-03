@@ -13,8 +13,7 @@ import { AuthCard, AuthLink, AuthLinks, Field, FormError, SubmitButton } from "@
 export { safeNext };
 
 // Deep-link schemes a client may ask us to hand the session back to:
-// `promptconnext` is the shipping Tauri shell, `promptconnext-theia` the
-// in-development Electron one, and the rest are the VS Code family the
+// `promptworkspace` is the Tauri shell, and the rest are the VS Code family the
 // extension in apps/vscode runs inside (ADR 0019) — every fork registers its
 // own scheme, so `env.uriScheme` differs per editor and cannot be hardcoded.
 //
@@ -31,10 +30,9 @@ export { safeNext };
 // a thief who takes the code without the state cannot complete *our* sign-in,
 // and the user sees a failed login rather than a silent one. What it does not
 // bound is an app that hijacks the scheme and wins the race; that risk already
-// existed for `promptconnext://` and this enlarges the colliding set.
+// existed for `promptworkspace://` and this enlarges the colliding set.
 const DESKTOP_SCHEMES: string[] = [
-  "promptconnext",
-  "promptconnext-theia",
+  "promptworkspace",
   "vscode",
   "vscode-insiders",
   "vscode-exploration",
@@ -45,7 +43,7 @@ const DESKTOP_SCHEMES: string[] = [
 ];
 
 export function desktopScheme(raw: string | null): string {
-  return raw && DESKTOP_SCHEMES.includes(raw) ? raw : "promptconnext";
+  return raw && DESKTOP_SCHEMES.includes(raw) ? raw : "promptworkspace";
 }
 
 // Where to send the one-time code.
@@ -107,7 +105,7 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  // Fallback for when the promptconnext:// redirect never arrives — e.g. a
+  // Fallback for when the promptworkspace:// redirect never arrives — e.g. a
   // `tauri dev` build, where macOS never registers a handler for the scheme
   // outside a bundled+installed .app (there's no Info.plist to source it
   // from). We still attempt the automatic redirect, but keep the code
@@ -176,7 +174,7 @@ function LoginForm() {
     return (
       <AuthCard
         title="Continue to the app"
-        subtitle="This browser already has a PromptConnext session."
+        subtitle="This browser already has a PromptWorkspace session."
       >
         <p className="text-sm text-slate-600">
           Signing in will hand <strong>{user.email || user.id}</strong> to the app that opened
@@ -283,7 +281,7 @@ function LoginForm() {
 
   if (AUTH_MODE === "stub") {
     return (
-      <AuthCard title="Sign in to PromptConnext" subtitle="Local dev (stub auth) — any user id works, no password.">
+      <AuthCard title="Sign in to PromptWorkspace" subtitle="Local dev (stub auth) — any user id works, no password.">
         <form onSubmit={handleStubSubmit} className="flex flex-col gap-4">
           <Field
             label="User id"
@@ -298,7 +296,7 @@ function LoginForm() {
   }
 
   return (
-    <AuthCard title="Sign in to PromptConnext">
+    <AuthCard title="Sign in to PromptWorkspace">
       <form onSubmit={handleSupabaseSubmit} className="flex flex-col gap-4">
         <Field
           label="Email"

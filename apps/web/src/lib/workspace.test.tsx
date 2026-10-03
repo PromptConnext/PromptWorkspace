@@ -15,8 +15,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetch(...args) };
 });
 
-const STUB_USER_KEY = "pz_stub_user_id";
-const CACHE_KEY = "pz_memberships:bob";
+const STUB_USER_KEY = "pw_stub_user_id";
+const CACHE_KEY = "pw_memberships:bob";
 
 function workspace(id: string, name: string) {
   return {

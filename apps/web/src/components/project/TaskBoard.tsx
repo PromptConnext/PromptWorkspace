@@ -70,9 +70,9 @@ const AUTHORITY_STYLE: Record<string, string> = {
  * at a business stakeholder.
  */
 const AUTHORITY_HINT: Record<string, string> = {
-  pz: "Managed in PromptConnext",
+  pz: "Managed in PromptWorkspace",
   pmo: "Managed by the connected project tracker (Jira / ClickUp)",
-  shared: "Editable in PromptConnext and the connected tracker",
+  shared: "Editable in PromptWorkspace and the connected tracker",
 };
 
 function authorityHint(field: string): string {
@@ -90,7 +90,7 @@ function memberLabel(members: WorkspaceMember[], userId: string | null): string 
 
 /**
  * A card is a few hundred pixels wide and an email address is not. The trigger
- * shows the local part only — `dev-user`, not `dev-user@promptconnext.local` —
+ * shows the local part only — `dev-user`, not `dev-user@promptworkspace.local` —
  * with the full address kept in the option list and the hover title, where
  * there is room to disambiguate two people who share a first name.
  */

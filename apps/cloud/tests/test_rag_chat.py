@@ -4,7 +4,8 @@
      their workspace's model key.
   2. A member of another workspace provably cannot retrieve those chunks —
      tested at the repository layer (the structural equivalent of RLS for the
-     in-memory backend; Postgres RLS itself is added in migrations/0009_rag.sql
+     in-memory backend; Postgres RLS itself is added in
+     migrations/0002_pw_baseline.sql, section 0009_rag.sql
      and, per this repo's convention, verified by running against a real
      Supabase instance rather than in pytest — see README's migrations note).
 """

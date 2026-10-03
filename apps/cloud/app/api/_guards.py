@@ -11,18 +11,18 @@ layers that also enforce these rules. It is the entire enforcement.
 
 Outside that set, `app/db/supabase_repository.py::for_user` still scopes
 calls to the caller's JWT, and RLS still enforces workspace membership. The
-policies and these guards agree fully on only two tables: pz_workspaces
-(`pz_ws_write`) and pz_workspace_members (`pz_members_write`), whose policies
-genuinely test `pz_is_admin`.
+policies and these guards agree fully on only two tables: pw_workspaces
+(`pw_ws_write`) and pw_workspace_members (`pw_members_write`), whose policies
+genuinely test `pw_is_admin`.
 
 Two known divergences remain, both outside plan 0014's scope and neither
 closed here:
-  * pz_projects — `pz_projects_rw` is membership-only, while the writes that
+  * pw_projects — `pw_projects_rw` is membership-only, while the writes that
     matter are admin-gated in the API alone (deployment_config and
     policy_scope via app/api/deployments.py's require_admin, lifecycle_status
     via app/api/sync.py). A member reaching PostgREST directly can still set
     those fields.
-  * pz_discussions — closed as of migration 0031, which added it to the
+  * pw_discussions — closed as of migration 0031, which added it to the
     service-only set; named here because plan 0014's own matrix omitted it
     and a reader comparing the two will look for it.
 """

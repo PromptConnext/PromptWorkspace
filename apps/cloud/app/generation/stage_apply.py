@@ -54,7 +54,7 @@ from app.models.schemas import (
 )
 from app.rag.queue import EmbedJob, enqueue
 
-logger = logging.getLogger("promptconnext.stage_apply")
+logger = logging.getLogger("promptworkspace.stage_apply")
 
 # How faithfully the project graph reflects the stage document that was just
 # saved. Both routes report this, so "the board didn't move" is something the

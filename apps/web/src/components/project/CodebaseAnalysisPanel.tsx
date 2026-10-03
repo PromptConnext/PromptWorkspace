@@ -23,7 +23,7 @@ export const ANALYSIS_ERROR_TEXT: Record<string, string> = {
     "The repository has already been created for this project — the analysis only matters before that.",
   github_not_configured:
     "No GitHub connection for this workspace. A workspace admin needs to connect one in workspace settings.",
-  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptConnext recognises.",
+  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptWorkspace recognises.",
   repo_owner_out_of_scope:
     "The imported repository isn't under the workspace's connected GitHub account any more — the " +
     "connection may have been changed since the import.",
@@ -116,7 +116,7 @@ export function CodebaseAnalysisPanel({
       </div>
       <p className="mb-3 mt-1 text-xs text-slate-500">
         This project was imported from an existing repository, so the plan and tasks describe
-        changes to its code rather than a new application. PromptConnext reads the repository and
+        changes to its code rather than a new application. PromptWorkspace reads the repository and
         writes a baseline of what is already there; the Plan and Tasks steps wait until it exists.
       </p>
 

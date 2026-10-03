@@ -4,7 +4,7 @@
 // rather than extracted. Plan 0025 §2 recommends exactly that: the ~90 lines of
 // prompt assembly are cheaper to duplicate than to generalise, unlike the
 // refresh coalescing and the 4xx rule, which must only ever be fixed once and
-// therefore moved to packages/pz-cloud. The divergence to expect is the coding
+// therefore moved to packages/cloud-client. The divergence to expect is the coding
 // rules section — there, not here, the extension reads the clone.
 //
 // Same contract as the original: every lookup is optional and failure-tolerant.
@@ -16,7 +16,7 @@ import {
   type AssignedTask,
   type CloudClient,
   type LoggerLike,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 
 const SPEC_EXCERPT_CHARS = 4000;
 
@@ -65,7 +65,7 @@ export async function buildTaskContext(
     "## What to do",
     "",
     `Implement this task in the current workspace. When it is done, commit with ` +
-      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptConnext ` +
+      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
       `closes the task automatically.`,
     "",
   );

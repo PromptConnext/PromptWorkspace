@@ -1,5 +1,5 @@
 {
-  "name": "@promptconnext/desktop",
+  "name": "@promptworkspace/desktop",
   "private": true,
   "version": "0.4.0",
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite",
     "prep:engine-resource": "node -e \"require('fs').mkdirSync('src-tauri/.engine-pkg',{recursive:true})\"",
     "build": "tsc && vite build",
-    "stage:engine": "node -e \"require('fs').rmSync('src-tauri/.engine-pkg',{recursive:true,force:true})\" && pnpm --filter @promptconnext/engine deploy --prod --config.node-linker=hoisted src-tauri/.engine-pkg && node scripts/bundle-node.mjs",
+    "stage:engine": "node -e \"require('fs').rmSync('src-tauri/.engine-pkg',{recursive:true,force:true})\" && pnpm --filter @promptworkspace/engine deploy --prod --config.node-linker=hoisted src-tauri/.engine-pkg && node scripts/bundle-node.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

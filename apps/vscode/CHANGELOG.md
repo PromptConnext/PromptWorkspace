@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — Unreleased
+
+**New extension ID: `promptconnext.promptworkspace`.** The product is now PromptWorkspace
+(PromptConnext is the company). This is a new Marketplace listing; the pre-rename listing is
+deprecated in its favour, and settings do not carry over — every setting is now
+`promptworkspace.*`.
+
+### Changed
+- Extension `name` is `promptworkspace`, display name **PromptWorkspace**; every command, view,
+  context key and setting now uses the `promptworkspace.*` prefix.
+- The defaults now point at production: `cloudApiUrl` `https://workspace-api.promptconnext.com`,
+  `cloudWebUrl` `https://workspace.promptconnext.com`, plus the production Supabase URL and
+  publishable key. Override all four to reach a develop/staging stack.
+- Packaging (`vscode:prepublish`) refuses while the production Supabase defaults are still
+  placeholders (`packages/cloud-client/scripts/assert-defaults-filled.mjs`).
+
+## Unreleased (pre-0.3.0)
 
 The whole loop, in the editor. **Start Task** claims a task, moves it to *In progress*, and offers
 to carry its number into git for you — as a branch name, as a prefilled commit message, or neither.
@@ -21,9 +37,9 @@ Auto-close then waits for the push.
   your machine has is not evidence the work is done, and until now it closed the task for the whole
   team. Nothing is sent to the cloud between commit and push, so an afternoon of amending and
   rebasing produces one status write instead of a sequence of them.
-- New setting `promptconnext.closeTasksOn` (`push` by default, `commit` for the old behaviour). A
+- New setting `promptworkspace.closeTasksOn` (`push` by default, `commit` for the old behaviour). A
   repository with no upstream branch falls back to `commit` and says so in the log.
-  `promptconnext.closeTasksFromCommits` still turns the feature off entirely.
+  `promptworkspace.closeTasksFromCommits` still turns the feature off entirely.
 - A commit that is amended or rebased away no longer closes anything; its replacement is picked up
   on its own terms.
 

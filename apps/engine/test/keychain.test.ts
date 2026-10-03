@@ -7,11 +7,11 @@
 // `security` CLI to write into, so it falls back to a blocking native
 // "Keychain Not Found" GUI dialog instead of failing cleanly — that dialog
 // would otherwise pop on every `node --test` run. Set
-// PROMPTCONNEXT_TEST_KEYCHAIN=1 to run this against a real, unlocked
+// PROMPTWORKSPACE_TEST_KEYCHAIN=1 to run this against a real, unlocked
 // keychain (e.g. an interactive local machine or a CI runner known to have
 // one).
 //
-// Run:  PROMPTCONNEXT_TEST_KEYCHAIN=1 node --test apps/engine/test/keychain.test.ts
+// Run:  PROMPTWORKSPACE_TEST_KEYCHAIN=1 node --test apps/engine/test/keychain.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -22,8 +22,8 @@ test("storeSecret/readSecret/deleteSecret round-trip through the real OS keychai
     t.skip("keychain.ts has no libsecret implementation on Linux (see module header)");
     return;
   }
-  if (process.env.PROMPTCONNEXT_TEST_KEYCHAIN !== "1") {
-    t.skip("set PROMPTCONNEXT_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
+  if (process.env.PROMPTWORKSPACE_TEST_KEYCHAIN !== "1") {
+    t.skip("set PROMPTWORKSPACE_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
     return;
   }
 
@@ -43,8 +43,8 @@ test("readSecret returns null for a credential ref that was never stored", (t) =
     t.skip("keychain.ts has no libsecret implementation on Linux (see module header)");
     return;
   }
-  if (process.env.PROMPTCONNEXT_TEST_KEYCHAIN !== "1") {
-    t.skip("set PROMPTCONNEXT_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
+  if (process.env.PROMPTWORKSPACE_TEST_KEYCHAIN !== "1") {
+    t.skip("set PROMPTWORKSPACE_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
     return;
   }
   assert.equal(readSecret(`test-never-stored-${randomUUID()}`), null);

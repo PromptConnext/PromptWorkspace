@@ -1,11 +1,11 @@
 [package]
-name = "promptconnext-desktop"
+name = "promptworkspace-desktop"
 version = "0.1.0"
-description = "PromptConnext desktop shell"
+description = "PromptWorkspace desktop shell"
 edition = "2021"
 
 [lib]
-name = "promptconnext_desktop_lib"
+name = "promptworkspace_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -130,7 +130,7 @@ export default function ThreeS({
       [
         `Implement task ${ref}: ${task.title}`,
         `Context: specs/001/spec.md (specification), specs/001/plan.md (plan), specs/001/tasks.md (full task list).`,
-        `Implement ONLY this task. Mention ${ref} in your commit message so PromptConnext tracks it automatically.`,
+        `Implement ONLY this task. Mention ${ref} in your commit message so PromptWorkspace tracks it automatically.`,
       ].join("\n"),
     );
     setCopied(task.id);

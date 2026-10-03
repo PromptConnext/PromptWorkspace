@@ -60,7 +60,7 @@ REQUEST_ID_HEADER = "X-Request-Id"
 
 _HEADER_NAME_BYTES = REQUEST_ID_HEADER.lower().encode("ascii")
 
-_request_id: ContextVar[str | None] = ContextVar("promptconnext_request_id", default=None)
+_request_id: ContextVar[str | None] = ContextVar("promptworkspace_request_id", default=None)
 
 # What a client is allowed to choose for itself. Long enough for a UUID or a
 # proxy's own id, restricted to characters that cannot break a log line, an

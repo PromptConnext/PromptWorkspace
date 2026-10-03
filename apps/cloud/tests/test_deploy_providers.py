@@ -213,7 +213,7 @@ def _verify_vercel_project(config: dict):
 
 def test_connecting_vercel_checks_the_team_and_not_a_project(vercel_api):
     _state, calls = vercel_api
-    # Which Vercel project a build goes to is chosen per PromptConnext project
+    # Which Vercel project a build goes to is chosen per PromptWorkspace project
     # (ADR 0025), so at connect time there is no project to check — listing
     # under the team is the most this half can honestly assert.
     assert _verify_vercel({"token": "tok", "org_id": "team_1"}) == {}

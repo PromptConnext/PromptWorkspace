@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-PromptConnext is a pnpm workspace (`apps/*`) with a Python backend. Main applications are `engine` (Node/TypeScript orchestration), `desktop` (Tauri/React), `web` (Next.js team UI), and `vscode` (editor extension). TypeScript source lives in each app’s `src/`; cloud code lives in `apps/cloud/app/`. `apps/desktop-theia/` and `spikes/` contain Theia shell work. The marketing site moved out to [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web).
+PromptWorkspace is a pnpm workspace (`apps/*`) with a Python backend. Main applications are `engine` (Node/TypeScript orchestration), `desktop` (Tauri/React), `web` (Next.js team UI), and `vscode` (editor extension). TypeScript source lives in each app’s `src/`; cloud code lives in `apps/cloud/app/`. The marketing site moved out to [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web).
 
 Cloud migrations live in `apps/cloud/migrations/`; Supabase configuration is in `supabase/`. Desktop icons are in `apps/desktop/src-tauri/icons/`, and extension assets are in `apps/vscode/media/`. Read relevant architecture decisions in `docs/decisions/` before changing subsystem boundaries.
 
@@ -34,4 +34,4 @@ Follow scoped Conventional Commits, e.g. `feat(cloud): add deployment template` 
 
 ## Security & Configuration
 
-Use app-specific `.env.example` files for setup; never commit credentials. Keep model keys in the established keychain/secret-store paths. Configure the extension through `promptconnext.*` VS Code settings.
+Use app-specific `.env.example` files for setup; never commit credentials. Keep model keys in the established keychain/secret-store paths. Configure the extension through `promptworkspace.*` VS Code settings.

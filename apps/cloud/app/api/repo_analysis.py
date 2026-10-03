@@ -50,7 +50,7 @@ from app.models.schemas import (
 )
 from app.rag.budget import estimate_tokens
 
-logger = logging.getLogger("promptconnext.repo_analysis")
+logger = logging.getLogger("promptworkspace.repo_analysis")
 router = APIRouter(tags=["repo_analysis"])
 
 # `generation_runs.stage` for a baseline run — free text there, the same way

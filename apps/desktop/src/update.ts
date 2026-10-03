@@ -10,7 +10,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 // but any *newer* release (a different version string) prompts afresh, since
 // we suppress only on an exact match.
 
-const SKIP_KEY = "promptconnext.skippedUpdateVersion";
+const SKIP_KEY = "promptworkspace.skippedUpdateVersion";
 
 // Returns an actionable Update, or null when the app is up to date, the
 // available version was skipped, or we're running outside Tauri (browser-only

@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 // workspace, and declining here leaves each project local and simply
 // unreachable under the gate until the user chooses to import it later.
 
-const DISMISS_KEY = "promptconnext.importLocalProjects.dismissed";
+const DISMISS_KEY = "promptworkspace.importLocalProjects.dismissed";
 
 export default function ImportLocalProjects({
   localOnly,

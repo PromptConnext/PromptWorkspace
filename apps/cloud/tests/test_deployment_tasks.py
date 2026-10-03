@@ -1,7 +1,7 @@
 """The frozen build -> task set (ADR 0023 decision 4, plan 0024 M2).
 
 These are the repository-level cases. The freeze is only meaningful against a
-real deployment row — the state lives on `pz_deployments`, not on the join
+real deployment row — the state lives on `pw_deployments`, not on the join
 table — so every case here creates one rather than writing task ids against a
 bare id string, which is what the pre-freeze version of this file did.
 """

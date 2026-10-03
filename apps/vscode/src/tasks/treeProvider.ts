@@ -10,9 +10,9 @@
 // affordance for "done", which is why engines.vscode floors at 1.85.
 
 import * as vscode from "vscode";
-import type { AssignedTask } from "@promptconnext/pz-cloud";
-import { TASK_STATUS_LABELS, isClosed } from "@promptconnext/pz-cloud";
-import { taskRefFromFeatureTag } from "@promptconnext/pz-cloud";
+import type { AssignedTask } from "@promptworkspace/cloud-client";
+import { TASK_STATUS_LABELS, isClosed } from "@promptworkspace/cloud-client";
+import { taskRefFromFeatureTag } from "@promptworkspace/cloud-client";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
@@ -69,13 +69,13 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       .filter(Boolean)
       .join(" · ");
     if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
-    item.contextValue = "promptconnext.task";
+    item.contextValue = "promptworkspace.task";
     item.checkboxState = isClosed(task.status)
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
     item.tooltip = this.tooltip(node.entry);
     item.command = {
-      command: "promptconnext.copyTaskContext",
+      command: "promptworkspace.copyTaskContext",
       title: "Copy Task Context",
       arguments: [node],
     };

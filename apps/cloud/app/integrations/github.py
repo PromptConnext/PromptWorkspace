@@ -197,7 +197,7 @@ class DeploymentStatusEvent:
     """A `deployment_status` delivery for the preview environment (ADR 0021).
 
     `external_key` is GitHub's deployment id as a string. It is the
-    idempotency key for `pz_deployments`, and it has to be: one deploy emits
+    idempotency key for `pw_deployments`, and it has to be: one deploy emits
     several of these (`in_progress`, then `success` or `failure`), so without
     a stable key each delivery would insert a duplicate row.
     """
@@ -328,7 +328,7 @@ def _normalize_expiry(raw: str | None) -> str | None:
 
 
 async def ensure_hook_events(client, token: str, repo: str, callback_url: str) -> bool:
-    """Make sure this repo's PromptZone hook is subscribed to WEBHOOK_EVENTS,
+    """Make sure this repo's PromptWorkspace hook is subscribed to WEBHOOK_EVENTS,
     widening it if not. True when a hook was found and is now correct.
 
     This is the only migration route for repositories created before ADR
@@ -886,7 +886,7 @@ class HttpGithubClient:
         successful deploy to compare against. Capped rather than paginated: a
         first build reaches back to the seed commit, and a repository whose
         first deploy carries more than a hundred commits is one whose history
-        predates PromptZone entirely."""
+        predates PromptWorkspace entirely."""
         resp = await _send(
             "GET",
             f"{GITHUB_API}/repos/{repo}/commits?sha={sha}&per_page={min(limit, 100)}",
@@ -1224,7 +1224,7 @@ class HttpGithubClient:
 
         Sending only `events` matters: the stored signing secret lives in
         `config`, and a PATCH that included `config` without it would rotate
-        the secret out from under `pz_repo_webhooks` and break verification
+        the secret out from under `pw_repo_webhooks` and break verification
         for every future delivery.
         """
         resp = await _send(
@@ -1249,7 +1249,7 @@ class HttpGithubClient:
         secret: str,
         events: list[str],
     ) -> None:
-        """Replace the secret on one existing PromptZone hook.
+        """Replace the secret on one existing PromptWorkspace hook.
 
         This is deliberately a PATCH to the hook selected from
         ``list_repo_hooks``, not a POST to the collection. GitHub permits

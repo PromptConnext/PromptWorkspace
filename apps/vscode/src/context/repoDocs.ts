@@ -9,13 +9,13 @@
 // The stage document is still fetched, but only as provenance — one line of
 // state when the two have diverged, never a diff view.
 //
-// The path list and the drift comparison live in @promptconnext/pz-cloud
+// The path list and the drift comparison live in @promptworkspace/cloud-client
 // because apps/mcp's `get_project_rules` answers the same question over
 // `node:fs` (plan 0025 §2). Only the reader is local to this file, and only
 // because `vscode.workspace.fs` is the reader an editor should use.
 
 import * as vscode from "vscode";
-import { SEEDED_DOCS, sameDocText, seededDocFor, type CloudClient, type SeededDocKey } from "@promptconnext/pz-cloud";
+import { SEEDED_DOCS, sameDocText, seededDocFor, type CloudClient, type SeededDocKey } from "@promptworkspace/cloud-client";
 import type { OutputLogger } from "../util/log.ts";
 
 export { SEEDED_DOCS, type SeededDocKey };

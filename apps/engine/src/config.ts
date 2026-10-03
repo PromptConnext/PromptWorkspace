@@ -1,10 +1,13 @@
-export const ENGINE_PORT = Number(process.env.PROMPTCONNEXT_ENGINE_PORT ?? 47131);
+export const ENGINE_PORT = Number(process.env.PROMPTWORKSPACE_ENGINE_PORT ?? 47131);
 
-// Cloud sync (apps/cloud) defaults to the hosted PromptConnext Cloud instance.
+// Cloud sync (apps/cloud) defaults to the hosted PromptWorkspace Cloud instance.
 // Override with CLOUD_API_URL (e.g. http://localhost:8080 for local dev
 // against a source checkout of apps/cloud, see docs/DEVELOPMENT.md). Set it
-// to an empty string to disable cloud sync entirely.
-const DEFAULT_CLOUD_API_URL = "https://promptconnextcloud-production.up.railway.app";
+// to an empty string to disable cloud sync entirely. This and the CLOUD_WEB_URL
+// default below copy packages/cloud-client/src/defaults.ts (the engine does not
+// depend on that package); packages/cloud-client/test/defaults.test.ts fails if
+// they drift.
+const DEFAULT_CLOUD_API_URL = "https://workspace-api.promptconnext.com";
 export const CLOUD_API_URL =
   process.env.CLOUD_API_URL === ""
     ? null
@@ -22,19 +25,10 @@ export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
 // (http://localhost:3000). Not nullable — browser login needs a destination.
 //
 // SECURITY: the desktop opens this for credential entry, so whoever controls
-// this origin can phish users. The default below is a `*.vercel.app` subdomain,
-// which is only owned while the Vercel project exists — if it is ever deleted or
-// renamed, the name becomes reclaimable by anyone (dangling-subdomain takeover).
-// The 2026-07-25 pre-launch readiness review called moving to an org-owned
-// custom domain a hard blocker for public distribution. On 2026-08-01 the
-// owner accepted the risk for launch instead (ADR 0014, "Accepted risk"), so
-// this ships on the vercel.app subdomain. The mitigation is unchanged and
-// still outstanding: point this default (or the shipped build's CLOUD_WEB_URL)
-// at a domain the org owns at the DNS level, e.g. app.promptconnext.com. Until
-// then, do not delete or rename the Vercel project — that is what makes the
-// name reclaimable.
+// this origin can phish users. The default is the org-owned production domain
+// (ADR 0014's mitigation: never a reclaimable `*.vercel.app` subdomain).
 export const CLOUD_WEB_URL =
-  process.env.CLOUD_WEB_URL || "https://prompt-zone-web-app.vercel.app";
+  process.env.CLOUD_WEB_URL || "https://workspace.promptconnext.com";
 
 // Which URL scheme the host shell registered for the ADR 0014 sign-in callback.
 // The engine is shell-agnostic, so whoever spawns it declares this and the
@@ -43,4 +37,4 @@ export const CLOUD_WEB_URL =
 // value, so a new scheme here needs adding there too. The default keeps a bare
 // `pnpm engine` run pointed at the shipping shell.
 export const DEEP_LINK_SCHEME =
-  process.env.PROMPTCONNEXT_DEEP_LINK_SCHEME || "promptconnext";
+  process.env.PROMPTWORKSPACE_DEEP_LINK_SCHEME || "promptworkspace";

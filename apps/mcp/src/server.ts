@@ -10,7 +10,7 @@
 // and reach, not vocabulary. Three read, and `close_task` writes exactly one
 // field through the one endpoint that takes it. Above all: this server never
 // touches `PUT /sync/projects/{id}/graph`. That is the same prohibition
-// packages/pz-cloud/src/client.ts writes down for the same reason — a task
+// packages/cloud-client/src/client.ts writes down for the same reason — a task
 // client with a full-graph push can overwrite the requirements and specs the
 // cloud authored. There is no task-claim or task-assignment tool either:
 // `/me/tasks` returns only tasks already assigned to the caller, so a claim tool
@@ -44,7 +44,7 @@ import {
   type LoggerLike,
   type StatusArtifact,
   type TaskStatus,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 import { createCloudContext, stderrLog } from "./cloud.ts";
 import { readGitHead, readGitRemotes } from "./gitRemotes.ts";
 import { buildProjectRules } from "./projectRules.ts";
@@ -53,15 +53,15 @@ import { resolveWorkspaceRoot } from "./repoDocs.ts";
 import { StatusWriter } from "./statusWriter.ts";
 import { buildTaskContext, summarizeTasks } from "./taskContext.ts";
 
-export const SERVER_NAME = "promptconnext";
+export const SERVER_NAME = "promptworkspace";
 export const SERVER_VERSION = "0.1.0";
 
 export const TOOLS: Tool[] = [
   {
     name: "list_my_tasks",
-    title: "List my PromptConnext tasks",
+    title: "List my PromptWorkspace tasks",
     description:
-      "The PromptConnext tasks assigned to the signed-in developer, across every " +
+      "The PromptWorkspace tasks assigned to the signed-in developer, across every " +
       "workspace and project. Defaults to open work (todo and in progress); pass " +
       "`status` explicitly to include completed tasks.",
     inputSchema: {
@@ -84,7 +84,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "get_task",
-    title: "Get one PromptConnext task with its context",
+    title: "Get one PromptWorkspace task with its context",
     description:
       "One assigned task with its acceptance criteria, an excerpt of the " +
       "specification it implements, and the project and repository it belongs to. " +
@@ -104,7 +104,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "get_project_rules",
-    title: "Get a PromptConnext project's coding rules",
+    title: "Get a PromptWorkspace project's coding rules",
     description:
       "The project's seeded coding-rules files — AGENTS.md, docs/conventions.md " +
       "and .specify/memory/constitution.md — read from the developer's clone. The " +
@@ -134,7 +134,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "close_task",
-    title: "Report a PromptConnext task's status",
+    title: "Report a PromptWorkspace task's status",
     description:
       "Set the status of a task assigned to the signed-in developer, recording " +
       "the commit that implemented it. Use `implemented` when the work is " +
@@ -286,7 +286,7 @@ async function getProjectRules(
     const named = candidates.find((c) => c.projectId === explicitId);
     if (!named) {
       return failure(
-        `No PromptConnext project ${explicitId} is visible to you. Either the id is ` +
+        `No PromptWorkspace project ${explicitId} is visible to you. Either the id is ` +
           "wrong or you are not a member of its workspace.",
       );
     }
@@ -297,21 +297,21 @@ async function getProjectRules(
   if (!isRepository) {
     return failure(
       `${root} is not inside a git repository, so there is no remote to match a ` +
-        "PromptConnext project against. Pass workspace_root for the developer's " +
+        "PromptWorkspace project against. Pass workspace_root for the developer's " +
         "clone, or project_id to name the project directly.",
     );
   }
   if (remotes.length === 0) {
     return failure(
       `The git repository at ${root} has no remote, so it cannot be matched to a ` +
-        "PromptConnext project. Pass project_id to name the project directly.",
+        "PromptWorkspace project. Pass project_id to name the project directly.",
     );
   }
 
   const matches = matchCandidates(remotes, candidates);
   if (matches.length === 0) {
     return failure(
-      `No PromptConnext project's repository matches the git remote of ${root} ` +
+      `No PromptWorkspace project's repository matches the git remote of ${root} ` +
         `(${remotes.join(", ")}). Check that this is the right clone, or pass ` +
         "project_id to name the project directly.",
     );
@@ -325,7 +325,7 @@ async function getProjectRules(
       .map((m) => `  - ${m.projectId}: ${m.projectName} (${m.workspaceName})`)
       .join("\n");
     return failure(
-      `${matches.length} PromptConnext projects share the git remote of ${root}. ` +
+      `${matches.length} PromptWorkspace projects share the git remote of ${root}. ` +
         `Call get_project_rules again with project_id set to one of:\n${listed}`,
     );
   }
@@ -439,7 +439,7 @@ async function closeTask(
     // Saying "failed" here would send the agent off to redo work that is done.
     return text(
       [
-        `PromptConnext could not be reached (${outcome.reason}), so this write is ` +
+        `PromptWorkspace could not be reached (${outcome.reason}), so this write is ` +
           `queued rather than lost: ${name} -> ${label} in ${entry.project_name}.`,
         note,
         "It will be retried on the next close_task call or when this server next " +
@@ -467,7 +467,7 @@ export function createServer(
     {
       capabilities: { tools: {} },
       instructions:
-        "PromptConnext tasks assigned to this developer, the coding rules of the " +
+        "PromptWorkspace tasks assigned to this developer, the coding rules of the " +
         "project they are working in, and the one write that closes a task: its " +
         "status, with the commit that implemented it. Nothing else in the task " +
         "graph is writable from here — not a task's title, its acceptance " +
@@ -498,14 +498,14 @@ export function createServer(
       // protocol-level failure it cannot explain.
       if (err instanceof CloudNotLoggedInError) {
         return failure(
-          "Not signed in to PromptConnext. Run `promptconnext-mcp login` in a terminal, " +
+          "Not signed in to PromptWorkspace. Run `promptworkspace-mcp login` in a terminal, " +
             "then try again.",
         );
       }
       if (err instanceof CloudNotConfiguredError) {
         return failure(
-          "PromptConnext cloud is not configured. Set cloudApiUrl in the config file or " +
-            "PROMPTCONNEXT_CLOUD_API_URL.",
+          "PromptWorkspace cloud is not configured. Set cloudApiUrl in the config file or " +
+            "PROMPTWORKSPACE_CLOUD_API_URL.",
         );
       }
       log.error(`${request.params.name} failed: ${String(err)}`);

@@ -156,7 +156,7 @@ def test_embed_model_mismatch_requires_reindex(client: TestClient):
 
 def test_embed_dim_mismatch_requires_reindex(client: TestClient):
     """Same embed_model name as the resolved managed connection ('bge-m3'),
-    but a different width — e.g. the operator narrowed pz_rag_chunks.embedding
+    but a different width — e.g. the operator narrowed pw_rag_chunks.embedding
     (migration 0023) without reindexing yet, or an MRL-truncated model
     dropped to a shorter width under an unchanged name. A dimension mismatch
     must be caught on its own, independent of the model-name check: matching

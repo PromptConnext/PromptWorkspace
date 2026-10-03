@@ -1,7 +1,7 @@
 """Supabase-backed repository.
 
 Persists the task graph to Postgres via the Supabase client. Table names are
-prefixed `pz_` and match the migrations under `migrations/`. The `supabase`
+prefixed `pw_` and match the migrations under `migrations/`. The `supabase`
 package is imported lazily so the rest of the app runs without it installed.
 
 Conflict policy: field-level merge with declared ownership (M3). The pure merge
@@ -16,7 +16,7 @@ server is their only writer (plan 0014, Option A). Everything else goes
 through `_client`, which `for_user` swaps onto the caller's own JWT so
 Postgres RLS really does scope those tables per request — except the writes
 to `_SERVICE_WRITE_TABLES` (`_write_table`): migration 0036 left
-`authenticated` only SELECT on pz_projects, so its reads stay scoped and its
+`authenticated` only SELECT on pw_projects, so its reads stay scoped and its
 writes take the service-role client.
 """
 
@@ -82,36 +82,36 @@ def _pg_filter_value(value: str) -> str:
 
 
 _TABLE = {
-    "requirements": "pz_requirements",
-    "spec_documents": "pz_spec_documents",
-    "tasks": "pz_tasks",
-    "artifacts": "pz_artifacts",
-    "agent_runs": "pz_agent_runs",
-    "discussions": "pz_discussions",
+    "requirements": "pw_requirements",
+    "spec_documents": "pw_spec_documents",
+    "tasks": "pw_tasks",
+    "artifacts": "pw_artifacts",
+    "agent_runs": "pw_agent_runs",
+    "discussions": "pw_discussions",
 }
-_PROJECTS = "pz_projects"
-_WORKSPACES = "pz_workspaces"
-_MEMBERS = "pz_workspace_members"
-_INVITATIONS = "pz_invitations"
-_TASK_LINKS = "pz_task_links"
-_MODEL_CONNECTIONS = "pz_workspace_model_connections"
-_RAG_CHUNKS = "pz_rag_chunks"
-_RAG_MATCH_RPC = "pz_rag_match_chunks"
-_PULL_REQUESTS = "pz_pull_requests"
-_CODE_CHUNKS = "pz_code_chunks"
-_CODE_MATCH_RPC = "pz_code_match_chunks"
-_DOCUMENTS = "pz_documents"
-_GENERATION_RUNS = "pz_generation_runs"
-_STAGE_DOCUMENTS = "pz_stage_documents"
-_REPO_ANALYSES = "pz_repo_analyses"
-_REPO_WEBHOOKS = "pz_repo_webhooks"
-_WORKSPACE_INTEGRATIONS = "pz_workspace_integrations"
-_DEPLOYMENTS = "pz_deployments"
-_DEPLOYMENT_TASKS = "pz_deployment_tasks"
+_PROJECTS = "pw_projects"
+_WORKSPACES = "pw_workspaces"
+_MEMBERS = "pw_workspace_members"
+_INVITATIONS = "pw_invitations"
+_TASK_LINKS = "pw_task_links"
+_MODEL_CONNECTIONS = "pw_workspace_model_connections"
+_RAG_CHUNKS = "pw_rag_chunks"
+_RAG_MATCH_RPC = "pw_rag_match_chunks"
+_PULL_REQUESTS = "pw_pull_requests"
+_CODE_CHUNKS = "pw_code_chunks"
+_CODE_MATCH_RPC = "pw_code_match_chunks"
+_DOCUMENTS = "pw_documents"
+_GENERATION_RUNS = "pw_generation_runs"
+_STAGE_DOCUMENTS = "pw_stage_documents"
+_REPO_ANALYSES = "pw_repo_analyses"
+_REPO_WEBHOOKS = "pw_repo_webhooks"
+_WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
+_DEPLOYMENTS = "pw_deployments"
+_DEPLOYMENT_TASKS = "pw_deployment_tasks"
 # Migration 0033. The only writer of _DEPLOYMENT_TASKS: the replace and the
 # state stamp are one transaction, and the "already frozen" test happens under
 # a row lock rather than in this process between two round trips.
-_FREEZE_DEPLOYMENT_TASKS_RPC = "pz_freeze_deployment_tasks"
+_FREEZE_DEPLOYMENT_TASKS_RPC = "pw_freeze_deployment_tasks"
 
 # The seven tables migration 0031 revoked from `authenticated` and `anon`
 # (plan 0014, Option A). `authenticated` can no longer touch them at all, so
@@ -119,12 +119,12 @@ _FREEZE_DEPLOYMENT_TASKS_RPC = "pz_freeze_deployment_tasks"
 # `permission denied for table ...` — including calls made on behalf of a
 # signed-in user, which is every graph write in production.
 #
-# pz_discussions belongs here for the same reason as the other six, though
+# pw_discussions belongs here for the same reason as the other six, though
 # plan 0014's matrix didn't enumerate it: plan 0015's rules that a comment is
 # an attributed statement — nobody may post as somebody else
 # (discussion_author_forbidden) or overwrite another member's
 # (discussion_forbidden) — live in app/api/_guards.py and nowhere else, while
-# 0011_discussions.sql granted `authenticated` full DML behind a
+# 0002_pw_baseline.sql section 0011_discussions.sql granted `authenticated` full DML behind a
 # membership-only policy. Same bypass class, same fix.
 #
 # Membership and role are still enforced, by app/api/_guards.py and
@@ -140,41 +140,41 @@ _FREEZE_DEPLOYMENT_TASKS_RPC = "pz_freeze_deployment_tasks"
 # client without knowing this rule exists.
 _SERVICE_ONLY_TABLES = frozenset(
     {
-        "pz_requirements",
-        "pz_spec_documents",
-        "pz_tasks",
-        "pz_artifacts",
-        "pz_agent_runs",
-        "pz_stage_documents",
-        "pz_discussions",
+        "pw_requirements",
+        "pw_spec_documents",
+        "pw_tasks",
+        "pw_artifacts",
+        "pw_agent_runs",
+        "pw_stage_documents",
+        "pw_discussions",
         # Not graph tables, but the same posture for the same reason. Migration
         # 0032 hands `authenticated` a column-level SELECT on
-        # pz_workspace_integrations' non-secret columns and nothing else, so the
+        # pw_workspace_integrations' non-secret columns and nothing else, so the
         # server must reach it — including to write it, and including to read
-        # `webhook_secret_ref` — on the service-role client. pz_task_links is
+        # `webhook_secret_ref` — on the service-role client. pw_task_links is
         # revoked outright by the same migration, because its `account_key` is
         # now a tenant boundary the webhook routes on and its only policy tested
         # workspace membership: a member could otherwise plant a row naming
         # another tenant's account and squat their (provider, account_key,
         # external_key) triple.
-        "pz_workspace_integrations",
-        "pz_task_links",
+        "pw_workspace_integrations",
+        "pw_task_links",
         # Plan 0027, migration 0034: born service-only. Excerpts of a
         # customer's source and the admin-only baseline — the rule that only
         # an admin analyses or edits lives in app/api/repo_analysis.py alone.
-        "pz_repo_analyses",
+        "pw_repo_analyses",
     }
 )
 
 # Readable through the caller's own JWT — RLS still scopes the read to the
 # caller's workspaces — but written only by the server. Migration 0036 took
-# INSERT/UPDATE/DELETE on pz_projects away from `authenticated`: the row holds
+# INSERT/UPDATE/DELETE on pw_projects away from `authenticated`: the row holds
 # columns only the server may set (repo_url, repo_id, repo_default_branch,
 # repo_origin, lifecycle_status, policy_scope, deployment_config/state), and
 # its only policy tested membership, so a member with their own JWT could set
 # any of them straight through PostgREST. Every write route already checks
 # membership or the admin role in app/api before it reaches this class.
-_SERVICE_WRITE_TABLES = frozenset({"pz_projects"})
+_SERVICE_WRITE_TABLES = frozenset({"pw_projects"})
 
 
 class SupabaseRepository(Repository):
@@ -201,9 +201,9 @@ class SupabaseRepository(Repository):
         `authenticated` with no privilege at all on those tables, so a scoped
         client reaching one gets `permission denied for table ...`, not a
         narrower view. Scoping stays real, and still worth having, for the
-        tables outside that set — pz_workspaces, pz_workspace_members,
-        pz_projects (reads only: its writes take the service-role client, see
-        `_SERVICE_WRITE_TABLES`), pz_invitations, pz_documents and the rest —
+        tables outside that set — pw_workspaces, pw_workspace_members,
+        pw_projects (reads only: its writes take the service-role client, see
+        `_SERVICE_WRITE_TABLES`), pw_invitations, pw_documents and the rest —
         where RLS at least enforces workspace membership, and on the two
         membership tables the admin rule too.
 
@@ -245,7 +245,7 @@ class SupabaseRepository(Repository):
     ) -> Workspace:
         ws = Workspace(name=name, created_by=created_by)
         # `returning="minimal"`: Postgres subjects INSERT...RETURNING to the
-        # table's SELECT policy too, and `pz_ws_read` requires membership —
+        # table's SELECT policy too, and `pw_ws_read` requires membership —
         # which doesn't exist yet (add_member runs next). The insert itself
         # is fine (WITH CHECK only needs created_by = auth.uid()); asking
         # Postgres to hand the row back is what RLS was rejecting. The
@@ -419,7 +419,7 @@ class SupabaseRepository(Repository):
             email=email,
         )
         # returning="minimal": same RLS-vs-RETURNING issue as create_workspace
-        # above — the SELECT policy (pz_members_read) can't see a just-added
+        # above — the SELECT policy (pw_members_read) can't see a just-added
         # member for RETURNING's benefit in every case (e.g. the bootstrap
         # add), and the caller already has `member` locally.
         self._table(_MEMBERS).upsert(
@@ -564,7 +564,7 @@ class SupabaseRepository(Repository):
         existing = self._get_deployment(deployment.project_id, deployment.external_key)
         if existing is not None:
             # attribution_state/attributed_at are owned by
-            # pz_freeze_deployment_tasks, never by the delivery this row was
+            # pw_freeze_deployment_tasks, never by the delivery this row was
             # built from. Carrying them forward is what stops a redelivery
             # from writing the model default over a frozen row (plan 0024 M2).
             deployment = deployment.model_copy(
@@ -612,7 +612,7 @@ class SupabaseRepository(Repository):
         self, deployment_id: str, task_ids: list[str], now: datetime
     ) -> bool:
         # Exactly one round trip, and never a bare delete. The delete, the
-        # insert and the state stamp happen inside pz_freeze_deployment_tasks
+        # insert and the state stamp happen inside pw_freeze_deployment_tasks
         # (migration 0033) so they cannot come apart: the previous shape
         # issued the delete and the insert as two PostgREST calls, and a
         # failure between them erased the record of what shipped rather than
@@ -1319,7 +1319,7 @@ class SupabaseRepository(Repository):
         query_embedding: list[float],
         top_k: int = 8,
     ) -> list[RagChunkHit]:
-        # pz_rag_match_chunks takes the (workspace_id, project_id) predicate as
+        # pw_rag_match_chunks takes the (workspace_id, project_id) predicate as
         # explicit RPC args — membership-scoped before similarity (ADR 0011),
         # independent of whether this client carries a caller JWT or the
         # service-role key.

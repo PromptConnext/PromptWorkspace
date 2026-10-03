@@ -1,6 +1,6 @@
 # Seeded because the project's technical plan describes a Go service.
 #
-# This file belongs to you. PromptZone wrote it once at repository creation and
+# This file belongs to you. PromptWorkspace wrote it once at repository creation and
 # never overwrites it — grow it into whatever this application actually needs.
 FROM golang:1.24-alpine AS build
 WORKDIR /src

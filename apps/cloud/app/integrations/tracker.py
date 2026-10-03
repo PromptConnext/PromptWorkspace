@@ -27,7 +27,7 @@ class OutboundRequest:
 @dataclass
 class InboundUpdate:
     """A provider-neutral, pmo-only task update parsed from a webhook. The API
-    layer resolves `external_key` to a PromptConnext task via the task-link table,
+    layer resolves `external_key` to a PromptWorkspace task via the task-link table,
     then writes these fields with source="pmo" (so M3 keeps pz fields safe)."""
 
     external_key: str
@@ -42,7 +42,7 @@ class InboundUpdate:
 @dataclass
 class InboundComment:
     """A provider-neutral tracker comment parsed from a webhook (M12). The API
-    layer resolves `external_key` (the parent issue) to a PromptConnext task via
+    layer resolves `external_key` (the parent issue) to a PromptWorkspace task via
     the task-link table, then upserts a Discussion with source="pmo"."""
 
     external_key: str

@@ -1,13 +1,13 @@
 // WP4 — origin allowlist + auth-token smoke tests (ADR 0008), no-token branch.
 // Env must be set BEFORE importing the SUT: security.ts reads
-// PROMPTCONNEXT_AUTH_TOKEN into a module-level const at import time.
+// PROMPTWORKSPACE_AUTH_TOKEN into a module-level const at import time.
 //
 // Run:  node --test apps/engine/test/security.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
 
-delete process.env.PROMPTCONNEXT_AUTH_TOKEN;
-delete process.env.PROMPTCONNEXT_ALLOWED_ORIGINS;
+delete process.env.PROMPTWORKSPACE_AUTH_TOKEN;
+delete process.env.PROMPTWORKSPACE_ALLOWED_ORIGINS;
 
 const { isAllowedOrigin, isAuthorized, AUTH_TOKEN } = await import("../src/security.ts");
 
@@ -25,7 +25,7 @@ test("isAllowedOrigin rejects unlisted origins and non-string input", () => {
   assert.equal(isAllowedOrigin(""), false);
 });
 
-test("AUTH_TOKEN is null when PROMPTCONNEXT_AUTH_TOKEN is unset (dev mode)", () => {
+test("AUTH_TOKEN is null when PROMPTWORKSPACE_AUTH_TOKEN is unset (dev mode)", () => {
   assert.equal(AUTH_TOKEN, null);
 });
 

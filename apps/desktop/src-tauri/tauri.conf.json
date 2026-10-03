@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PromptConnext",
+  "productName": "PromptWorkspace",
   "version": "0.4.0",
-  "identifier": "dev.ideva.promptconnext",
+  "identifier": "com.promptconnext.promptworkspace",
   "build": {
     "beforeDevCommand": "pnpm prep:engine-resource && pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -27,7 +27,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["promptconnext"]
+        "schemes": ["promptworkspace"]
       }
     },
     "updater": {

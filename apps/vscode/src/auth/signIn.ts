@@ -18,7 +18,7 @@
 
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import type { CloudClient } from "@promptconnext/pz-cloud";
+import type { CloudClient } from "@promptworkspace/cloud-client";
 import { readConfig } from "../config.ts";
 import type { OutputLogger } from "../util/log.ts";
 
@@ -26,8 +26,8 @@ import type { OutputLogger } from "../util/log.ts";
 // addressed to this exact authority and nothing else, so a rename here is a
 // rename in package.json too — and both must be registered on the Marketplace
 // and Open VSX before the first release.
-export const EXTENSION_ID = "promptconnext.promptconnext-vscode";
-const PENDING_STATE_KEY = "promptconnext.pendingLoginState";
+export const EXTENSION_ID = "promptconnext.promptworkspace";
+const PENDING_STATE_KEY = "promptworkspace.pendingLoginState";
 const PENDING_STATE_TTL_MS = 10 * 60_000;
 
 interface PendingState {
@@ -54,7 +54,7 @@ export class SignInFlow {
     const config = readConfig();
     if (!config.webUrl) {
       void vscode.window.showErrorMessage(
-        "Set promptconnext.cloudWebUrl before signing in.",
+        "Set promptworkspace.cloudWebUrl before signing in.",
       );
       return;
     }
@@ -84,7 +84,7 @@ export class SignInFlow {
     await vscode.env.openExternal(url);
 
     const choice = await vscode.window.showInformationMessage(
-      "Finish signing in to PromptConnext in your browser.",
+      "Finish signing in to PromptWorkspace in your browser.",
       "Paste code instead",
     );
     if (choice === "Paste code instead") await this.withCode();
@@ -94,7 +94,7 @@ export class SignInFlow {
    *  arrives, and this is where it goes. */
   async withCode(): Promise<void> {
     const code = await vscode.window.showInputBox({
-      title: "PromptConnext sign-in code",
+      title: "PromptWorkspace sign-in code",
       prompt: "Paste the code shown in the browser.",
       ignoreFocusOut: true,
     });
@@ -125,7 +125,7 @@ export class SignInFlow {
       // Either a stale attempt or someone else's callback. Refusing is the
       // whole point of the state parameter.
       void vscode.window.showWarningMessage(
-        "Unexpected or expired sign-in. Start again from PromptConnext: Sign In.",
+        "Unexpected or expired sign-in. Start again from PromptWorkspace: Sign In.",
       );
       return;
     }
@@ -136,19 +136,19 @@ export class SignInFlow {
     try {
       const session = await this.client.redeemDesktopCode(code);
       void vscode.window.showInformationMessage(
-        `Signed in to PromptConnext as ${session.email ?? session.userId}.`,
+        `Signed in to PromptWorkspace as ${session.email ?? session.userId}.`,
       );
     } catch (err) {
       this.log.error(`redeem failed: ${String(err)}`);
       void vscode.window.showErrorMessage(
-        `PromptConnext sign-in failed: ${String(err)}`,
+        `PromptWorkspace sign-in failed: ${String(err)}`,
       );
     }
   }
 
   private async stubSignIn(): Promise<void> {
     const userId = await vscode.window.showInputBox({
-      title: "PromptConnext (local development)",
+      title: "PromptWorkspace (local development)",
       prompt:
         "No Supabase configured, so the cloud is in stub auth mode. Enter a user id.",
       value: "dev-user",

@@ -198,7 +198,7 @@ cloud.get("/engine/cloud/roster", (c) =>
 // the desktop can still render and distinguish "cloud unreachable" from
 // "signed out" (ADR 0015 state 4).
 cloud.post("/engine/cloud/roster/refresh", async (c) => {
-  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptConnext Cloud" }, 401);
+  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptWorkspace Cloud" }, 401);
   try {
     const { workspaces, projects } = await refreshRoster();
     return c.json({ workspaces, projects, syncedAt: rosterSyncedAt(), offline: false });
@@ -243,7 +243,7 @@ function findLocalProjectByCloudId(cloudProjectId: string): string | null {
 // state 9 "new device"). The task graph stays local-authoritative afterward —
 // this is a one-shot hydrate, not an ongoing merge.
 cloud.post("/engine/cloud/projects/:cloudProjectId/open", async (c) => {
-  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptConnext Cloud" }, 401);
+  if (!loadCloudSession()) return c.json({ error: "not logged in to PromptWorkspace Cloud" }, 401);
   const cloudProjectId = c.req.param("cloudProjectId");
 
   const existing = findLocalProjectByCloudId(cloudProjectId);
@@ -489,7 +489,7 @@ cloud.post("/engine/projects/:id/discussions", async (c) => {
   // accepting the one just inserted above, and the pull path upserts by id
   // (`ON CONFLICT(id)`), so calling it naively would leave two rows for the
   // same comment — the local one and a second copy pulled back under the
-  // cloud's id. Reconciling local and cloud ids for pz-authored writes is
+  // cloud's id. Reconciling local and cloud ids for pw-authored writes is
   // exactly the cache-vs-authority work plan 0012's M4 does for tasks;
   // give discussions the same treatment there instead of a narrower fix here.
   const created = db

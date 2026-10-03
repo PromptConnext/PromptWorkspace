@@ -1,6 +1,6 @@
 // Minimal Go service. Replace it with your application — the pipeline around
 // it (Dockerfile, compose.yaml, .github/workflows/deploy.yml) is what
-// PromptZone seeded, and it does not care what this file grows into.
+// PromptWorkspace seeded, and it does not care what this file grows into.
 package main
 
 import (
@@ -13,10 +13,10 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	// Passed in by compose from the deploy workflow. Naming the PromptZone web
+	// Passed in by compose from the deploy workflow. Naming the PromptWorkspace web
 	// origin as a frame ancestor is what lets the project's Preview tab embed
 	// this app instead of falling back to a link card.
-	webOrigin := os.Getenv("PZ_WEB_ORIGIN")
+	webOrigin := os.Getenv("PROMPTWORKSPACE_WEB_ORIGIN")
 
 	files := http.FileServer(http.Dir("public"))
 

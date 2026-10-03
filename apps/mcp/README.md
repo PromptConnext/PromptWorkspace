@@ -1,6 +1,6 @@
-# PromptConnext MCP server
+# PromptWorkspace MCP server
 
-Your assigned PromptConnext tasks, and the context needed to do them, over the
+Your assigned PromptWorkspace tasks, and the context needed to do them, over the
 Model Context Protocol — for the editors the VS Code extension cannot reach.
 
 ADR [0019](../../docs/decisions/0019-desktop-as-vscode-extension.md) made two
@@ -63,17 +63,30 @@ This is **not a planning client**. It does not create projects, run stages,
 author or edit requirements and specs, upload a PRD, post discussions, or clone a
 repository. It never calls `PUT /sync/projects/{id}/graph` — a task client with a
 full-graph push can overwrite the requirements and specs the cloud authored, and
-`packages/pz-cloud/src/client.ts` writes down the same prohibition for the same
+`packages/cloud-client/src/client.ts` writes down the same prohibition for the same
 reason. There is no task-claim or task-assignment tool either: `/me/tasks`
 returns only tasks already assigned to you, so a claim tool would have no caller.
 
 ## Install and sign in
 
+The package is not on the npm registry. Each release is a tarball attached to a
+GitHub Release (tag `mcp-v<version>`) at
+<https://github.com/PromptConnext/PromptWorkspace/releases>. Download
+`promptworkspace-mcp-<version>.tgz` and install it globally:
+
+```bash
+npm i -g ./promptworkspace-mcp-<version>.tgz
+```
+
+That puts a `promptworkspace-mcp` binary on your `PATH`. The release also carries
+the bundled `dist/index.js` alone; `node /path/to/index.js` works the same way if
+you would rather not install anything.
+
 The server speaks stdio, so your MCP client launches it as a child process. Sign
 in once, in a terminal:
 
 ```bash
-npx promptconnext-mcp login
+promptworkspace-mcp login
 ```
 
 That opens `…/login?desktop=1&state=…` in your browser, waits for you to paste
@@ -82,14 +95,14 @@ The code is single-use and expires after two minutes; if it does, run `login`
 again for a fresh one. Every MCP client on the machine then shares the session.
 
 Then point your client at the server. The shape differs per client, but the
-block is always some spelling of:
+block is always some spelling of (or `"command": "node", "args": ["/path/to/index.js"]`
+for the bare bundle):
 
 ```json
 {
   "mcpServers": {
-    "promptconnext": {
-      "command": "npx",
-      "args": ["-y", "promptconnext-mcp"]
+    "promptworkspace": {
+      "command": "promptworkspace-mcp"
     }
   }
 }
@@ -104,19 +117,23 @@ environment variables work, environment winning:
 
 | Setting | Environment variable |
 |---|---|
-| `cloudApiUrl` | `PROMPTCONNEXT_CLOUD_API_URL` |
-| `cloudWebUrl` | `PROMPTCONNEXT_CLOUD_WEB_URL` |
-| `supabaseUrl` | `PROMPTCONNEXT_SUPABASE_URL` |
-| `supabaseAnonKey` | `PROMPTCONNEXT_SUPABASE_ANON_KEY` |
+| `cloudApiUrl` | `PROMPTWORKSPACE_CLOUD_API_URL` |
+| `cloudWebUrl` | `PROMPTWORKSPACE_CLOUD_WEB_URL` |
+| `supabaseUrl` | `PROMPTWORKSPACE_SUPABASE_URL` |
+| `supabaseAnonKey` | `PROMPTWORKSPACE_SUPABASE_ANON_KEY` |
 
 The file is `config.json` in the config directory below, and holds those same
-four keys. Leaving `supabaseUrl`/`supabaseAnonKey` empty puts the client in the
-cloud's stub auth mode, which is local development only — a real deployment
-rejects it.
+four keys. Unset, all four default to production (`https://workspace-api.promptconnext.com`,
+`https://workspace.promptconnext.com` and the production Supabase project), from
+the one shared list in `packages/cloud-client/src/defaults.ts` that `apps/vscode`
+copies. Point a develop/staging run at that stack by overriding all four (e.g.
+`PROMPTWORKSPACE_CLOUD_API_URL=https://promptworkspace-api.truthledgers.com`).
+Setting `supabaseUrl`/`supabaseAnonKey` to empty puts the client in the cloud's
+stub auth mode, which is local development only — a real deployment rejects it.
 
-The config directory is `$XDG_CONFIG_HOME/promptconnext-mcp` (falling back to
-`~/.config/promptconnext-mcp`), or `%APPDATA%\promptconnext-mcp` on Windows.
-`PROMPTCONNEXT_MCP_CONFIG_DIR` overrides it.
+The config directory is `$XDG_CONFIG_HOME/promptworkspace-mcp` (falling back to
+`~/.config/promptworkspace-mcp`), or `%APPDATA%\promptworkspace-mcp` on Windows.
+`PROMPTWORKSPACE_MCP_CONFIG_DIR` overrides it.
 
 `projectId`, `closeTasksFromCommits`, `closeTasksOn` and `commitScanLimit` have
 no analogue here: there is no folder scope and no git watcher. The extension
@@ -165,7 +182,7 @@ node dist/index.js --help
 ```
 
 The cloud transport, wire types, session store, error taxonomy, retry queue,
-repository-URL matching and seeded-document paths come from `packages/pz-cloud`,
+repository-URL matching and seeded-document paths come from `packages/cloud-client`,
 shared with `apps/vscode` by `workspace:*`. Fix a transport bug there, not here —
 and note that the repo-URL matching in particular is shared precisely so the two
 surfaces cannot resolve the same clone to two different projects.

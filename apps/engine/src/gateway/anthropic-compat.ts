@@ -158,7 +158,7 @@ export function anthropicCompat(getConnection: () => ModelConnection | undefined
       return c.json({ type: "error", error: { type: "invalid_request_error", message: "no verified coding model connected" } }, 400);
     }
     const req = (await c.req.json()) as AnthropicRequest;
-    const msgId = `msg_pz_${Date.now().toString(36)}`;
+    const msgId = `msg_pw_${Date.now().toString(36)}`;
 
     if (!req.stream) {
       const res = await upstream(conn, toOpenAIBody(req, conn.model, false));
@@ -284,7 +284,7 @@ export function anthropicCompat(getConnection: () => ModelConnection | undefined
                     type: "content_block_start", index: blockIndex,
                     content_block: {
                       type: "tool_use",
-                      id: call.id ?? `toolu_pz_${blockIndex}`,
+                      id: call.id ?? `toolu_pw_${blockIndex}`,
                       name: call.function?.name ?? "unknown",
                       input: {},
                     },

@@ -32,7 +32,7 @@ export function backupDir(): string {
 }
 
 /**
- * `promptconnext-2026-08-01T00-42-13Z.db` — sorts chronologically as text.
+ * `promptworkspace-2026-08-01T00-42-13Z.db` — sorts chronologically as text.
  *
  * Second resolution is the readable choice, but two backups taken inside the
  * same second (a double-click, or a scripted loop) would name the same file
@@ -41,7 +41,7 @@ export function backupDir(): string {
  */
 function defaultBackupPath(now: Date): string {
   const stamp = now.toISOString().replace(/\.\d+Z$/, "Z").replace(/[:]/g, "-");
-  const base = join(backupDir(), `promptconnext-${stamp}`);
+  const base = join(backupDir(), `promptworkspace-${stamp}`);
   let candidate = `${base}.db`;
   for (let n = 2; existsSync(candidate); n += 1) candidate = `${base}-${n}.db`;
   return candidate;
@@ -99,7 +99,7 @@ function describe(path: string): BackupInfo {
 /** Backups in the managed directory, newest first. Ignores anything else there. */
 export function listBackups(): BackupInfo[] {
   return readdirSync(backupDir())
-    .filter((name) => name.startsWith("promptconnext-") && name.endsWith(".db"))
+    .filter((name) => name.startsWith("promptworkspace-") && name.endsWith(".db"))
     .map((name) => describe(join(backupDir(), name)))
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }

@@ -7,7 +7,7 @@
 // purposes, both provenance: to stand in when the constitution is not on disk
 // at all, and to say in one line when the two have diverged. Never a diff.
 
-import { sameDocText, type CloudClient, type LoggerLike } from "@promptconnext/pz-cloud";
+import { sameDocText, type CloudClient, type LoggerLike } from "@promptworkspace/cloud-client";
 import type { ProjectCandidate } from "./projectResolve.ts";
 import { readSeededDocs } from "./repoDocs.ts";
 

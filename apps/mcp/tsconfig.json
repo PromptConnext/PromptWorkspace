@@ -11,7 +11,7 @@
     "sourceMap": true,
     "skipLibCheck": true,
     // Both settings are inherited from apps/vscode/tsconfig.json by way of
-    // packages/pz-cloud, whose sources this project type-checks as part of its
+    // packages/cloud-client, whose sources this project type-checks as part of its
     // own program. They are not optional here: the shared package's modules
     // import each other with `.ts` specifiers, and its own tests run under bare
     // `node --test`, which type-strips rather than compiles.

@@ -80,7 +80,7 @@ def list_workspaces(
     # membership gate never dead-ends a brand-new account. Idempotent — a
     # no-op once any membership exists (an invited user who already accepted
     # gets none). Reuses the same create path migration 0007 fixed, so the
-    # creator's admin row satisfies pz_is_admin without a bootstrap deadlock.
+    # creator's admin row satisfies pw_is_admin without a bootstrap deadlock.
     #
     # Suppressed while a live invitation addressed to this user is outstanding:
     # the root layout's workspace provider calls this endpoint on *every* route,

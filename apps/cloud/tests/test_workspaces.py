@@ -179,7 +179,7 @@ def test_auto_provision_is_idempotent(client):
 
 
 def test_auto_provisioned_admin_can_act_without_bootstrap_deadlock(client):
-    # The auto-provisioned admin row must satisfy pz_is_admin — demonstrated at
+    # The auto-provisioned admin row must satisfy pw_is_admin — demonstrated at
     # the app layer by the user immediately performing an admin-only action.
     ws = client.get("/workspaces", headers={"X-User-Id": "newbie"}).json()[0]
     invited = client.post(
@@ -225,7 +225,7 @@ def test_pending_invitation_suppresses_personal_workspace(client):
     # so an invited user who lands anywhere but /invite/{token} used to have a
     # personal workspace minted underneath them and got swept into it.
     ws = _ws(client, user="alice")
-    _invite(client, ws["id"], "bob@promptconnext.local")
+    _invite(client, ws["id"], "bob@promptworkspace.local")
 
     listed = client.get("/workspaces", headers={"X-User-Id": "bob"}).json()
     assert listed == []
@@ -233,7 +233,7 @@ def test_pending_invitation_suppresses_personal_workspace(client):
 
 def test_pending_invitation_is_discoverable_by_invitee(client):
     ws = _ws(client, name="Acme", user="alice")
-    inv = _invite(client, ws["id"], "bob@promptconnext.local")
+    inv = _invite(client, ws["id"], "bob@promptworkspace.local")
 
     pending = client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json()
     assert len(pending) == 1
@@ -245,7 +245,7 @@ def test_pending_invitation_is_discoverable_by_invitee(client):
 
 def test_pending_invitation_matches_email_case_insensitively(client):
     ws = _ws(client, user="alice")
-    _invite(client, ws["id"], "BoB@PromptConnext.Local")
+    _invite(client, ws["id"], "BoB@PromptWorkspace.Local")
 
     pending = client.get("/invitations/pending", headers={"X-User-Id": "bob"}).json()
     assert len(pending) == 1
@@ -254,7 +254,7 @@ def test_pending_invitation_matches_email_case_insensitively(client):
 
 def test_pending_invitations_are_scoped_to_the_caller(client):
     ws = _ws(client, user="alice")
-    _invite(client, ws["id"], "bob@promptconnext.local")
+    _invite(client, ws["id"], "bob@promptworkspace.local")
 
     # Carol was not invited; the endpoint must not leak bob's invitation.
     pending = client.get("/invitations/pending", headers={"X-User-Id": "carol"}).json()
@@ -263,7 +263,7 @@ def test_pending_invitations_are_scoped_to_the_caller(client):
 
 def test_accepted_invitation_no_longer_pending_and_provision_resumes(client):
     ws = _ws(client, user="alice")
-    inv = _invite(client, ws["id"], "bob@promptconnext.local")
+    inv = _invite(client, ws["id"], "bob@promptworkspace.local")
     accepted = client.post(
         f"/invitations/{inv['token']}/accept", headers={"X-User-Id": "bob"}
     )
@@ -280,7 +280,7 @@ def test_revoked_invitation_stops_suppressing_provision(client):
     ws = _ws(client, user="alice")
     inv_res = client.post(
         f"/workspaces/{ws['id']}/invitations",
-        json={"email": "bob@promptconnext.local"},
+        json={"email": "bob@promptworkspace.local"},
         headers={"X-User-Id": "alice"},
     ).json()
     inv_id = inv_res["invitation"]["id"]

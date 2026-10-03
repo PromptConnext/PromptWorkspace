@@ -6,9 +6,9 @@
 // failure-tolerant by construction.
 
 import * as vscode from "vscode";
-import type { CloudClient } from "@promptconnext/pz-cloud";
-import type { AssignedTask } from "@promptconnext/pz-cloud";
-import { TASK_STATUS_LABELS } from "@promptconnext/pz-cloud";
+import type { CloudClient } from "@promptworkspace/cloud-client";
+import type { AssignedTask } from "@promptworkspace/cloud-client";
+import { TASK_STATUS_LABELS } from "@promptworkspace/cloud-client";
 import type { RepoDocs } from "../context/repoDocs.ts";
 import type { OutputLogger } from "../util/log.ts";
 
@@ -50,7 +50,7 @@ export async function buildTaskContext(
     "## What to do",
     "",
     `Implement this task in the current workspace. When it is done, commit with ` +
-      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptConnext ` +
+      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
       `closes the task automatically.`,
     "",
   );

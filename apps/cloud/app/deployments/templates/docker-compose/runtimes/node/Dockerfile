@@ -1,6 +1,6 @@
 # Seeded because the project's technical plan describes a Node service.
 #
-# This file belongs to you. PromptZone wrote it once at repository creation and
+# This file belongs to you. PromptWorkspace wrote it once at repository creation and
 # never overwrites it — grow it into whatever this application actually needs.
 FROM node:24-slim
 WORKDIR /app

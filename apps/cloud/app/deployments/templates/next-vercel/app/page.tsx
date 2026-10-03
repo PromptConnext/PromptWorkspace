@@ -1,5 +1,5 @@
 // Replace this page as the project takes shape — the pipeline around it
-// (next.config.mjs, .github/workflows/deploy.yml) is what PromptZone seeded,
+// (next.config.mjs, .github/workflows/deploy.yml) is what PromptWorkspace seeded,
 // and it does not care what this app grows into.
 export default function Page() {
   return (
@@ -9,7 +9,7 @@ export default function Page() {
       <p>
         Every push to the default branch rebuilds this app and publishes it to
         Vercel. Replace the contents of <code>app/</code> as the project takes
-        shape — what you see here is what stakeholders see in PromptZone.
+        shape — what you see here is what stakeholders see in PromptWorkspace.
       </p>
       <p className="muted">
         How this repository builds and deploys is documented in{" "}

@@ -1,14 +1,14 @@
 // Read at BUILD time, not at request time. `vercel build` runs on the GitHub
-// runner, where the PZ_WEB_ORIGIN repository variable is in the environment, so
+// runner, where the PROMPTWORKSPACE_WEB_ORIGIN repository variable is in the environment, so
 // the header below is baked into the routes manifest and needs no Vercel
 // project environment variable to exist.
 //
-// Naming the PromptZone web origin as a frame ancestor is what lets the
+// Naming the PromptWorkspace web origin as a frame ancestor is what lets the
 // project's Preview tab embed this app instead of falling back to a link card.
 // When the variable is absent no header is emitted at all, and the app still
 // frames — an absent CSP is permissive. That is the same trade `server.js`
 // makes in the docker-compose template.
-const WEB_ORIGIN = process.env.PZ_WEB_ORIGIN || "";
+const WEB_ORIGIN = process.env.PROMPTWORKSPACE_WEB_ORIGIN || "";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

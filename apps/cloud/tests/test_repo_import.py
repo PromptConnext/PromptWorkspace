@@ -501,33 +501,35 @@ def test_existing_readme_and_agents_survive_create_repository(client: TestClient
     assert fake.written_files[("acme/storyapp", "AGENTS.md")] == _TEAM_AGENTS
 
 
-def test_derived_docs_land_under_docs_promptzone(client: TestClient):
+def test_derived_docs_land_under_docs_promptworkspace(client: TestClient):
     pid = _imported_at_tech_review(client, ["README.md", "AGENTS.md", "src/server.js"])
     client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
 
     written = set(client.app.state.github_client.commits[0]["paths"])
     assert {
-        "docs/promptzone/README.md",
-        "docs/promptzone/scope.md",
-        "docs/promptzone/conventions.md",
+        "docs/promptworkspace/README.md",
+        "docs/promptworkspace/scope.md",
+        "docs/promptworkspace/conventions.md",
         # Taken at the root, so moved beside the others.
-        "docs/promptzone/AGENTS.md",
+        "docs/promptworkspace/AGENTS.md",
     } <= written
     # Free in this repository, so written where the tools look for it.
     assert ".specify/memory/constitution.md" in written
-    assert not any(p.startswith("docs/") and not p.startswith("docs/promptzone/") for p in written)
+    assert not any(
+        p.startswith("docs/") and not p.startswith("docs/promptworkspace/") for p in written
+    )
 
 
-def test_an_existing_promptzone_folder_is_left_intact(client: TestClient):
+def test_an_existing_promptworkspace_folder_is_left_intact(client: TestClient):
     pid = _imported_at_tech_review(
-        client, ["README.md", "docs/promptzone/README.md", "docs/promptzone/scope.md"]
+        client, ["README.md", "docs/promptworkspace/README.md", "docs/promptworkspace/scope.md"]
     )
     res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
     assert res.status_code == 200, res.text
 
     written = client.app.state.github_client.commits[0]["paths"]
-    assert "docs/promptzone/README.md" not in written
-    assert "docs/promptzone/scope.md" not in written
+    assert "docs/promptworkspace/README.md" not in written
+    assert "docs/promptworkspace/scope.md" not in written
 
 
 def test_an_existing_deploy_workflow_refuses_before_anything_is_written(client: TestClient):
@@ -558,7 +560,7 @@ def test_existing_scaffold_files_are_skipped_one_by_one(client: TestClient):
     written = client.app.state.github_client.commits[0]["paths"]
     assert "site/index.html" not in written
     assert ".github/workflows/deploy.yml" in written
-    assert "docs/promptzone/deployment.md" in written
+    assert "docs/promptworkspace/deployment.md" in written
 
 
 def test_seed_preview_matches_the_actual_commit(client: TestClient):
@@ -569,8 +571,8 @@ def test_seed_preview_matches_the_actual_commit(client: TestClient):
     preview = client.get(f"/projects/{pid}/repository/seed-preview", headers=ALICE)
     assert preview.status_code == 200, preview.text
     body = preview.json()
-    assert {"from": "AGENTS.md", "to": "docs/promptzone/AGENTS.md"} in body["relocated"]
-    assert {"from": "README.md", "to": "docs/promptzone/README.md"} in body["relocated"]
+    assert {"from": "AGENTS.md", "to": "docs/promptworkspace/AGENTS.md"} in body["relocated"]
+    assert {"from": "README.md", "to": "docs/promptworkspace/README.md"} in body["relocated"]
     assert body["skipped"] == ["site/index.html"]
     assert body["conflicts"] == []
     # A preview writes nothing and reads only.
@@ -615,7 +617,7 @@ def test_scratch_project_seed_is_unchanged(client: TestClient):
     fake = client.app.state.github_client
     written = fake.commits[0]["paths"]
     assert "README.md" in written and "AGENTS.md" in written
-    assert not any(p.startswith("docs/promptzone/") for p in written)
+    assert not any(p.startswith("docs/promptworkspace/") for p in written)
     assert sorted(preview["write"]) == sorted(written)
     assert not any(e.startswith("tree:") for e in fake.call_log)
 
@@ -636,7 +638,7 @@ def _crash_window_project(
         "full_name": "acme/fresh",
         "html_url": "https://github.com/acme/fresh",
         "default_branch": "main",
-        "description": description or f"PromptZone-managed repository for project {pid}",
+        "description": description or f"PromptWorkspace-managed repository for project {pid}",
     }
     repository = client.app.state.repository
     repository.update_project_repo(
@@ -657,7 +659,7 @@ def test_a_repo_this_project_created_keeps_the_full_seed_on_retry(client: TestCl
     assert res.status_code == 200, res.text
     written = client.app.state.github_client.commits[0]["paths"]
     assert "README.md" in written
-    assert not any(p.startswith("docs/promptzone/") for p in written)
+    assert not any(p.startswith("docs/promptworkspace/") for p in written)
 
 
 def test_a_spoofed_description_does_not_earn_an_import_the_overwriting_seed(client: TestClient):
@@ -666,14 +668,14 @@ def test_a_spoofed_description_does_not_earn_an_import_the_overwriting_seed(clie
     pid = _imported_at_tech_review(client, ["README.md", "AGENTS.md"])
     fake: FakeGithubClient = client.app.state.github_client
     fake.existing_repos["acme/storyapp"]["description"] = (
-        f"PromptZone-managed repository for project {pid}"
+        f"PromptWorkspace-managed repository for project {pid}"
     )
 
     res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
     assert res.status_code == 200, res.text
     written = fake.commits[0]["paths"]
     assert "README.md" not in written and "AGENTS.md" not in written
-    assert "docs/promptzone/README.md" in written
+    assert "docs/promptworkspace/README.md" in written
 
 
 def test_a_legacy_project_without_an_origin_gets_the_non_destructive_seed(client: TestClient):
@@ -685,7 +687,7 @@ def test_a_legacy_project_without_an_origin_gets_the_non_destructive_seed(client
     assert res.status_code == 200, res.text
     written = client.app.state.github_client.commits[0]["paths"]
     assert "README.md" not in written
-    assert "docs/promptzone/README.md" in written
+    assert "docs/promptworkspace/README.md" in written
 
 
 def test_a_created_origin_with_a_changed_description_is_not_overwritten(client: TestClient):
@@ -729,7 +731,7 @@ def test_a_truncated_listing_still_protects_every_seed_path(client: TestClient):
     tree = [
         "README.md",
         "AGENTS.md",
-        "docs/promptzone/scope.md",
+        "docs/promptworkspace/scope.md",
         *(f"src/m{i}.js" for i in range(50)),
     ]
     pid = _imported_at_tech_review(client, tree)
@@ -738,13 +740,13 @@ def test_a_truncated_listing_still_protects_every_seed_path(client: TestClient):
     fake.truncated_listing["acme/storyapp"] = ["src/m0.js"]
 
     preview = client.get(f"/projects/{pid}/repository/seed-preview", headers=ALICE).json()
-    assert {"from": "AGENTS.md", "to": "docs/promptzone/AGENTS.md"} in preview["relocated"]
-    assert "docs/promptzone/scope.md" in preview["skipped"]
+    assert {"from": "AGENTS.md", "to": "docs/promptworkspace/AGENTS.md"} in preview["relocated"]
+    assert "docs/promptworkspace/scope.md" in preview["skipped"]
 
     res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={}, headers=ALICE)
     assert res.status_code == 200, res.text
     written = fake.commits[0]["paths"]
-    assert "AGENTS.md" not in written and "docs/promptzone/scope.md" not in written
+    assert "AGENTS.md" not in written and "docs/promptworkspace/scope.md" not in written
     assert sorted(preview["write"]) == sorted(written)
 
 
@@ -781,7 +783,7 @@ def test_collisions_ignore_case(client: TestClient):
     assert res.status_code == 200, res.text
     written = client.app.state.github_client.commits[0]["paths"]
     assert "AGENTS.md" not in written
-    assert "docs/promptzone/AGENTS.md" in written
+    assert "docs/promptworkspace/AGENTS.md" in written
 
 
 def test_a_workflow_differing_only_in_case_is_a_conflict(client: TestClient):

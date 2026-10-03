@@ -68,7 +68,7 @@ from app.models.schemas import (
 )
 from app.rag.queue import EmbedJob, enqueue
 
-logger = logging.getLogger("promptconnext.github")
+logger = logging.getLogger("promptworkspace.github")
 router = APIRouter(tags=["github"])
 
 

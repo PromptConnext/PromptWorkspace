@@ -1,188 +1,121 @@
-# PromptConnext Deployment Guide
+# PromptWorkspace Deployment Guide
 
-How to ship the three deployable halves of PromptConnext:
+PromptConnext is the company; PromptWorkspace is the product this repository ships. Its live surfaces are:
 
-1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Northflank** today (public HTTPS; this guide's step-by-step still describes Railway — see the note below).
-2. **Web app** (`apps/web`, M8) — Next.js read-only workspace UI → **Vercel**.
-3. **Desktop app** (`apps/desktop` + `apps/engine`) — Tauri 2 bundle → installers published to **Cloudflare R2** for download.
+1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Northflank**, one service per environment.
+2. **Web app** (`apps/web`) — Next.js workspace UI → **Vercel** (project `promptworkspace-web`).
+3. **VS Code extension** (`apps/vscode`) → Visual Studio Marketplace, ID `promptconnext.promptworkspace` (§3A).
+4. **MCP server** (`apps/mcp`) → GitHub Release `mcp-v*` (§3A).
 
-Railway is used (not Vercel) for the cloud app because it's a long-lived container with WebSockets (presence) and in-process state that requires a **single instance** — a poor fit for serverless. `apps/web` has none of those constraints (its only WebSocket use is a client-side connection *to* `apps/cloud`, not a server it hosts), so Vercel's static/SSR hosting is a good fit — see [§2.8](#28-web-app-apps-web--vercel). Deploys are manual for now; CI/CD recommendations are in [§6](#6-cicd-recommendations).
+`apps/desktop` (Tauri) and `apps/engine` are renamed but **not deployed** (plan 0011, ADR 0028); `.github/workflows/desktop-build.yml` is `workflow_dispatch`-only. The corp site lives in [`PromptConnext/promptconnext-corp-web`](https://github.com/PromptConnext/promptconnext-corp-web).
 
----
-
-## 1. Architecture recap
-
-```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│  Desktop app (per user)     │  HTTPS │  PromptConnext Cloud (Railway)  │
-│  Tauri shell + engine       │───────▶│  FastAPI, 1 instance         │
-│  models/keys stay local     │  WS    │  DATA_BACKEND=supabase       │
-└─────────────────────────────┘        └──────────────┬───────────────┘
-        ▲ download .dmg/.msi                          │
-┌───────┴─────────────────────┐        ┌──────────────▼───────────────┐
-│  Cloudflare R2 (downloads)  │        │  Supabase (Postgres + Auth)  │
-└─────────────────────────────┘        └──────────────────────────────┘
-```
-
-The engine always runs locally as a sidecar — only the sync backend and the installer files are deployed.
-
-> **Where production actually runs (checked 2026-09-26).** The live cloud API is the Northflank service
-> `promptconnect-cloud-api` at `https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run` — the default cloud URL in `apps/vscode` and `apps/mcp`, and the
-> origin whose `/health` reports `env: production`. The Railway domain this guide was written against
-> (`promptconnextcloud-production.up.railway.app`) no longer answers. §2's Railway commands are kept as the
-> original setup record and as a working alternative for any Docker host; everything that is not a Railway
-> command — the Dockerfile, the environment-variable table in §2.4, the single-instance constraint, the
-> `/health` checks — applies to the Northflank service unchanged. Set variables in Northflank under the
-> service's **Environment** (runtime variables or a linked secret group) and redeploy/restart for them to
-> take effect. How the Northflank service is built and whether it auto-deploys on push to `main` is not
-> recorded in this repository — check the service's build settings before relying on either.
+Northflank (not Vercel) hosts the cloud app because it is a long-lived container with WebSockets (presence) and in-process state that requires a **single instance** — a poor fit for serverless. `apps/web` has none of those constraints (its only WebSocket use is a client-side connection *to* `apps/cloud`), so Vercel is a good fit — see [§2.8](#28-web-app-apps-web--vercel).
 
 ---
 
-## 2. Cloud app → Railway (original setup; production is on Northflank)
+## 1. Environments
+
+Two branch-mapped stacks, each with its own Vercel deployments, Northflank service and Supabase project. They never share a database.
+
+| | `develop` (staging) | `main` (production) |
+|---|---|---|
+| Web | `https://promptworkspace.truthledgers.com` | `https://workspace.promptconnext.com` |
+| Cloud API | `https://promptworkspace-api.truthledgers.com` | `https://workspace-api.promptconnext.com` |
+| Corp | `https://promptconnext.truthledgers.com` | `https://promptconnext.com` |
+| Northflank service | `promptworkspace` in project `promptworkspace` (runtime variables) | `promptworkspace-prod` in the same project (runtime variables) |
+| Supabase project | `vndszeanigomqguhfmwc` (develop) | `promptworkspace-prod` (Pro plan, daily backups) |
+| Auth email (custom SMTP) | sender on `truthledgers.com` | sender on `promptconnext.com` (staging sender until it is verified) |
+
+Code reaches `main` only through a PR from `develop` (merge commit). The VS Code extension and the MCP server default to **production**; develop/staging is reached by overriding all four client settings (`cloudApiUrl`, `cloudWebUrl`, `supabaseUrl`, `supabaseAnonKey` — VS Code settings `promptworkspace.*`, or `PROMPTWORKSPACE_*` env for MCP). The defaults live once, in `packages/cloud-client/src/defaults.ts`.
+
+```
+┌─────────────────────────────┐        ┌──────────────────────────────────┐
+│  VS Code ext / MCP server   │  HTTPS │  PromptWorkspace Cloud (Northflank)│
+│  apps/web (Vercel)          │───────▶│  FastAPI, 1 instance              │
+│                             │  WS    │  DATA_BACKEND=supabase            │
+└─────────────────────────────┘        └──────────────┬───────────────────┘
+                                                      │
+                                       ┌──────────────▼───────────────┐
+                                       │  Supabase (Postgres + Auth)  │
+                                       └──────────────────────────────┘
+```
+
+---
+
+## 2. Cloud app → Northflank
 
 ### 2.1 Prerequisites
 
-- Railway account + CLI: `npm i -g @railway/cli && railway login`
-- A Supabase project (production) — grab `SUPABASE_URL` and the **service_role** key
-- `psql` locally for applying migrations
+- Northflank project `promptworkspace` with the two services from §1.
+- A Supabase project per environment — record `SUPABASE_URL`, the **secret** key (`sb_secret_…`, or the legacy `service_role` JWT if the secret key is refused; cloud pins `supabase>=2.17,<3`, which accepts the new keys), the **publishable** key (`sb_publishable_…` or legacy `anon`) for the clients, and the **Session pooler** URI (IPv4; the direct host is IPv6-only).
+- `psql` 10 or later locally for applying migrations.
 
-### 2.2 Apply Supabase migrations
+### 2.2 Apply the schema
 
-Migrations are plain SQL in `apps/cloud/migrations/`. The recommended way to apply them is `apps/cloud/scripts/migrate.py` — a dependency-free wrapper around `psql` (see the script's own docstring for why it shells out rather than adding a Postgres driver) that reads `pz_schema_migrations` to know what's already applied, applies only what's pending in numeric order, wraps each migration in a transaction so a failure leaves it wholly unapplied, records the ledger row in that same transaction, and refuses — loudly, before touching anything — if an already-applied file's checksum no longer matches what's recorded:
+Migrations are plain SQL in `apps/cloud/migrations/`, applied by `apps/cloud/scripts/migrate.py` — a dependency-free wrapper around `psql` that reads the `pw_schema_migrations` ledger to know what is applied, applies only what is pending in numeric order, wraps each file in a transaction together with its ledger row, and refuses — before touching anything — if an applied file's checksum no longer matches.
 
-```bash
-cd apps/cloud
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --dry-run   # see what's pending first
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply             # then actually apply it
-```
+The history was squashed on 2026-10-03 into a **two-file baseline**: `0001_pw_schema_migrations_ledger.sql` (the ledger table) and `0002_pw_baseline.sql` (the whole schema). The 36 files it replaces, with their apply-after-deploy procedures, live only in git tag `pre-promptworkspace-rename`. There is no `adopt` subcommand any more: with the ledger at number 1 there is no pre-ledger history to assert. Future migrations start at `0003_*`. The baseline is generated by `scripts/baseline/build_baseline.py` (rerun it with `--check` to confirm the committed file is current), and `scripts/baseline/verify_squash.sh` proves it schema-equivalent to the token-mapped 36-file chain.
 
-`SUPABASE_DB_URL` is the direct Postgres connection string (Supabase → Settings → Database); `--db-url` can be omitted if that variable (or `DATABASE_URL`) is already in the environment. Migration 0003 installs the RLS policies that back workspace membership — do not skip it (the runner won't let you skip anything out of order regardless). On a brand-new database the runner bootstraps `pz_schema_migrations` itself (see 0024 below) before anything else, then proceeds through the rest in normal numeric order — a fresh database needs no separate ledger step, just run `apply` and stop.
+**One deliberate difference from the old chain: the ledger is closed to end users.** On the old chain `pw_schema_migrations` inherited `authenticated` DML from 0006's default privileges (the ledger, 0024, was created after them) and had no RLS, so on hosted Supabase it was reachable through the Data API. On the baseline the ledger is file 1, created before those defaults exist, and `0001_pw_schema_migrations_ledger.sql` ends in a labelled **post-squash hardening** block, generated by `build_baseline.py`: `alter table pw_schema_migrations enable row level security;` and `revoke all on pw_schema_migrations from anon, authenticated;`. `migrate.py` connects through `psql` as the table's owner (or a superuser), which RLS and these revokes do not restrict, so the runner reads and writes the ledger as before. `scripts/baseline/verify_squash.sh` treats this as the one checked exception: it asserts on the baseline database that `anon` and `authenticated` hold no select/insert/update/delete on the ledger and that RLS is on.
 
-**Migration 0023 needs a deploy-time value.** It replaces the embedding column's fixed `vector(1536)` width with a parameter (there is no `1536` baked into the schema anymore), and doing so is destructive: any already-embedded `pz_rag_chunks`/`pz_code_chunks` rows are deleted, because a vector computed at one width cannot be reinterpreted at another. Its header declares this to the runner (`migration-runner: requires-vars=embed_dim`), so `apply` refuses to run it — before opening a connection — without a matching `--var`:
-
-```bash
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply --var embed_dim=1024
-```
-
-Pick the width your embedding model actually produces (e.g. 1024 for BGE-m3 or Jina v3, 896 for KaLM-embedding-multilingual v2.5) — there is deliberately no default; omitting `--var embed_dim` stops the run rather than silently reapplying the 1536 ceiling this migration exists to remove. This `requires-vars` header convention is generic, not a one-off for 0023 — any future migration that needs a deploy-time value declares it the same way and gets the same fail-fast treatment; see the runner's docstring. **After 0023 runs, reindex before the assistant can ground content again**: `POST /workspaces/{id}/assistant/reindex` (or per-project `POST /projects/{id}/assistant/reindex`). Until that completes, content/mixed chat questions degrade to the existing "no indexed content" ungrounded path (`app/api/assistant.py`) rather than erroring — nothing is silently wrong, but nothing is grounded either. A workspace's model connection (`POST /workspaces/{id}/model-connection`) also needs its own `embed_dim` set to the same number; a mismatch there now 409s with `embed_dim_mismatch` instead of failing at query time against the vector column.
-
-**Migration 0031 is the one migration to apply _after_ the code deploy, not before.** Everything else in this directory adds or widens something, which is why the rule in §6 — apply migrations, then deploy the code that needs them — holds for all of them. 0031 is the exception because it *removes* privileges from the role the currently-running code writes as. Until plan 0014's paired code change is live, `app/dependencies.py::get_repository` hands every authenticated request a repository scoped to the caller's own JWT, so production graph reads and writes execute as `authenticated`; 0031 revokes exactly that. Apply it while the old code is still serving and every task write, stage-document save and comment fails with `permission denied for table ...` until the rollout finishes.
-
-Its partner **0030 has no such constraint and should be applied early** — on its own, ahead of the deploy, with the rest of the pending migrations. It only grants, only to `service_role`, which bypasses RLS anyway; it cannot break any version of the code, and it is what guarantees the new code's service-role client has the privileges it is about to start depending on. So the sequence for this pair is:
-
-```bash
-# 1. with everything else pending, before the deploy — safe on any code version
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply   # applies through 0030
-# 2. deploy apps/cloud, wait for the rollout to complete and /health to answer
-# 3. only now
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" apply   # applies 0031
-```
-
-The runner applies strictly in numeric order and only what is pending, so stopping after 0030 is just a matter of not having 0031 on disk yet at step 1 — or, more simply, running step 1 from the pre-deploy commit. Nothing enforces this ordering automatically; it is why both files say so in their own headers, and why it is written down here rather than only there. Rolling the code back after 0031 is applied requires re-granting `authenticated` on the seven tables first (`migrations/0006_grants.sql` and `migrations/0011_discussions.sql` are the shape to copy) — plan for forward-fix rather than rollback across this one.
-
-**Migration 0032 (plan 0019, tracker account identity) rides in step 3 with 0031, and there is no way to separate them.** It is numbered after 0031 and `scripts/migrate.py apply` has no `--through` or per-file selection — "run step 1 from the pre-deploy commit" is the only lever, and a commit that carries 0032 carries 0031 too. So the sequence above is the real sequence for this migration as well: pre-deploy commit applies through 0030, deploy the code, then apply 0031 **and** 0032 together.
-
-That matters because 0032 breaks something in *either* order, briefly. It swaps `pz_task_links`' primary key to `(provider, account_key, external_key)` and revokes the table from `authenticated`, and it creates `pz_workspace_integrations`, which the new code reads on all four tracker routes. Old code against the new schema gets `42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification` on the mirror route (its upsert still names two columns) and `permission denied` on the rest; new code against the old schema 500s on every tracker route (no `pz_workspace_integrations` table). Applying it in step 3 picks the first of those and keeps the window to the gap between the rollout completing and the migration landing — seconds, not minutes.
-
-**Migration 0036 (plan 0027, `pz_projects` becomes server-written) is a third apply-after-deploy migration, for the same reason as 0031.** It revokes insert/update/delete on `pz_projects` from `authenticated`, which is the role the pre-plan-0027 code writes that table as through the caller's JWT. Applied ahead of the rollout, every project create, lifecycle transition, repository creation, policy-scope and deployment-config save fails with `permission denied for table pz_projects` until the new code, which routes those writes through the service-role client, is live. 0034 and 0035 only add things and are safe to apply beforehand; since `migrate.py apply` has no per-file selection, apply through 0035 from a commit that doesn't carry 0036, deploy, then apply 0036.
-
-This is tolerable only because **no production workspace currently has a working tracker binding**: the inbound path read GitHub's `X-Hub-Signature-256` rather than the `X-Hub-Signature` Jira Cloud actually sends, so no real delivery has ever verified. If that stops being true — i.e. after a workspace successfully configures Jira on the new code — this migration is no longer safe to re-run against a populated table and the next schema change to `pz_task_links` needs its own sequencing.
-
-**After 0032, a workspace that had configured Jira before it must re-save that configuration.** The migration creates `pz_workspace_integrations` empty and deliberately does not backfill it from `pz_workspaces.integration_config` (the old blob has the `base_url`, but a workspace that has since changed or removed its Jira settings would be guessed wrong, and a guess that collides on `unique (provider, account_key)` would fail the migration outright). Until an admin re-POSTs `/workspaces/{id}/integrations/jira`, `mirror_task` answers `400 integration_not_configured` and inbound deliveries are acked-and-ignored. That re-save is also what issues the per-site webhook secret, which is revealed **once**, in that response's `webhook_secret` field, and has to be pasted into the Jira webhook's *Secret* box — Atlassian never shows theirs again either, and neither do we. A lost secret is recovered with `POST /workspaces/{id}/integrations/{provider}/webhook-secret/rotate`, not by rebinding: `unique (provider, account_key)` will refuse a second claim on the same site. Existing `pz_task_links` rows keep `account_key = ''`, which no configured account can equal, so they stop resolving until the task is mirrored again — fail-closed by design.
-
-**Migration 0024** creates `pz_schema_migrations` itself — the table that makes all of the above possible. It records, per file: filename, a sha256 checksum of the file's exact bytes (so an edit to an already-applied file becomes detectable instead of silently drifting from what actually ran — this repo has already had an operator decline to let a migration file be touched post-application for exactly that reason), when the row was written, who wrote it, and a `source` of either `applied` (the runner executed the file and wrote the row in the same action) or `adopted` (an operator asserted the row's truth without that execution — see below).
-
-<details>
-<summary>Fallback: applying migrations without the runner (no Python venv available)</summary>
-
-The runner is a thin wrapper — everything it does can still be done by hand with plain `psql`, and this is worth keeping documented for an environment with no `apps/cloud/.venv` handy:
+**Pre-baseline databases are reset, not migrated.** If `apply` finds the ledger under its pre-rename table name, it refuses with exit 2 ("pre-baseline database … reset it — fresh-start decision"). Nothing is migrated in place: reset that database and apply the baseline from scratch.
 
 ```bash
 cd apps/cloud
-for f in migrations/00*.sql; do
-  psql -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -f "$f" || { echo "migration failed: $f" >&2; break; }
-done
+python scripts/migrate.py --db-url "$POOLER_URL" apply --dry-run
+python scripts/migrate.py --db-url "$POOLER_URL" apply --var embed_dim=1536
+psql "$POOLER_URL" -c "select has_table_privilege('service_role','public.pw_tasks','select,insert,update,delete')"   # must print t
 ```
 
-(The glob is `00*.sql`, not `000*.sql` — migration numbers passed 0009 long ago, and the tighter pattern silently stops matching anything from 0010 on.) This loop does **not** wrap each file in its own transaction, does **not** write ledger rows, and does **not** check checksums — it is the pre-0024 behavior, kept only as a manual fallback. Migration 0023 is not part of it — run it by hand, in its numeric place, exactly as shown above but with plain `psql -v embed_dim=1024 -f migrations/0023_configurable_embed_dim.sql`, before resuming the loop. If this fallback is ever used against a database the runner will later manage, follow up with the adoption procedure below so `pz_schema_migrations` reflects what actually happened.
+**`embed_dim` is required and must equal `MANAGED_EMBED_DIM`.** The baseline declares `migration-runner: requires-vars=embed_dim`, so `apply` refuses without it. The default for both environments is `1536` (OpenAI `text-embedding-3-small`; `gemini-embedding-001` truncated to 1536 also fits). Changing it later is destructive — embedded rows are deleted because a vector of one width cannot be reinterpreted at another — so choose the embedding model first. A workspace's own model connection (`POST /workspaces/{id}/model-connection`) must use the same `embed_dim`; a mismatch 409s with `embed_dim_mismatch`.
 
-</details>
+If the privilege check prints `f`, run the grant SQL from `.github/workflows/cloud-contract.yml` (the "grant" step). `/health.schema_version` reports the stem of the last migration file, so a correctly applied database answers `"schema_version": "0002_pw_baseline"`.
 
-#### Adopting an existing database into the migrations ledger
+### 2.3 Create the Northflank service
 
-The ledger has a bootstrapping problem: the operator's production database almost certainly already carries 0001 through 0022 (0023 is destructive and requires its own deliberate `-v embed_dim` run, so don't assume it), applied over months by the plain `psql -f` loop, with nothing anywhere recording that fact. Once `pz_schema_migrations` exists, that history needs to be *in* it — but re-running 0001–0022 to populate it is exactly the wrong move: several of those files are only partially idempotent (0003 guards 15 of 32 DDL statements, 0009 guards 9 of 16, 0006 none of its one `GRANT`), so replaying them against a database that already has their effects would fail partway or silently duplicate work. The ledger has to be told this history, not made to re-derive it by force.
+Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
 
-It also must not be told automatically. A migration that inserted "every file numbered below me is applied" the first time it ran would be guessing on the operator's behalf and recording that guess as though it were observed fact — precisely the uncertainty this table exists to remove. `apps/cloud/scripts/migrate.py apply` never does this on its own; adoption is its own subcommand, gated behind an explicit `--through` and an interactive confirmation (or `--yes`), so it can't be triggered by running the ordinary `apply` path. Every row it writes carries `source = 'adopted'` rather than `'applied'`, so the distinction between "we watched this happen" and "we were told this happened" survives in the data rather than being flattened away for convenience.
+### 2.4 Environment variables (Northflank → service → Runtime variables)
 
-```bash
-cd apps/cloud
-.venv/bin/python scripts/migrate.py --db-url "$SUPABASE_DB_URL" adopt --through 0022
-```
-
-`--through` is the last migration you believe this database already has (0023 is refused unless you also pass `--yes` — see the warning it prints; 0024 and anything after it is always refused outright, since those are only ever recorded by actually running them). Run with no `--yes` first: it prints the full plan — which files will be marked `adopted`, whether the ledger table itself still needs creating — and prompts before writing anything, so nothing changes on a dry look. Add `--yes` (optionally `--adopted-by NAME` and `--note "..."`) to actually commit it. This single command replaces what used to be three separate manual `psql` steps (create the ledger table, loop-insert the adopted rows, separately record 0024 itself as `applied`): it creates `pz_schema_migrations` by actually running 0024 if it isn't there yet — recorded `source='applied'`, because that part really is watched, not asserted — then records everything through `--through` as `adopted` in one transaction. It's also safe to re-run: rows already in the ledger are left alone (`on conflict (filename) do nothing`), so retrying after a partial failure or re-checking an already-adopted database is a no-op, not a duplicate.
-
-The checksum recorded for each adopted row is of the file as it exists on disk *today*, not as it looked whenever the migration actually ran — this table cannot recover that historical byte-for-byte state, and doesn't pretend to. What it buys is a going-forward baseline: if that file changes after adoption, a checksum comparison will catch the drift on the next `apply`, which is the failure mode this column exists for regardless of whether the row's origin was `applied` or `adopted`.
-
-After adoption, resume with the runner for anything past `--through` that hasn't run yet — `apply --var embed_dim=<N>` will stop and ask for it when it reaches 0023, exactly as it would on any other database.
-
-A **fresh** database needs none of this: `apply` bootstraps the ledger table itself and proceeds through everything else in numeric order, with no history to assert and therefore nothing to adopt.
-
-### 2.3 Create the Railway service
-
-The repo already has a working `apps/cloud/Dockerfile` (respects `$PORT`, single uvicorn worker). Two options:
-
-**CLI (manual deploy):**
-
-```bash
-cd apps/cloud
-railway init                 # create project, e.g. "promptconnext-cloud"
-railway up                   # builds the Dockerfile, deploys
-```
-
-**Dashboard (repo-linked):** New Project → Deploy from GitHub repo → set **Root Directory** to `apps/cloud` so Railway finds the Dockerfile. Repo-linked services auto-deploy on push — fine for the dev environment, consider disabling auto-deploy on prod until CI exists.
-
-### 2.4 Environment variables (Railway → service → Variables)
-
-Production values:
+Production values (develop differs only where noted in §2.7):
 
 | Variable | Value | Notes |
 |---|---|---|
 | `DATA_BACKEND` | `supabase` | `memory` loses all data on restart — dev only |
 | `SUPABASE_URL` | `https://<ref>.supabase.co` | |
-| `SUPABASE_KEY` | service_role key | Server-side only; requests are re-scoped to the caller's JWT |
+| `SUPABASE_KEY` | secret key (`sb_secret_…`, or legacy `service_role` JWT) | Server-side only; requests are re-scoped to the caller's JWT |
 | `AUTH_MODE` | `supabase` | `stub` (X-User-Id header) must never reach production |
-| `SUPABASE_JWT_SECRET` | (usually empty) | Legacy HS256 fallback only; JWKS via `SUPABASE_URL` is the default path |
+| `SUPABASE_JWT_SECRET` | **optional — leave unset** | Legacy HS256 fallback only; JWKS via `SUPABASE_URL` is the default path |
 | `APP_ENV` | `production` | |
 | `LOG_LEVEL` | `INFO` | |
-| `CORS_ORIGINS` | `tauri://localhost,http://localhost:1420,https://<web-app>.vercel.app` | Packaged Tauri app origin + dev Vite origin + the `apps/web` deployment's origin(s) — see [§2.8](#28-web-app-apps-web--vercel) |
+| `CORS_ORIGINS` | `https://workspace.promptconnext.com` | The environment's own web origin only — see [§2.8](#28-web-app-apps-web--vercel) |
 | `RATE_LIMIT_ENABLED` | `true` | |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `300` / `60` | Defaults are fine to start |
 | `WS_HEARTBEAT_SECONDS` | `20` | |
 | `WS_MAX_CONNECTIONS_PER_PROJECT` | `50` | |
 | `TOMBSTONE_TTL_DAYS` | `30` | `0` disables the GC loop |
 | `TOMBSTONE_GC_INTERVAL_SECONDS` | `3600` | |
-| `JIRA_EMAIL` / `JIRA_API_TOKEN` | as needed | Only if the Jira mirror (M5) is in use — the *outbound* credential. There is no longer a `JIRA_WEBHOOK_SECRET`: since plan 0019 the *inbound* secret is generated per Atlassian site when an admin configures the integration and stored encrypted in `pz_workspace_integrations`, because one shared secret cannot tell two tenants apart and a Jira issue key is unique per site, not per provider. ClickUp is registered but not advertised or configurable (`provider_unavailable`) until it has a credential path of its own. |
-| `RAG_KEY_ENCRYPTION_KEY` | Fernet key | Required before any workspace configures a model connection (M9 RAG assistant); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, `POST /workspaces/{id}/model-connection` fails closed rather than storing a plaintext key. |
-| `WEB_APP_URL` | `https://<web-app>.vercel.app` | Base for every invitation accept link — both the URL emailed to the invitee and the `accept_url` handed to the admin who created the invite. **Required in production:** the default is `http://localhost:3000`, so leaving it unset mails invitees a link to their own machine and the invitation silently dead-ends. `{WEB_APP_URL}/invite/*` must also be allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs, as a `/**` wildcard — see [§2.8](#28-web-app-apps-web--vercel). |
-| `PUBLIC_API_URL` | **this** service's origin, e.g. `https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
+| `JIRA_EMAIL` / `JIRA_API_TOKEN` | as needed | Only if the Jira mirror (M5) is in use — the *outbound* credential. There is no longer a `JIRA_WEBHOOK_SECRET`: since plan 0019 the *inbound* secret is generated per Atlassian site when an admin configures the integration and stored encrypted in `pw_workspace_integrations`, because one shared secret cannot tell two tenants apart and a Jira issue key is unique per site, not per provider. ClickUp is registered but not advertised or configurable (`provider_unavailable`) until it has a credential path of its own. |
+| `RAG_KEY_ENCRYPTION_KEY` | Fernet key, one per environment | **Required: the service refuses to start with `DATA_BACKEND=supabase` and no key.** It encrypts workspace PATs, model keys and webhook secrets; losing it bricks every stored credential, so keep an offline copy per environment in the team password manager. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
+| `WEB_APP_URL` | `https://workspace.promptconnext.com` | Base for every invitation accept link — both the URL emailed to the invitee and the `accept_url` handed to the admin who created the invite. **Required in production:** the default is `http://localhost:3000`, so leaving it unset mails invitees a link to their own machine and the invitation silently dead-ends. `{WEB_APP_URL}/invite/*` must also be allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs, as a `/**` wildcard — see [§2.8](#28-web-app-apps-web--vercel). |
+| `PUBLIC_API_URL` | **this** service's origin, `https://workspace-api.promptconnext.com` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
 | `DEPLOY_R2_*` | see `apps/cloud/.env.example` | Only for the platform-hosted deployment template (ADR 0021). `DEPLOY_R2_API_TOKEN` is account-wide and is used **only** to mint a per-workspace, bucket-scoped credential — only the minted one is ever written into a customer repository, because a repo secret is readable by anyone who can push to that repo. `DEPLOY_R2_PUBLIC_BASE_URL` is required for that template: without it there is no preview address to hand the pipeline and repo creation refuses with `deployment_preview_url_not_configured`. Leave the block empty to disable the template entirely (it then refuses with `deployment_provider_not_configured` rather than seeding a pipeline that could never succeed). **Never set `DEPLOY_R2_ALLOW_SHARED_KEY=true` outside local dev** — it seals one shared key into every repository. |
 | `TYPESAFE_API_KEY` | TypeSafe API key | **Optional.** Enables the typed judgment that picks the docker-compose template's runtime and services from a project's plan (`app/deployments/stack_judge.py`, ADR 0026's 2026-09-26 amendment). Unset keeps the keyword scan. `TYPESAFE_BASE_URL`/`TYPESAFE_MODEL` default correctly. Platform-held, like `MANAGED_MODEL_API_KEY`. |
 
-Railway injects `PORT` automatically; the Dockerfile already honors it.
+The managed tier also needs `MANAGED_MODEL_*`, `MANAGED_EMBED_*` (with `MANAGED_EMBED_DIM` equal to the migration's `embed_dim`) and `MANAGED_DAILY_TOKEN_BUDGET` — see below and `apps/cloud/.env.example`. The Dockerfile honours `PORT` and defaults to 8080.
 
 
 ### Deployment templates and the workspace GitHub token (ADR 0021)
 
-Selecting a deployment template makes the cloud write GitHub Actions **secrets and variables** into each new project repository, which the workspace's fine-grained PAT must be permitted to do. That is a permission most existing tokens do not carry, and GitHub offers no way to read a fine-grained token's own scopes — so it cannot be checked when the token is connected. A stale token connects cleanly, works for months, and then fails at repo creation with `github_secrets_not_in_token_scope`. Before enabling deployment templates for real projects, ask workspace admins to reissue their tokens with **Secrets** and **Variables** write access alongside Contents, Administration and Webhooks.
+Selecting a deployment template makes the cloud write GitHub Actions **secrets and variables** into each new project repository, which the workspace's fine-grained PAT must be permitted to do. That is a permission most existing tokens do not carry, and GitHub offers no way to read a fine-grained token's own scopes — so it cannot be checked when the token is connected. A stale token connects cleanly, works for months, and then fails at repo creation with `github_secrets_not_in_token_scope`. Before enabling deployment templates for real projects, ask workspace admins to reissue their tokens with **Secrets** and **Variables** write access alongside Contents, Administration and Webhooks. The full fine-grained permission list for a workspace PAT is: **Contents RW, Administration RW, Webhooks RW, Secrets RW, Variables RW, Metadata R, Pull requests R**.
 
 Repositories created before ADR 0021 carry webhooks subscribed only to `push` and `pull_request`, so no deploy they run will ever be visible in the cloud. Re-running repo creation does not fix this — that route returns early for a project already at `repo_created`, and hook registration treats GitHub's "already exists" response as success. `POST /projects/{id}/deployment/repair-webhook` (workspace admin) is the migration path: it widens the existing hook's event list in place, leaving its signing secret untouched, and is idempotent.
 
 One network note for production. After a successful deploy the cloud makes a single outbound request to the deployed preview URL, to read whether it permits being embedded — a question no browser can answer for a cross-origin frame. That URL is reported by the project's own workflow, so it is attacker-chosen input from anyone with push access to a project repository. The code refuses to probe any hostname resolving to a loopback, private, link-local, reserved or multicast address and follows no redirects, which blocks the direct request-forgery path. It cannot, on its own, close DNS rebinding between the resolution and the connection. If the cloud runs anywhere with reachable internal services or an instance-metadata endpoint, put its egress behind a proxy that enforces the same public-address rule at the network layer.
 
-The cloud Planner UI (the web app's stage-generation tab, `apps/cloud/app/api/generation.py`) has no BYO-model fallback: `select_model()` (`apps/cloud/app/generation/routing.py`) returns whatever `build_managed_connection()` (`apps/cloud/app/generation/managed.py`) produces from `MANAGED_MODEL_ENABLED` and `MANAGED_MODEL_API_KEY`, and returns nothing at all if either is unset. `apps/cloud/.env.example` ships `MANAGED_MODEL_ENABLED=false` by default, so a deployment that only follows the table above will have a Planner tab that fails closed on every request. Treat `MANAGED_MODEL_ENABLED=true` plus a valid `MANAGED_MODEL_API_KEY` as required, not optional, before telling users the Planner is available — set both explicitly in Railway's Variables alongside the settings above.
+The cloud Planner UI (the web app's stage-generation tab, `apps/cloud/app/api/generation.py`) has no BYO-model fallback: `select_model()` (`apps/cloud/app/generation/routing.py`) returns whatever `build_managed_connection()` (`apps/cloud/app/generation/managed.py`) produces from `MANAGED_MODEL_ENABLED` and `MANAGED_MODEL_API_KEY`, and returns nothing at all if either is unset. `apps/cloud/.env.example` ships `MANAGED_MODEL_ENABLED=false` by default, so a deployment that only follows the table above will have a Planner tab that fails closed on every request. Treat `MANAGED_MODEL_ENABLED=true` plus a valid `MANAGED_MODEL_API_KEY` as required, not optional, before telling users the Planner is available — set both explicitly in the Northflank runtime variables alongside the settings above.
 
-Turning on `MANAGED_MODEL_ENABLED` covers the Planner's *generation* path, but the RAG assistant's *retrieval* path needs a second, separate setting: Typhoon is chat-only, so a keyless workspace's content questions (anything grounded in synced documents or code, as opposed to task status or lineage) are answered by `build_managed_embed_connection()` (`apps/cloud/app/generation/managed.py`), which reads `MANAGED_EMBED_BASE_URL`, `MANAGED_EMBED_MODEL`, and `MANAGED_EMBED_API_KEY`. Leave any of those unset and it silently returns `None` — `app/api/assistant.py` then skips retrieval entirely, and every content question comes back with a fluent "I don't have enough information" that is indistinguishable from a working assistant that genuinely doesn't know. The app now logs a startup WARNING when this combination occurs (`MANAGED_MODEL_ENABLED=true` with no embed connection resolved), but don't wait to see it in the logs — set the three `MANAGED_EMBED_*` variables in Railway's Variables alongside `MANAGED_MODEL_*` whenever the managed tier is on. `apps/cloud/.env.example` documents the constraint that matters most when picking a model: `pz_rag_chunks.embedding` is a fixed `vector(1536)` column, so the embedding model's output dimension must be exactly 1536 — most open multilingual encoders (BGE-m3, Jina v3, KaLM-embedding-multilingual) do not fit that, and OpenAI's `text-embedding-3-small`, Google's `gemini-embedding-001` (MRL-truncated to 1536), and `Alibaba-NLP/gte-Qwen2-1.5B-instruct` are known-good options instead.
+Turning on `MANAGED_MODEL_ENABLED` covers the Planner's *generation* path, but the RAG assistant's *retrieval* path needs a second, separate setting: Typhoon is chat-only, so a keyless workspace's content questions (anything grounded in synced documents or code, as opposed to task status or lineage) are answered by `build_managed_embed_connection()` (`apps/cloud/app/generation/managed.py`), which reads `MANAGED_EMBED_BASE_URL`, `MANAGED_EMBED_MODEL`, and `MANAGED_EMBED_API_KEY`. Leave any of those unset and it silently returns `None` — `app/api/assistant.py` then skips retrieval entirely, and every content question comes back with a fluent "I don't have enough information" that is indistinguishable from a working assistant that genuinely doesn't know. The app now logs a startup WARNING when this combination occurs (`MANAGED_MODEL_ENABLED=true` with no embed connection resolved), but don't wait to see it in the logs — set the three `MANAGED_EMBED_*` variables in the Northflank runtime variables alongside `MANAGED_MODEL_*` whenever the managed tier is on. `apps/cloud/.env.example` documents the constraint that matters most when picking a model: `pw_rag_chunks.embedding` is a `vector(embed_dim)` column fixed at migration time (§2.2), so the embedding model's output dimension must equal that `embed_dim` (1536 by default) — most open multilingual encoders (BGE-m3, Jina v3, KaLM-embedding-multilingual) do not fit that, and OpenAI's `text-embedding-3-small`, Google's `gemini-embedding-001` (MRL-truncated to 1536), and `Alibaba-NLP/gte-Qwen2-1.5B-instruct` are known-good options instead.
 
 ### 2.5 Scaling constraints — important
 
@@ -190,7 +123,7 @@ Presence, rate-limit, metrics, the RAG embed queue, and the RAG daily token
 budget are all **in-process**. Until a shared backplane (e.g. Redis) exists:
 
 - **Replicas = 1.** Do not scale horizontally.
-- Railway routes all traffic to the single replica, so session affinity is a non-issue at 1 instance — but revisit before ever raising the replica count.
+- Northflank routes all traffic to the single instance, so session affinity is a non-issue at 1 instance — but revisit before ever raising the instance count. A rolling deploy briefly overlaps two instances; the `instance_id` alarm below fires once per deploy for that reason.
 - Vertical scaling (more memory/CPU on the one instance) is the only safe lever.
 
 **What breaks first, if the replica count ever does leave 1.** The order matters because the four components fail differently, not equally. The **daily token budget** (`apps/cloud/app/rag/budget.py`, plus the global managed limiter built in `apps/cloud/app/main.py`) goes first, because its failure costs money: it is a dict keyed by workspace, so split across N replicas each workspace gets N times its daily cap and the managed-Typhoon bill multiplies to match. **Presence** (`apps/cloud/app/ws/manager.py`) is second — two people on the same project connected to different replicas simply do not see each other, which is a wrong answer rather than an error, and the kind of thing users report. The **rate limiter** (`apps/cloud/app/ratelimit.py`) and the **embed queue** (`apps/cloud/app/rag/queue.py`) come last, not because they matter least but because they degrade *silently*: every client's effective request limit becomes N times the configured one, and a job enqueued on one replica is invisible to the other, so the index-status panel's `pending_jobs` becomes a coin flip. Fix them in that same order if a backplane is ever genuinely needed — a shared counter for the budget and the managed limiter, then pub/sub fan-out for presence, then the request limiter, then the queue, which by that point wants a real job broker rather than a Redis list.
@@ -211,7 +144,7 @@ budget are all **in-process**. Until a shared backplane (e.g. Redis) exists:
 
 The budget block reports headroom against `MANAGED_DAILY_TOKEN_BUDGET` — the cap whose overrun spends the platform's money (ADR 0027), as opposed to a BYO workspace overrunning its own key — and deliberately names no workspace or project: `/health` is unauthenticated, so it reports the shape of the load and not whose it is.
 
-**The alarm.** Nothing in this repository talks to an uptime-monitoring service; wire the following into whichever one you already use (Better Uptime, UptimeRobot, Pingdom, a Railway-side check), polling `/health` every 60 s:
+**The alarm.** Nothing in this repository talks to an uptime-monitoring service; wire the following into whichever one you already use (Better Uptime, UptimeRobot, Pingdom, a Northflank health check), polling `/health` every 60 s:
 
 - **Two concurrent polls returning different `instance_id`s ⇒ more than one instance is serving traffic.** Page on it: that is the condition all four components above break under, and it is the closest thing to a replica-count alarm that exists, because **a process cannot count its own peers.** There is no discovery mechanism here, no registry, and nothing the container platform guarantees to set to the current replica count, so the service does not report a `replicas` field rather than report a guess. `instance_id` is minted once per process, which makes "how many replicas?" answerable from outside by comparison alone.
 - **`instance_id` changed between two sequential polls ⇒ the single instance restarted.** Not an error by itself (a deploy does this), but it drops every queued embed job and empties every presence room, so an unexplained change is worth an alert.
@@ -224,26 +157,30 @@ The rate limiter is the one component with no counter of its own: a bucket count
 ### 2.6 Verify
 
 ```bash
-curl https://<service>.up.railway.app/health     # schema_version from migrations + the capacity block (§2.5)
-open https://<service>.up.railway.app/docs       # FastAPI docs
+API=https://workspace-api.promptconnext.com    # or https://promptworkspace-api.truthledgers.com
+curl -sSf $API/health | jq '{env, schema_version}'   # "production"/"staging", "0002_pw_baseline"
+curl -si -X OPTIONS -H "Origin: https://workspace.promptconnext.com" -H "Access-Control-Request-Method: GET" $API/health | grep -i '^access-control-allow-origin'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/webhooks/github   # 400/401 for an unsigned request, not 404
 ```
 
-Then point a desktop build's cloud-sync URL at the Railway domain and confirm push/pull on `/sync/projects/{id}/graph`.
+### 2.7 Develop vs production values
 
-### 2.7 Dev vs production environments
-
-Use Railway **Environments** (one project, `dev` + `production`) or two projects:
-
-| | dev | production |
+| | `develop` | `main` |
 |---|---|---|
-| `DATA_BACKEND` | `memory` (or a dev Supabase project) | `supabase` |
-| `AUTH_MODE` | `stub` acceptable | `supabase` — required |
-| `APP_ENV` | `development` | `production` |
+| `APP_ENV` | `staging` | `production` |
 | `LOG_LEVEL` | `DEBUG` | `INFO` |
-| Deploys | auto-deploy on push OK | manual / CI-gated |
-| Supabase | separate free project | production project |
+| `SUPABASE_URL` / `SUPABASE_KEY` | develop project | prod project |
+| `CORS_ORIGINS`, `WEB_APP_URL` | `https://promptworkspace.truthledgers.com` | `https://workspace.promptconnext.com` |
+| `PUBLIC_API_URL` | `https://promptworkspace-api.truthledgers.com` | `https://workspace-api.promptconnext.com` |
+| `RAG_KEY_ENCRYPTION_KEY` | develop key | prod key (never the same) |
+| `MANAGED_EMBED_*` | a free 1536-dim model if supported, else the prod model | OpenAI `text-embedding-3-small`, `MANAGED_EMBED_DIM=1536` |
+| Deploys | auto-deploy from `develop` | first build triggered by hand after the schema and the merge; then optional auto-deploy from `main` |
 
 Never share a Supabase project between environments — migrations and tombstone GC would collide.
+
+#### Auth email (custom SMTP)
+
+Supabase's built-in sender only delivers to members of the Supabase org, so each project needs custom SMTP for confirmations, invitations and password resets: Supabase → Authentication → SMTP Settings. Every value (host, port, user, password, sender name and address) is per-environment provider configuration; nothing in this repo hard-codes a mail provider. Today both environments use Brevo (`smtp-relay.brevo.com:587`) with the `truthledgers.com` sender, until a `promptconnext.com` sender is verified for production. Email templates use `{{ .SiteURL }}`/`{{ .ConfirmationURL }}`, so links follow each project's Site URL.
 
 ### 2.8 Web app (`apps/web`) → Vercel
 
@@ -251,18 +188,22 @@ Never share a Supabase project between environments — migrations and tombstone
 secrets, no WebSocket server of its own (presence is a client-side connection
 *to* `apps/cloud`), so it deploys as a normal static/SSR Vercel project.
 
-1. Import `apps/web` as the project root in Vercel (monorepo → set "Root
-   Directory" to `apps/web`).
+1. Vercel project `promptworkspace-web`: Root Directory `apps/web`, "Include
+   files outside Root Directory" on, install command
+   `corepack enable && pnpm install --frozen-lockfile --filter @promptworkspace/web...`,
+   Production Branch `main`. The `develop` branch is attached to
+   `promptworkspace.truthledgers.com` with Preview-scoped env vars; the
+   Ignored Build Step builds only `main` and `develop`.
 2. Environment variables (Vercel → project → Settings → Environment
    Variables), mirroring `apps/web/.env.example`:
 
    | Variable | Value |
    |---|---|
-   | `NEXT_PUBLIC_CLOUD_API_URL` | `https://<cloud-service>.up.railway.app` |
-   | `NEXT_PUBLIC_CLOUD_WS_URL` | `wss://<cloud-service>.up.railway.app` |
+   | `NEXT_PUBLIC_CLOUD_API_URL` | `https://workspace-api.promptconnext.com` (Preview/`develop`: `https://promptworkspace-api.truthledgers.com`) |
+   | `NEXT_PUBLIC_CLOUD_WS_URL` | `wss://workspace-api.promptconnext.com` (develop: `wss://promptworkspace-api.truthledgers.com`) |
    | `NEXT_PUBLIC_AUTH_MODE` | `supabase` |
    | `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon key (safe to expose client-side) |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | publishable/anon key (safe to expose client-side) |
 
 3. After the first deploy, add the resulting `https://<project>.vercel.app`
    origin (and any custom domain) to `apps/cloud`'s `CORS_ORIGINS` (§2.4) and
@@ -311,7 +252,7 @@ cd apps/desktop
 pnpm tauri build
 ```
 
-Output: `apps/desktop/src-tauri/target/release/bundle/macos/PromptConnext.app` (~192 MB, self-contained engine + bundled Node).
+Output: `apps/desktop/src-tauri/target/release/bundle/macos/PromptWorkspace.app` (~192 MB, self-contained engine + bundled Node).
 
 **Produce a DMG for distribution** — add `"dmg"` to bundle targets in `src-tauri/tauri.conf.json`:
 
@@ -324,14 +265,14 @@ Rebuild; the `.dmg` lands in `bundle/dmg/`.
 **Unsigned-app reality:** without an Apple Developer account, Gatekeeper blocks downloaded copies. Ship with instructions for testers:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/PromptConnext.app
+xattr -dr com.apple.quarantine /Applications/PromptWorkspace.app
 ```
 
 or right-click → Open → Open. When you get an Apple Developer account later: set `bundle.macOS.signingIdentity` in `tauri.conf.json`, export `APPLE_ID`, `APPLE_PASSWORD` (app-specific) or `APPLE_API_KEY`, and `APPLE_TEAM_ID`, and Tauri signs + notarizes during `tauri build`. Treat signing as a prerequisite for any public (non-tester) distribution.
 
 ### 3.2 Windows — via CI (Linux still not supported)
 
-Windows can't be built locally on an M1 (Tauri's MSI/WiX path doesn't run on macOS at all, and the NSIS cross-compile route is experimental) — it ships from `.github/workflows/desktop-build.yml`, a `macos-latest` + `windows-latest` matrix using `tauri-apps/tauri-action`. Trigger with `git tag v0.0.1 && git push origin v0.0.1` or `gh workflow run desktop-build.yml`. Full detail (why CI and not local cross-compile, and the experimental local route for debugging) is in [`DEVELOPMENT.md` — Build target 3](./DEVELOPMENT.md#build-target-3--windows-from-the-m1-use-ci-recommended).
+Windows can't be built locally on an M1 (Tauri's MSI/WiX path doesn't run on macOS at all, and the NSIS cross-compile route is experimental) — it ships from `.github/workflows/desktop-build.yml`, a `macos-latest` + `windows-latest` matrix using `tauri-apps/tauri-action`. Trigger with `gh workflow run desktop-build.yml` — the workflow is dispatch-only, so no tag push starts it. Full detail (why CI and not local cross-compile, and the experimental local route for debugging) is in [`DEVELOPMENT.md` — Build target 3](./DEVELOPMENT.md#build-target-3--windows-from-the-m1-use-ci-recommended).
 
 The three app-level gaps this required are closed:
 
@@ -345,46 +286,52 @@ The three app-level gaps this required are closed:
 
 ### 3.3 Versioning
 
-Bump `version` in `apps/desktop/src-tauri/tauri.conf.json` (and keep `apps/desktop/package.json` in sync) before each release. Use the version in the uploaded filename (below) so URLs are immutable.
+`apps/desktop` is not deployed at present (plan 0011, ADR 0028). If it is built, bump `version` in `apps/desktop/src-tauri/tauri.conf.json` (and keep `apps/desktop/package.json` in sync) first. Use the version in the uploaded filename (below) so URLs are immutable.
 
 ---
 
-## 3A. VS Code extension (`apps/vscode`) → Marketplace + Open VSX
+## 3A. VS Code extension and MCP server
 
-The extension is not an installer and does not touch R2. It has no bundled runtime and spawns no
-executable, so there is nothing to sign and nothing to disclose beyond saying so.
+### VS Code extension (`apps/vscode`) → Marketplace + Open VSX
+
+The extension ID is **`promptconnext.promptworkspace`** (`"publisher": "promptconnext"`, name `promptworkspace`). It is a new listing: Marketplace IDs are immutable, so the pre-rename listing (its ID is in tag `pre-promptworkspace-rename`) is deprecated in favour of it (publisher manage page → the old item → Deprecate → "in favour of another extension"), later Unpublished — never Removed, which would reserve the name for ever. The extension has no bundled runtime and spawns no executable, so there is nothing to sign.
 
 ```bash
 pnpm --dir apps/vscode typecheck
 pnpm --dir apps/vscode test
-pnpm --dir apps/vscode build
-pnpm --dir apps/vscode package        # → promptconnext-vscode-<version>.vsix
+pnpm --filter promptworkspace run package    # → apps/vscode/promptworkspace-<version>.vsix
 ```
 
-**Publish from Linux or macOS, never Windows.** Packaging on Windows strips the POSIX executable
-bit from bundled files. Harmless while we bundle no executables — establish the habit before that
-stops being true.
+Gate before publishing: install the VSIX with **no setting overrides**, sign in against production, and see your tasks. The four defaults (`promptworkspace.cloudApiUrl`, `cloudWebUrl`, `supabaseUrl`, `supabaseAnonKey`) are copies of `packages/cloud-client/src/defaults.ts`, and that package's `defaults.test.ts` (in CI) fails while either side drifts.
 
-Two registries, both from day one (ADR 0019):
+**Release gate: production defaults must be filled.** Until the production Supabase project exists, `supabaseUrl` and `supabaseAnonKey` in `packages/cloud-client/src/defaults.ts` are `__PROD_*` placeholders. CI stays green with them, but packaging does not: `packages/cloud-client/scripts/assert-defaults-filled.mjs` exits non-zero while any placeholder (or an empty value, or a `supabaseUrl` that is not `https://<ref>.supabase.co`) remains. It runs from `vscode:prepublish` in `apps/vscode` (so `pnpm --filter promptworkspace run package` and `vsce publish` both stop) and from `prepack` in `apps/mcp` (so `pnpm pack` stops). Run it by hand with `pnpm --filter @promptworkspace/cloud-client run assert-defaults-filled`. Fill the real values, then copy them into the four `apps/vscode/package.json` defaults; `defaults.test.ts` confirms the copies match. Never bypass the gate: an extension shipped with placeholders points at a URL that does not resolve.
+
+**Publish from Linux or macOS, never Windows.** Packaging on Windows strips the POSIX executable bit from bundled files.
 
 ```bash
-npx @vscode/vsce publish --azure-credential   # Microsoft Marketplace → VS Code
-npx ovsx publish promptconnext-vscode-<version>.vsix -p "$OVSX_TOKEN"   # → Cursor, Windsurf, VSCodium, code-server
+npx @vscode/vsce publish --packagePath promptworkspace-<version>.vsix    # Microsoft Marketplace
+npx ovsx publish promptworkspace-<version>.vsix -p "$OVSX_TOKEN"         # Open VSX (Cursor, Windsurf, VSCodium)
+git tag vscode-v<version> && git push origin vscode-v<version>
 ```
 
-Three things to get right before the first release:
+- The extension ID is baked into the sign-in callback URI (`src/auth/signIn.ts::EXTENSION_ID`) and the web app's tests; changing it again breaks in-flight sign-ins.
+- Global Azure DevOps PATs retire **2026-12-01**; verify publisher access with `npx @vscode/vsce verify-pat <publisher>` (the `publisher` in `apps/vscode/package.json`) and move to Entra ID (`--azure-credential`) before then.
+- **Marketplace Participation Policies §3(b)**: the listing may not promote other IDE offerings. That pitch belongs on the corp site.
 
-- **Register the publisher on both registries.** The extension id (`publisher.name`) is baked into
-  the sign-in callback URI (`src/auth/signIn.ts::EXTENSION_ID`) and into the web app's scheme
-  allow-list expectations. Renaming after release breaks in-flight sign-ins.
-- **Do not build a PAT-based publishing flow.** Global Azure DevOps PATs retire **2026-12-01**;
-  use Entra ID workload identity federation with `vsce publish --azure-credential`.
-- **Marketplace Participation Policies §3(b)**: the listing and walkthrough may not promote our
-  other IDE offerings. That pitch belongs on the corp site (promptconnext-corp-web).
+Bumping `version` in `apps/vscode/package.json` is the release process — installed extensions auto-update from the registry.
 
-Bumping `version` in `apps/vscode/package.json` is the whole release process — installed
-extensions auto-update from the registry, so there is no manifest to assemble and no channel to
-maintain.
+### MCP server (`apps/mcp`) → GitHub Release
+
+`@promptworkspace/mcp`, binary `promptworkspace-mcp`, config dir `promptworkspace-mcp` (XDG, or `%APPDATA%` on Windows), env overrides `PROMPTWORKSPACE_*`. It ships as a GitHub Release, not to npm (yet); users install the tarball with `npm i -g ./promptworkspace-mcp-<version>.tgz` (see `apps/mcp/README.md`). `pnpm pack` runs the same defaults gate as the extension (above) via `prepack`.
+
+```bash
+pnpm --filter @promptworkspace/mcp build && (cd apps/mcp && pnpm pack)   # → promptworkspace-mcp-<version>.tgz (files: dist only)
+docker run --rm -v "$PWD/apps/mcp:/w" node:22 sh -c 'npm i -g /w/promptworkspace-mcp-<version>.tgz && promptworkspace-mcp --help'
+gh release create mcp-v<version> --repo PromptConnext/PromptWorkspace --target main \
+  apps/mcp/promptworkspace-mcp-<version>.tgz apps/mcp/dist/index.js
+```
+
+**Release tags are product-prefixed** (`vscode-v*`, `mcp-v*`), never bare `v*`.
 
 ---
 
@@ -392,7 +339,7 @@ maintain.
 
 ### 4.1 One-time bucket setup
 
-1. Cloudflare dashboard → **R2 Object Storage** → Create bucket, e.g. `promptconnext-releases`. Location: automatic.
+1. Cloudflare dashboard → **R2 Object Storage** → Create bucket, e.g. `promptworkspace-releases`. Location: automatic.
 2. Create an **R2 API token** (R2 → Manage API Tokens): *Object Read & Write*, scoped to this bucket. Note the Access Key ID / Secret.
 3. **Public access** — two options:
    - **Custom domain (recommended):** bucket → Settings → Public access → Connect Domain → `downloads.<yourdomain>` (the domain must be on Cloudflare DNS). Cloudflare creates the DNS record and proxies/caches automatically.
@@ -414,21 +361,21 @@ aws configure --profile r2          # use the R2 Access Key ID / Secret
 # endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 
 VERSION=0.0.1
-aws s3 cp apps/desktop/src-tauri/target/release/bundle/dmg/PromptConnext_${VERSION}_aarch64.dmg \
-  s3://promptconnext-releases/desktop/${VERSION}/PromptConnext_${VERSION}_macos-arm64.dmg \
+aws s3 cp apps/desktop/src-tauri/target/release/bundle/dmg/PromptWorkspace_${VERSION}_aarch64.dmg \
+  s3://promptworkspace-releases/desktop/${VERSION}/PromptWorkspace_${VERSION}_macos-arm64.dmg \
   --profile r2 --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
   --content-type application/x-apple-diskimage
 ```
 
-Alternatively with Wrangler: `wrangler r2 object put promptconnext-releases/desktop/${VERSION}/... --file=...`.
+Alternatively with Wrangler: `wrangler r2 object put promptworkspace-releases/desktop/${VERSION}/... --file=...`.
 
 ### 4.3 Suggested layout
 
 ```
 desktop/
-  latest.json                        # {"version":"0.0.1","macos-arm64":"https://downloads.../PromptConnext_0.0.1_macos-arm64.dmg"}
+  latest.json                        # {"version":"0.0.1","macos-arm64":"https://downloads.../PromptWorkspace_0.0.1_macos-arm64.dmg"}
   0.0.1/
-    PromptConnext_0.0.1_macos-arm64.dmg
+    PromptWorkspace_0.0.1_macos-arm64.dmg
     checksums.txt                    # shasum -a 256 *.dmg
 ```
 
@@ -438,40 +385,40 @@ Versioned paths are immutable (cache-friendly); `latest.json` is the one mutable
 
 ## 5. DNS summary
 
-| Record | Target | Purpose |
+| Host | Target | Env |
 |---|---|---|
-| `downloads.<domain>` | R2 custom domain (Cloudflare-managed) | Installer downloads |
-| `api.<domain>` (optional, later) | CNAME → Railway service domain (Railway → Settings → Custom Domain) | Stable cloud API URL |
+| `promptworkspace.truthledgers.com` | CNAME → Vercel (`promptworkspace-web`, branch `develop`) | develop |
+| `promptconnext.truthledgers.com` | CNAME → Vercel (`promptconnext-corp-web`, branch `develop`) | develop |
+| `promptworkspace-api.truthledgers.com` | CNAME → Northflank `promptworkspace` + verification TXT | develop |
+| `workspace.promptconnext.com` | CNAME → Vercel (`promptworkspace-web`, Production) | main |
+| `promptconnext.com` / `www` | A `76.76.21.21` (or Vercel ALIAS) / CNAME → Vercel, `www` 308 → apex | main |
+| `workspace-api.promptconnext.com` | CNAME → Northflank `promptworkspace-prod` + verification TXT | main |
 
-Using Railway's default `*.up.railway.app` URL is fine to start; add `api.<domain>` before hardcoding the URL into distributed desktop builds — a custom domain lets you migrate hosts without shipping a new app version.
+Plus each mail domain's SPF/DKIM records exactly as the SMTP provider displays them. CAA, if present, must allow `letsencrypt.org`.
 
 ---
 
 ## 6. CI/CD
 
-**Shipped.** `.github/workflows/ci.yml` runs on every `pull_request` and on `push` to `main`, gated by a computed path-diff so an unrelated change never runs an unrelated suite (a job-level `if:` reading a single `changes` job's output, not GitHub's workflow-level `paths:` filter, so one workflow can gate its jobs individually). Six jobs: `cloud` (`ruff check .` then `pytest`, plus the repository contract suite — see below), `engine`, `web`, `vscode`, `mcp`, and `pz-cloud` (the shared library `apps/vscode` and `apps/mcp` both depend on — its own job exists so a change there is never invisible even if a consumer's path filter is narrower). `.github/workflows/cloud-contract.yml` is separate: it brings up a local Supabase stack (`supabase start` + `scripts/migrate.py apply`) and runs the `contract` and `rls` marked test suites — the only place the cloud's two Repository adapters (in-memory and Supabase) and the row-level-security grants are actually exercised against real Postgres — nightly, on demand, and on any change under `apps/cloud/app/db/**`, `apps/cloud/migrations/**`, or `apps/cloud/tests/{contract,rls}/**`.
+`.github/workflows/ci.yml` runs on every `pull_request` and on `push` to `main` and `develop`, gated by a computed path-diff so an unrelated change never runs an unrelated suite. Jobs: `cloud` (`ruff check .` then `pytest`), `engine`, `web`, `vscode`, `mcp`, `cloud-client`, `rename-gate` (the PromptWorkspace rename gate, `scripts/rename/check.py` plus its fixture tests, unfiltered), and **`ci-required`**, an always-running aggregate that fails if any job it needs failed or was cancelled. Branch protection requires `ci-required` only, because a path-filtered job that was skipped would otherwise count as a missing check.
 
-Neither workflow deploys. `railway up`/`vercel deploy` behind a manual approval gate (GitHub Environments) remains **not yet built** — Railway's own git-push auto-deploy and Vercel's own git integration are what actually ships `apps/cloud`/`apps/web` (and the separate corp-web repo) today; CI is verification only.
+`.github/workflows/cloud-contract.yml` brings up a local Supabase stack (`supabase start` + `scripts/migrate.py apply`) and runs the `contract` and `rls` suites — nightly, on demand, and on any change under `apps/cloud/app/db/**`, `apps/cloud/migrations/**` or `apps/cloud/tests/{contract,rls}/**`, on PRs and on pushes to `main`/`develop`. It is path-filtered at workflow level, so it cannot be a required check.
 
-**Desktop (release on tag `v*`):** unchanged from before CI existed — `.github/workflows/desktop-build.yml`, matrix `macos-14` (arm64) now; add `windows-latest` / `ubuntu-latest` after closing the §3.2 gaps. Each job: install Node 24 + pnpm + Rust → `pnpm tauri build` → upload artifacts to R2 → update `latest.json` last, only after all uploads succeed. Add checksum generation, and signing/notarization secrets once the Apple Developer account exists. (`apps/desktop-theia`'s and its spike's CI workflows are retired — see the Layout section's notice in `CLAUDE.md` — but `apps/desktop-theia` itself is not yet deleted; don't confuse the two.)
+Neither workflow deploys: Vercel's git integration and Northflank's per-service build settings do. `desktop-build.yml` is `workflow_dispatch`-only.
 
-**Migrations:** keep applying manually via `scripts/migrate.py apply` (§2.2) before deploying code that needs them; automate later with a pre-deploy job. Three migrations invert that rule — **0031, 0032 and 0036 must be applied after the code deploy, not before** (§2.2 has the sequence and the reason for each). A pre-deploy job that applied everything pending would take production down on the deploy that first carries any of them, so whatever automates this eventually has to be able to hold a migration back until the rollout completes — not just skip ahead to "whatever's pending."
+**Migrations:** apply manually with `scripts/migrate.py apply --var embed_dim=<N>` (§2.2) before deploying code that needs them, develop first, then production with the identical command.
 
 ---
 
 ## 7. Production checklist
 
-- [ ] `scripts/migrate.py apply` run against the target database, `schema_version` on `/health` matches — including 0023 with its required `--var embed_dim=<N>` (§2.2), followed by a reindex
-- [ ] **0031 and 0032 applied only after the code deploy completed** (§2.2) — 0031 revokes the seven graph tables from `authenticated`, the role the pre-plan-0014 code writes as, so applying it ahead of the rollout fails every graph write until the rollout finishes. 0032 cannot be separated from it (`migrate.py apply` has no per-file selection) and breaks the tracker routes in either order; step 3 picks the shorter window. 0030, the grant-only partner, is safe to apply with everything else beforehand and should be
-- [ ] After 0032: each workspace that had Jira configured has **re-saved** its integration (`POST /workspaces/{id}/integrations/jira`) and pasted the revealed `webhook_secret` into the Jira webhook's *Secret* field — the migration creates no bindings and backfills none, so until then `mirror_task` answers `integration_not_configured` and inbound deliveries are acked-and-ignored (§2.2)
-- [ ] After 0031: a plain member's own JWT is refused at the PostgREST data API for `pz_tasks`/`pz_stage_documents`/`pz_discussions` (`42501`). `pytest -m rls` asserts this against a disposable stack; `.github/workflows/cloud-contract.yml` runs it. On the production database the equivalent check is that `information_schema.role_table_grants` returns no `authenticated` or `anon` row for those seven tables
-- [ ] `pz_schema_migrations` reflects this database's real history — for a database that had migrations applied before the ledger existed, that means `scripts/migrate.py adopt` (§2.2) ran once, not that it was silently skipped
-- [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`
-- [ ] service_role key set only in Railway variables — never in the repo or client
-- [ ] Replicas = 1 (in-process presence/rate-limit state)
-- [ ] `CORS_ORIGINS` includes the packaged app origin, excludes wildcards
+- [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `/health.schema_version` is `"0002_pw_baseline"`; the service_role privilege check prints `t` (§2.2)
+- [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`, `RAG_KEY_ENCRYPTION_KEY` set (the service refuses to boot without it) and backed up offline
+- [ ] Secret key set only in the Northflank runtime variables — never in the repo or a client; clients get only the publishable key
+- [ ] Instances = 1 (in-process presence/rate-limit state)
+- [ ] `CORS_ORIGINS` and `WEB_APP_URL` are the environment's own web origin; `PUBLIC_API_URL` its own API origin
+- [ ] Supabase Auth: Site URL and `/**` Redirect URLs for the environment's web origin; custom SMTP set; prod backups on; signup closed once the team has registered (members join by invite)
 - [ ] `SENTRY_DSN` set on the cloud service and `NEXT_PUBLIC_SENTRY_DSN` on both Vercel projects (`apps/web`, promptconnext-corp-web) — unset means the SDK never initialises and the instance runs blind; the cloud logs a startup warning to that effect
-- [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web/corp equivalent is `src/lib/sentry.ts` in each app, covered by `src/lib/sentry.test.ts`. The URL rules are the ones worth re-reading before adding a route: a credential in a path or fragment has no key name for a denylist to match, which is how `/invitations/{token}/accept` and Supabase's `#access_token=` recovery link both leaked in review
-- [ ] DMG uploaded to versioned R2 path + `checksums.txt` + `latest.json` updated
-- [ ] Download page includes the Gatekeeper workaround note (until signing exists)
-- [ ] Version bumped in `tauri.conf.json` and tagged in git
+- [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web equivalent is `src/lib/sentry.ts`, covered by `src/lib/sentry.test.ts`
+- [ ] The production web bundle contains no `truthledgers`; the staging bundle no `workspace-api.promptconnext.com`
+- [ ] VSIX installed with no overrides signs in against production before `vsce publish`

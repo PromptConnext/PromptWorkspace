@@ -53,7 +53,7 @@ test("runAgentTask rejects with AgentError('no-agent') when no adapter resolves"
   );
 });
 
-// The "custom" adapter (PROMPTCONNEXT_AGENT_CMD) is also how tests inject a
+// The "custom" adapter (PROMPTWORKSPACE_AGENT_CMD) is also how tests inject a
 // fake agent CLI (see adapters/custom.ts) — it lets the "agent-crash" and
 // "no-changes" throw sites be exercised deterministically without a real
 // agent CLI installed.
@@ -70,8 +70,8 @@ async function withTempGitRepo(fn: (dir: string) => Promise<void>): Promise<void
 }
 
 test("runAgentTask rejects with AgentError('agent-crash') when the agent CLI exits non-zero", async () => {
-  const prevCmd = process.env.PROMPTCONNEXT_AGENT_CMD;
-  process.env.PROMPTCONNEXT_AGENT_CMD = "exit 1";
+  const prevCmd = process.env.PROMPTWORKSPACE_AGENT_CMD;
+  process.env.PROMPTWORKSPACE_AGENT_CMD = "exit 1";
   try {
     await withTempGitRepo(async (dir) => {
       await assert.rejects(
@@ -84,14 +84,14 @@ test("runAgentTask rejects with AgentError('agent-crash') when the agent CLI exi
       );
     });
   } finally {
-    if (prevCmd === undefined) delete process.env.PROMPTCONNEXT_AGENT_CMD;
-    else process.env.PROMPTCONNEXT_AGENT_CMD = prevCmd;
+    if (prevCmd === undefined) delete process.env.PROMPTWORKSPACE_AGENT_CMD;
+    else process.env.PROMPTWORKSPACE_AGENT_CMD = prevCmd;
   }
 });
 
 test("runAgentTask rejects with AgentError('no-changes') when the agent CLI makes no changes", async () => {
-  const prevCmd = process.env.PROMPTCONNEXT_AGENT_CMD;
-  process.env.PROMPTCONNEXT_AGENT_CMD = "true";
+  const prevCmd = process.env.PROMPTWORKSPACE_AGENT_CMD;
+  process.env.PROMPTWORKSPACE_AGENT_CMD = "true";
   try {
     await withTempGitRepo(async (dir) => {
       await assert.rejects(
@@ -104,7 +104,7 @@ test("runAgentTask rejects with AgentError('no-changes') when the agent CLI make
       );
     });
   } finally {
-    if (prevCmd === undefined) delete process.env.PROMPTCONNEXT_AGENT_CMD;
-    else process.env.PROMPTCONNEXT_AGENT_CMD = prevCmd;
+    if (prevCmd === undefined) delete process.env.PROMPTWORKSPACE_AGENT_CMD;
+    else process.env.PROMPTWORKSPACE_AGENT_CMD = prevCmd;
   }
 });

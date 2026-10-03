@@ -12,7 +12,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
@@ -34,7 +34,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       vscode: ${{ steps.filter.outputs.vscode }}
       mcp: ${{ steps.filter.outputs.mcp }}
-      pz_cloud: ${{ steps.filter.outputs.pz_cloud }}
+      cloud_client: ${{ steps.filter.outputs.cloud_client }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -88,11 +88,12 @@ jobs:
           emit cloud    'apps/cloud/' "$ci_re"
           emit engine   'apps/engine/' "$root_re"
           emit web      'apps/web/' "$root_re"
-          # apps/vscode and apps/mcp both consume packages/pz-cloud via
+          # apps/vscode and apps/mcp both consume packages/cloud-client via
           # workspace:*, so a breaking change there must fail in both.
-          emit vscode   'apps/vscode/' 'packages/pz-cloud/' "$root_re"
-          emit mcp      'apps/mcp/' 'packages/pz-cloud/' "$root_re"
-          emit pz_cloud 'packages/pz-cloud/' "$root_re"
+          emit vscode   'apps/vscode/' 'packages/cloud-client/' "$root_re"
+          emit mcp      'apps/mcp/' 'packages/cloud-client/' "$root_re"
+          # Its defaults test reads apps/vscode/package.json's four defaults.
+          emit cloud_client 'packages/cloud-client/' 'apps/vscode/package\.json' "$root_re"
 
   cloud:
     needs: changes
@@ -131,10 +132,8 @@ jobs:
           cache: pnpm
       # node-pty ships prebuilds for darwin and win32 only, so on Linux its
       # install script falls through to `node-gyp rebuild` and compiles from
-      # source. The filter keeps that to the engine's own copy and skips
-      # apps/desktop-theia's node-pty beta, whose postinstall shells out to
-      # node-gyp's compile_commands generator and fails on a modern Python.
-      - run: pnpm install --frozen-lockfile --filter @promptconnext/engine...
+      # source. The filter keeps that to the engine's own copy.
+      - run: pnpm install --frozen-lockfile --filter @promptworkspace/engine...
       - run: pnpm --dir apps/engine typecheck
       - run: pnpm --dir apps/engine test
 
@@ -149,7 +148,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @promptconnext/web...
+      - run: pnpm install --frozen-lockfile --filter @promptworkspace/web...
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
 
@@ -164,7 +163,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter promptconnext-vscode...
+      - run: pnpm install --frozen-lockfile --filter promptworkspace...
       - run: pnpm --dir apps/vscode typecheck
       # `pretest` runs scripts/check-feature-detection.mjs automatically.
       - run: pnpm --dir apps/vscode test
@@ -185,17 +184,17 @@ jobs:
           # unflagged type stripping Node 22.18+ provides.
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @promptconnext/mcp...
+      - run: pnpm install --frozen-lockfile --filter @promptworkspace/mcp...
       - run: pnpm --dir apps/mcp typecheck
       - run: pnpm --dir apps/mcp test
       - run: pnpm --dir apps/mcp build
 
-  # apps/vscode and apps/mcp already gate on packages/pz-cloud/**, so this job
+  # apps/vscode and apps/mcp already gate on packages/cloud-client/**, so this job
   # is redundant for most changes. It exists so the shared library is still
   # covered on its own terms if either consumer's filter is ever narrowed.
-  pz-cloud:
+  cloud-client:
     needs: changes
-    if: needs.changes.outputs.pz_cloud == 'true'
+    if: needs.changes.outputs.cloud_client == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -204,6 +203,44 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @promptconnext/pz-cloud...
-      - run: pnpm --dir packages/pz-cloud typecheck
-      - run: pnpm --dir packages/pz-cloud test
+      - run: pnpm install --frozen-lockfile --filter @promptworkspace/cloud-client...
+      - run: pnpm --dir packages/cloud-client typecheck
+      - run: pnpm --dir packages/cloud-client test
+
+  # The PromptWorkspace rename gate: no token the rename map rewrites may
+  # survive outside scripts/rename-allowlist-patterns.txt. Unfiltered and
+  # cheap (stdlib Python over `git ls-files`), so it runs on every change.
+  rename-gate:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: build_baseline.py --check regenerates the
+      # migration baseline from tag pre-promptworkspace-rename.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - run: python -m unittest scripts/rename/test_rename.py
+      - run: python scripts/rename/check.py
+      - run: python scripts/baseline/build_baseline.py --check
+
+  # The one required status check (ruleset `protect-main`). Path-filtered jobs
+  # report "skipped" when their app is untouched, which a required check would
+  # treat as missing, so branch protection requires this aggregate instead: it
+  # always runs and fails if any job it needs failed or was cancelled.
+  ci-required:
+    if: always()
+    needs: [changes, cloud, engine, web, vscode, mcp, cloud-client, rename-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              failure|cancelled) echo "a required job ended in $r"; exit 1 ;;
+            esac
+          done

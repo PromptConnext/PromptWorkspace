@@ -1,6 +1,6 @@
 // Run:  node --test apps/mcp/test/tools.test.ts
 //
-// Same strategy as packages/pz-cloud's suite and apps/engine's: no mocking
+// Same strategy as packages/cloud-client's suite and apps/engine's: no mocking
 // library, a real http.createServer on port 0 standing in for the cloud, and the
 // code under test genuinely making requests. The tools are driven through the
 // SDK's own in-memory transport rather than called directly, so what is asserted
@@ -25,13 +25,14 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   CloudClient,
+  PRODUCTION_DEFAULTS,
   SessionStore,
   type AssignedTask,
   type LoggerLike,
   type QueueEntry,
   type SecretsLike,
   type StorageLike,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 import { createStatusQueue } from "../src/cloud.ts";
 import { readConfig } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
@@ -444,7 +445,7 @@ test("a folder whose remote matches no project is a tool error naming the remote
     const result = await call("get_project_rules", { workspace_root: root });
     assert.equal(result.isError, true);
     const body = (result.content[0] as { text: string }).text;
-    assert.match(body, /No PromptConnext project's repository matches the git remote/);
+    assert.match(body, /No PromptWorkspace project's repository matches the git remote/);
     assert.match(body, /someone\/unrelated/);
   });
 });
@@ -467,7 +468,7 @@ test("an unknown project_id is refused rather than silently falling back to the 
     assert.equal(result.isError, true);
     assert.match(
       (result.content[0] as { text: string }).text,
-      /No PromptConnext project proj-9 is visible to you/,
+      /No PromptWorkspace project proj-9 is visible to you/,
     );
   });
 });
@@ -481,7 +482,7 @@ test("two projects sharing one remote ask the developer to disambiguate", async 
       const body = (result.content[0] as { text: string }).text;
       // Guessing between them would hand the agent another project's rules and
       // look like it worked.
-      assert.match(body, /2 PromptConnext projects share the git remote/);
+      assert.match(body, /2 PromptWorkspace projects share the git remote/);
       assert.match(body, /proj-1: Uploader/);
       assert.match(body, /proj-2: Uploader fork/);
     },
@@ -701,13 +702,21 @@ test("close_task refuses a status outside the one vocabulary", async () => {
 
 test("config precedence is default, then file, then environment", () => {
   const withEnv = readConfig({
-    PROMPTCONNEXT_MCP_CONFIG_DIR: "/nonexistent-promptconnext-mcp",
-    PROMPTCONNEXT_CLOUD_API_URL: "http://localhost:8080/",
+    PROMPTWORKSPACE_MCP_CONFIG_DIR: "/nonexistent-promptworkspace-mcp",
+    PROMPTWORKSPACE_CLOUD_API_URL: "http://localhost:8080/",
   } as NodeJS.ProcessEnv);
   // Env wins, and a trailing slash is trimmed the way apps/vscode trims it.
   assert.equal(withEnv.cloudApiUrl, "http://localhost:8080");
-  // Anything unset falls back to the same default apps/vscode ships.
-  assert.equal(withEnv.cloudWebUrl, "https://prompt-zone-web-app.vercel.app");
-  assert.equal(withEnv.supabaseUrl, "");
-  assert.equal(withEnv.supabaseAnonKey, "");
+  // Anything unset falls back to the shared production defaults apps/vscode ships.
+  assert.equal(withEnv.cloudWebUrl, PRODUCTION_DEFAULTS.cloudWebUrl);
+  assert.equal(withEnv.supabaseUrl, PRODUCTION_DEFAULTS.supabaseUrl);
+  assert.equal(withEnv.supabaseAnonKey, PRODUCTION_DEFAULTS.supabaseAnonKey);
+});
+
+test("with no file and no env the config is exactly the production defaults", () => {
+  const bare = readConfig({
+    PROMPTWORKSPACE_MCP_CONFIG_DIR: "/nonexistent-promptworkspace-mcp",
+  } as NodeJS.ProcessEnv);
+  assert.deepEqual(bare, { ...PRODUCTION_DEFAULTS });
+  assert.equal(bare.cloudApiUrl, "https://workspace-api.promptconnext.com");
 });

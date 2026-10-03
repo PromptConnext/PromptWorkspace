@@ -1,4 +1,4 @@
-# PromptConnext Cloud — container image for Cloud Run / any container host.
+# PromptWorkspace Cloud — container image for Cloud Run / any container host.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \

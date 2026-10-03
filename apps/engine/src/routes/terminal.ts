@@ -1,6 +1,6 @@
 // Integrated terminal (ADR 0007): a real PTY in the project directory over a
-// WebSocket. Developers implement inside PromptConnext their own way — their own
-// agent CLI, their own auth — instead of PromptConnext driving an agent for them.
+// WebSocket. Developers implement inside PromptWorkspace their own way — their own
+// agent CLI, their own auth — instead of PromptWorkspace driving an agent for them.
 import type { Hono } from "hono";
 import type { UpgradeWebSocket } from "hono/ws";
 import pty from "node-pty";
