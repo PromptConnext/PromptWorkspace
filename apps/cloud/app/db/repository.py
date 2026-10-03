@@ -49,6 +49,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageInputs,
     Task,
     TaskLink,
     TaskStatus,
@@ -96,6 +97,14 @@ class CrossProjectWrite(ValueError):
         self.entity_type = entity_type
         self.entity_id = entity_id
         self.owner_project_id = owner_project_id
+
+
+class StageInputsUnavailable(RuntimeError):
+    """The stage-inputs store isn't there — migration 0003 not yet applied to
+    this database. Migrations are applied by hand (docs/DEPLOYMENT.md §2.2),
+    so code can arrive first; reads then come back empty and a write maps to
+    503 `stage_inputs_unavailable` (app/api/stage_inputs.py) instead of a
+    500."""
 
 
 class Repository(abc.ABC):
@@ -716,6 +725,21 @@ class Repository(abc.ABC):
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
     ) -> StageDocument: ...
 
+    @abc.abstractmethod
+    def get_stage_inputs(self, project_id: str, stage: str) -> StageInputs | None: ...
+
+    @abc.abstractmethod
+    def upsert_stage_inputs(
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        inputs: dict[str, str],
+        user_id: str,
+    ) -> StageInputs:
+        """Replace (not merge) the stage's answers. Raises
+        StageInputsUnavailable when the store doesn't exist yet."""
+
     # -- repository analysis (plan 0027) ---------------------------------- #
     @abc.abstractmethod
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None: ...
@@ -766,6 +790,8 @@ class InMemoryRepository(Repository):
         self._generation_runs: dict[str, GenerationRun] = {}
         # project_id -> stage -> StageDocument (Planner editable-markdown)
         self._stage_documents: dict[str, dict[str, StageDocument]] = {}
+        # (project_id, stage) -> StageInputs (Planner form answers)
+        self._stage_inputs: dict[tuple[str, str], StageInputs] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
 
@@ -1725,6 +1751,29 @@ class InMemoryRepository(Repository):
         )
         store[stage] = doc
         return copy.deepcopy(doc)
+
+    def get_stage_inputs(self, project_id: str, stage: str) -> StageInputs | None:
+        row = self._stage_inputs.get((project_id, stage))
+        return copy.deepcopy(row) if row else None
+
+    def upsert_stage_inputs(
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        inputs: dict[str, str],
+        user_id: str,
+    ) -> StageInputs:
+        row = StageInputs(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            stage=stage,
+            inputs=dict(inputs),
+            updated_by=user_id,
+            updated_at=utcnow(),
+        )
+        self._stage_inputs[(project_id, stage)] = row
+        return copy.deepcopy(row)
 
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
         analysis = self._repo_analyses.get(project_id)
