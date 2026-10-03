@@ -9,8 +9,11 @@ identical" instruction.
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 from typing import Literal
+
+from app.models.schemas import utcnow
 
 StageKind = Literal["constitution", "specify", "plan", "tasks"]
 
@@ -44,11 +47,17 @@ def _template(name: str) -> str:
     return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
 
 
-def driver_prompt(kind: StageKind, existing_codebase: bool = False) -> str:
+def driver_prompt(
+    kind: StageKind, existing_codebase: bool = False, today: date | None = None
+) -> str:
     """`existing_codebase` is set for a project imported from a repository
     that has a codebase baseline (plan 0027): `plan` and `tasks` then describe
-    changes to that code rather than a fresh build. Every other project's
-    prompt is byte-identical to what it was before the flag existed."""
+    changes to that code rather than a fresh build. With it unset, the prompt
+    carries none of the codebase lines.
+
+    `today` (UTC by default) is stated so the templates' date fields are not
+    filled with a date the model makes up."""
+    today = today or utcnow().date()
     doc = _template(_STAGE_TEMPLATE[kind])
     lines = [
         f"You are the {_STAGE_ROLE[kind]} engine inside PromptWorkspace.",
@@ -61,7 +70,14 @@ def driver_prompt(kind: StageKind, existing_codebase: bool = False) -> str:
         "line containing a __SPECKIT_COMMAND_*__ marker (including the 'Note: This template is "
         "filled in by...' line) is template metadata, not part of the document — delete the "
         "entire line, don't just leave the marker unresolved.",
+        f"Today's date is {today.isoformat()}; use it for any date field in the template.",
     ]
+    if kind in ("plan", "tasks"):
+        lines.append(
+            "The [specification] in CONTEXT defines what is being built, and its title is the "
+            "feature name. The policy scope, the constitution and any codebase baseline are "
+            "constraints on how to build it; they must never replace it as the subject."
+        )
     if kind == "tasks":
         lines.append(
             "Every task line MUST keep the exact checklist shape `- [ ] T001 [P] Description` "
