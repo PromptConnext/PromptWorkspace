@@ -103,9 +103,18 @@ def test_real_baseline_declares_embed_dim():
     assert migrate.Migration(BASELINE).required_vars() == ["embed_dim"]
 
 
-def test_real_migrations_are_the_two_file_baseline():
-    names = [m.filename for m in migrate.discover_migrations(migrate.MIGRATIONS_DIR_DEFAULT)]
-    assert names == [LEDGER.name, BASELINE.name]
+def test_real_migrations_start_with_the_two_file_baseline():
+    """Ledger, then baseline, then additive migrations from 0003 on."""
+    migrations = migrate.discover_migrations(migrate.MIGRATIONS_DIR_DEFAULT)
+    assert [m.filename for m in migrations[:2]] == [LEDGER.name, BASELINE.name]
+    assert all(m.number >= 3 for m in migrations[2:])
+    assert "0003_pw_stage_inputs.sql" in [m.filename for m in migrations]
+
+
+def test_additive_migrations_need_no_vars_and_no_own_transaction():
+    for m in migrate.discover_migrations(migrate.MIGRATIONS_DIR_DEFAULT)[2:]:
+        assert m.required_vars() == [], m.filename
+        assert m.is_self_transactional() is False, m.filename
 
 
 def test_real_ledger_is_migration_1():

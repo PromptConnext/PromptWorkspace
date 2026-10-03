@@ -240,6 +240,41 @@ def test_member_cannot_write_a_repo_analysis_directly(
     _denied(read)
 
 
+def test_member_cannot_write_stage_inputs_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Migration 0003: `pw_stage_inputs` is born service-only. The answers to
+    `plan` and `constitution` are admin-only to write in
+    `app/api/_guards.py::require_stage_access` and nowhere else; the default
+    privileges would have handed every member a direct write around it."""
+    res = http.post(
+        f"{target.rest}/pw_stage_inputs",
+        headers=target.user_headers(fixture.member.access_token),
+        json={
+            "project_id": fixture.project_id,
+            "workspace_id": fixture.workspace_id,
+            "stage": "plan",
+            "inputs": {"language": "planted by a member, around the API"},
+            "updated_by": fixture.member.id,
+        },
+    )
+    _denied(res)
+    check = http.get(
+        f"{target.rest}/pw_stage_inputs",
+        headers=target.service_headers(),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's direct stage-inputs write landed"
+
+    read = http.get(
+        f"{target.rest}/pw_stage_inputs",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    _denied(read)
+
+
 def test_member_cannot_read_graph_tables_directly_either(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
