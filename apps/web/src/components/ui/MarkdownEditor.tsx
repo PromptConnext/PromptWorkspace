@@ -8,11 +8,11 @@ type Mode = "raw" | "preview";
 
 /**
  * The mode an editor opens in when nobody has picked one: a document that
- * already says something is read first, an empty one (or one still arriving)
+ * already says something is read first, an empty one
  * is something to write in.
  */
-export function defaultEditorMode(value: string, streaming = false): Mode {
-  return value.trim().length > 0 && !streaming ? "preview" : "raw";
+export function defaultEditorMode(value: string): Mode {
+  return value.trim().length > 0 ? "preview" : "raw";
 }
 
 export function MarkdownEditor({
@@ -22,7 +22,6 @@ export function MarkdownEditor({
   saving = false,
   error = null,
   readOnly = false,
-  streaming = false,
   label,
 }: {
   value: string;
@@ -31,16 +30,13 @@ export function MarkdownEditor({
   saving?: boolean;
   error?: string | null;
   readOnly?: boolean;
-  /** True while the document is being generated into — keeps the editor on
-   *  Raw rather than flipping to a preview of half a document. */
-  streaming?: boolean;
   /** Accessible name for the document, e.g. "Specification document". */
   label?: string;
 }) {
   // Null until someone presses Raw or Preview: the default follows the content
   // (see defaultEditorMode), an explicit choice sticks.
   const [chosen, setChosen] = useState<Mode | null>(null);
-  const mode = chosen ?? defaultEditorMode(value, streaming);
+  const mode = chosen ?? defaultEditorMode(value);
 
   const toggleClass = (on: boolean) =>
     `rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${

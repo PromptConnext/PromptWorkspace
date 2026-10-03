@@ -20,17 +20,11 @@ describe("MarkdownEditor", () => {
     expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
-  it("stays on raw while the document is streaming in", () => {
-    render(<MarkdownEditor value="# Hel" onChange={vi.fn()} onSave={vi.fn()} streaming />);
-    expect(screen.getByRole("textbox")).toHaveValue("# Hel");
-  });
-
-  it("picks the default mode from content and streaming", () => {
+  it("picks the default mode from content", () => {
     expect(defaultEditorMode("")).toBe("raw");
     expect(defaultEditorMode("  \n")).toBe("raw");
     expect(defaultEditorMode("# Doc")).toBe("preview");
-    expect(defaultEditorMode("# Doc", true)).toBe("raw");
-  });
+    });
 
   it("keeps an explicit Raw choice once content arrives", () => {
     const { rerender } = render(<MarkdownEditor value="" onChange={vi.fn()} onSave={vi.fn()} />);

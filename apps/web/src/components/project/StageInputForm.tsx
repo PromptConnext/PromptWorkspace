@@ -30,6 +30,8 @@ export type PrefillOption = {
   busyLabel: string;
   ariaLabel: string;
   description: string;
+  /** Said instead of the generic text when the cloud 409s no_source_material. */
+  noSourceError?: string;
   /** Set when there is nothing to draft from yet — the button stays visible
    *  but disabled, and this says why. */
   disabledReason?: string;
@@ -132,7 +134,11 @@ export function StageInputForm({
       );
     } catch (err) {
       const detail = (err as Error).message;
-      setDraftError(PREFILL_ERROR_TEXT[detail] ?? detail);
+      setDraftError(
+        (detail === "no_source_material" && prefill?.noSourceError) ||
+          PREFILL_ERROR_TEXT[detail] ||
+          detail,
+      );
     } finally {
       setDrafting(false);
     }

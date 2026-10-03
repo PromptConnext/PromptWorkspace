@@ -53,7 +53,7 @@ type StageMeta = {
 const STAGE_ORDER: StageMeta[] = [
   {
     stage: "constitution",
-    label: "Step 1 · Project rules",
+    label: "Project rules (do this first)",
     buttonLabel: "Generate rules",
     blurb:
       "Do this first. The project's standing rules. They steer every later stage and become AGENTS.md in the " +
@@ -70,7 +70,7 @@ const STAGE_ORDER: StageMeta[] = [
   },
   {
     stage: "plan",
-    label: "Step 2 · Implementation plan",
+    label: "Implementation plan",
     buttonLabel: "Generate plan",
     blurb:
       "Then this — the plan is written against the specification and the rules above. These fields become the plan's Technical Context — the stack, " +
@@ -137,7 +137,7 @@ const PLAN_HELPER = "Not technical? Use Suggest from Spec, then review.";
 // Advice, not a lock: generate/plan runs without a constitution
 // (app/api/generation.py only folds one in when it exists).
 const CONSTITUTION_RECOMMENDATION =
-  "Recommended: generate Step 1 · Project rules first — the plan follows them when they exist.";
+  "Recommended: generate the project rules first — the plan follows them when they exist.";
 
 const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
   STAGE_ORDER.map((meta) => [meta.stage, meta]),
@@ -470,7 +470,6 @@ function StageSection({
             saving={docSaving}
             error={docError}
             readOnly={readOnly}
-            streaming={status === "generating"}
             label={EDITOR_LABEL[stage]}
           />
           {docUpdatedAt && (
@@ -753,7 +752,7 @@ export function Planner({
     if (ADMIN_ONLY_STAGES.includes(meta.requires) && !isTechLead) {
       return `Waiting on ${label} — your Tech Lead generates it.`;
     }
-    return `Waiting on ${label} — generate that document first.`;
+    return `Waiting on ${label} — generate it first.`;
   }
 
   // What each tab's progress mark reads. Foundation's inputs are optional, so
@@ -761,6 +760,7 @@ export function Planner({
   function tabDone(key: string): boolean {
     switch (key) {
       case "foundation":
+        if (analysisRequired && analysis?.status !== "baseline_ready") return false;
         return hasPolicyScope(project) || hasPrd === true;
       case "specify":
         return docPresent.specify === true;
@@ -796,6 +796,8 @@ export function Planner({
         busyLabel: "Reading the PRD…",
         ariaLabel: `Draft the ${stage} fields from the PRD`,
         description: `Fills the blank fields from the uploaded document${editNote}`,
+        noSourceError:
+          "The uploaded PRD has no readable text (scanned PDF?). Upload a text PDF or Markdown.",
       };
     }
     if (baselineReady) {

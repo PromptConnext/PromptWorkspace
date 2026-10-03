@@ -632,6 +632,21 @@ describe("Planner", () => {
     expect(screen.queryByText(/analyze the repository first/i)).not.toBeInTheDocument();
   });
 
+  it("does not mark Foundation done while a required analysis has no baseline", async () => {
+    const scoped = { ...IMPORTED, policy_scope: { selected: ["gdpr"], custom_text: "" } };
+    mockImported("none");
+    const { unmount } = render(
+      <Planner project={makeProject(scoped)} projectId="p1" onChange={vi.fn()} />,
+    );
+    await screen.findByText("Codebase analysis");
+    expect(screen.queryByRole("tab", { name: /foundation completed/i })).not.toBeInTheDocument();
+    unmount();
+
+    mockImported("baseline_ready");
+    render(<Planner project={makeProject(scoped)} projectId="p1" onChange={vi.fn()} />);
+    expect(await screen.findByRole("tab", { name: /foundation completed/i })).toBeInTheDocument();
+  });
+
   it("shows no analysis panel for a project started from scratch", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
     await screen.findByRole("tab", { name: /plan/i });
@@ -838,7 +853,7 @@ describe("Planner", () => {
       await screen.findByRole("button", { name: /draft the specify fields from the prd/i }),
     );
 
-    expect(await screen.findByText(/upload a prd \(or write the specification\) first/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no readable text \(scanned pdf\?\)/i)).toBeInTheDocument();
   });
 
   it("warns that the existing document couldn't be loaded instead of showing an empty editor", async () => {
@@ -932,18 +947,18 @@ describe("Planner", () => {
     expect(screen.getByText(/nothing to suggest from yet/i)).toBeInTheDocument();
   });
 
-  it("labels the Plan tab's two generations as ordered steps", async () => {
+  it("labels the Plan tab's two generations without a second step sequence", async () => {
     mockStageDocuments({ specify: "# Spec" });
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
     await screen.findByRole("tab", { name: /plan/i });
     openTab(/2 · plan/i);
 
-    expect(screen.getByRole("heading", { name: "Step 1 · Project rules" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Project rules (do this first)" })).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Step 2 · Implementation plan" }),
+      screen.getByRole("heading", { name: "Implementation plan" }),
     ).toBeInTheDocument();
     // The cloud plans without the rules, so missing rules advise rather than lock.
-    expect(await screen.findByText(/recommended: generate step 1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/recommended: generate the project rules/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/language \/ runtime version/i)).toBeEnabled();
   });
 
@@ -953,7 +968,7 @@ describe("Planner", () => {
     await screen.findByRole("tab", { name: /plan/i });
     openTab(/2 · plan/i);
     await screen.findByRole("region", { name: "Project rules document" });
-    expect(screen.queryByText(/recommended: generate step 1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/recommended: generate the project rules/i)).not.toBeInTheDocument();
   });
 
   it("names every stage editor for assistive technology", async () => {
