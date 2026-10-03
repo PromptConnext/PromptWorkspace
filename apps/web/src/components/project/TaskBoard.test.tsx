@@ -16,14 +16,25 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 // A URL that answers back: the board reads its filters and open task from the
-// query string, so a write has to re-render the board the way Next would.
-const nav = vi.hoisted(() => ({ query: "", listeners: new Set<() => void>() }));
-const router = vi.hoisted(() => ({
-  replace: (url: string) => {
-    nav.query = url.split("?")[1] ?? "";
-    nav.listeners.forEach((notify) => notify());
-  },
-}));
+// query string and writes through `history.replaceState`, so a write has to
+// re-render the board the way Next's patched history does.
+const nav = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const replaceState = window.history.replaceState.bind(window.history);
+  window.history.replaceState = (data, unused, url) => {
+    replaceState(data, unused, url);
+    listeners.forEach((notify) => notify());
+  };
+  return {
+    listeners,
+    get query() {
+      return window.location.search.slice(1);
+    },
+    set query(q: string) {
+      window.history.replaceState(null, "", q ? `/w/ws1/p/p1?${q}` : "/w/ws1/p/p1");
+    },
+  };
+});
 
 vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -34,7 +45,6 @@ vi.mock("next/navigation", async () => {
   return {
     useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => nav.query)),
     usePathname: () => "/w/ws1/p/p1",
-    useRouter: () => router,
   };
 });
 
@@ -242,6 +252,71 @@ describe("TaskBoard assignment", () => {
     await userEvent.click(within(notifications()).getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(assignTask).toHaveBeenCalledTimes(2));
     expect(assignTask.mock.calls[1][2]).toBeNull();
+  });
+
+  it("does not undo an assignment that has changed since", async () => {
+    const t1 = task({ id: "t1", feature_tag: "T001" });
+    assignTask.mockResolvedValueOnce({ ...t1, assigned_user_id: "u2", updated_at: "2026-08-09T00:00:00Z" });
+    const view = board([t1]);
+    await screen.findByText("Task t1");
+
+    await pick(screen.getByRole("combobox", { name: /^Assignee for/ }), "dev@example.com");
+    await waitFor(() => expect(notifications()).toHaveTextContent("Assigned T001 to dev"));
+
+    // A refresh brings in somebody else's later reassignment.
+    view.rerender(
+      <ToastProvider>
+        <TaskBoard
+          graph={graphWith([{ ...t1, assigned_user_id: "u1", updated_at: "2026-08-10T00:00:00Z" }])}
+          workspaceId="ws1"
+          projectId="p1"
+        />
+      </ToastProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: /^Assignee for/ })).toHaveTextContent("admin"),
+    );
+
+    await userEvent.click(within(notifications()).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(notifications()).toHaveTextContent("T001 changed since — not undone"));
+    expect(assignTask).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("combobox", { name: /^Assignee for/ })).toHaveTextContent("admin");
+  });
+
+  it("does not undo while another write to the task is in flight", async () => {
+    assignTask.mockResolvedValueOnce({ ...THREE[0], assigned_user_id: "u2" });
+    setTaskStatus.mockReturnValueOnce(new Promise(() => {}));
+    board([task({ id: "t1", feature_tag: "T001" })]);
+    await screen.findByText("Task t1");
+
+    await pick(screen.getByRole("combobox", { name: /^Assignee for/ }), "dev@example.com");
+    await waitFor(() => expect(notifications()).toHaveTextContent("Assigned T001 to dev"));
+    await pick(screen.getByRole("combobox", { name: "Move T001 to another column" }), "In Progress");
+    await waitFor(() => expect(setTaskStatus).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(within(notifications()).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(notifications()).toHaveTextContent("T001 changed since — not undone"));
+    expect(assignTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries from the task as it is now, not as it was when the write failed", async () => {
+    const t1 = task({ id: "t1", feature_tag: "T001" });
+    assignTask.mockRejectedValueOnce(new Error("db_timeout"));
+    assignTask.mockReturnValueOnce(new Promise(() => {}));
+    setTaskStatus.mockResolvedValueOnce({ ...t1, status: "in_progress", updated_at: "2026-08-09T00:00:00Z" });
+    board([t1]);
+    await screen.findByText("Task t1");
+
+    await pick(screen.getByRole("combobox", { name: /^Assignee for/ }), "dev@example.com");
+    await waitFor(() => expect(notifications()).toHaveTextContent("Couldn't assign T001"));
+    await pick(screen.getByRole("combobox", { name: "Move T001 to another column" }), "In Progress");
+    await waitFor(() => expect(columnOrder("In Progress")).toEqual(["Task t1"]));
+
+    await userEvent.click(within(notifications()).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(assignTask).toHaveBeenCalledTimes(2));
+    // The optimistic retry layers on the moved row; a stale copy would pull
+    // the card back to To Do while the request is out.
+    expect(columnOrder("In Progress")).toEqual(["Task t1"]);
   });
 
   it("names a member, never their id, and hides a tracker assignee that matches", async () => {
@@ -552,7 +627,10 @@ describe("TaskBoard filters, lanes and drawer", () => {
       "Unassigned, 1 task",
     ]);
     expect(within(lanes[1]).getByText("Signup page")).toBeInTheDocument();
-    expect(within(lanes[1]).getByRole("region", { name: "To Do, 1 task" })).toBeInTheDocument();
+    // Each column names its lane, so the landmark list doesn't repeat
+    // "To Do" once per lane, and its heading sits under the lane's h3.
+    const column = within(lanes[1]).getByRole("region", { name: "dev — To Do, 1 task" });
+    expect(within(column).getByRole("heading", { level: 4, name: "To Do" })).toBeInTheDocument();
 
     const toggle = within(lanes[1]).getByRole("button", { name: /^dev/ });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -575,7 +653,7 @@ describe("TaskBoard filters, lanes and drawer", () => {
     const lane = screen.getByRole("region", { name: "dev, 1 task" });
     await waitFor(() =>
       expect(
-        within(within(lane).getByRole("region", { name: "In Progress, 1 task" })).getByText(
+        within(within(lane).getByRole("region", { name: "dev — In Progress, 1 task" })).getByText(
           "Signup page",
         ),
       ).toBeInTheDocument(),

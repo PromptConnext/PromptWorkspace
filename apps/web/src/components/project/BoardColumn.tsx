@@ -26,6 +26,7 @@ export function BoardColumn({
   tasks,
   activeTask,
   viewer,
+  lane,
   dropId = column.status,
   children,
 }: {
@@ -33,6 +34,12 @@ export function BoardColumn({
   tasks: Task[];
   activeTask: Task | null;
   viewer: Viewer;
+  /**
+   * The swimlane this column sits in. It prefixes the region name, so a
+   * screen reader's landmark list reads "dev — To Do" rather than one "To Do"
+   * per lane, and drops the heading a level under the lane's own h3.
+   */
+  lane?: string;
   /** Unique per swimlane (see `laneDropId`); the bare status otherwise. */
   dropId?: string;
   children: React.ReactNode;
@@ -43,11 +50,12 @@ export function BoardColumn({
   const foreign = activeTask !== null && activeTask.status !== column.status;
   const receptive = foreign && canMoveTo(activeTask, viewer, column.status);
   const refused = foreign && !receptive;
+  const Heading = lane === undefined ? "h3" : "h4";
 
   return (
     <section
       ref={setNodeRef}
-      aria-label={`${column.label}, ${countLabel(tasks.length)}`}
+      aria-label={`${lane === undefined ? "" : `${lane} — `}${column.label}, ${countLabel(tasks.length)}`}
       className={[
         COLUMN_SHELL,
         "transition-[background-color,border-color,opacity]",
@@ -61,9 +69,9 @@ export function BoardColumn({
     >
       <header className="flex items-center gap-2 px-3 pb-2 pt-2">
         <span className={`h-1.5 w-1.5 rounded-full ${column.accent}`} aria-hidden />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+        <Heading className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
           {column.label}
-        </h3>
+        </Heading>
         <span
           aria-hidden
           className="rounded-full bg-slate-200 px-1.5 text-[11px] font-medium tabular-nums text-slate-700"

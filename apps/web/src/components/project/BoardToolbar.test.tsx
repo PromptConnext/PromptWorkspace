@@ -57,6 +57,15 @@ describe("BoardToolbar", () => {
     expect(onChange).toHaveBeenLastCalledWith({ assignee: null });
   });
 
+  it("names the filtered assignee by member, never by raw user id", () => {
+    const { props, view } = setup({ assignee: "u1" });
+    expect(screen.getByRole("combobox", { name: /Assignee/ })).toHaveTextContent("dev-user");
+
+    view.rerender(<BoardToolbar {...props} filters={{ ...props.filters, assignee: "gone-user-id" }} />);
+    expect(screen.getByRole("combobox", { name: /Assignee/ })).toHaveTextContent("Unknown member");
+    expect(screen.queryByText(/gone-user-id/)).toBeNull();
+  });
+
   it("shows Clear Filters only when a filter is active", async () => {
     const user = userEvent.setup();
     const { onClear, props, view } = setup({ group: "assignee" });

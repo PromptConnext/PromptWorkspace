@@ -146,6 +146,19 @@ describe("TaskDrawer", () => {
     expect(screen.queryByText("https://example.com/elsewhere")).toBeNull();
   });
 
+  it("names an assignee the member list doesn't know without printing their id", () => {
+    render(
+      <TaskDrawer
+        task={{ ...task, assigned_user_id: "gone-user-id" }}
+        graph={graph}
+        members={members}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Unknown member")).toBeInTheDocument();
+    expect(screen.queryByText(/gone-user-id/)).toBeNull();
+  });
+
   it("uses the slots when provided", () => {
     render(
       <TaskDrawer
@@ -174,7 +187,15 @@ describe("TaskDrawer", () => {
   });
 
   it("links commit artifacts by short sha in a new tab", () => {
-    render(<TaskDrawer task={task} graph={graph} members={members} onClose={vi.fn()} />);
+    render(
+      <TaskDrawer
+        task={task}
+        graph={graph}
+        members={members}
+        artifacts={graph.artifacts.filter((a) => a.task_id === "t1")}
+        onClose={vi.fn()}
+      />,
+    );
     const link = screen.getByRole("link", { name: "abcdef1" });
     expect(link).toHaveAttribute("href", "https://github.com/acme/widget/commit/abcdef1234567890");
     expect(link).toHaveAttribute("target", "_blank");

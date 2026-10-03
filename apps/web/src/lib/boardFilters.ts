@@ -80,6 +80,15 @@ export function hasActiveFilters(f: BoardFilters): boolean {
   return f.q.trim() !== "" || f.assignee !== null || f.sprint !== null || f.spec !== null;
 }
 
+/**
+ * A task's sprint as the board shows it: trimmed, and null when blank. The
+ * sprint options, the sprint filter and the sprint lanes all read it through
+ * here, so "Sprint 2 " can't be offered as an option that then matches nothing.
+ */
+export function sprintOf(task: Task): string | null {
+  return task.sprint?.trim() || null;
+}
+
 function matchesQuery(task: Task, needle: string): boolean {
   if (task.title.toLowerCase().includes(needle)) return true;
   if (task.feature_tag?.toLowerCase().includes(needle)) return true;
@@ -99,7 +108,7 @@ export function applyBoardFilters(tasks: Task[], f: BoardFilters, viewerId: stri
     (t) =>
       (needle === "" || matchesQuery(t, needle)) &&
       (f.assignee === null || matchesAssignee(t, f.assignee, viewerId)) &&
-      (f.sprint === null || t.sprint === f.sprint) &&
+      (f.sprint === null || sprintOf(t) === f.sprint.trim()) &&
       (f.spec === null || t.spec_id === f.spec),
   );
 }
@@ -150,7 +159,7 @@ export function groupBoardTasks(
   if (group === "none") return [{ key: "all", label: "All Tasks", tasks }];
 
   const valueOf = (t: Task): string | null =>
-    group === "assignee" ? t.assigned_user_id : group === "sprint" ? nonEmpty(t.sprint) : t.spec_id;
+    group === "assignee" ? t.assigned_user_id : group === "sprint" ? sprintOf(t) : t.spec_id;
   const labelOf = (value: string): string =>
     group === "assignee" ? ctx.memberLabel(value) : group === "spec" ? ctx.specLabel(value) : value;
 

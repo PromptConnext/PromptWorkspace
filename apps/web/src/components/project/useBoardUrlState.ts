@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { EMPTY_FILTERS, parseBoardFilters, writeBoardFilters } from "@/lib/boardFilters";
 import type { BoardFilters } from "@/lib/boardFilters";
@@ -8,11 +8,17 @@ import type { BoardFilters } from "@/lib/boardFilters";
 /**
  * The board's filters and open task, read from and written to the URL.
  *
- * Writes use `replace`, not `push`: narrowing a board is not navigation, and
- * a back button that steps through every keystroke of a search is a trap. The
- * scroll position is kept for the same reason — the board did not change
- * pages. Debouncing typed search is the toolbar's job; this hook writes
- * whatever it is handed, immediately.
+ * Writes replace the history entry rather than push one: narrowing a board is
+ * not navigation, and a back button that steps through every keystroke of a
+ * search is a trap. The scroll position is kept for the same reason — the
+ * board did not change pages. Debouncing typed search is the toolbar's job;
+ * this hook writes whatever it is handed, immediately.
+ *
+ * Each write starts from the live address bar, not the query this render
+ * read, and lands synchronously through `history.replaceState` (which Next
+ * folds back into `useSearchParams`). Two writes in one tick — closing a
+ * stale task link while a filter changes — therefore compose instead of the
+ * second quietly undoing the first.
  */
 export function useBoardUrlState(): {
   filters: BoardFilters;
@@ -24,7 +30,6 @@ export function useBoardUrlState(): {
 } {
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const router = useRouter();
 
   // useSearchParams returns a fresh read-only object per navigation, so its
   // string form is the stable thing to memoise on.
@@ -32,42 +37,46 @@ export function useBoardUrlState(): {
   const filters = useMemo(() => parseBoardFilters(new URLSearchParams(query)), [query]);
   const openTaskId = new URLSearchParams(query).get("task") || null;
 
-  const replace = useCallback(
-    (params: URLSearchParams) => {
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  const update = useCallback(
+    (edit: (current: URLSearchParams) => URLSearchParams) => {
+      const qs = edit(new URLSearchParams(window.location.search)).toString();
+      window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
     },
-    [router, pathname],
+    [pathname],
   );
 
   const setFilters = useCallback(
     (next: Partial<BoardFilters>) => {
-      replace(writeBoardFilters(new URLSearchParams(query), { ...filters, ...next }));
+      update((current) =>
+        writeBoardFilters(current, { ...parseBoardFilters(current), ...next }),
+      );
     },
-    [replace, query, filters],
+    [update],
   );
 
   // Clears what narrows the list; the grouping is a layout choice and stays.
   const clearFilters = useCallback(() => {
-    replace(
-      writeBoardFilters(new URLSearchParams(query), { ...EMPTY_FILTERS, group: filters.group }),
+    update((current) =>
+      writeBoardFilters(current, { ...EMPTY_FILTERS, group: parseBoardFilters(current).group }),
     );
-  }, [replace, query, filters.group]);
+  }, [update]);
 
   const openTask = useCallback(
     (id: string) => {
-      const params = new URLSearchParams(query);
-      params.set("task", id);
-      replace(params);
+      update((current) => {
+        current.set("task", id);
+        return current;
+      });
     },
-    [replace, query],
+    [update],
   );
 
   const closeTask = useCallback(() => {
-    const params = new URLSearchParams(query);
-    params.delete("task");
-    replace(params);
-  }, [replace, query]);
+    update((current) => {
+      current.delete("task");
+      return current;
+    });
+  }, [update]);
 
   return { filters, setFilters, clearFilters, openTaskId, openTask, closeTask };
 }

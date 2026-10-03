@@ -5,6 +5,7 @@ import ProjectPage from "./page";
 
 const replace = vi.fn();
 let search = "";
+let refreshError: string | null = null;
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace }),
   usePathname: () => "/w/w1/p/p1",
@@ -45,7 +46,7 @@ vi.mock("@/lib/hooks", () => ({
     loading: false,
     refetch: vi.fn(),
     refreshing: false,
-    refreshError: null,
+    refreshError,
     lastUpdated: Date.now(),
     revalidate: vi.fn(),
   }),
@@ -54,6 +55,7 @@ vi.mock("@/lib/hooks", () => ({
 beforeEach(() => {
   replace.mockReset();
   search = "";
+  refreshError = null;
 });
 afterEach(cleanup);
 
@@ -122,5 +124,49 @@ describe("project page tab URL sync", () => {
     expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=preview", {
       scroll: false,
     });
+  });
+
+  it("drops the open task when leaving Tasks, and keeps it on Tasks", () => {
+    search = "tab=tasks&task=t1";
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=graph", {
+      scroll: false,
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=tasks&task=t1", {
+      scroll: false,
+    });
+  });
+});
+
+describe("board freshness", () => {
+  function renderTasks() {
+    search = "tab=tasks";
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+  }
+
+  it("does not put the ticking 'Updated' label in a live region", () => {
+    renderTasks();
+    const label = screen.getByText(/^Updated /);
+    expect(label.closest("[aria-live]")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("announces a failed refresh through a status region", () => {
+    refreshError = "boom";
+    renderTasks();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Couldn't refresh — showing last loaded data.",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

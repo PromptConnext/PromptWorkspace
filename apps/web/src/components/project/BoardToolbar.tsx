@@ -6,6 +6,7 @@ import { hasActiveFilters } from "@/lib/boardFilters";
 import type { BoardFilters, BoardGroup } from "@/lib/boardFilters";
 import type { WorkspaceMember } from "@/lib/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
+import { memberFullName, memberShortName } from "./MemberChip";
 
 /**
  * Search, filter and grouping controls above the task board.
@@ -29,13 +30,6 @@ const GROUP_OPTIONS: { value: BoardGroup; label: string }[] = [
 
 const FOCUS_RING =
   "outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-1";
-
-/** `dev-user@promptworkspace.local` → `dev-user`; the full address goes in the list. */
-function localPart(member: WorkspaceMember): string {
-  const full = member.email ?? member.user_id;
-  const at = full.indexOf("@");
-  return at > 0 ? full.slice(0, at) : full;
-}
 
 export function BoardToolbar({
   filters,
@@ -97,10 +91,7 @@ export function BoardToolbar({
         ? "Me"
         : filters.assignee === "unassigned"
           ? "Unassigned"
-          : (() => {
-              const member = members.find((m) => m.user_id === filters.assignee);
-              return member ? localPart(member) : filters.assignee;
-            })();
+          : memberShortName(members.find((m) => m.user_id === filters.assignee));
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -177,8 +168,8 @@ export function BoardToolbar({
           {viewerId && <SelectItem value="me">Me</SelectItem>}
           <SelectItem value="unassigned">Unassigned</SelectItem>
           {members.map((m) => (
-            <SelectItem key={m.user_id} value={m.user_id} title={m.email ?? m.user_id}>
-              {localPart(m)}
+            <SelectItem key={m.user_id} value={m.user_id} title={memberFullName(m)}>
+              {memberShortName(m)}
               {m.email && <span className="ml-2 text-xs text-slate-400">{m.email}</span>}
             </SelectItem>
           ))}

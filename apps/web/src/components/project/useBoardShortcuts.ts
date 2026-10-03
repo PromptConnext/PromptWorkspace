@@ -3,8 +3,9 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Single-key board shortcuts: `/` focuses search, `m` toggles My Tasks, Esc
- * hands off to the caller (clear search, close something).
+ * Single-key board shortcuts: `/` focuses search, `m` toggles My Tasks. Esc
+ * is not one of them: the search box clears itself and the drawer closes
+ * itself, and a board-level Esc on top of either would act twice on one press.
  *
  * Bare letters are only safe when nobody is typing, so the hook stands down
  * whenever focus is in a text field, a modifier is held (Cmd+M minimises a
@@ -12,26 +13,22 @@ import { useEffect, useRef } from "react";
  * is open and owns the keyboard.
  *
  * It listens on `window` in the bubble phase, the last stop for a key event,
- * and skips anything already marked handled: the task drawer closes itself on
- * Esc from `document` and calls preventDefault, so one Esc never both closes
- * the drawer and clears the board's search behind it.
+ * and skips anything already marked handled.
  */
 export function useBoardShortcuts({
   onSearch,
   onToggleMine,
-  onEscape,
   enabled = true,
 }: {
   onSearch: () => void;
   onToggleMine: () => void;
-  onEscape: () => void;
   enabled?: boolean;
 }): void {
   // Callers pass inline arrows; reading them through a ref keeps one listener
   // for the life of the board instead of re-binding on every render.
-  const handlers = useRef({ onSearch, onToggleMine, onEscape });
+  const handlers = useRef({ onSearch, onToggleMine });
   useEffect(() => {
-    handlers.current = { onSearch, onToggleMine, onEscape };
+    handlers.current = { onSearch, onToggleMine };
   });
 
   useEffect(() => {
@@ -43,10 +40,6 @@ export function useBoardShortcuts({
       if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
       if (popoverOpen()) return;
 
-      if (event.key === "Escape") {
-        handlers.current.onEscape();
-        return;
-      }
       // A modal dialog (the task drawer) is on top; reaching through it to
       // the board's search or filters would act on something you can't see.
       if (document.activeElement?.closest('[aria-modal="true"]')) return;

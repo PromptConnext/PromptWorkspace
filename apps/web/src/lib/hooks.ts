@@ -65,6 +65,8 @@ export function useCloudGet<T>(
       .then((result) => {
         if (gen !== generation.current) return;
         setData(result);
+        // A good answer supersedes a failed first load too.
+        setError(null);
         setRefreshError(null);
         setLastUpdated(Date.now());
       })
@@ -85,6 +87,8 @@ export function useCloudGet<T>(
       return;
     }
     let cancelled = false;
+    // Background refreshes stand down while the first load is out.
+    inFlight.current = true;
     setLoading(true);
     setError(null);
     apiFetch<T>(path, authHeaders())
@@ -98,7 +102,9 @@ export function useCloudGet<T>(
         if (!cancelled) setError(err.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        inFlight.current = false;
+        setLoading(false);
       });
     return () => {
       cancelled = true;

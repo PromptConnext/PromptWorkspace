@@ -228,9 +228,13 @@ export function LockNote({ reason }: { reason: string }) {
   );
 }
 
+/** Artifact URIs come from the sync payload; only http(s) becomes a link. */
+export function isHttpUrl(uri: string): boolean {
+  return /^https?:\/\//i.test(uri);
+}
+
 function ArtifactLinks({ artifacts }: { artifacts: Artifact[] }) {
-  // Artifact URIs come from the sync payload; only http(s) becomes a link.
-  const linkable = artifacts.filter((a) => !a.deleted_at && /^https?:\/\//i.test(a.uri));
+  const linkable = artifacts.filter((a) => !a.deleted_at && isHttpUrl(a.uri));
   if (linkable.length === 0) return null;
   const shown = linkable.slice(0, 2);
   return (

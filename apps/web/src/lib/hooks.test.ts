@@ -78,6 +78,34 @@ describe("useCloudGet", () => {
     expect(apiFetch).toHaveBeenCalledTimes(2); // initial + one background
   });
 
+  it("clears a first-load error once a background refresh succeeds", async () => {
+    apiFetch.mockRejectedValueOnce(new Error("down"));
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+    await waitFor(() => expect(result.current.error).toBe("down"));
+
+    apiFetch.mockResolvedValueOnce({ n: 2 });
+    act(() => result.current.revalidate());
+    await waitFor(() => expect(result.current.data).toEqual({ n: 2 }));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("does not start a background request while the first load is out", async () => {
+    let resolve!: (v: { n: number }) => void;
+    apiFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+    expect(result.current.loading).toBe(true);
+
+    act(() => result.current.revalidate());
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.refreshing).toBe(false);
+
+    await act(async () => resolve({ n: 1 }));
+    expect(result.current.data).toEqual({ n: 1 });
+    apiFetch.mockResolvedValueOnce({ n: 2 });
+    act(() => result.current.revalidate());
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("polls while visible and pauses while hidden", async () => {
     vi.useFakeTimers();
     apiFetch.mockResolvedValue({ n: 1 });

@@ -13,7 +13,9 @@ import type {
   TaskStatus,
   WorkspaceMember,
 } from "@/lib/types";
+import { memberFullName } from "./MemberChip";
 import { STATUS_LABEL } from "./taskBoardA11y";
+import { isHttpUrl } from "./TaskCard";
 
 /**
  * A task's full record, as a right-side sheet over the board.
@@ -91,13 +93,9 @@ function TimeStamp({ iso }: { iso: string | null }) {
   );
 }
 
-function isHttpUrl(uri: string): boolean {
-  return /^https?:\/\//i.test(uri);
-}
-
 function memberLabel(members: WorkspaceMember[], userId: string | null): string {
   if (!userId) return "Unassigned";
-  return members.find((m) => m.user_id === userId)?.email ?? userId;
+  return memberFullName(members.find((m) => m.user_id === userId));
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -203,6 +201,7 @@ export function TaskDrawer({
   task,
   graph,
   members,
+  artifacts = [],
   onClose,
   renderAssignee,
   renderMove,
@@ -210,6 +209,8 @@ export function TaskDrawer({
   task: Task | null;
   graph: ProjectGraph;
   members: WorkspaceMember[];
+  /** This task's live artifacts, as the board already grouped them. */
+  artifacts?: Artifact[];
   onClose: () => void;
   renderAssignee?: (task: Task) => ReactNode;
   renderMove?: (task: Task) => ReactNode;
@@ -277,7 +278,6 @@ export function TaskDrawer({
   const ref = taskRefLabel(task) ?? task.feature_tag;
   const criteria = task.acceptance_criteria;
   const spec = task.spec_id ? graph.spec_documents.find((s) => s.id === task.spec_id) : undefined;
-  const artifacts = graph.artifacts.filter((a) => a.task_id === task.id && !a.deleted_at);
   const runs = graph.agent_runs
     .filter((r) => r.task_id === task.id && !r.deleted_at)
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))

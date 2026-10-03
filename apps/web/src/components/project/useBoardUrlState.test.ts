@@ -3,22 +3,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useBoardUrlState } from "./useBoardUrlState";
 
 const nav = { query: "", pathname: "/projects/p1" };
-const replace = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.query),
   usePathname: () => nav.pathname,
-  useRouter: () => ({ replace }),
 }));
 
+/** Points both the rendered query and the address bar at `query`. */
+function at(query: string) {
+  nav.query = query;
+  window.history.replaceState(null, "", query ? `${nav.pathname}?${query}` : nav.pathname);
+}
+
+function url(): string {
+  return `${window.location.pathname}${window.location.search}`;
+}
+
 beforeEach(() => {
-  replace.mockReset();
-  nav.query = "";
+  at("");
 });
 
 describe("useBoardUrlState", () => {
   it("parses filters and the open task from the URL", () => {
-    nav.query = "tab=tasks&q=login&assignee=me&group=sprint&task=t1";
+    at("tab=tasks&q=login&assignee=me&group=sprint&task=t1");
     const { result } = renderHook(() => useBoardUrlState());
     expect(result.current.filters).toEqual({
       q: "login",
@@ -31,40 +38,49 @@ describe("useBoardUrlState", () => {
   });
 
   it("merges a partial update and preserves unknown params", () => {
-    nav.query = "tab=tasks&q=login";
+    at("tab=tasks&q=login");
     const { result } = renderHook(() => useBoardUrlState());
     result.current.setFilters({ assignee: "unassigned" });
-    expect(replace).toHaveBeenCalledWith("/projects/p1?tab=tasks&q=login&assignee=unassigned", {
-      scroll: false,
-    });
+    expect(url()).toBe("/projects/p1?tab=tasks&q=login&assignee=unassigned");
   });
 
   it("clears filters but keeps the grouping", () => {
-    nav.query = "tab=tasks&q=x&sprint=S1&group=assignee";
+    at("tab=tasks&q=x&sprint=S1&group=assignee");
     const { result } = renderHook(() => useBoardUrlState());
     result.current.clearFilters();
-    expect(replace).toHaveBeenCalledWith("/projects/p1?tab=tasks&group=assignee", {
-      scroll: false,
-    });
+    expect(url()).toBe("/projects/p1?tab=tasks&group=assignee");
   });
 
   it("opens and closes a task", () => {
-    nav.query = "tab=tasks";
+    at("tab=tasks");
     const { result, rerender } = renderHook(() => useBoardUrlState());
     result.current.openTask("t7");
-    expect(replace).toHaveBeenLastCalledWith("/projects/p1?tab=tasks&task=t7", { scroll: false });
+    expect(url()).toBe("/projects/p1?tab=tasks&task=t7");
 
     nav.query = "tab=tasks&task=t7";
     rerender();
     expect(result.current.openTaskId).toBe("t7");
     result.current.closeTask();
-    expect(replace).toHaveBeenLastCalledWith("/projects/p1?tab=tasks", { scroll: false });
+    expect(url()).toBe("/projects/p1?tab=tasks");
   });
 
   it("drops the query string entirely when nothing is left", () => {
-    nav.query = "q=x";
+    at("q=x");
     const { result } = renderHook(() => useBoardUrlState());
     result.current.setFilters({ q: "" });
-    expect(replace).toHaveBeenCalledWith("/projects/p1", { scroll: false });
+    expect(url()).toBe("/projects/p1");
+  });
+
+  it("keeps both of two writes made in one tick, before any re-render", () => {
+    at("tab=tasks&task=gone");
+    const { result } = renderHook(() => useBoardUrlState());
+    // Same render, same callbacks: the second must not rebuild from the
+    // query the first one already replaced.
+    result.current.closeTask();
+    result.current.setFilters({ assignee: "me" });
+    expect(url()).toBe("/projects/p1?tab=tasks&assignee=me");
+
+    result.current.setFilters({ sprint: "S1" });
+    expect(url()).toBe("/projects/p1?tab=tasks&assignee=me&sprint=S1");
   });
 });

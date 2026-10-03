@@ -14,7 +14,7 @@ import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { applyBoardFilters, groupBoardTasks, specLabel } from "@/lib/boardFilters";
+import { applyBoardFilters, groupBoardTasks, specLabel, sprintOf } from "@/lib/boardFilters";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
 import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
@@ -87,10 +87,12 @@ export function TaskBoard({
   const searchRef = useRef<HTMLInputElement>(null);
   const { filters, setFilters, clearFilters, openTaskId, openTask, closeTask } = useBoardUrlState();
   const board = useOptimisticTasks(graph.tasks);
-  // Undo and the drag announcer run after later renders; they read the
-  // current rows rather than the ones captured when they were created.
+  // Undo, Retry and the drag announcer run after later renders; they read the
+  // current rows and writes rather than the ones captured when they were made.
   const tasksRef = useRef(board.tasks);
   tasksRef.current = board.tasks;
+  const savingRef = useRef(board.savingIds);
+  savingRef.current = board.savingIds;
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +126,7 @@ export function TaskBoard({
 
   const sprints = useMemo(
     () =>
-      [...new Set(graph.tasks.map((t) => t.sprint?.trim()).filter((s): s is string => !!s))].sort(
+      [...new Set(graph.tasks.map(sprintOf).filter((s): s is string => s !== null))].sort(
         NUMERIC.compare,
       ),
     [graph.tasks],
@@ -145,9 +147,6 @@ export function TaskBoard({
   useBoardShortcuts({
     onSearch: () => searchRef.current?.focus(),
     onToggleMine: () => setFilters({ assignee: filters.assignee === "me" ? null : "me" }),
-    // The search box clears itself on Esc and the drawer closes itself; a
-    // board-level Esc on top of either would act twice on one key press.
-    onEscape: () => {},
     enabled: !membersLoading && graph.tasks.length > 0,
   });
 
@@ -195,63 +194,93 @@ export function TaskBoard({
     return memberShortName(members.find((m) => m.user_id === userId));
   }
 
-  // `board.mutate` reports failure through onError but resolves either way, so
-  // success is read off the request itself. An undo is a write like any other
-  // but doesn't offer to undo itself.
-  async function assign(task: Task, next: string | null, isUndo = false) {
+  /**
+   * The one write path behind assign and move: optimistic patch, error toast
+   * with Retry, success toast with Undo. `again` re-enters the caller's own
+   * write so a retry or an undo gets that write's copy and request.
+   *
+   * `board.mutate` reports failure through onError but resolves either way, so
+   * success is read off the request itself. An undo is a write like any other
+   * but doesn't offer to undo itself. Undo only reverts what this write set:
+   * if the field has moved on since (a later edit, or a refresh carrying
+   * someone else's) or another write to the task is still out, it leaves the
+   * task alone rather than clobber or race it.
+   */
+  async function write<F extends "assigned_user_id" | "status">(
+    task: Task,
+    field: F,
+    next: Task[F],
+    {
+      send,
+      failed,
+      done,
+      again,
+      isUndo,
+    }: {
+      send: () => Promise<Task>;
+      failed: string;
+      done: string;
+      again: (task: Task, value: Task[F], isUndo: boolean) => void;
+      isUndo: boolean;
+    },
+  ) {
     const label = taskRefLabel(task) ?? task.title;
-    const previous = task.assigned_user_id;
+    const previous = task[field];
     const outcome = { saved: false };
     await board.mutate(task, {
-      patch: { assigned_user_id: next },
+      patch: { [field]: next },
       request: async () => {
-        const row = await assignTask(projectId, task.id, next, authHeaders());
+        const row = await send();
         outcome.saved = true;
         return row;
       },
       onError: (err) =>
         toast({
           variant: "error",
-          title: `Couldn't assign ${label}`,
+          title: failed,
           description: explain(err),
-          action: { label: "Retry", onClick: () => void assign(task, next) },
+          action: { label: "Retry", onClick: () => again(latest(task), next, isUndo) },
         }),
     });
     if (!outcome.saved || isUndo) return;
     toast({
       variant: "success",
-      title: next ? `Assigned ${label} to ${memberName(next)}` : `Unassigned ${label}`,
+      title: done,
       duration: UNDO_DURATION,
-      action: { label: "Undo", onClick: () => void assign(latest(task), previous, true) },
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const current = latest(task);
+          if (current[field] !== next || savingRef.current.has(task.id)) {
+            toast({ variant: "info", title: `${label} changed since — not undone` });
+            return;
+          }
+          again(current, previous, true);
+        },
+      },
+    });
+  }
+
+  function assign(task: Task, next: string | null, isUndo = false) {
+    const label = taskRefLabel(task) ?? task.title;
+    return write(task, "assigned_user_id", next, {
+      send: () => assignTask(projectId, task.id, next, authHeaders()),
+      failed: `Couldn't assign ${label}`,
+      done: next ? `Assigned ${label} to ${memberName(next)}` : `Unassigned ${label}`,
+      again: (t, value, undo) => void assign(t, value, undo),
+      isUndo,
     });
   }
 
   async function move(task: Task, next: TaskStatus, isUndo = false) {
     if (next === task.status) return;
     const label = taskRefLabel(task) ?? task.title;
-    const previous = task.status;
-    const outcome = { saved: false };
-    await board.mutate(task, {
-      patch: { status: next },
-      request: async () => {
-        const row = await setTaskStatus(projectId, task.id, next, authHeaders());
-        outcome.saved = true;
-        return row;
-      },
-      onError: (err) =>
-        toast({
-          variant: "error",
-          title: `Couldn't move ${label} to ${STATUS_LABEL[next]}`,
-          description: explain(err),
-          action: { label: "Retry", onClick: () => void move(task, next) },
-        }),
-    });
-    if (!outcome.saved || isUndo) return;
-    toast({
-      variant: "success",
-      title: `Moved ${label} to ${STATUS_LABEL[next]}`,
-      duration: UNDO_DURATION,
-      action: { label: "Undo", onClick: () => void move(latest(task), previous, true) },
+    return write(task, "status", next, {
+      send: () => setTaskStatus(projectId, task.id, next, authHeaders()),
+      failed: `Couldn't move ${label} to ${STATUS_LABEL[next]}`,
+      done: `Moved ${label} to ${STATUS_LABEL[next]}`,
+      again: (t, value, undo) => void move(t, value, undo),
+      isUndo,
     });
   }
 
@@ -319,7 +348,7 @@ export function TaskBoard({
     });
   }
 
-  function columnsFor(tasks: Task[], laneKey: string | null) {
+  function columnsFor(tasks: Task[], lane: { key: string; label: string } | null) {
     return (
       <div className={`${BOARD_ROW} ${activeTask ? "select-none" : ""}`}>
         {COLUMNS.map((column) => {
@@ -331,7 +360,8 @@ export function TaskBoard({
               tasks={inColumn}
               activeTask={activeTask}
               viewer={viewer}
-              dropId={laneKey === null ? column.status : laneDropId(laneKey, column.status)}
+              lane={lane?.label}
+              dropId={lane === null ? column.status : laneDropId(lane.key, column.status)}
             >
               {inColumn.map((t) => (
                 <TaskCard
@@ -449,7 +479,7 @@ export function TaskBoard({
                         </span>
                       </button>
                     </h3>
-                    {open && columnsFor(lane.tasks, lane.key)}
+                    {open && columnsFor(lane.tasks, lane)}
                   </section>
                 );
               })}
@@ -470,6 +500,7 @@ export function TaskBoard({
         task={openedTask}
         graph={graph}
         members={members}
+        artifacts={openedTask ? artifactsByTask.get(openedTask.id) : undefined}
         onClose={closeTask}
         // The card's own controls and write path, so a change made here gets
         // the same permission rules, optimistic update and Undo toast.

@@ -113,6 +113,12 @@ describe("applyBoardFilters", () => {
     expect(ids({ spec: "s1" })).toEqual(["b"]);
     expect(ids({ sprint: "S1", assignee: "me" })).toEqual([]);
   });
+
+  it("matches a sprint padded with whitespace to its trimmed option", () => {
+    const padded = [task({ id: "p", sprint: " Sprint 2 " }), task({ id: "q", sprint: "Sprint 2" })];
+    const matched = applyBoardFilters(padded, { ...EMPTY_FILTERS, sprint: "Sprint 2" }, "u1");
+    expect(matched.map((t) => t.id)).toEqual(["p", "q"]);
+  });
 });
 
 describe("groupBoardTasks", () => {
@@ -134,6 +140,19 @@ describe("groupBoardTasks", () => {
     expect(groups.map((g) => g.label)).toEqual(["Sprint 2", "Sprint 10", "No sprint"]);
     expect(groups[1].tasks.map((t) => t.id)).toEqual(["b", "d"]);
     expect(groups[2].key).toBe(EMPTY_GROUP_KEY);
+  });
+
+  it("puts padded and blank sprints in the same lanes as their trimmed values", () => {
+    const tasks = [
+      task({ id: "a", sprint: "Sprint 2 " }),
+      task({ id: "b", sprint: "Sprint 2" }),
+      task({ id: "c", sprint: "   " }),
+    ];
+    const groups = groupBoardTasks(tasks, "sprint", ctx);
+    expect(groups.map((g) => [g.key, g.tasks.map((t) => t.id)])).toEqual([
+      ["Sprint 2", ["a", "b"]],
+      [EMPTY_GROUP_KEY, ["c"]],
+    ]);
   });
 
   it("labels assignee and spec groups through the context", () => {

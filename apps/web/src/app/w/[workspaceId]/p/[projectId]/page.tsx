@@ -66,10 +66,9 @@ function BoardFreshness({
     return () => clearInterval(id);
   }, []);
   return (
-    <div
-      className="flex items-center gap-2 text-xs text-slate-500"
-      aria-live="polite"
-    >
+    // No live region here: the relative label re-renders every 30s and would
+    // be re-announced each time. Only a failed refresh is announced.
+    <div className="flex items-center gap-2 text-xs text-slate-500">
       <span>
         {refreshing
           ? "Refreshing…"
@@ -85,17 +84,20 @@ function BoardFreshness({
       >
         Refresh
       </button>
+      {/* Mounted up front so the message is announced when it appears. */}
+      <span role="status" className="text-amber-700">
+        {refreshError && !refreshing
+          ? "Couldn't refresh — showing last loaded data."
+          : ""}
+      </span>
       {refreshError && !refreshing && (
-        <span className="text-amber-700">
-          Couldn&apos;t refresh — showing last loaded data.{" "}
-          <button
-            type="button"
-            onClick={onRefresh}
-            className={`underline ${FOCUS_RING}`}
-          >
-            Retry
-          </button>
-        </span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className={`text-amber-700 underline ${FOCUS_RING}`}
+        >
+          Retry
+        </button>
       )}
     </div>
   );
@@ -114,11 +116,14 @@ function ProjectWorkspace({
   const tab = tabFromParam(searchParams.get("tab"));
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  // Preserves every other query param; only `tab` changes.
+  // Preserves every other query param except the board's `task`.
   const setTab = useCallback(
     (next: Tab) => {
       const params = new URLSearchParams(searchParams.toString());
       params.set("tab", slugOf(next));
+      // The open task belongs to the board; carried to another tab it would
+      // reopen the drawer on the way back.
+      if (next !== "Tasks") params.delete("task");
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
     [router, pathname, searchParams],
