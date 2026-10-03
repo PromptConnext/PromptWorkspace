@@ -1,7 +1,7 @@
 // apps/web/src/components/project/StageInputForm.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { prefillStage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
@@ -20,6 +20,21 @@ const PREFILL_ERROR_TEXT: Record<string, string> = {
   managed_tier_rate_limited: "The shared model is busy right now — try again in a moment.",
   daily_token_budget_exceeded: "This workspace hit its daily generation budget.",
   model_provider_error: "The model provider failed. Try again.",
+};
+
+/** What the draft button says and reads from. The prefill endpoint is one
+ *  call either way; this is only how the Planner names it, so the label can
+ *  say what the draft is actually drawn from (a PRD, or the specification). */
+export type PrefillOption = {
+  label: string;
+  busyLabel: string;
+  ariaLabel: string;
+  description: string;
+  /** Said instead of the generic text when the cloud 409s no_source_material. */
+  noSourceError?: string;
+  /** Set when there is nothing to draft from yet — the button stays visible
+   *  but disabled, and this says why. */
+  disabledReason?: string;
 };
 
 // Answers are the only part of a stage the server never stores — the endpoint
@@ -43,6 +58,8 @@ export function StageInputForm({
   onChange,
   disabled = false,
   canPrefill = true,
+  prefill,
+  prefillHint,
 }: {
   projectId: string;
   stage: StageKind;
@@ -53,6 +70,11 @@ export function StageInputForm({
   /** False for stages the prefill endpoint doesn't accept (see
    *  PREFILLABLE_STAGES) — the button is hidden rather than left to 422. */
   canPrefill?: boolean;
+  /** The draft button, when there is something to draft from. */
+  prefill?: PrefillOption;
+  /** Said instead of the button when `prefill` is absent — e.g. where to
+   *  upload the PRD the draft would read. */
+  prefillHint?: ReactNode;
 }) {
   const { authHeaders } = useAuth();
   const [hydrated, setHydrated] = useState(false);
@@ -112,7 +134,11 @@ export function StageInputForm({
       );
     } catch (err) {
       const detail = (err as Error).message;
-      setDraftError(PREFILL_ERROR_TEXT[detail] ?? detail);
+      setDraftError(
+        (detail === "no_source_material" && prefill?.noSourceError) ||
+          PREFILL_ERROR_TEXT[detail] ||
+          detail,
+      );
     } finally {
       setDrafting(false);
     }
@@ -120,25 +146,28 @@ export function StageInputForm({
 
   return (
     <>
-      {canPrefill && (
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={disabled || drafting}
-          onClick={draftFromSources}
-          // Both stage forms carry this button, so a bare "Draft from PRD" is
-          // ambiguous to a screen reader moving through the page.
-          aria-label={`Draft the ${stage} fields from the PRD`}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs hover:border-slate-300 disabled:opacity-60"
-        >
-          {drafting ? "Reading the PRD…" : "Draft from PRD"}
-        </button>
-        <span className="text-xs text-slate-500">
-          Fills the blank fields from the uploaded document — yours to edit.
-        </span>
-      </div>
+      {canPrefill && prefill && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={disabled || drafting || Boolean(prefill.disabledReason)}
+            onClick={draftFromSources}
+            // Both stage forms carry this button, so a bare label is
+            // ambiguous to a screen reader moving through the page.
+            aria-label={prefill.ariaLabel}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-60"
+          >
+            {drafting ? prefill.busyLabel : prefill.label}
+          </button>
+          <span className="text-xs text-slate-500">
+            {prefill.disabledReason ?? prefill.description}
+          </span>
+        </div>
       )}
-      {draftNote &&<p className="mb-3 text-xs text-slate-600">{draftNote}</p>}
+      {canPrefill && !prefill && prefillHint && (
+        <p className="mb-3 text-xs text-slate-500">{prefillHint}</p>
+      )}
+      {draftNote && <p className="mb-3 text-xs text-slate-600">{draftNote}</p>}
       {draftError && (
         <p className="mb-3 rounded bg-amber-50 p-2 text-xs text-amber-900">{draftError}</p>
       )}

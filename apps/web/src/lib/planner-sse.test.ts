@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSseLine, type SseParseState } from "./planner-sse";
+import { parseSseLine, stripStreamFence, type SseParseState } from "./planner-sse";
 
 describe("parseSseLine", () => {
   it("parses a bare data line as a message-event delta", () => {
@@ -36,5 +36,31 @@ describe("parseSseLine", () => {
     const before = state;
     state = parseSseLine("", state);
     expect(state).toEqual({ ...before, fresh: false });
+  });
+});
+
+describe("stripStreamFence", () => {
+  it("drops the leading file fence line and the closing fence", () => {
+    expect(stripStreamFence("```file:specs/001/spec.md\n# Spec\n\nBody\n```")).toBe(
+      "# Spec\n\nBody\n",
+    );
+  });
+
+  it("holds back a fence line that is still arriving", () => {
+    expect(stripStreamFence("```fi")).toBe("");
+    expect(stripStreamFence("```file:specs/001/sp")).toBe("");
+  });
+
+  it("drops a closing fence that is only partly streamed", () => {
+    expect(stripStreamFence("```file:a.md\n# A\n``")).toBe("# A\n");
+  });
+
+  it("leaves text with no wrapper alone, including fences inside it", () => {
+    const text = "# Plan\n\n```ts\nconst x = 1;\n```\n\nMore";
+    expect(stripStreamFence(text)).toBe(text);
+  });
+
+  it("keeps a non-file fence on the first line", () => {
+    expect(stripStreamFence("```ts\nconst x = 1;")).toBe("```ts\nconst x = 1;");
   });
 });
