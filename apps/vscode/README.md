@@ -61,7 +61,7 @@ your current folder belongs to.
 
 | Setting | What it is |
 |---|---|
-| `promptworkspace.cloudApiUrl` | The cloud API. Defaults to production (`https://api.workspace.promptconnext.com`); point at `https://api.promptworkspace.truthledgers.com` for staging or `http://localhost:8080` for local development. |
+| `promptworkspace.cloudApiUrl` | The cloud API. Defaults to production (`https://workspace-api.promptconnext.com`); point at `https://promptworkspace-api.truthledgers.com` for staging or `http://localhost:8080` for local development. |
 | `promptworkspace.cloudWebUrl` | The web app that hosts the sign-in pages. Defaults to `https://workspace.promptconnext.com`. |
 | `promptworkspace.supabaseUrl` / `supabaseAnonKey` | Real authentication; default to the production project. Override both together with the other two to reach staging. Set both empty and the extension talks to a cloud running in stub auth mode. |
 | `promptworkspace.projectId` | Which cloud project a folder belongs to. Set by *Link This Folder to a Project…*. |

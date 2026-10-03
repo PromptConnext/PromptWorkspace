@@ -20,10 +20,10 @@ Two branch-mapped stacks, each with its own Vercel deployments, Northflank servi
 | | `develop` (staging) | `main` (production) |
 |---|---|---|
 | Web | `https://promptworkspace.truthledgers.com` | `https://workspace.promptconnext.com` |
-| Cloud API | `https://api.promptworkspace.truthledgers.com` | `https://api.workspace.promptconnext.com` |
+| Cloud API | `https://promptworkspace-api.truthledgers.com` | `https://workspace-api.promptconnext.com` |
 | Corp | `https://promptconnext.truthledgers.com` | `https://promptconnext.com` |
-| Northflank service | `pw-cloud-develop` (secret group `pw-develop`) | `pw-cloud-main` (secret group `pw-main`) |
-| Supabase project | `promptworkspace-develop` | `promptworkspace-prod` (Pro plan, daily backups) |
+| Northflank service | `promptworkspace` in project `promptworkspace` (runtime variables) | `promptworkspace-prod` in the same project (runtime variables) |
+| Supabase project | `vndszeanigomqguhfmwc` (develop) | `promptworkspace-prod` (Pro plan, daily backups) |
 | Auth email (custom SMTP) | sender on `truthledgers.com` | sender on `promptconnext.com` (staging sender until it is verified) |
 
 Code reaches `main` only through a PR from `develop` (merge commit). The VS Code extension and the MCP server default to **production**; develop/staging is reached by overriding all four client settings (`cloudApiUrl`, `cloudWebUrl`, `supabaseUrl`, `supabaseAnonKey` — VS Code settings `promptworkspace.*`, or `PROMPTWORKSPACE_*` env for MCP). The defaults live once, in `packages/cloud-client/src/defaults.ts`.
@@ -73,9 +73,9 @@ If the privilege check prints `f`, run the grant SQL from `.github/workflows/clo
 
 ### 2.3 Create the Northflank service
 
-Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for `pw-cloud-develop`, `main` for `pw-cloud-main`. Keep CI/auto-deploy **off** until that environment's schema is applied and its secret group is set; then enable it (or trigger builds manually). Custom domains: `api.promptworkspace.truthledgers.com` / `api.workspace.promptconnext.com`.
+Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
 
-### 2.4 Environment variables (Northflank → secret group `pw-develop` / `pw-main`)
+### 2.4 Environment variables (Northflank → service → Runtime variables)
 
 Production values (develop differs only where noted in §2.7):
 
@@ -98,7 +98,7 @@ Production values (develop differs only where noted in §2.7):
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` | as needed | Only if the Jira mirror (M5) is in use — the *outbound* credential. There is no longer a `JIRA_WEBHOOK_SECRET`: since plan 0019 the *inbound* secret is generated per Atlassian site when an admin configures the integration and stored encrypted in `pw_workspace_integrations`, because one shared secret cannot tell two tenants apart and a Jira issue key is unique per site, not per provider. ClickUp is registered but not advertised or configurable (`provider_unavailable`) until it has a credential path of its own. |
 | `RAG_KEY_ENCRYPTION_KEY` | Fernet key, one per environment | **Required: the service refuses to start with `DATA_BACKEND=supabase` and no key.** It encrypts workspace PATs, model keys and webhook secrets; losing it bricks every stored credential, so keep an offline copy per environment in the team password manager. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 | `WEB_APP_URL` | `https://workspace.promptconnext.com` | Base for every invitation accept link — both the URL emailed to the invitee and the `accept_url` handed to the admin who created the invite. **Required in production:** the default is `http://localhost:3000`, so leaving it unset mails invitees a link to their own machine and the invitation silently dead-ends. `{WEB_APP_URL}/invite/*` must also be allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs, as a `/**` wildcard — see [§2.8](#28-web-app-apps-web--vercel). |
-| `PUBLIC_API_URL` | **this** service's origin, `https://api.workspace.promptconnext.com` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
+| `PUBLIC_API_URL` | **this** service's origin, `https://workspace-api.promptconnext.com` | Callback base for per-repo GitHub webhooks (`{PUBLIC_API_URL}/api/webhooks/github`). The cloud origin, not the web one — easy to confuse with `WEB_APP_URL` above. GitHub POSTs to it directly, so it must be publicly reachable over HTTPS. Leaving it empty is a valid launch choice — repo creation and seeding still work, only PR/push indexing stays dormant — but **it does not apply retroactively**: hooks are registered once, at repo creation, so any repo created while this is unset never gets one and there is no backfill. Set it before real projects start creating repos. There is **no** platform GitHub credential to configure; each workspace supplies its own fine-grained PAT in workspace settings, encrypted with `RAG_KEY_ENCRYPTION_KEY` (ADR 0017 amendment). |
 | `DEPLOY_R2_*` | see `apps/cloud/.env.example` | Only for the platform-hosted deployment template (ADR 0021). `DEPLOY_R2_API_TOKEN` is account-wide and is used **only** to mint a per-workspace, bucket-scoped credential — only the minted one is ever written into a customer repository, because a repo secret is readable by anyone who can push to that repo. `DEPLOY_R2_PUBLIC_BASE_URL` is required for that template: without it there is no preview address to hand the pipeline and repo creation refuses with `deployment_preview_url_not_configured`. Leave the block empty to disable the template entirely (it then refuses with `deployment_provider_not_configured` rather than seeding a pipeline that could never succeed). **Never set `DEPLOY_R2_ALLOW_SHARED_KEY=true` outside local dev** — it seals one shared key into every repository. |
 | `TYPESAFE_API_KEY` | TypeSafe API key | **Optional.** Enables the typed judgment that picks the docker-compose template's runtime and services from a project's plan (`app/deployments/stack_judge.py`, ADR 0026's 2026-09-26 amendment). Unset keeps the keyword scan. `TYPESAFE_BASE_URL`/`TYPESAFE_MODEL` default correctly. Platform-held, like `MANAGED_MODEL_API_KEY`. |
 
@@ -113,9 +113,9 @@ Repositories created before ADR 0021 carry webhooks subscribed only to `push` an
 
 One network note for production. After a successful deploy the cloud makes a single outbound request to the deployed preview URL, to read whether it permits being embedded — a question no browser can answer for a cross-origin frame. That URL is reported by the project's own workflow, so it is attacker-chosen input from anyone with push access to a project repository. The code refuses to probe any hostname resolving to a loopback, private, link-local, reserved or multicast address and follows no redirects, which blocks the direct request-forgery path. It cannot, on its own, close DNS rebinding between the resolution and the connection. If the cloud runs anywhere with reachable internal services or an instance-metadata endpoint, put its egress behind a proxy that enforces the same public-address rule at the network layer.
 
-The cloud Planner UI (the web app's stage-generation tab, `apps/cloud/app/api/generation.py`) has no BYO-model fallback: `select_model()` (`apps/cloud/app/generation/routing.py`) returns whatever `build_managed_connection()` (`apps/cloud/app/generation/managed.py`) produces from `MANAGED_MODEL_ENABLED` and `MANAGED_MODEL_API_KEY`, and returns nothing at all if either is unset. `apps/cloud/.env.example` ships `MANAGED_MODEL_ENABLED=false` by default, so a deployment that only follows the table above will have a Planner tab that fails closed on every request. Treat `MANAGED_MODEL_ENABLED=true` plus a valid `MANAGED_MODEL_API_KEY` as required, not optional, before telling users the Planner is available — set both explicitly in the Northflank secret group alongside the settings above.
+The cloud Planner UI (the web app's stage-generation tab, `apps/cloud/app/api/generation.py`) has no BYO-model fallback: `select_model()` (`apps/cloud/app/generation/routing.py`) returns whatever `build_managed_connection()` (`apps/cloud/app/generation/managed.py`) produces from `MANAGED_MODEL_ENABLED` and `MANAGED_MODEL_API_KEY`, and returns nothing at all if either is unset. `apps/cloud/.env.example` ships `MANAGED_MODEL_ENABLED=false` by default, so a deployment that only follows the table above will have a Planner tab that fails closed on every request. Treat `MANAGED_MODEL_ENABLED=true` plus a valid `MANAGED_MODEL_API_KEY` as required, not optional, before telling users the Planner is available — set both explicitly in the Northflank runtime variables alongside the settings above.
 
-Turning on `MANAGED_MODEL_ENABLED` covers the Planner's *generation* path, but the RAG assistant's *retrieval* path needs a second, separate setting: Typhoon is chat-only, so a keyless workspace's content questions (anything grounded in synced documents or code, as opposed to task status or lineage) are answered by `build_managed_embed_connection()` (`apps/cloud/app/generation/managed.py`), which reads `MANAGED_EMBED_BASE_URL`, `MANAGED_EMBED_MODEL`, and `MANAGED_EMBED_API_KEY`. Leave any of those unset and it silently returns `None` — `app/api/assistant.py` then skips retrieval entirely, and every content question comes back with a fluent "I don't have enough information" that is indistinguishable from a working assistant that genuinely doesn't know. The app now logs a startup WARNING when this combination occurs (`MANAGED_MODEL_ENABLED=true` with no embed connection resolved), but don't wait to see it in the logs — set the three `MANAGED_EMBED_*` variables in the Northflank secret group alongside `MANAGED_MODEL_*` whenever the managed tier is on. `apps/cloud/.env.example` documents the constraint that matters most when picking a model: `pw_rag_chunks.embedding` is a `vector(embed_dim)` column fixed at migration time (§2.2), so the embedding model's output dimension must equal that `embed_dim` (1536 by default) — most open multilingual encoders (BGE-m3, Jina v3, KaLM-embedding-multilingual) do not fit that, and OpenAI's `text-embedding-3-small`, Google's `gemini-embedding-001` (MRL-truncated to 1536), and `Alibaba-NLP/gte-Qwen2-1.5B-instruct` are known-good options instead.
+Turning on `MANAGED_MODEL_ENABLED` covers the Planner's *generation* path, but the RAG assistant's *retrieval* path needs a second, separate setting: Typhoon is chat-only, so a keyless workspace's content questions (anything grounded in synced documents or code, as opposed to task status or lineage) are answered by `build_managed_embed_connection()` (`apps/cloud/app/generation/managed.py`), which reads `MANAGED_EMBED_BASE_URL`, `MANAGED_EMBED_MODEL`, and `MANAGED_EMBED_API_KEY`. Leave any of those unset and it silently returns `None` — `app/api/assistant.py` then skips retrieval entirely, and every content question comes back with a fluent "I don't have enough information" that is indistinguishable from a working assistant that genuinely doesn't know. The app now logs a startup WARNING when this combination occurs (`MANAGED_MODEL_ENABLED=true` with no embed connection resolved), but don't wait to see it in the logs — set the three `MANAGED_EMBED_*` variables in the Northflank runtime variables alongside `MANAGED_MODEL_*` whenever the managed tier is on. `apps/cloud/.env.example` documents the constraint that matters most when picking a model: `pw_rag_chunks.embedding` is a `vector(embed_dim)` column fixed at migration time (§2.2), so the embedding model's output dimension must equal that `embed_dim` (1536 by default) — most open multilingual encoders (BGE-m3, Jina v3, KaLM-embedding-multilingual) do not fit that, and OpenAI's `text-embedding-3-small`, Google's `gemini-embedding-001` (MRL-truncated to 1536), and `Alibaba-NLP/gte-Qwen2-1.5B-instruct` are known-good options instead.
 
 ### 2.5 Scaling constraints — important
 
@@ -157,7 +157,7 @@ The rate limiter is the one component with no counter of its own: a bucket count
 ### 2.6 Verify
 
 ```bash
-API=https://api.workspace.promptconnext.com    # or https://api.promptworkspace.truthledgers.com
+API=https://workspace-api.promptconnext.com    # or https://promptworkspace-api.truthledgers.com
 curl -sSf $API/health | jq '{env, schema_version}'   # "production"/"staging", "0002_pw_baseline"
 curl -si -X OPTIONS -H "Origin: https://workspace.promptconnext.com" -H "Access-Control-Request-Method: GET" $API/health | grep -i '^access-control-allow-origin'
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/webhooks/github   # 400/401 for an unsigned request, not 404
@@ -165,13 +165,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/webhooks/github   # 40
 
 ### 2.7 Develop vs production values
 
-| | `develop` (`pw-develop`) | `main` (`pw-main`) |
+| | `develop` | `main` |
 |---|---|---|
 | `APP_ENV` | `staging` | `production` |
 | `LOG_LEVEL` | `DEBUG` | `INFO` |
 | `SUPABASE_URL` / `SUPABASE_KEY` | develop project | prod project |
 | `CORS_ORIGINS`, `WEB_APP_URL` | `https://promptworkspace.truthledgers.com` | `https://workspace.promptconnext.com` |
-| `PUBLIC_API_URL` | `https://api.promptworkspace.truthledgers.com` | `https://api.workspace.promptconnext.com` |
+| `PUBLIC_API_URL` | `https://promptworkspace-api.truthledgers.com` | `https://workspace-api.promptconnext.com` |
 | `RAG_KEY_ENCRYPTION_KEY` | develop key | prod key (never the same) |
 | `MANAGED_EMBED_*` | a free 1536-dim model if supported, else the prod model | OpenAI `text-embedding-3-small`, `MANAGED_EMBED_DIM=1536` |
 | Deploys | auto-deploy from `develop` | first build triggered by hand after the schema and the merge; then optional auto-deploy from `main` |
@@ -199,8 +199,8 @@ secrets, no WebSocket server of its own (presence is a client-side connection
 
    | Variable | Value |
    |---|---|
-   | `NEXT_PUBLIC_CLOUD_API_URL` | `https://api.workspace.promptconnext.com` (Preview/`develop`: `https://api.promptworkspace.truthledgers.com`) |
-   | `NEXT_PUBLIC_CLOUD_WS_URL` | `wss://api.workspace.promptconnext.com` (develop: `wss://api.promptworkspace.truthledgers.com`) |
+   | `NEXT_PUBLIC_CLOUD_API_URL` | `https://workspace-api.promptconnext.com` (Preview/`develop`: `https://promptworkspace-api.truthledgers.com`) |
+   | `NEXT_PUBLIC_CLOUD_WS_URL` | `wss://workspace-api.promptconnext.com` (develop: `wss://promptworkspace-api.truthledgers.com`) |
    | `NEXT_PUBLIC_AUTH_MODE` | `supabase` |
    | `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | publishable/anon key (safe to expose client-side) |
@@ -389,10 +389,10 @@ Versioned paths are immutable (cache-friendly); `latest.json` is the one mutable
 |---|---|---|
 | `promptworkspace.truthledgers.com` | CNAME → Vercel (`promptworkspace-web`, branch `develop`) | develop |
 | `promptconnext.truthledgers.com` | CNAME → Vercel (`promptconnext-corp-web`, branch `develop`) | develop |
-| `api.promptworkspace.truthledgers.com` | CNAME → Northflank `pw-cloud-develop` + verification TXT | develop |
+| `promptworkspace-api.truthledgers.com` | CNAME → Northflank `promptworkspace` + verification TXT | develop |
 | `workspace.promptconnext.com` | CNAME → Vercel (`promptworkspace-web`, Production) | main |
 | `promptconnext.com` / `www` | A `76.76.21.21` (or Vercel ALIAS) / CNAME → Vercel, `www` 308 → apex | main |
-| `api.workspace.promptconnext.com` | CNAME → Northflank `pw-cloud-main` + verification TXT | main |
+| `workspace-api.promptconnext.com` | CNAME → Northflank `promptworkspace-prod` + verification TXT | main |
 
 Plus each mail domain's SPF/DKIM records exactly as the SMTP provider displays them. CAA, if present, must allow `letsencrypt.org`.
 
@@ -414,11 +414,11 @@ Neither workflow deploys: Vercel's git integration and Northflank's per-service 
 
 - [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `/health.schema_version` is `"0002_pw_baseline"`; the service_role privilege check prints `t` (§2.2)
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`, `RAG_KEY_ENCRYPTION_KEY` set (the service refuses to boot without it) and backed up offline
-- [ ] Secret key set only in the Northflank secret group — never in the repo or a client; clients get only the publishable key
+- [ ] Secret key set only in the Northflank runtime variables — never in the repo or a client; clients get only the publishable key
 - [ ] Instances = 1 (in-process presence/rate-limit state)
 - [ ] `CORS_ORIGINS` and `WEB_APP_URL` are the environment's own web origin; `PUBLIC_API_URL` its own API origin
 - [ ] Supabase Auth: Site URL and `/**` Redirect URLs for the environment's web origin; custom SMTP set; prod backups on; signup closed once the team has registered (members join by invite)
 - [ ] `SENTRY_DSN` set on the cloud service and `NEXT_PUBLIC_SENTRY_DSN` on both Vercel projects (`apps/web`, promptconnext-corp-web) — unset means the SDK never initialises and the instance runs blind; the cloud logs a startup warning to that effect
 - [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web equivalent is `src/lib/sentry.ts`, covered by `src/lib/sentry.test.ts`
-- [ ] The production web bundle contains no `truthledgers`; the staging bundle no `api.workspace.promptconnext.com`
+- [ ] The production web bundle contains no `truthledgers`; the staging bundle no `workspace-api.promptconnext.com`
 - [ ] VSIX installed with no overrides signs in against production before `vsce publish`

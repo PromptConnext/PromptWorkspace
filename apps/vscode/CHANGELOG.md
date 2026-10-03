@@ -10,7 +10,7 @@ deprecated in its favour, and settings do not carry over — every setting is no
 ### Changed
 - Extension `name` is `promptworkspace`, display name **PromptWorkspace**; every command, view,
   context key and setting now uses the `promptworkspace.*` prefix.
-- The defaults now point at production: `cloudApiUrl` `https://api.workspace.promptconnext.com`,
+- The defaults now point at production: `cloudApiUrl` `https://workspace-api.promptconnext.com`,
   `cloudWebUrl` `https://workspace.promptconnext.com`, plus the production Supabase URL and
   publishable key. Override all four to reach a develop/staging stack.
 - Packaging (`vscode:prepublish`) refuses while the production Supabase defaults are still

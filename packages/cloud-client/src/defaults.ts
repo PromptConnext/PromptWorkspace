@@ -20,7 +20,7 @@ export interface ClientDefaults {
 }
 
 export const PRODUCTION_DEFAULTS: Readonly<ClientDefaults> = Object.freeze({
-  cloudApiUrl: "https://api.workspace.promptconnext.com",
+  cloudApiUrl: "https://workspace-api.promptconnext.com",
   cloudWebUrl: "https://workspace.promptconnext.com",
   supabaseUrl: "__PROD_SUPABASE_URL__",
   supabaseAnonKey: "__PROD_SUPABASE_PUBLISHABLE_KEY__",

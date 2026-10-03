@@ -15,7 +15,7 @@ and the roadmap in [`../../docs/plans/`](../../docs/plans).
 [`apps/web`](../web) (M8) is a read-only browser client of this API's
 sync/workspace/invitation endpoints — its origin must be added to
 `CORS_ORIGINS` (default already includes `http://localhost:3000` for local
-dev; production origins go in the Northflank secret group, see
+dev; production origins go in the Northflank runtime variables, see
 [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md#28-web-app-apps-web--vercel)).
 
 ## Stack

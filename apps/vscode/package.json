@@ -326,7 +326,7 @@
       "properties": {
         "promptworkspace.cloudApiUrl": {
           "type": "string",
-          "default": "https://api.workspace.promptconnext.com",
+          "default": "https://workspace-api.promptconnext.com",
           "description": "Base URL of the PromptWorkspace cloud API."
         },
         "promptworkspace.cloudWebUrl": {

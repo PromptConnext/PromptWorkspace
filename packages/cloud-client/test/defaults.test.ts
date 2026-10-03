@@ -38,7 +38,7 @@ test("all four vscode package.json defaults equal the shared production defaults
 });
 
 test("the defaults point at the production domains", () => {
-  assert.equal(PRODUCTION_DEFAULTS.cloudApiUrl, "https://api.workspace.promptconnext.com");
+  assert.equal(PRODUCTION_DEFAULTS.cloudApiUrl, "https://workspace-api.promptconnext.com");
   assert.equal(PRODUCTION_DEFAULTS.cloudWebUrl, "https://workspace.promptconnext.com");
 });
 
