@@ -6,14 +6,14 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { SignInFlow } from "./auth/signIn.ts";
-import { CloudClient } from "@promptconnext/pz-cloud";
-import { SessionStore } from "@promptconnext/pz-cloud";
+import { CloudClient } from "@promptworkspace/cloud-client";
+import { SessionStore } from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
   isClosed,
   type TaskStatus,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 import { projectIdFor, readConfig } from "./config.ts";
 import { ContextViewProvider } from "./context/contextView.ts";
 import { RepoDocs } from "./context/repoDocs.ts";
@@ -26,9 +26,9 @@ import { clearCloneState, readPendingClone } from "./projects/knownClones.ts";
 import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
-import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptconnext/pz-cloud";
+import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
 import { copyTaskContext } from "./tasks/copyContext.ts";
-import { StatusQueue, type QueueEntry } from "@promptconnext/pz-cloud";
+import { StatusQueue, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
 import { TaskStore } from "./tasks/taskStore.ts";
@@ -65,13 +65,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const store = new TaskStore(client, cache, log);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 5);
-  statusBar.command = "promptconnext.flushQueue";
+  statusBar.command = "promptworkspace.flushQueue";
   const refreshStatusBar = () => {
     if (queue.size() === 0) {
       statusBar.hide();
       return;
     }
-    statusBar.text = `$(cloud-upload) PromptConnext: ${queue.size()} pending`;
+    statusBar.text = `$(cloud-upload) PromptWorkspace: ${queue.size()} pending`;
     statusBar.tooltip = "Task updates waiting to reach the cloud. Click to retry.";
     statusBar.show();
   };
@@ -91,12 +91,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
 
-  const treeView = vscode.window.createTreeView("promptconnext.tasks", {
+  const treeView = vscode.window.createTreeView("promptworkspace.tasks", {
     treeDataProvider: tree,
   });
   const roster = new RosterStore(client, cache, log);
   const rosterTree = new RosterTreeProvider(roster, store, git, context.globalState);
-  const projectsView = vscode.window.createTreeView("promptconnext.projects", {
+  const projectsView = vscode.window.createTreeView("promptworkspace.projects", {
     treeDataProvider: rosterTree,
   });
   context.subscriptions.push(
@@ -114,12 +114,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ------------------------------------------------------------- reactions
 
   const setSignedInContext = (signedIn: boolean) =>
-    vscode.commands.executeCommand("setContext", "promptconnext.signedIn", signedIn);
+    vscode.commands.executeCommand("setContext", "promptworkspace.signedIn", signedIn);
 
   const setActiveProjectContext = (active: ActiveProject | undefined) =>
     vscode.commands.executeCommand(
       "setContext",
-      "promptconnext.hasActiveProject",
+      "promptworkspace.hasActiveProject",
       active !== undefined,
     );
 
@@ -188,7 +188,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Shared by every event that can change the answer to "which project is
   // the active one": switching the focused editor, editing
-  // `promptconnext.projectId` directly, and adding or removing a workspace
+  // `promptworkspace.projectId` directly, and adding or removing a workspace
   // folder — including `git.clone`'s own "Add to Workspace" answer, which
   // changes `workspaceFolders` with no editor event and no config event of
   // its own. The three reactions used to duplicate this body verbatim; this
@@ -272,14 +272,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // views are scoped to — the whole point of following the editor instead
     // of a stored selection (see activeProject.ts).
     vscode.window.onDidChangeActiveTextEditor(() => reactToActiveProjectChange()),
-    // Linking a folder to a project writes `promptconnext.projectId` straight
+    // Linking a folder to a project writes `promptworkspace.projectId` straight
     // to configuration — no editor event fires for that, so without this the
     // task tree, the view titles and the context webview would all sit stale
     // until the user happened to switch files afterward. Same reaction as an
     // editor switch, because the underlying question — "which project is this
     // folder now" — is identical either way.
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (!event.affectsConfiguration("promptconnext.projectId")) return;
+      if (!event.affectsConfiguration("promptworkspace.projectId")) return;
       await reactToActiveProjectChange();
     }),
     // Adding or removing a workspace folder changes "which project am I in"
@@ -287,7 +287,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // editor-change nor the config-change reaction above fires for it. This
     // is the gap that let `git.clone`'s own "Add to Workspace" answer — one
     // of the three buttons this extension's own clone flow presents — leave
-    // `promptconnext.hasActiveProject`, the task tree, the view descriptions
+    // `promptworkspace.hasActiveProject`, the task tree, the view descriptions
     // and the context webview all showing the previous folder's project.
     vscode.workspace.onDidChangeWorkspaceFolders(() => reactToActiveProjectChange()),
   );
@@ -298,11 +298,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     node && node.kind === "task" ? node.entry : undefined;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("promptconnext.signIn", () => signIn.start()),
-    vscode.commands.registerCommand("promptconnext.signInWithCode", () =>
+    vscode.commands.registerCommand("promptworkspace.signIn", () => signIn.start()),
+    vscode.commands.registerCommand("promptworkspace.signInWithCode", () =>
       signIn.withCode(),
     ),
-    vscode.commands.registerCommand("promptconnext.signOut", async () => {
+    vscode.commands.registerCommand("promptworkspace.signOut", async () => {
       if (queue.size() > 0) {
         const choice = await vscode.window.showWarningMessage(
           `${queue.size()} task update(s) have not reached the cloud yet. ` +
@@ -318,9 +318,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // answer: a progress bar on the view while it runs, and a message if it
     // failed. `store.refresh()` deliberately never rejects (it keeps the
     // cache), so the outcome has to be read back off the store.
-    vscode.commands.registerCommand("promptconnext.refreshTasks", async () => {
+    vscode.commands.registerCommand("promptworkspace.refreshTasks", async () => {
       await vscode.window.withProgress(
-        { location: { viewId: "promptconnext.tasks" } },
+        { location: { viewId: "promptworkspace.tasks" } },
         async () => {
           await store.refresh();
           await writer.flush();
@@ -334,18 +334,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const failure = store.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
-        `PromptConnext could not reach the cloud: ${failure}. Showing the tasks it had.`,
+        `PromptWorkspace could not reach the cloud: ${failure}. Showing the tasks it had.`,
         "Show Log",
       );
       if (choice === "Show Log") log.show();
     }),
-    vscode.commands.registerCommand("promptconnext.flushQueue", async () => {
+    vscode.commands.registerCommand("promptworkspace.flushQueue", async () => {
       await queue.retryAll();
       await writer.flush();
       refreshStatusBar();
     }),
     vscode.commands.registerCommand(
-      "promptconnext.copyTaskContext",
+      "promptworkspace.copyTaskContext",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
@@ -353,7 +353,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand(
-      "promptconnext.startTask",
+      "promptworkspace.startTask",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
@@ -370,7 +370,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand(
-      "promptconnext.setTaskStatus",
+      "promptworkspace.setTaskStatus",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
@@ -391,7 +391,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand(
-      "promptconnext.openTaskInWeb",
+      "promptworkspace.openTaskInWeb",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
@@ -409,12 +409,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // no node (the view title menu, the welcome view) it falls back to the
     // active project exactly as before.
     vscode.commands.registerCommand(
-      "promptconnext.openProjectInWeb",
+      "promptworkspace.openProjectInWeb",
       async (node?: RosterNode) => {
         const { webUrl } = readConfig();
         if (!webUrl) {
           void vscode.window.showErrorMessage(
-            "Set promptconnext.cloudWebUrl before opening the web app.",
+            "Set promptworkspace.cloudWebUrl before opening the web app.",
           );
           return;
         }
@@ -431,33 +431,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.env.openExternal(vscode.Uri.parse(`${webUrl}${path}`));
       },
     ),
-    vscode.commands.registerCommand("promptconnext.linkProject", () =>
+    vscode.commands.registerCommand("promptworkspace.linkProject", () =>
       link.linkInteractively(candidates()),
     ),
-    vscode.commands.registerCommand("promptconnext.showLog", () => log.show()),
-    vscode.commands.registerCommand("promptconnext.refreshProjects", async () => {
+    vscode.commands.registerCommand("promptworkspace.showLog", () => log.show()),
+    vscode.commands.registerCommand("promptworkspace.refreshProjects", async () => {
       await vscode.window.withProgress(
-        { location: { viewId: "promptconnext.projects" } },
+        { location: { viewId: "promptworkspace.projects" } },
         () => roster.refresh(),
       );
       projectsView.description = describeRoster();
       const failure = roster.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
-        `PromptConnext could not reach the cloud: ${failure}. Showing the projects it had.`,
+        `PromptWorkspace could not reach the cloud: ${failure}. Showing the projects it had.`,
         "Show Log",
       );
       if (choice === "Show Log") log.show();
     }),
     vscode.commands.registerCommand(
-      "promptconnext.cloneProject",
+      "promptworkspace.cloneProject",
       async (node?: RosterNode) => {
         if (!(node instanceof ProjectTreeNode)) return;
         await cloneProject(node.row, context.globalState, log);
       },
     ),
     vscode.commands.registerCommand(
-      "promptconnext.openProjectFolder",
+      "promptworkspace.openProjectFolder",
       async (node?: RosterNode) => {
         if (!(node instanceof ProjectTreeNode) || !node.row.localPath) return;
         const uri = vscode.Uri.file(node.row.localPath);

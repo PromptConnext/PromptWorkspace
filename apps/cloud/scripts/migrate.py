@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Apply apps/cloud/migrations/*.sql against a Postgres database, tracked in
-pz_schema_migrations (see migrations/0024_schema_migrations_ledger.sql and
+pw_schema_migrations (see migrations/0001_pw_schema_migrations_ledger.sql and
 docs/DEPLOYMENT.md §2.2, "Apply Supabase migrations").
 
 WHY A SCRIPT THAT SHELLS OUT TO `psql`, NOT A PYTHON DB DRIVER
@@ -8,8 +8,8 @@ apps/cloud's runtime dependencies (requirements.txt) include no Postgres
 driver — DATA_BACKEND=supabase talks to Postgres through the supabase-py
 client (PostgREST over HTTPS), never a direct psycopg-style connection, and
 migrations are explicitly plain SQL applied over a *direct* connection (see
-0024's own migration comment: "read/written only over a direct Postgres
-connection"). Adding psycopg2 solely for this script would be a new
+the ledger migration's own comment: "read/written only over a direct
+Postgres connection"). Adding psycopg2 solely for this script would be a new
 dependency in a repo that deliberately carries none for this purpose, and
 `psql` is already the tool every existing doc and migration comment assumes
 is on PATH. So this stays a thin, testable wrapper around `psql -f` — no
@@ -20,66 +20,78 @@ a plain function covered by tests/test_migrate.py; only the two `run psql`
 call sites touch a real connection.
 
 PARAMETERISED MIGRATIONS
-A migration that needs a deploy-time value (e.g. 0023_configurable_embed_dim
-.sql's destructive, fixed-width vector column) declares it in its own header
-with a comment of the form:
+A migration that needs a deploy-time value (e.g. 0002_pw_baseline.sql's
+fixed-width vector columns) declares it in its own header with a comment of
+the form:
 
     -- migration-runner: requires-vars=embed_dim
 
 (comma-separated for more than one). `apply` reads this before ever opening
-a connection for that file and refuses — loudly, before touching the
-database — to apply it without a matching `--var NAME=VALUE`. This is
-independent of whatever guard the migration's own SQL contains (0023 has a
-`\\if :{?embed_dim}` abort of its own for anyone who runs it with plain
-psql, outside this runner); the header convention exists so a *future*
-parameterised migration doesn't need to hand-roll that same psql-level
-guard to get the runner's fail-fast behaviour.
+a connection for that file — the ledger bootstrap included — and refuses,
+loudly and before touching the database, to apply it without a matching
+`--var NAME=VALUE`. This is independent of whatever guard the migration's
+own SQL contains (the baseline has a `\\if :{?embed_dim}` abort of its own
+for anyone who runs it with plain psql, outside this runner); the header
+convention exists so a *future* parameterised migration doesn't need to
+hand-roll that same psql-level guard to get the runner's fail-fast
+behaviour.
 
 USAGE
     scripts/migrate.py apply [--db-url URL] [--var NAME=VALUE ...] [--dry-run]
-    scripts/migrate.py adopt --through 0022 [--adopted-by NAME] [--note TEXT] [--yes]
     scripts/migrate.py status [--db-url URL]
 
 `--db-url` defaults to $DATABASE_URL, then $SUPABASE_DB_URL.
 
 STATUS IS STRICTLY READ-ONLY
 `status` answers "what does this database's history actually look like" —
-which migrations are recorded, whether each was `applied` (a runner
-executed it) or `adopted` (an operator asserted it without that
-execution), which are pending, and whether any already-recorded file has
-drifted from what's on disk. It runs a handful of SELECTs and nothing
+which migrations are recorded (with the `source` each row carries), which
+are pending, and whether any already-recorded file has drifted from what's
+on disk. It runs a handful of SELECTs and nothing
 else: no ledger bootstrap, no writes, no side effects, so pointing it at
 production to find out what state it's in cannot itself change that
-state. On a database with no `pz_schema_migrations` table at all, it does
+state. On a database with no `pw_schema_migrations` table at all, it does
 NOT fall back to inferring history from which application tables happen
 to exist — a partially-applied migration leaves some of its objects
 behind, which would make that inference actively wrong, not just
-imprecise — it reports the history as unknown and points at `adopt`.
+imprecise — it reports the history as unknown.
+
+THE LEDGER IS MIGRATION 1
+0001_pw_schema_migrations_ledger.sql creates the ledger, so every database
+this runner builds has a complete history from its first statement. A
+database built from the pre-baseline 36-file chain (tag
+pre-promptworkspace-rename) is not upgraded by this runner.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import getpass
 import hashlib
 import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 MIGRATIONS_DIR_DEFAULT = Path(__file__).resolve().parent.parent / "migrations"
-LEDGER_TABLE = "pz_schema_migrations"
-LEDGER_MIGRATION_NUMBER = 24
+LEDGER_TABLE = "pw_schema_migrations"
+LEDGER_MIGRATION_NUMBER = 1
+# Before the 2026-10-03 rename and squash, every table (the ledger included)
+# carried this prefix. A database that still has the old ledger predates the
+# baseline; it is reset, never migrated forward (docs/DEPLOYMENT.md §2.2).
+PRE_BASELINE_TABLE_PREFIX = "pz_"
+PRE_BASELINE_LEDGER_TABLE = f"{PRE_BASELINE_TABLE_PREFIX}schema_migrations"
+PRE_BASELINE_MESSAGE = (
+    f"pre-baseline database ({PRE_BASELINE_TABLE_PREFIX} schema); reset it — "
+    "fresh-start decision, see docs/DEPLOYMENT.md"
+)
 
 NUM_RE = re.compile(r"^(\d+)_")
 REQUIRES_VARS_RE = re.compile(r"^--\s*migration-runner:\s*requires-vars=(.+)$", re.MULTILINE)
 # A migration is "self-transactional" if it brackets itself in its own
-# top-level begin;/commit; (currently only 0023, whose destructive guard has
-# to run and be able to abort before any DDL starts — see its header).
-# Everything else is "plain" and gets wrapped by psql --single-transaction.
+# top-level begin;/commit; (none currently does — the baseline generator
+# strips the one the pre-baseline 0023 had). Everything else is "plain" and
+# gets wrapped by psql --single-transaction.
 SELF_TX_BEGIN_RE = re.compile(r"^[ \t]*begin[ \t]*;[ \t]*$", re.MULTILINE | re.IGNORECASE)
 TOP_LEVEL_COMMIT_RE = re.compile(r"^[ \t]*commit[ \t]*;[ \t]*$", re.MULTILINE | re.IGNORECASE)
 
@@ -110,9 +122,8 @@ class Migration:
         return self.path.read_text()
 
     def checksum(self) -> str:
-        # sha256 of the raw bytes — matches `shasum -a 256` in
-        # docs/DEPLOYMENT.md's adoption procedure, so a checksum recorded by
-        # `adopt` and one recorded by `apply` are directly comparable.
+        # sha256 of the raw bytes — the same value `shasum -a 256 <file>`
+        # prints, so a ledger row can be checked by hand.
         return hashlib.sha256(self.path.read_bytes()).hexdigest()
 
     def required_vars(self) -> list[str]:
@@ -127,7 +138,7 @@ class Migration:
 
 @dataclasses.dataclass(frozen=True)
 class LedgerEntry:
-    """One row of pz_schema_migrations, as read back for `status`."""
+    """One row of pw_schema_migrations, as read back for `status`."""
 
     filename: str
     checksum: str
@@ -178,7 +189,7 @@ def parse_vars(raw: list[str] | None) -> dict[str, str]:
 
 def ledger_insert_sql(source: str, with_note: bool) -> str:
     # Distinct :mig_runner_* variable names so they can never collide with a
-    # migration's own declared vars (e.g. 0023's :embed_dim).
+    # migration's own declared vars (e.g. the baseline's :embed_dim).
     if with_note:
         return (
             f"insert into {LEDGER_TABLE} (filename, checksum, source, notes) "
@@ -248,19 +259,26 @@ def run_psql(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, input=script, text=True, capture_output=True)
 
 
-def table_exists(db_url: str) -> bool:
+def _public_table_exists(db_url: str, table: str) -> bool:
     argv = psql_argv(db_url, {}, single_transaction=False, as_script=False)
-    argv += ["-t", "-A", "-c", f"select to_regclass('public.{LEDGER_TABLE}') is not null;"]
+    argv += ["-t", "-A", "-c", f"select to_regclass('public.{table}') is not null;"]
     result = run_psql(argv, "")
     if result.returncode != 0:
         raise MigrationError(f"could not query database: {result.stderr.strip()}")
     return result.stdout.strip() == "t"
 
 
+def table_exists(db_url: str) -> bool:
+    return _public_table_exists(db_url, LEDGER_TABLE)
+
+
+def pre_baseline_ledger_exists(db_url: str) -> bool:
+    return _public_table_exists(db_url, PRE_BASELINE_LEDGER_TABLE)
+
+
 def load_ledger(db_url: str) -> dict[str, str]:
-    """filename -> checksum for every row currently in pz_schema_migrations,
-    or {} if the table doesn't exist yet (a brand-new database, or one that
-    hasn't been through adoption/0024 yet)."""
+    """filename -> checksum for every row currently in pw_schema_migrations,
+    or {} if the table doesn't exist yet (a brand-new database)."""
     if not table_exists(db_url):
         return {}
     argv = psql_argv(db_url, {}, single_transaction=False, as_script=False)
@@ -320,7 +338,7 @@ def find_checksum_mismatches(
     """(filename, checksum recorded in the ledger, checksum of the file on
     disk today) for every already-applied migration whose file has changed
     since it was recorded. This is the failure mode the checksum column
-    exists for — see 0024's migration comment."""
+    exists for — see the ledger migration's comment."""
     mismatches = []
     for migration in migrations:
         recorded = ledger.get(migration.filename)
@@ -393,9 +411,8 @@ def format_status_report(migrations_dir: Path, db_url: str, report: StatusReport
             "with no ledger, there is nothing to report, only nothing to know."
         )
         lines.append(
-            "Run `migrate.py adopt --through NNNN` to establish a baseline for "
-            "an existing database's pre-ledger history, or `migrate.py apply` "
-            "if this is a genuinely fresh database (see docs/DEPLOYMENT.md §2.2)."
+            "Run `migrate.py apply` if this is a genuinely fresh database (see "
+            "docs/DEPLOYMENT.md §2.2)."
         )
         return "\n".join(lines)
 
@@ -466,21 +483,44 @@ def apply_one(
     return run_psql(argv, script)
 
 
+def refuse_missing_vars(migration: Migration, extra_vars: dict[str, str]) -> bool:
+    """Print the refusal and return True if `migration` declares a
+    requires-vars name that `extra_vars` lacks. Shared by the ledger
+    bootstrap and the pending loop, so neither path can apply a
+    parameterised migration without its value."""
+    missing = [v for v in migration.required_vars() if v not in extra_vars]
+    if not missing:
+        return False
+    print(
+        f"REFUSING TO APPLY {migration.filename} — missing required variable(s): "
+        f"{', '.join(missing)} (declared in this file's own "
+        "'migration-runner: requires-vars=' header). Re-run with "
+        f"--var {missing[0]}=<value>; see the file's header comment "
+        "for what value it expects.",
+        file=sys.stderr,
+    )
+    print("Stopping — no later migrations will be attempted.", file=sys.stderr)
+    return True
+
+
 def cmd_apply(args: argparse.Namespace) -> int:
     migrations_dir = Path(args.migrations_dir)
     migrations = discover_migrations(migrations_dir)
     db_url = resolve_db_url(args)
     extra_vars = parse_vars(args.var)
 
+    if pre_baseline_ledger_exists(db_url):
+        print(f"REFUSING TO APPLY — {PRE_BASELINE_MESSAGE}", file=sys.stderr)
+        return 2
+
     if not table_exists(db_url):
-        # A fresh database: pz_schema_migrations doesn't exist yet, so no
+        # A fresh database: pw_schema_migrations doesn't exist yet, so no
         # migration's ledger row can be written "in the same transaction as
         # the migration" — that table has to exist first. Bootstrap it by
-        # applying the ledger migration itself out of numeric order (its DDL
-        # only ever creates that one ops table; nothing else in this repo's
-        # migrations reads or depends on it, so running it first is safe),
-        # then resume every other migration — 0001 included — in normal
-        # numeric order with the ledger already in place.
+        # applying the ledger migration (number 1, so first in numeric
+        # order anyway; its DDL only ever creates that one ops table), with
+        # its own ledger row spliced in, then resume every other migration
+        # in numeric order with the ledger already in place.
         if args.dry_run:
             print(f"{len(migrations)} pending migration(s) (ledger table not created yet):")
             for m in migrations:
@@ -497,6 +537,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
                 f"{LEDGER_MIGRATION_NUMBER:04d}_*.sql not found in {migrations_dir} — "
                 "cannot bootstrap the ledger table."
             )
+        if refuse_missing_vars(ledger_migration, extra_vars):
+            return 2
         print(
             f"Ledger table not present yet — bootstrapping by applying "
             f"{ledger_migration.filename} first (source='applied'), then "
@@ -550,17 +592,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         return 0
 
     for m in pending:
-        missing = [v for v in m.required_vars() if v not in extra_vars]
-        if missing:
-            print(
-                f"REFUSING TO APPLY {m.filename} — missing required variable(s): "
-                f"{', '.join(missing)} (declared in this file's own "
-                "'migration-runner: requires-vars=' header). Re-run with "
-                f"--var {missing[0]}=<value>; see the file's header comment "
-                "for what value it expects.",
-                file=sys.stderr,
-            )
-            print("Stopping — no later migrations will be attempted.", file=sys.stderr)
+        if refuse_missing_vars(m, extra_vars):
             return 2
 
         print(f"Applying {m.filename} ...")
@@ -579,139 +611,6 @@ def cmd_apply(args: argparse.Namespace) -> int:
         print(f"Applied {m.filename}.")
 
     print(f"Done — applied {len(pending)} migration(s).")
-    return 0
-
-
-def cmd_adopt(args: argparse.Namespace) -> int:
-    migrations_dir = Path(args.migrations_dir)
-    migrations = discover_migrations(migrations_dir)
-    db_url = resolve_db_url(args)
-
-    try:
-        through = int(args.through)
-    except ValueError as exc:
-        raise MigrationError(f"--through {args.through!r} is not a migration number") from exc
-
-    if through >= LEDGER_MIGRATION_NUMBER:
-        print(
-            "REFUSING — adoption is only for pre-ledger history (migrations "
-            f"before {LEDGER_MIGRATION_NUMBER:04d}_schema_migrations_ledger.sql). "
-            "That migration and everything after it is always recorded as "
-            "source='applied' by actually running it, never asserted. Use "
-            "`apply` for those.",
-            file=sys.stderr,
-        )
-        return 2
-
-    ledger_migration = next(
-        (m for m in migrations if m.number == LEDGER_MIGRATION_NUMBER), None
-    )
-    if ledger_migration is None:
-        print(
-            f"could not find a {LEDGER_MIGRATION_NUMBER:04d}_*.sql migration in "
-            f"--migrations-dir ({migrations_dir})",
-            file=sys.stderr,
-        )
-        return 2
-
-    if through == 23:
-        print(
-            "WARNING: 0023_configurable_embed_dim.sql is destructive and "
-            "requires a deliberate -v embed_dim=<N> run — adopting it only "
-            "asserts you already did that by hand yourself; this command "
-            "does not and cannot verify it. See docs/DEPLOYMENT.md §2.2.",
-            file=sys.stderr,
-        )
-        if not args.yes:
-            print("Re-run with --yes to confirm you understand this.", file=sys.stderr)
-            return 2
-
-    to_adopt = [
-        m for m in migrations if m.number <= through and m.number != LEDGER_MIGRATION_NUMBER
-    ]
-    ledger = load_ledger(db_url)
-    already = [m.filename for m in to_adopt if m.filename in ledger]
-    new_adopt = [m for m in to_adopt if m.filename not in ledger]
-    ledger_needs_creating = ledger_migration.filename not in ledger
-
-    print("Adoption plan:")
-    print(f"  database: {redact(db_url)}")
-    if ledger_needs_creating:
-        print(
-            f"  create the ledger table by actually applying "
-            f"{ledger_migration.filename} (source='applied')"
-        )
-    else:
-        print(f"  ledger table already present ({ledger_migration.filename} already recorded)")
-    if already:
-        print(f"  already recorded, left alone: {', '.join(already)}")
-    if new_adopt:
-        names = ", ".join(m.filename for m in new_adopt)
-        print(f"  record as source='adopted' (asserted, not executed): {names}")
-    else:
-        print("  no new history to adopt.")
-
-    if not new_adopt and not ledger_needs_creating:
-        print("Nothing to do.")
-        return 0
-
-    if not args.yes:
-        reply = input("Proceed? [y/N] ").strip().lower()
-        if reply != "y":
-            print("Aborted — nothing changed.")
-            return 1
-
-    if ledger_needs_creating:
-        print(f"Applying {ledger_migration.filename} ...")
-        result = apply_one(db_url, ledger_migration, extra_vars={})
-        if result.stdout.strip():
-            print(result.stdout.strip())
-        if result.returncode != 0:
-            print(result.stderr.strip(), file=sys.stderr)
-            print(
-                "FAILED creating the ledger table — adoption aborted, nothing recorded.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"Applied {ledger_migration.filename}.")
-
-    if new_adopt:
-        adopted_by = args.adopted_by or os.environ.get("USER") or getpass.getuser()
-        adopted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        note = (
-            f"Adopted {adopted_at} by {adopted_by}: asserted already applied "
-            "to this database; not independently verified, only "
-            "checksummed against the current file."
-        )
-        if args.note:
-            note += f" {args.note}"
-
-        statements = []
-        script_vars: dict[str, str] = {"adopt_note": note}
-        for i, m in enumerate(new_adopt):
-            fkey, ckey = f"adopt_f{i}", f"adopt_c{i}"
-            statements.append(
-                f"insert into {LEDGER_TABLE} (filename, checksum, source, notes) "
-                f"values (:'{fkey}', :'{ckey}', 'adopted', :'adopt_note') "
-                "on conflict (filename) do nothing;"
-            )
-            script_vars[fkey] = m.filename
-            script_vars[ckey] = m.checksum()
-        script = "\n".join(statements) + "\n"
-        argv = psql_argv(db_url, script_vars, single_transaction=True, as_script=True)
-        result = run_psql(argv, script)
-        if result.stdout.strip():
-            print(result.stdout.strip())
-        if result.returncode != 0:
-            print(result.stderr.strip(), file=sys.stderr)
-            print(
-                "FAILED recording adopted history — rolled back, nothing changed.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"Recorded {len(new_adopt)} migration(s) as adopted.")
-
-    print("Adoption complete.")
     return 0
 
 
@@ -759,26 +658,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     apply_p.set_defaults(func=cmd_apply)
 
-    adopt_p = sub.add_parser(
-        "adopt",
-        help="assert pre-ledger migration history without executing it (docs/DEPLOYMENT.md §2.2)",
-    )
-    adopt_p.add_argument(
-        "--through",
-        required=True,
-        metavar="NNNN",
-        help="last migration already believed applied, e.g. 0022",
-    )
-    adopt_p.add_argument("--adopted-by", help="default: $USER")
-    adopt_p.add_argument("--note", help="appended to the standard adoption note")
-    adopt_p.add_argument(
-        "--yes", action="store_true", help="skip the interactive confirmation prompt"
-    )
-    adopt_p.set_defaults(func=cmd_adopt)
-
     status_p = sub.add_parser(
         "status",
-        help="read-only: which migrations are applied/adopted/pending, and any checksum drift",
+        help="read-only: which migrations are applied/pending, and any checksum drift",
     )
     status_p.set_defaults(func=cmd_status)
 

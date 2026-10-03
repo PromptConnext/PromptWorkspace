@@ -15,6 +15,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { PRODUCTION_DEFAULTS } from "@promptworkspace/cloud-client";
+
 export interface McpConfig {
   cloudApiUrl: string;
   cloudWebUrl: string;
@@ -22,14 +24,9 @@ export interface McpConfig {
   supabaseAnonKey: string;
 }
 
-// Same values as apps/vscode/package.json's `contributes.configuration`
-// defaults. If one moves, both move.
-const DEFAULTS: McpConfig = {
-  cloudApiUrl: "https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run",
-  cloudWebUrl: "https://prompt-zone-web-app.vercel.app",
-  supabaseUrl: "",
-  supabaseAnonKey: "",
-};
+// The shared production defaults — apps/vscode/package.json copies the same
+// four values, and packages/cloud-client/test/defaults.test.ts keeps them equal.
+export const DEFAULTS: McpConfig = { ...PRODUCTION_DEFAULTS };
 
 // Prefixed rather than the engine's bare `CLOUD_API_URL` / `SUPABASE_URL`. The
 // engine is started by a shell we control; this process is started by someone
@@ -37,10 +34,10 @@ const DEFAULTS: McpConfig = {
 // an unrelated project's `SUPABASE_URL` silently redirecting our auth is a
 // failure mode worth spending a prefix to avoid.
 const ENV_KEYS: Record<keyof McpConfig, string> = {
-  cloudApiUrl: "PROMPTCONNEXT_CLOUD_API_URL",
-  cloudWebUrl: "PROMPTCONNEXT_CLOUD_WEB_URL",
-  supabaseUrl: "PROMPTCONNEXT_SUPABASE_URL",
-  supabaseAnonKey: "PROMPTCONNEXT_SUPABASE_ANON_KEY",
+  cloudApiUrl: "PROMPTWORKSPACE_CLOUD_API_URL",
+  cloudWebUrl: "PROMPTWORKSPACE_CLOUD_WEB_URL",
+  supabaseUrl: "PROMPTWORKSPACE_SUPABASE_URL",
+  supabaseAnonKey: "PROMPTWORKSPACE_SUPABASE_ANON_KEY",
 };
 
 export const CONFIG_FILE = "config.json";
@@ -50,14 +47,14 @@ export const CONFIG_FILE = "config.json";
  *  XDG everywhere except Windows, which has no XDG convention and where
  *  apps/engine's keychain fallback already writes under %APPDATA%. */
 export function configDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.PROMPTCONNEXT_MCP_CONFIG_DIR?.trim();
+  const override = env.PROMPTWORKSPACE_MCP_CONFIG_DIR?.trim();
   if (override) return override;
   if (process.platform === "win32") {
     const base = env.APPDATA ?? join(homedir(), "AppData", "Roaming");
-    return join(base, "promptconnext-mcp");
+    return join(base, "promptworkspace-mcp");
   }
   const base = env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
-  return join(base, "promptconnext-mcp");
+  return join(base, "promptworkspace-mcp");
 }
 
 /** Create the config directory if it is missing. 0700 because the token store

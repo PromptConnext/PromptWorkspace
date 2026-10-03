@@ -9,7 +9,7 @@
 
 import * as vscode from "vscode";
 import type { API, GitExtension, Repository } from "./git";
-import type { LoggerLike } from "@promptconnext/pz-cloud";
+import type { LoggerLike } from "@promptworkspace/cloud-client";
 
 export interface RemoteRef {
   name: string;

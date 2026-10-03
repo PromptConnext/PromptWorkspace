@@ -1,4 +1,4 @@
-// Orchestrates an external coding-agent CLI (ADR 0009). PromptConnext does not
+// Orchestrates an external coding-agent CLI (ADR 0009). PromptWorkspace does not
 // ship its own coding-agent runtime; it launches whichever agent the developer
 // prefers (Claude Code / Gemini / Codex / custom) headless in the project
 // workspace and captures the result from Git — a capture path that is
@@ -51,7 +51,7 @@ export async function runAgentTask(
     prompt,
     engineBaseUrl: `http://127.0.0.1:${ENGINE_PORT}`,
     configDir: agentConfigDir(),
-    allowBash: process.env.PROMPTCONNEXT_AGENT_ALLOW_BASH === "1",
+    allowBash: process.env.PROMPTWORKSPACE_AGENT_ALLOW_BASH === "1",
   });
 
   const child = spawn(plan.command, plan.args, {
@@ -102,6 +102,6 @@ export async function runAgentTask(
       `${adapter.label} completed but made no changes to the repository`,
     );
   }
-  const commitSha = commitFiles(projectPath, files, `promptconnext: ${taskLabel}`);
+  const commitSha = commitFiles(projectPath, files, `promptworkspace: ${taskLabel}`);
   return { files, commitSha, agent: adapter.id };
 }

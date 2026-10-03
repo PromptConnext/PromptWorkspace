@@ -51,7 +51,7 @@ def driver_prompt(kind: StageKind, existing_codebase: bool = False) -> str:
     prompt is byte-identical to what it was before the flag existed."""
     doc = _template(_STAGE_TEMPLATE[kind])
     lines = [
-        f"You are the {_STAGE_ROLE[kind]} engine inside PromptConnext.",
+        f"You are the {_STAGE_ROLE[kind]} engine inside PromptWorkspace.",
         "Fill in the following template completely, based on the user's input. Replace every "
         "placeholder. Do not leave template markers like [FEATURE NAME] or $ARGUMENTS in the "
         "output. Mark genuine unknowns with [NEEDS CLARIFICATION: question].",
@@ -129,7 +129,7 @@ def codebase_baseline_prompt() -> str:
     doc = _template("codebase-baseline-template.md")
     return "\n".join(
         [
-            "You are the codebase-analysis engine inside PromptConnext.",
+            "You are the codebase-analysis engine inside PromptWorkspace.",
             "You are given a snapshot of an existing software repository: its directory "
             "summary, the stack detected from its manifests, a test summary, excerpts of a "
             "fixed list of files, and outlines of its source files (declaration and "

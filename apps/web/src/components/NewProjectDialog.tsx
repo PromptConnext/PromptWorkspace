@@ -24,9 +24,9 @@ const DETAIL_MESSAGES: Record<string, string> = {
   // Scope-neutral by design (plan 0016 M5): the match can land in a
   // workspace this user isn't a member of, so the message must not name
   // which workspace or project already imported it.
-  repo_already_imported: "This repository is already connected to a PromptConnext project.",
+  repo_already_imported: "This repository is already connected to a PromptWorkspace project.",
   repo_is_empty:
-    "That repository has no commits yet — PromptConnext can only add files on top of an existing one.",
+    "That repository has no commits yet — PromptWorkspace can only add files on top of an existing one.",
   invalid_repo_full_name: "That doesn't look like a repository — refresh the list and try again.",
   github_repo_not_in_token_scope:
     'The workspace\'s GitHub token can\'t read that repository — a token scoped to "Only select ' +
@@ -174,7 +174,7 @@ export function NewProjectDialog({
             >
               <p className="text-sm font-medium text-slate-900">Start from scratch</p>
               <p className="mt-1 text-xs text-slate-500">
-                A new, empty project — the usual PromptConnext flow.
+                A new, empty project — the usual PromptWorkspace flow.
               </p>
             </button>
             <button
@@ -237,7 +237,7 @@ export function NewProjectDialog({
                 <p>
                   The workspace's GitHub connection is for{" "}
                   <strong>{repoList.owner ?? "an account with no repositories"}</strong>.
-                  PromptConnext can only see repositories under that account.
+                  PromptWorkspace can only see repositories under that account.
                 </p>
                 <p className="mt-1">
                   Move your repository to {repoList.owner ?? "that account"}, or ask a workspace
@@ -267,9 +267,9 @@ export function NewProjectDialog({
                 <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
                   {filtered.map((r) => {
                     const disabledReason = r.archived
-                      ? "archived on GitHub — unarchive it first, PromptConnext must be able to push"
+                      ? "archived on GitHub — unarchive it first, PromptWorkspace must be able to push"
                       : r.empty
-                        ? "no commits yet — PromptConnext can only add files on top of an existing commit"
+                        ? "no commits yet — PromptWorkspace can only add files on top of an existing commit"
                         : null;
                     return (
                       <li key={r.full_name}>
@@ -337,7 +337,7 @@ export function NewProjectDialog({
                   README. */}
               <p>
                 Nothing is written to GitHub now. When your Tech Lead creates the repository for
-                this project, PromptConnext adds its planning documents to{" "}
+                this project, PromptWorkspace adds its planning documents to{" "}
                 <strong>{selected.full_name}</strong> in a single commit on{" "}
                 <strong>{selected.default_branch}</strong>.
               </p>
@@ -345,7 +345,7 @@ export function NewProjectDialog({
                 <li>Existing files are never overwritten or deleted.</li>
                 <li>
                   Where a document would land on a file that already exists — a README, say — it
-                  goes under <code>docs/promptzone/</code> instead.
+                  goes under <code>docs/promptworkspace/</code> instead.
                 </li>
                 <li>
                   If a deployment template is chosen, its pipeline is added at{" "}
@@ -369,7 +369,7 @@ export function NewProjectDialog({
                 onChange={(e) => setConsent(e.target.checked)}
                 className="mt-0.5"
               />
-              I understand PromptConnext will add files to {selected.full_name}.
+              I understand PromptWorkspace will add files to {selected.full_name}.
             </label>
 
             {error && <p className="mb-2 text-sm text-red-600">{error}</p>}

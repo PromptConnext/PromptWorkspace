@@ -57,7 +57,7 @@ fn mint_token() -> String {
 // compiled from (dev / `cargo build`).
 #[cfg_attr(debug_assertions, allow(unused_variables))]
 fn engine_dir<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> PathBuf {
-    if let Ok(dir) = std::env::var("PROMPTCONNEXT_ENGINE_DIR") {
+    if let Ok(dir) = std::env::var("PROMPTWORKSPACE_ENGINE_DIR") {
         return PathBuf::from(dir);
     }
     // Release builds only. Under `tauri dev` the resource dir is target/debug/,
@@ -89,12 +89,12 @@ fn spawn_engine(token: &str, dir: &Path, log: &EngineLog) -> std::io::Result<Chi
     let mut child = Command::new(node)
         .arg("src/index.ts")
         .current_dir(dir)
-        .env("PROMPTCONNEXT_PARENT_PID", std::process::id().to_string())
-        .env("PROMPTCONNEXT_AUTH_TOKEN", token)
+        .env("PROMPTWORKSPACE_PARENT_PID", std::process::id().to_string())
+        .env("PROMPTWORKSPACE_AUTH_TOKEN", token)
         // Names the scheme this shell registered so the sign-in page bounces
         // the ADR 0014 callback back here. Must match register() below and
         // tauri.conf.json's deep-link config.
-        .env("PROMPTCONNEXT_DEEP_LINK_SCHEME", "promptconnext")
+        .env("PROMPTWORKSPACE_DEEP_LINK_SCHEME", "promptworkspace")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -143,7 +143,7 @@ pub fn run() {
         // OS-provided deep-link argv into the deep-link plugin's state
         // (Windows/Linux single-instance re-launch path).
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // A promptconnext:// open (or a plain second launch) hit an
+            // A promptworkspace:// open (or a plain second launch) hit an
             // already-running instance; bring the existing window forward.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
@@ -169,7 +169,7 @@ pub fn run() {
             let child = match spawn_engine(&token, &dir, &log) {
                 Ok(child) => {
                     println!(
-                        "[promptconnext] engine started (pid {}) from {}",
+                        "[promptworkspace] engine started (pid {}) from {}",
                         child.id(),
                         dir.display()
                     );
@@ -178,7 +178,7 @@ pub fn run() {
                 Err(err) => {
                     // The UI polls /engine/health and surfaces "unreachable";
                     // never block the shell on a failed sidecar.
-                    eprintln!("[promptconnext] failed to start engine: {err}");
+                    eprintln!("[promptworkspace] failed to start engine: {err}");
                     None
                 }
             };
@@ -193,9 +193,9 @@ pub fn run() {
             // before any app script runs (ADR 0008). Window chrome mirrors what
             // tauri.conf.json used to declare.
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("PromptConnext")
+                .title("PromptWorkspace")
                 .inner_size(1280.0, 840.0)
-                .initialization_script(&format!("window.__PROMPTCONNEXT_TOKEN__ = \"{token}\";"))
+                .initialization_script(&format!("window.__PROMPTWORKSPACE_TOKEN__ = \"{token}\";"))
                 .build()?;
 
             // Release Windows builds register the scheme from the
@@ -211,7 +211,7 @@ pub fn run() {
             // there (Launch Services only reads CFBundleURLTypes from a
             // bundle's Info.plist — there's no dynamic registration API for
             // an unbundled process). So on `tauri dev` for macOS, the
-            // `promptconnext://` redirect after browser sign-in has no
+            // `promptworkspace://` redirect after browser sign-in has no
             // registered handler and silently goes nowhere; that's why
             // TopBar's sign-in flow also has a "paste the code manually"
             // fallback — it's not just a dev convenience, it's the only way
@@ -220,12 +220,12 @@ pub fn run() {
             // case a future plugin version adds support.
             #[cfg(any(target_os = "linux", target_os = "macos", debug_assertions))]
             {
-                if let Err(err) = app.deep_link().register("promptconnext") {
-                    eprintln!("[promptconnext] failed to register promptconnext:// scheme: {err}");
+                if let Err(err) = app.deep_link().register("promptworkspace") {
+                    eprintln!("[promptworkspace] failed to register promptworkspace:// scheme: {err}");
                 }
             }
 
-            // Forward every promptconnext:// callback to the webview, which
+            // Forward every promptworkspace:// callback to the webview, which
             // parses ?code & ?state and calls the engine redeem route. Only
             // an opaque one-time code rides this URL (ADR 0014). On macOS
             // this fires directly from the OS `open` event; on Windows/Linux

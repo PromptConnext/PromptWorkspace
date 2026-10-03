@@ -12,7 +12,7 @@ import type { DeploymentOut, DeploymentStatus } from "@/lib/types";
 function status(overrides: Partial<DeploymentStatus> = {}): DeploymentStatus {
   return {
     template_id: "static-r2",
-    template_name: "Static site → PromptZone hosting",
+    template_name: "Static site → PromptWorkspace hosting",
     provider: "platform-r2",
     embeddable: true,
     state: "live",

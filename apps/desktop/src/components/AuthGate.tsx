@@ -5,7 +5,7 @@ import { redeemBrowserLogin, startBrowserLogin } from "../api";
 
 // Identity gate (ADR 0015 state 1). Reuses the ADR 0014 browser handoff
 // unchanged — start a login, open the hosted sign-in page, and redeem the
-// promptconnext:// callback the Rust shell forwards as `auth-callback`. On a
+// promptworkspace:// callback the Rust shell forwards as `auth-callback`. On a
 // successful redeem it calls onSignedIn, which re-drives App's gate.
 export default function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
   const [waiting, setWaiting] = useState(false);
@@ -46,9 +46,9 @@ export default function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
 
   return (
     <main className="gate">
-      <h1>Sign in to PromptConnext</h1>
+      <h1>Sign in to PromptWorkspace</h1>
       <p>
-        Your workspaces and projects live in PromptConnext Cloud. Sign in with
+        Your workspaces and projects live in PromptWorkspace Cloud. Sign in with
         your browser to continue — your code, model keys, and compute stay on
         this machine.
       </p>

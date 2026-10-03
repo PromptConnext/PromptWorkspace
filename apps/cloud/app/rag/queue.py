@@ -44,7 +44,7 @@ from app.rag.code_chunker import chunk_code
 from app.rag.source import node_text
 from app.requestlog import get_request_id, request_id_scope
 
-logger = logging.getLogger("promptconnext.rag")
+logger = logging.getLogger("promptworkspace.rag")
 
 
 @dataclass(frozen=True)

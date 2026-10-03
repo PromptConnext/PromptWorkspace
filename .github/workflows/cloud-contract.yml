@@ -29,7 +29,7 @@ on:
       - "apps/cloud/tests/rls/**"
       - ".github/workflows/cloud-contract.yml"
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "apps/cloud/app/db/**"
       - "apps/cloud/migrations/**"
@@ -73,13 +73,13 @@ jobs:
           supabase --version
 
       # supabase/config.toml at the repository root is the whole configuration:
-      # project_id PromptZone, Postgres 17, db on 54322, PostgREST on 54321.
+      # project_id PromptWorkspace, Postgres 17, db on 54322, PostgREST on 54321.
       - name: Start the local stack
         run: supabase start
 
       # The runner has psql (postgresql-client ships on ubuntu-latest), which is
-      # what scripts/migrate.py shells out to. 0023 refuses to apply without
-      # --var embed_dim, by its own header declaration.
+      # what scripts/migrate.py shells out to. 0002_pw_baseline.sql refuses to
+      # apply without --var embed_dim, by its requires-vars=embed_dim header.
       - name: Apply the cloud migrations
         working-directory: apps/cloud
         env:
@@ -104,31 +104,31 @@ jobs:
       - name: Run the contract suite against both adapters
         working-directory: apps/cloud
         env:
-          PZ_CONTRACT_SUPABASE_URL: http://127.0.0.1:54321
-          # PZ_CONTRACT_REQUIRE_SUPABASE turns "no target configured" from a
+          PROMPTWORKSPACE_CONTRACT_SUPABASE_URL: http://127.0.0.1:54321
+          # PROMPTWORKSPACE_CONTRACT_REQUIRE_SUPABASE turns "no target configured" from a
           # skip into a failure (tests/contract/conftest.py). Without it a
           # broken stack would leave every supabase case skipped and the job
           # green, which is the exact shape of the blindness this plan fixes.
-          PZ_CONTRACT_REQUIRE_SUPABASE: "1"
+          PROMPTWORKSPACE_CONTRACT_REQUIRE_SUPABASE: "1"
         run: |
           set -euo pipefail
-          PZ_CONTRACT_SUPABASE_KEY="$(supabase status -o env --workdir "$GITHUB_WORKSPACE" \
+          PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY="$(supabase status -o env --workdir "$GITHUB_WORKSPACE" \
             | sed -n 's/^SERVICE_ROLE_KEY="\(.*\)"$/\1/p')"
-          if [ -z "$PZ_CONTRACT_SUPABASE_KEY" ]; then
+          if [ -z "$PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY" ]; then
             echo "could not read SERVICE_ROLE_KEY from \`supabase status\`" >&2
             exit 1
           fi
-          export PZ_CONTRACT_SUPABASE_KEY
+          export PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY
           # tests/contract/test_for_user_client_split.py is the one contract
-          # case needing a real end-user JWT, so it reads the PZ_RLS_* trio
-          # (a GoTrue signup needs the anon key) rather than PZ_CONTRACT_*.
+          # case needing a real end-user JWT, so it reads the PROMPTWORKSPACE_RLS_* trio
+          # (a GoTrue signup needs the anon key) rather than PROMPTWORKSPACE_CONTRACT_*.
           # Same stack, same keys, different variable names — see that
           # module's docstring for why it cannot live with the others.
-          PZ_RLS_SUPABASE_URL=http://127.0.0.1:54321 \
-          PZ_RLS_SUPABASE_ANON_KEY="$(supabase status -o env --workdir "$GITHUB_WORKSPACE" \
+          PROMPTWORKSPACE_RLS_SUPABASE_URL=http://127.0.0.1:54321 \
+          PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY="$(supabase status -o env --workdir "$GITHUB_WORKSPACE" \
             | sed -n 's/^ANON_KEY="\(.*\)"$/\1/p')" \
-          PZ_RLS_SUPABASE_SERVICE_KEY="$PZ_CONTRACT_SUPABASE_KEY" \
-          PZ_RLS_REQUIRE_SUPABASE=1 \
+          PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY="$PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY" \
+          PROMPTWORKSPACE_RLS_REQUIRE_SUPABASE=1 \
           pytest -q -m contract -rsx
 
       # The grant probes (plan 0014 M4). Separate step, not folded into the one
@@ -145,23 +145,23 @@ jobs:
       - name: Run the RLS grant probes against real Postgres
         working-directory: apps/cloud
         env:
-          PZ_RLS_SUPABASE_URL: http://127.0.0.1:54321
-          # Same reasoning as PZ_CONTRACT_REQUIRE_SUPABASE above: a stack that
+          PROMPTWORKSPACE_RLS_SUPABASE_URL: http://127.0.0.1:54321
+          # Same reasoning as PROMPTWORKSPACE_CONTRACT_REQUIRE_SUPABASE above: a stack that
           # failed to come up must fail this job, not skip every case and
           # report green. This is the only verification the revoke has.
-          PZ_RLS_REQUIRE_SUPABASE: "1"
+          PROMPTWORKSPACE_RLS_REQUIRE_SUPABASE: "1"
         run: |
           set -euo pipefail
           status="$(supabase status -o env --workdir "$GITHUB_WORKSPACE")"
-          PZ_RLS_SUPABASE_ANON_KEY="$(printf '%s\n' "$status" \
+          PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY="$(printf '%s\n' "$status" \
             | sed -n 's/^ANON_KEY="\(.*\)"$/\1/p')"
-          PZ_RLS_SUPABASE_SERVICE_KEY="$(printf '%s\n' "$status" \
+          PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY="$(printf '%s\n' "$status" \
             | sed -n 's/^SERVICE_ROLE_KEY="\(.*\)"$/\1/p')"
-          if [ -z "$PZ_RLS_SUPABASE_ANON_KEY" ] || [ -z "$PZ_RLS_SUPABASE_SERVICE_KEY" ]; then
+          if [ -z "$PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY" ] || [ -z "$PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY" ]; then
             echo "could not read ANON_KEY/SERVICE_ROLE_KEY from \`supabase status\`" >&2
             exit 1
           fi
-          export PZ_RLS_SUPABASE_ANON_KEY PZ_RLS_SUPABASE_SERVICE_KEY
+          export PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY
           pytest -q -m rls -rsx
 
       - name: Stop the local stack

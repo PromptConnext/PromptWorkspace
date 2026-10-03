@@ -36,7 +36,7 @@ describe("repro create-project error", () => {
     } catch {}
 
     await browser.pause(1500);
-    const token = await browser.execute(() => window.__PROMPTCONNEXT_TOKEN__);
+    const token = await browser.execute(() => window.__PROMPTWORKSPACE_TOKEN__);
     console.log("R_TOKEN=" + token);
 
     const start = await engineFetch(token, "http://127.0.0.1:47131/engine/cloud/login/browser", {

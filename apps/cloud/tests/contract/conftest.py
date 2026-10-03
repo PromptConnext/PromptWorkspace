@@ -17,8 +17,8 @@ adapter is built through `create_app`, so `settings.data_backend`,
 The supabase parameter reads a *dedicated* pair of variables the root conftest
 does not touch:
 
-    PZ_CONTRACT_SUPABASE_URL
-    PZ_CONTRACT_SUPABASE_KEY
+    PROMPTWORKSPACE_CONTRACT_SUPABASE_URL
+    PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY
 
 Unset (the default, and the state of every ordinary `pytest` run) means the
 supabase parameter is **skipped with a reason naming the variable that is
@@ -38,8 +38,8 @@ Standing the target up locally (plan 0020 M2), from the repository root:
     # app/db/supabase_repository.py's module docstring), so grant it:
     psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
       -c 'grant select, insert, update, delete on all tables in schema public to service_role'
-    export PZ_CONTRACT_SUPABASE_URL=http://127.0.0.1:54321
-    export PZ_CONTRACT_SUPABASE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
+    export PROMPTWORKSPACE_CONTRACT_SUPABASE_URL=http://127.0.0.1:54321
+    export PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
     pytest -q -m contract
 
 Reset is `supabase db reset` (re-apply migrations afterwards), not a
@@ -57,13 +57,13 @@ import pytest
 
 from app.db.repository import InMemoryRepository, Repository
 
-_URL_VAR = "PZ_CONTRACT_SUPABASE_URL"
-_KEY_VAR = "PZ_CONTRACT_SUPABASE_KEY"
+_URL_VAR = "PROMPTWORKSPACE_CONTRACT_SUPABASE_URL"
+_KEY_VAR = "PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY"
 # Set by the job whose entire purpose is to reach the adapter (see
 # .github/workflows/cloud-contract.yml). A nightly that skipped every supabase
 # case must not read as green, so where the run is *supposed* to have a target,
 # the absent variable is a failure rather than a skip.
-_REQUIRE_VAR = "PZ_CONTRACT_REQUIRE_SUPABASE"
+_REQUIRE_VAR = "PROMPTWORKSPACE_CONTRACT_REQUIRE_SUPABASE"
 
 BACKENDS = ("memory", "supabase")
 

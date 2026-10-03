@@ -57,7 +57,7 @@ from app.models.schemas import (
     utcnow,
 )
 
-logger = logging.getLogger("promptconnext.deployments")
+logger = logging.getLogger("promptworkspace.deployments")
 router = APIRouter(tags=["deployments"])
 
 # Terminal states: a deploy in any other state is still moving, and is what
@@ -102,7 +102,7 @@ class DeploymentTemplateOut(BaseModel):
     provider_is_platform_owned: bool
     # "customer" | "platform" | "host". The boolean above answers "is there
     # anything to connect"; this answers "who is hosting the result", which
-    # the picker has to say differently for PromptZone storage and for a git
+    # the picker has to say differently for PromptWorkspace storage and for a git
     # host. See DeployProvider.credential_owner.
     provider_credential_owner: str
     # Identifiers this template needs PER PROJECT — the provider-side project
@@ -146,7 +146,7 @@ class DeploymentOut(BaseModel):
     ref: str | None
     run_url: str | None
     frame_policy: str | None
-    # Frozen at terminal state (pz_deployment_tasks). Empty for a build still
+    # Frozen at terminal state (pw_deployment_tasks). Empty for a build still
     # in flight, and empty for a build whose tasks have since been deleted.
     tasks: list[BuildTaskOut] = []
     # "uncomputed" | "frozen". `tasks` alone cannot tell a reader which of two
@@ -549,7 +549,7 @@ async def repair_webhook(
                 new_secret,
                 list(WEBHOOK_EVENTS),
             )
-            # The service repository is required here: pz_repo_webhooks is
+            # The service repository is required here: pw_repo_webhooks is
             # intentionally inaccessible to the caller's JWT-scoped client.
             service_repo.upsert_repo_webhook(
                 RepoWebhook(

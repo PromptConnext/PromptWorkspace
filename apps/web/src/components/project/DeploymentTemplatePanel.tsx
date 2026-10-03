@@ -9,7 +9,7 @@ import { useCloudGet } from "@/lib/hooks";
 import type { DeploymentTemplateOut, Project } from "@/lib/types";
 
 // Three postures, three different things to say. "No account needed" is true
-// of both providers nobody connects, but only one of them means PromptConnext
+// of both providers nobody connects, but only one of them means PromptWorkspace
 // is hosting the result — saying that about GitHub Pages would be wrong.
 const ACCOUNT_NOTE: Record<DeploymentTemplateOut["provider_credential_owner"], string> = {
   customer: "needs a connected account",

@@ -1,23 +1,27 @@
 {
-  "name": "@promptconnext/mcp",
-  "version": "0.1.0",
+  "name": "@promptworkspace/mcp",
+  "version": "0.2.0",
   "private": true,
-  "description": "PromptConnext MCP server — assigned tasks and their context, for the editors the VS Code extension cannot reach (ADR 0019 decision 3).",
+  "description": "PromptWorkspace MCP server — assigned tasks and their context, for the editors the VS Code extension cannot reach (ADR 0019 decision 3).",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/9haroon/prompt-zone.git",
+    "url": "https://github.com/PromptConnext/PromptWorkspace.git",
     "directory": "apps/mcp"
   },
   "bin": {
-    "promptconnext-mcp": "./dist/index.js"
+    "promptworkspace-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "build": "node esbuild.mjs --production",
+    "prepack": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ../../packages/cloud-client/scripts/assert-defaults-filled.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "start": "node --experimental-strip-types src/index.ts",
@@ -27,7 +31,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
-    "@promptconnext/pz-cloud": "workspace:*",
+    "@promptworkspace/cloud-client": "workspace:*",
     "@types/node": "^24.0.0",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2"

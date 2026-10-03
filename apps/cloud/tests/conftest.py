@@ -6,7 +6,7 @@ import os
 # .env.local/.env files entirely — set here, before app.config is imported, so
 # every setting falls back to its declared default rather than only the few
 # this file used to pin by name.
-os.environ["PZ_DISABLE_ENV_FILE"] = "1"
+os.environ["PROMPTWORKSPACE_DISABLE_ENV_FILE"] = "1"
 
 # Belt and braces: real process environment variables take precedence over
 # env_file values in pydantic-settings, so a developer exporting these in their

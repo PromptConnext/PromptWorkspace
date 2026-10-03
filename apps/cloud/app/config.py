@@ -20,7 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # under this flag makes the suite hermetic for all settings at once rather
 # than one variable at a time.
 _ENV_FILES: tuple[str, ...] = (
-    () if os.getenv("PZ_DISABLE_ENV_FILE") == "1" else (".env.local", ".env")
+    () if os.getenv("PROMPTWORKSPACE_DISABLE_ENV_FILE") == "1" else (".env.local", ".env")
 )
 
 
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # sent a delivery, and since an issue key is unique per site rather than per
     # provider, two tenants reusing a project prefix could cross-update each
     # other's tasks. Inbound secrets are now minted per tracker account and held
-    # as ciphertext in pz_workspace_integrations.
+    # as ciphertext in pw_workspace_integrations.
     jira_email: str = ""
     jira_api_token: str = ""
 
@@ -191,18 +191,18 @@ class Settings(BaseSettings):
     # generation-only, so a keyless (no BYO) workspace needs a separate
     # platform-hosted embedding model to ground content questions. Any
     # OpenAI-compatible /embeddings endpoint works (Text-Embeddings-Inference,
-    # vLLM, ...), but pz_rag_chunks.embedding is a fixed vector(1536) column
-    # (migrations/0009_rag.sql), so the chosen model's output dimension must
-    # be 1536 or chunks embedded with it won't fit the column at all. Most
-    # open multilingual encoders do NOT fit (BGE-m3 emits 1024, Jina v3 1024,
-    # KaLM-embedding-multilingual v2.5 896); known-good 1536 options are
-    # OpenAI text-embedding-3-small (1536 native), Google gemini-embedding-001
-    # via its OpenAI-compatible endpoint (3072 native, MRL-truncated to 1536
-    # via the `dimensions` param), or Alibaba-NLP/gte-Qwen2-1.5B-instruct
-    # (1536 native, self-hosted). Left unset (empty base_url/model), the
-    # assistant still answers lineage/status questions on the managed chat
-    # model alone; content questions degrade to "no matching artifacts"
-    # rather than erroring.
+    # vLLM, ...), but pw_rag_chunks.embedding is a fixed vector(1536) column
+    # (migrations/0002_pw_baseline.sql, section 0009_rag.sql), so the chosen
+    # model's output dimension must be 1536 or chunks embedded with it won't
+    # fit the column at all. Most open multilingual encoders do NOT fit
+    # (BGE-m3 emits 1024, Jina v3 1024, KaLM-embedding-multilingual v2.5 896);
+    # known-good 1536 options are OpenAI text-embedding-3-small (1536 native),
+    # Google gemini-embedding-001 via its OpenAI-compatible endpoint (3072
+    # native, MRL-truncated to 1536 via the `dimensions` param), or
+    # Alibaba-NLP/gte-Qwen2-1.5B-instruct (1536 native, self-hosted). Left
+    # unset (empty base_url/model), the assistant still answers lineage/status
+    # questions on the managed chat model alone; content questions degrade to
+    # "no matching artifacts" rather than erroring.
     managed_embed_base_url: str = ""
     managed_embed_model: str = ""
     managed_embed_dim: int = 1536
@@ -217,6 +217,38 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "DATA_BACKEND=supabase requires SUPABASE_URL and SUPABASE_KEY to be set."
             )
+        # A hosted backend without the key would silently fall back to
+        # MemorySecretStore (base64, not encryption) for every workspace PAT,
+        # model key and webhook secret — and a key added later cannot read
+        # what was stored before it. Refuse to boot instead.
+        if self.data_backend == "supabase" and not self.rag_key_encryption_key:
+            raise RuntimeError(
+                "DATA_BACKEND=supabase requires RAG_KEY_ENCRYPTION_KEY to be set (generate "
+                "one with `python -c \"from cryptography.fernet import Fernet; "
+                'print(Fernet.generate_key().decode())"`). Without it stored credentials '
+                "would not be encrypted."
+            )
+
+    def require_valid_encryption_key(self) -> None:
+        # A malformed key would otherwise surface only on the first secret
+        # write or read, long after boot. Fernet() is the parser that the
+        # secret store itself uses (app/secrets.py), so this is the same check.
+        if not self.rag_key_encryption_key:
+            return
+        from cryptography.fernet import Fernet  # lazy, as in app/secrets.py
+
+        try:
+            Fernet(self.rag_key_encryption_key.encode())
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(
+                "RAG_KEY_ENCRYPTION_KEY is not a valid Fernet key (it must be 32 "
+                "url-safe base64-encoded bytes; generate one with `python -c \"from "
+                "cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`)."
+            ) from exc
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() == "production"
 
     def require_auth(self) -> None:
         # Modern Supabase projects sign JWTs asymmetrically and are verified
@@ -231,9 +263,9 @@ class Settings(BaseSettings):
             )
 
     def require_rag(self) -> None:
-        # Checked lazily at the model-connection endpoint, not app startup:
-        # RAG is opt-in per workspace, so an existing supabase deployment that
-        # hasn't configured it yet must keep booting.
+        # Also checked at the model-connection endpoint. require_supabase()
+        # already refuses to boot a supabase backend without the key, so this
+        # is the per-request backstop for a Settings built outside startup.
         if self.data_backend == "supabase" and not self.rag_key_encryption_key:
             raise RuntimeError(
                 "RAG_KEY_ENCRYPTION_KEY is required to store a workspace model "
@@ -254,8 +286,11 @@ class Settings(BaseSettings):
         visibility is an operational fault, not a security hole, and refusing
         to boot over it would take a working service down to fix a monitoring
         gap.
+
+        APP_ENV is compared case- and whitespace-insensitively, so
+        `APP_ENV=Production` cannot slip past these checks.
         """
-        if self.app_env == "production" and self.auth_mode == "stub":
+        if self.is_production and self.auth_mode == "stub":
             raise RuntimeError(
                 "APP_ENV=production requires AUTH_MODE=supabase. AUTH_MODE=stub "
                 "trusts an unverified X-User-Id header and lets any caller act "
@@ -269,14 +304,14 @@ class Settings(BaseSettings):
             for o in "http://localhost:3000,http://localhost:1420".split(",")
             if o.strip()
         }
-        if self.app_env == "production" and set(self.cors_origin_list) <= default_cors:
+        if self.is_production and set(self.cors_origin_list) <= default_cors:
             warnings.append(
                 "APP_ENV=production but CORS_ORIGINS is still the localhost dev "
                 "default ({}); set CORS_ORIGINS to your production origin(s).".format(
                     ", ".join(sorted(default_cors))
                 )
             )
-        if self.app_env == "production" and not self.sentry_dsn:
+        if self.is_production and not self.sentry_dsn:
             warnings.append(
                 "Sentry DSN is not configured; a production instance is running "
                 "with no error visibility. Set SENTRY_DSN to the project's ingest "

@@ -52,17 +52,17 @@ const DETAIL_MESSAGES: Record<string, string> = {
     "The deployment provider's stored credential is missing something the template needs — " +
     "reconnect it in workspace settings.",
   deployment_preview_url_not_configured:
-    "PromptZone hosting isn't fully configured on this server, so there is no preview address to " +
+    "PromptWorkspace hosting isn't fully configured on this server, so there is no preview address to " +
     "give the pipeline. Contact your administrator.",
   // Plan 0027 M4: the platform never merges into, or silently skips, a
   // workflow the imported repository already has — the project would look
   // deployable and not be. The seed preview below names the file first.
   deploy_workflow_conflict:
     "The imported repository already has a .github/workflows/deploy.yml, and the deployment " +
-    "template needs that path. PromptConnext never overwrites or merges into an existing workflow — " +
+    "template needs that path. PromptWorkspace never overwrites or merges into an existing workflow — " +
     "rename or remove that file on GitHub, then try again.",
   // The seed preview's refusals for an imported project (sync.py::seed_preview).
-  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptConnext recognises.",
+  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptWorkspace recognises.",
   repo_owner_out_of_scope:
     "The imported repository isn't under the workspace's connected GitHub account any more — the " +
     "connection may have been changed since the import.",
@@ -83,7 +83,7 @@ const DETAIL_MESSAGES: Record<string, string> = {
   // Create-repository and the seed preview alike: a directory GitHub won't
   // list in full leaves no complete answer to "is this path free".
   repo_tree_too_large:
-    "A directory in this repository is too large for GitHub to list, so PromptConnext can't " +
+    "A directory in this repository is too large for GitHub to list, so PromptWorkspace can't " +
     "check safely which files already exist. Nothing was written.",
 };
 
@@ -149,7 +149,7 @@ function SeedPreviewList({ preview }: { preview: SeedPreview }) {
       {preview.relocated.length > 0 && (
         <div>
           <p className="text-slate-500">
-            Already in the repository, so PromptConnext&apos;s version is written beside it:
+            Already in the repository, so PromptWorkspace&apos;s version is written beside it:
           </p>
           <ul className="ml-4 mt-1 list-disc">
             {preview.relocated.map((r) => (
@@ -174,7 +174,7 @@ function SeedPreviewList({ preview }: { preview: SeedPreview }) {
         <div className="rounded bg-red-50 p-2 text-red-700">
           <p>
             These already exist and can&apos;t be written around — the deployment template needs
-            exactly these paths, and PromptConnext never overwrites or merges into an existing
+            exactly these paths, and PromptWorkspace never overwrites or merges into an existing
             workflow. Rename or remove them on GitHub, then check again:
           </p>
           <ul className="ml-4 mt-1 list-disc">
@@ -304,8 +304,8 @@ export function CreateRepositoryPanel({
             </a>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            No file already in the repository is overwritten. Where one of PromptConnext&apos;s
-            documents would land on an existing file, it goes under docs/promptzone/ instead.
+            No file already in the repository is overwritten. Where one of PromptWorkspace&apos;s
+            documents would land on an existing file, it goes under docs/promptworkspace/ instead.
           </p>
           {previewLoading && !preview && (
             <p className="mt-2 text-xs text-slate-500">Checking the repository…</p>

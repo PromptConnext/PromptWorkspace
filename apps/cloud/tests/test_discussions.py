@@ -215,13 +215,13 @@ def test_a_member_may_still_push_their_own_comment(
     assert stored["body"] == "Mine, edited"
 
 
-def test_pz_and_pmo_can_each_create_their_own_discussion_row(
+def test_pw_and_pmo_can_each_create_their_own_discussion_row(
     client: TestClient, project_with_task: tuple[str, str, str]
 ):
     """FIELD_AUTHORITY["discussions"]["body"] = "shared" — unlike Task.status,
     a pmo-source upsert must not be silently dropped."""
     _ws_id, pid, task_id = project_with_task
-    pz_push = client.put(
+    pw_push = client.put(
         f"/sync/projects/{pid}/graph",
         json={
             "discussions": [
@@ -239,7 +239,7 @@ def test_pz_and_pmo_can_each_create_their_own_discussion_row(
         },
         headers=ALICE,
     )
-    assert pz_push.status_code == 200
+    assert pw_push.status_code == 200
 
     pmo_push = client.put(
         f"/sync/projects/{pid}/graph",

@@ -4,14 +4,14 @@ Two claims in migration 0032 are claims about the *database*, and
 `InMemoryRepository` has no concept of either, so nothing in the default
 `DATA_BACKEND=memory` suite can fail if the migration is wrong:
 
-  1. `pz_workspace_integrations.webhook_secret_ref` never reaches a browser
-     session. The table deliberately keeps a `pz_is_member` read policy — unlike
-     `pz_repo_webhooks`, its non-secret columns are a workspace's own settings —
+  1. `pw_workspace_integrations.webhook_secret_ref` never reaches a browser
+     session. The table deliberately keeps a `pw_is_member` read policy — unlike
+     `pw_repo_webhooks`, its non-secret columns are a workspace's own settings —
      so the secret is held back by a *column-level* grant, not by the row
      policy. The distinction matters: a reviewer who sees "RLS enabled, member
      policy" on a table holding webhook secrets should be able to point at the
      case that proves the secret is still out of reach.
-  2. `pz_task_links`' primary key really is `(provider, account_key,
+  2. `pw_task_links`' primary key really is `(provider, account_key,
      external_key)`. That swap is the mechanism of the whole plan; if the
      migration failed to drop the old two-column key, two sites' `PZ-1` would
      still collide in production while every memory-backed test passed.
@@ -56,7 +56,7 @@ def integration(http: httpx.Client, target: Target, fixture: Fixture) -> str:
     writes it — on the service key. Returns its account_key."""
     account_key = f"{_ACCOUNT}/{uuid.uuid4().hex[:8]}"
     res = http.post(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.service_headers(),
         json={
             "workspace_id": fixture.workspace_id,
@@ -75,7 +75,7 @@ def test_member_may_read_the_non_secret_columns(
     """The half that is deliberately *allowed* — otherwise a settings UI could
     not show a workspace which site it is connected to."""
     res = http.get(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         params={
             "workspace_id": f"eq.{fixture.workspace_id}",
@@ -96,10 +96,10 @@ def test_member_cannot_read_the_webhook_secret(
     http: httpx.Client, target: Target, fixture: Fixture, integration: str
 ) -> None:
     """The load-bearing case. A member of the very workspace that owns this row
-    — so `pz_is_member` is true and the read policy permits the row — still
+    — so `pw_is_member` is true and the read policy permits the row — still
     cannot see the column, because `authenticated` holds no SELECT on it."""
     named = http.get(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         params={"workspace_id": f"eq.{fixture.workspace_id}", "select": "webhook_secret_ref"},
     )
@@ -108,7 +108,7 @@ def test_member_cannot_read_the_webhook_secret(
 
     # `select=*` is the way a secret leaks by accident, so pin that too.
     star = http.get(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         params={"workspace_id": f"eq.{fixture.workspace_id}", "select": "*"},
     )
@@ -124,7 +124,7 @@ def test_member_cannot_write_a_tracker_binding(
     0032 closes — or overwrite their own workspace's secret with one they chose,
     which would let them forge deliveries."""
     inserted = http.post(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "workspace_id": fixture.workspace_id,
@@ -136,7 +136,7 @@ def test_member_cannot_write_a_tracker_binding(
     _denied(inserted)
 
     updated = http.patch(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         params={"workspace_id": f"eq.{fixture.workspace_id}", "provider": "eq.jira"},
         json={"webhook_secret_ref": "chosen-by-the-attacker"},
@@ -144,7 +144,7 @@ def test_member_cannot_write_a_tracker_binding(
     _denied(updated)
 
     deleted = http.delete(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.user_headers(fixture.member.access_token),
         params={"workspace_id": f"eq.{fixture.workspace_id}", "provider": "eq.jira"},
     )
@@ -152,7 +152,7 @@ def test_member_cannot_write_a_tracker_binding(
 
     # Read back as the one role that keeps its grants: nothing moved.
     check = http.get(
-        f"{target.rest}/pz_workspace_integrations",
+        f"{target.rest}/pw_workspace_integrations",
         headers=target.service_headers(),
         params={"workspace_id": f"eq.{fixture.workspace_id}", "select": "*"},
     )
@@ -166,11 +166,13 @@ def test_member_cannot_write_a_tracker_binding(
 def test_member_cannot_plant_a_task_link(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
-    """`account_key` is a tenant boundary now, so `pz_task_links` stops being
+    """`account_key` is a tenant boundary now, so `pw_task_links` stops being
     member-writable.
 
-    Before this migration, `0006_grants.sql` gave `authenticated` full DML here
-    and `0005_tracker_links.sql`'s policy tested workspace membership and
+    Before this migration, `0002_pw_baseline.sql section 0006_grants.sql` gave `authenticated` full
+    DML here
+    and `0002_pw_baseline.sql section 0005_tracker_links.sql`'s policy tested workspace membership
+    and
     nothing else — so a member could POST a row into *their own* project naming
     a victim's `account_key`. `_resolve_link`'s workspace check means the
     planted row is dropped rather than acted on, so it was never a cross-tenant
@@ -181,7 +183,7 @@ def test_member_cannot_plant_a_task_link(
     """
     victim_site = "https://victim.atlassian.net"
     planted = http.post(
-        f"{target.rest}/pz_task_links",
+        f"{target.rest}/pw_task_links",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "task_id": fixture.task_id,
@@ -195,14 +197,14 @@ def test_member_cannot_plant_a_task_link(
 
     # Reads go too — `revoke all` is not write-only.
     read = http.get(
-        f"{target.rest}/pz_task_links",
+        f"{target.rest}/pw_task_links",
         headers=target.user_headers(fixture.member.access_token),
         params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
     )
     _denied(read)
 
     check = http.get(
-        f"{target.rest}/pz_task_links",
+        f"{target.rest}/pw_task_links",
         headers=target.service_headers(),
         params={"account_key": f"eq.{victim_site}", "select": "account_key"},
     )
@@ -225,7 +227,7 @@ def test_task_links_are_keyed_by_account(
 
     def insert(account_key: str) -> httpx.Response:
         return http.post(
-            f"{target.rest}/pz_task_links",
+            f"{target.rest}/pw_task_links",
             headers=headers,
             json={
                 "task_id": fixture.task_id,
@@ -257,7 +259,7 @@ def test_task_links_are_keyed_by_account(
     # tests/rls/conftest.py), so an unscoped read would also see PZ-1 rows left
     # by a previous run against the same local stack.
     rows = http.get(
-        f"{target.rest}/pz_task_links",
+        f"{target.rest}/pw_task_links",
         headers=headers,
         params={
             "project_id": f"eq.{fixture.project_id}",

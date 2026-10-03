@@ -1,9 +1,9 @@
 # Builds this Next.js application and deploys it to your Vercel project, then
-# reports the result back as a GitHub Deployment. PromptZone reads that
+# reports the result back as a GitHub Deployment. PromptWorkspace reads that
 # deployment over this repository's webhook and shows the running app in the
 # project's Preview tab.
 #
-# This file belongs to you. Edit it freely — PromptZone seeded it once at
+# This file belongs to you. Edit it freely — PromptWorkspace seeded it once at
 # repository creation and does not overwrite it.
 
 name: Deploy preview
@@ -64,14 +64,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
-          PROJECT_ID: ${{ vars.PZ_PROJECT_ID }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
+          PROJECT_ID: ${{ vars.PROMPTWORKSPACE_PROJECT_ID }}
         run: |
           set -euo pipefail
           deployment_id=$(gh api "repos/$REPO/deployments" \
             -f ref="$SHA" \
             -f environment="$ENVIRONMENT" \
-            -f description="PromptZone preview for project $PROJECT_ID" \
+            -f description="PromptWorkspace preview for project $PROJECT_ID" \
             -F auto_merge=false \
             -F transient_environment=false \
             -f 'required_contexts[]' \
@@ -90,7 +90,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
-      # PZ_WEB_ORIGIN is read by next.config.mjs at build time, which is why it
+      # PROMPTWORKSPACE_WEB_ORIGIN is read by next.config.mjs at build time, which is why it
       # is set on THIS step: `vercel build` runs the Next.js build here on the
       # runner, so the frame-ancestors header is baked into the routes manifest
       # and no Vercel project environment variable has to exist for it.
@@ -98,7 +98,7 @@ jobs:
         shell: bash
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          PZ_WEB_ORIGIN: ${{ vars.PZ_WEB_ORIGIN }}
+          PROMPTWORKSPACE_WEB_ORIGIN: ${{ vars.PROMPTWORKSPACE_WEB_ORIGIN }}
         run: vercel build --prod --token="$VERCEL_TOKEN"
 
       # Deployed to production rather than to a Vercel preview deployment, on
@@ -145,7 +145,7 @@ jobs:
           REPO: ${{ github.repository }}
           DEPLOYMENT_ID: ${{ steps.open.outputs.id }}
           PREVIEW_URL: ${{ steps.vercel.outputs.url }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

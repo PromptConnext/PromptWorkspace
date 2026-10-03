@@ -1,8 +1,8 @@
 """Pydantic models for the AI-native task graph and the Sync API.
 
-The task graph is PromptConnext's moat: every entity ties a business requirement all
+The task graph is PromptWorkspace's moat: every entity ties a business requirement all
 the way down to the AI agent run that produced code for it. See
-docs/promptconnext-platform-architecture.md (section 3.1).
+docs/promptzone-platform-architecture.md (section 3.1).
 
 IMPORTANT: model *credentials* never live in the cloud. `ModelConnection` here is
 metadata-only (role/provider/mode) — no keys — and is not part of this first
@@ -157,7 +157,7 @@ class Task(GraphEntity):
     # PMO fields, populated by the external-tracker mirror (M5).
     assignee: str | None = None
     sprint: str | None = None
-    # pz-owned: a workspace member's user_id, set by the app (ADR 0018).
+    # pw-owned: a workspace member's user_id, set by the app (ADR 0018).
     # Distinct from the pmo `assignee` free-text tracker name above.
     assigned_user_id: str | None = None
 
@@ -181,7 +181,7 @@ class AgentRun(GraphEntity):
 
 class Discussion(GraphEntity):
     """A comment threaded on any graph node (M12). `source` distinguishes a
-    PromptConnext-native comment (web/desktop) from a Jira-mirrored one — unlike
+    PromptWorkspace-native comment (web/desktop) from a Jira-mirrored one — unlike
     Task, both sources create their *own* rows rather than fighting over the
     same one, so `body`/`author` are "shared" authority (see FIELD_AUTHORITY
     below), not a pz/pmo split."""
@@ -195,7 +195,7 @@ class Discussion(GraphEntity):
 
 
 class TaskAssignmentUpdate(BaseModel):
-    """Set or clear a task's PromptConnext assignee. `null` unassigns."""
+    """Set or clear a task's PromptWorkspace assignee. `null` unassigns."""
 
     assigned_user_id: str | None = None
 
@@ -258,7 +258,7 @@ class Workspace(BaseModel):
     # this row (ADR 0010 §5).
     integration_config: dict = Field(default_factory=dict)
     # Discussions RAG opt-in (M12, ADR 0011): pmo-mirrored (Jira) comments are
-    # third-party content and default OUT of the assistant's index; pz-native
+    # third-party content and default OUT of the assistant's index; pw-native
     # discussions are always in. A typed column, not another integration_config
     # key — this is a first-class workspace setting, not vendor config.
     rag_index_pmo_discussions: bool = False
@@ -320,7 +320,7 @@ class PendingInvitation(BaseModel):
 # External-tracker links (M5)
 # --------------------------------------------------------------------------- #
 class TaskLink(BaseModel):
-    """Maps a PromptConnext task to its mirror in an external tracker."""
+    """Maps a PromptWorkspace task to its mirror in an external tracker."""
 
     task_id: str
     project_id: str
@@ -403,7 +403,7 @@ class JiraIntegrationConfig(BaseModel):
 
     base_url: str  # https://your-org.atlassian.net
     project_key: str  # "PZ"
-    # PromptConnext TaskStatus value -> Jira status name used in transitions.
+    # PromptWorkspace TaskStatus value -> Jira status name used in transitions.
     status_map: dict[str, str] = Field(
         default_factory=lambda: {
             "todo": "To Do",
@@ -450,7 +450,7 @@ class PolicyScopeUpdate(BaseModel):
 #
 # `DeploymentState` is the server's CURRENT VIEW, written only by the signed
 # GitHub webhook and mutating for the life of the project. It duplicates the
-# newest pz_deployments row on purpose — the same trade `repo_url` already
+# newest pw_deployments row on purpose — the same trade `repo_url` already
 # makes — because GET /projects backs the workspace project list and the
 # engine roster, and neither can afford a join or an N+1 to answer "is this
 # project live, and where".
@@ -525,7 +525,7 @@ class DeploymentState(BaseModel):
 
 
 class Deployment(BaseModel):
-    """One row per deploy, in `pz_deployments`.
+    """One row per deploy, in `pw_deployments`.
 
     Plain BaseModel, not a GraphEntity: a deployment has exactly one author
     (the webhook) and never participates in field-level merge, so it stays
@@ -553,7 +553,7 @@ class Deployment(BaseModel):
     # The browser cannot read a cross-origin response header; the backend can.
     frame_policy: str | None = None
     # uncomputed | frozen (migration 0033). Whether this build's task set in
-    # pz_deployment_tasks has been resolved yet — which is a different fact
+    # pw_deployment_tasks has been resolved yet — which is a different fact
     # from the set being empty, and used to be indistinguishable from it. A
     # frozen set is never recomputed: GitHub redelivers webhooks freely, and
     # a redelivery must not rewrite what a reviewer already relied on. The
@@ -609,7 +609,7 @@ class Project(BaseModel):
     # How the project came by its repository (plan 0027, migration 0035):
     # "imported" by POST /projects, "created" by create_repository. Written by
     # the server only — no route accepts it, and migration 0036 took member
-    # writes on pz_projects away — unlike the repository's description, which
+    # writes on pw_projects away — unlike the repository's description, which
     # anyone with admin on the repository can edit. `None` for a project with no
     # repository yet, or one that predates the field; see `is_imported`.
     repo_origin: Literal["imported", "created"] | None = None
@@ -653,7 +653,7 @@ ENTITY_TYPES: dict[str, type[GraphEntity]] = {
 
 
 # Per-field authority domains (M3). A field is one of:
-#   "pz"     — PromptConnext-authoritative (AI-native: agent evidence, spec lineage)
+#   "pz"     — PromptWorkspace-authoritative (AI-native: agent evidence, spec lineage)
 #   "pmo"    — external-tracker-authoritative (assignee/sprint/human priority)
 #   "shared" — low-contention free text; row-level LWW is acceptable
 # Fields absent from an entity's map default to "pz" (the moat stays local).
@@ -836,7 +836,7 @@ class ModelConnection(BaseModel):
     `source` (M2, plan 0007): "byo" for every real, persisted workspace row
     (the default, so existing rows without this column still load fine) —
     "managed" is synthesized on the fly by app/generation/managed.py, never
-    written to `pz_workspace_model_connections`, and carries the
+    written to `pw_workspace_model_connections`, and carries the
     platform-held Typhoon key instead of a workspace-supplied one."""
 
     workspace_id: str
@@ -956,7 +956,7 @@ class RagChunk(BaseModel):
     silently comparing incompatible vectors.
 
     `embed_dim` (migration 0023) records the vector's width. Before 0023
-    `pz_rag_chunks.embedding` was a fixed `vector(1536)` column, so no chunk
+    `pw_rag_chunks.embedding` was a fixed `vector(1536)` column, so no chunk
     could ever be a different width and this field would have been
     redundant. Once the column width became a deploy-time parameter, a
     workspace whose connection's `embed_dim` no longer matches what its

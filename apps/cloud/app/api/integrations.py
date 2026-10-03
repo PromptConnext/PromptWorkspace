@@ -8,8 +8,8 @@ Three surfaces:
 
 The outbound API token still comes from the server env. The inbound webhook
 secret does not, any more: it is minted per tracker account at configuration
-time and stored as ciphertext in `pz_workspace_integrations` (plan 0019, and
-`app/integrations/github.py`'s `pz_repo_webhooks` before it). A single
+time and stored as ciphertext in `pw_workspace_integrations` (plan 0019, and
+`app/integrations/github.py`'s `pw_repo_webhooks` before it). A single
 process-wide `JIRA_WEBHOOK_SECRET` could only prove that *some* configured Jira
 sent a delivery, never which one — and since a Jira issue key is unique per
 site rather than per provider, "which one" is exactly what routing needs.
@@ -40,7 +40,7 @@ from app.models.schemas import (
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
-logger = logging.getLogger("promptconnext.integrations")
+logger = logging.getLogger("promptworkspace.integrations")
 router = APIRouter(tags=["integrations"])
 
 # Provider-specific webhook signature headers, most-canonical first.
@@ -160,7 +160,7 @@ def configure_integration(
         # _validate_base_url already required https + an allowlisted host, so
         # this is unreachable in practice; it is here because an empty
         # account_key must never reach the table (it is the pre-0032 backfill
-        # value on pz_task_links.account_key).
+        # value on pw_task_links.account_key).
         raise HTTPException(status_code=422, detail="base_url_invalid")
     ws = require_admin(repo, workspace_id, user)
 
@@ -383,7 +383,7 @@ async def tracker_webhook(
         # one (200). That distinction is inherent to routing before verifying —
         # the account has to be resolved before there is a key to check against
         # — and `github_webhook` has exactly the same property. What made it
-        # worth acting on was the writable `account_key` on pz_task_links, which
+        # worth acting on was the writable `account_key` on pw_task_links, which
         # migration 0032 now revokes.
         logger.warning("tracker webhook for unknown %s account %r", provider, account_key)
         return {"received": True, "matched": False}

@@ -180,7 +180,7 @@ describe("NewProjectDialog", () => {
     // is the create-repository panel's live preview), and Create starts
     // disabled.
     expect(screen.getByText(/never overwritten/i)).toBeInTheDocument();
-    expect(screen.getByText("docs/promptzone/")).toBeInTheDocument();
+    expect(screen.getByText("docs/promptworkspace/")).toBeInTheDocument();
     expect(screen.getByText(/\.github\/workflows\/deploy\.yml/)).toBeInTheDocument();
     expect(screen.queryByText("AGENTS.md")).not.toBeInTheDocument();
     const createButton = screen.getByRole("button", { name: "Create" });

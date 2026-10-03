@@ -43,7 +43,7 @@ _UUID4 = re.compile(
 def log_lines():
     """A handler wired exactly as `configure_logging` wires the root one.
 
-    Attached to the `promptconnext` logger rather than root, so pytest's own
+    Attached to the `promptworkspace` logger rather than root, so pytest's own
     capture is untouched and this is independent of whether `basicConfig` did
     anything in this process.
     """
@@ -51,7 +51,7 @@ def log_lines():
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonLogFormatter())
     handler.addFilter(RequestIdFilter())
-    logger = logging.getLogger("promptconnext")
+    logger = logging.getLogger("promptworkspace")
     previous_level = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
@@ -71,7 +71,7 @@ def _app_that_logs() -> FastAPI:
     in this service are sync.
     """
     app = create_app()
-    logger = logging.getLogger("promptconnext.test")
+    logger = logging.getLogger("promptworkspace.test")
 
     @app.get("/__test__/logs-sync")
     def logs_sync() -> dict:
@@ -198,18 +198,18 @@ def test_records_logged_during_a_request_carry_its_id(log_lines):
             res = client.get(route, headers={REQUEST_ID_HEADER: sent})
             assert res.json()["request_id"] == sent, route
 
-    logged = [line for line in log_lines() if line["logger"] == "promptconnext.test"]
+    logged = [line for line in log_lines() if line["logger"] == "promptworkspace.test"]
     assert len(logged) == 2, logged
     assert {line["message"] for line in logged} == {"sync handler ran", "async handler ran"}
     assert all(line["request_id"] == sent for line in logged), logged
 
 
 def test_a_json_line_carries_the_fields_a_log_search_filters_on(log_lines):
-    logging.getLogger("promptconnext.test").warning("disk is %s%% full", 91)
+    logging.getLogger("promptworkspace.test").warning("disk is %s%% full", 91)
 
     line = log_lines()[-1]
     assert line["level"] == "WARNING"
-    assert line["logger"] == "promptconnext.test"
+    assert line["logger"] == "promptworkspace.test"
     assert line["message"] == "disk is 91% full"
     assert line["timestamp"].endswith("Z")
     # Parseable as an instant, not merely string-shaped.
@@ -221,11 +221,11 @@ def test_a_json_line_carries_the_fields_a_log_search_filters_on(log_lines):
 def test_records_outside_any_request_have_a_null_id(log_lines):
     """Startup, the tombstone GC, a CLI import. `request_id` is present and
     null rather than absent, so a log search can filter on the field."""
-    logging.getLogger("promptconnext.test").info("started")
+    logging.getLogger("promptworkspace.test").info("started")
     try:
         raise RuntimeError("nothing to do with a request")
     except RuntimeError:
-        logging.getLogger("promptconnext.test").exception("startup step failed")
+        logging.getLogger("promptworkspace.test").exception("startup step failed")
 
     lines = log_lines()
     assert [line["request_id"] for line in lines] == [None, None]
@@ -250,11 +250,11 @@ def test_configure_logging_puts_json_on_the_root_logger(capsys):
     try:
         configure_logging("INFO")
         assert any(isinstance(h.formatter, JsonLogFormatter) for h in root.handlers)
-        logging.getLogger("promptconnext").info("PromptConnext Cloud %s started", "0.1.0")
+        logging.getLogger("promptworkspace").info("PromptWorkspace Cloud %s started", "0.1.0")
         payload = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
         assert payload["level"] == "INFO"
-        assert payload["logger"] == "promptconnext"
-        assert payload["message"] == "PromptConnext Cloud 0.1.0 started"
+        assert payload["logger"] == "promptworkspace"
+        assert payload["message"] == "PromptWorkspace Cloud 0.1.0 started"
         assert payload["request_id"] is None
         # The DEBUG-noise pin moved into configure_logging with the formatter.
         assert logging.getLogger("httpx").level == logging.WARNING
@@ -337,7 +337,7 @@ def test_the_worker_loops_failure_line_names_the_enqueueing_request(log_lines):
 
     asyncio.run(drain())
 
-    failures = [line for line in log_lines() if line["logger"] == "promptconnext.rag"]
+    failures = [line for line in log_lines() if line["logger"] == "promptworkspace.rag"]
     assert failures, "the worker should have logged the failure"
     assert failures[-1]["message"] == "embed job failed node=r1 type=requirements"
     assert failures[-1]["request_id"] == "req-that-uploaded-the-prd"
@@ -377,7 +377,7 @@ def test_the_worker_does_not_leak_one_jobs_id_into_the_next(log_lines):
 
     asyncio.run(drain())
 
-    failures = [line for line in log_lines() if line["logger"] == "promptconnext.rag"]
+    failures = [line for line in log_lines() if line["logger"] == "promptworkspace.rag"]
     assert [line["request_id"] for line in failures] == ["req-1", None]
 
 

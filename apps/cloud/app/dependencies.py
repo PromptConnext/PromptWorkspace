@@ -87,7 +87,7 @@ def get_current_user(
     if settings.auth_mode == "stub":
         uid = x_user_id or "dev-user"
         tag_user(uid)
-        return User(id=uid, email=f"{uid}@promptconnext.local")
+        return User(id=uid, email=f"{uid}@promptworkspace.local")
 
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:
@@ -115,15 +115,15 @@ def get_repository(
 
     That scoping is real for workspaces, members and the other tables whose
     RLS policies still enforce workspace membership. It is *not* what guards
-    the seven graph tables (pz_requirements, pz_spec_documents, pz_tasks,
-    pz_artifacts, pz_agent_runs, pz_stage_documents, pz_discussions): calls
+    the seven graph tables (pw_requirements, pw_spec_documents, pw_tasks,
+    pw_artifacts, pw_agent_runs, pw_stage_documents, pw_discussions): calls
     against those always use the service-role client, because migration 0031
     revoked them from `authenticated` entirely — the server is their only
     writer, and app/api/_guards.py is their only enforcement (plan 0014). The
     routing is in app/db/supabase_repository.py::_table, keyed by table name,
     so it holds for both the scoped and unscoped repository this function can
     return. See _guards.py's module docstring for where the policies and the
-    guards still diverge outside that set (pz_projects).
+    guards still diverge outside that set (pw_projects).
 
     Un-authenticated call sites (inbound tracker webhooks, the tombstone GC
     loop) have no end-user token and correctly fall through to the shared,

@@ -4,7 +4,7 @@
 // a backup that can't be read back is not a backup.
 //
 // Run:  node --test apps/engine/test/backup.test.ts
-// (PROMPTCONNEXT_DATA_DIR must be set BEFORE importing the SUT, so setup is
+// (PROMPTWORKSPACE_DATA_DIR must be set BEFORE importing the SUT, so setup is
 // top-level await, matching test/g2-roster.test.ts.)
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dataDir = mkdtempSync(join(tmpdir(), "pz-backup-"));
-process.env.PROMPTCONNEXT_DATA_DIR = dataDir;
+process.env.PROMPTWORKSPACE_DATA_DIR = dataDir;
 
 const { db } = await import("../src/db.ts");
 const { backupDir, createBackup, listBackups, BackupError } = await import("../src/backup.ts");
@@ -110,7 +110,7 @@ test("the route surface creates and lists backups", async () => {
   assert.equal(listed.status, 200);
   const body = (await listed.json()) as { dir: string; db_path: string; backups: unknown[] };
   assert.equal(body.dir, backupDir());
-  assert.ok(body.db_path.endsWith("promptconnext.db"));
+  assert.ok(body.db_path.endsWith("promptworkspace.db"));
   assert.ok(body.backups.length > 0);
 });
 

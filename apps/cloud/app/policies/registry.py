@@ -11,7 +11,7 @@ Spec Kit stage templates, so there is no engine-side mirror to keep in sync.
 Future org-owned custom templates (deferred, designed-for — see the Policy
 Scope plan's "Future org templates" section) resolve through this same
 module: built-in IDs are bare slugs (never containing ":"); namespaced
-`ws:<uuid>` IDs will resolve against a `pz_workspace_policy_templates` table
+`ws:<uuid>` IDs will resolve against a `pw_workspace_policy_templates` table
 instead. Nothing here needs to change shape when that lands.
 """
 

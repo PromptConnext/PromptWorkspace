@@ -62,7 +62,7 @@ from app.models.schemas import (
 from app.policies.registry import render_policy_context, render_policy_summary
 from app.rag.budget import estimate_tokens
 
-logger = logging.getLogger("promptconnext.generation")
+logger = logging.getLogger("promptworkspace.generation")
 router = APIRouter(tags=["generation"])
 
 # Key for the managed source's *global* rate limiter (app.state.managed_limiter)

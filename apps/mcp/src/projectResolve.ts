@@ -1,7 +1,7 @@
 // Which cloud project is the developer sitting in?
 //
 // apps/vscode answers this with a persisted, resource-scoped
-// `promptconnext.projectId` setting, discovered by matching git remotes and
+// `promptworkspace.projectId` setting, discovered by matching git remotes and
 // written only after the user confirms (src/link/projectLink.ts). None of that
 // exists here: there is no settings store to write to, no folder scope, and no
 // one to confirm — an MCP client calls a tool and expects an answer. So the
@@ -19,7 +19,7 @@ import {
   sameRepo,
   type CloudClient,
   type LoggerLike,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 
 export interface ProjectCandidate {
   projectId: string;

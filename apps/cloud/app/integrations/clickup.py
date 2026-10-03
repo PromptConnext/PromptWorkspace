@@ -76,10 +76,10 @@ class ClickUpAdapter:
 
 def _reverse_status(clickup_status: str, config: dict) -> TaskStatus | None:
     status_map = config.get("status_map") or _DEFAULT_STATUS_MAP
-    for pz_value, cu_name in status_map.items():
+    for pw_value, cu_name in status_map.items():
         if cu_name.lower() == clickup_status.lower():
             try:
-                return TaskStatus(pz_value)
+                return TaskStatus(pw_value)
             except ValueError:
                 return None
     return None

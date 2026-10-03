@@ -705,9 +705,9 @@ export function Planner({
               the rule rather than list paths that may not be there. */}
           {project.repo_origin === "imported" ? (
             <p className="mt-2 text-emerald-800">
-              PromptConnext added its planning documents in one commit. Existing files were left
+              PromptWorkspace added its planning documents in one commit. Existing files were left
               untouched; where a document would have landed on one, it went under
-              docs/promptzone/ instead.
+              docs/promptworkspace/ instead.
             </p>
           ) : (
             <>
@@ -721,7 +721,7 @@ export function Planner({
               </ul>
             </>
           )}
-          <p className="mt-2">Developers can now clone this repo and open it in the PromptConnext VS Code extension.</p>
+          <p className="mt-2">Developers can now clone this repo and open it in the PromptWorkspace VS Code extension.</p>
         </div>
       )}
 

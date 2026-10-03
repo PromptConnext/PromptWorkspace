@@ -1,14 +1,14 @@
 """Plan 0014 M4 — a member's own JWT, straight at PostgREST, must be refused.
 
 Each case below is one row of plan 0014's gap matrix — plus two for
-`pz_discussions`, which that matrix omitted — executed the way the matrix says
+`pw_discussions`, which that matrix omitted — executed the way the matrix says
 a client could execute it: raw HTTP at the Supabase data API, with a real
 workspace member's real Supabase Auth token, never touching `apps/cloud`.
 Before migration 0031 every one of them **succeeded** — the graph-table
-policies test `pz_is_member` and nothing else, and `authenticated` held
-`select, insert, update, delete` outright (`migrations/0006_grants.sql`,
-`migrations/0011_discussions.sql`, `migrations/0019_stage_documents.sql`). The
-API's own refusals (`app/api/_guards.py`, `app/api/sync.py`'s
+policies test `pw_is_member` and nothing else, and `authenticated` held
+`select, insert, update, delete` outright (`migrations/0002_pw_baseline.sql`,
+sections `0006_grants.sql`, `0011_discussions.sql` and `0019_stage_documents.sql`).
+The API's own refusals (`app/api/_guards.py`, `app/api/sync.py`'s
 `set_task_status`/`assign_task`, `ADMIN_ONLY_STAGES`, and plan 0015's
 `discussion_author_forbidden`/`discussion_forbidden`) were never in the path.
 
@@ -17,8 +17,8 @@ An RLS policy that declines a row makes an `UPDATE` a no-op: PostgREST answers
 200 with an empty array, indistinguishable from "no row matched". A missing
 base grant makes Postgres refuse before policy evaluation runs at all, with
 SQLSTATE 42501, which is both loud and unconditional. That ordering — base
-GRANT checked before RLS — is exactly what `migrations/0006_grants.sql`'s own
-comment describes, and it is why plan 0014 chose Option A (revoke) over
+GRANT checked before RLS — is exactly what the comment in `migrations/0002_pw_baseline.sql`,
+section `0006_grants.sql`, describes, and it is why plan 0014 chose Option A (revoke) over
 Option B (more policies). So every case asserts two things: the request was
 refused with 42501, *and* the row is unchanged when read back with the
 service-role key. The second assertion is the one that would still catch a
@@ -57,7 +57,7 @@ def _denied(res: httpx.Response) -> None:
 def _read_task(http: httpx.Client, target: Target, task_id: str) -> dict:
     """Read back as service_role — the one role that keeps its grants."""
     res = http.get(
-        f"{target.rest}/pz_tasks",
+        f"{target.rest}/pw_tasks",
         headers=target.service_headers(),
         params={"id": f"eq.{task_id}", "select": "*"},
     )
@@ -73,7 +73,7 @@ def test_member_cannot_verify_a_task_directly(
     """Matrix row 2: `verified` is admin-only in `sync.py:593-600`
     (`403 verified_requires_admin`), and was member-writable in Postgres."""
     res = http.patch(
-        f"{target.rest}/pz_tasks",
+        f"{target.rest}/pw_tasks",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{fixture.task_id}"},
         json={"status": "verified"},
@@ -86,10 +86,10 @@ def test_member_cannot_author_an_admin_only_stage_directly(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
     """Matrix row 1: `plan` is in `ADMIN_ONLY_STAGES`
-    (`app/api/_guards.py`), and `pz_stage_documents_write` tested only
-    `pz_is_member(workspace_id)`."""
+    (`app/api/_guards.py`), and `pw_stage_documents_write` tested only
+    `pw_is_member(workspace_id)`."""
     res = http.post(
-        f"{target.rest}/pz_stage_documents",
+        f"{target.rest}/pw_stage_documents",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "workspace_id": fixture.workspace_id,
@@ -101,7 +101,7 @@ def test_member_cannot_author_an_admin_only_stage_directly(
     )
     _denied(res)
     check = http.get(
-        f"{target.rest}/pz_stage_documents",
+        f"{target.rest}/pw_stage_documents",
         headers=target.service_headers(),
         params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
     )
@@ -117,7 +117,7 @@ def test_member_cannot_steal_a_task_assignment_directly(
     pointing `assigned_user_id` at themselves is the steal that rule exists to
     stop, and no row-level predicate existed for it."""
     res = http.patch(
-        f"{target.rest}/pz_tasks",
+        f"{target.rest}/pw_tasks",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{fixture.task_id}"},
         json={"assigned_user_id": fixture.member.id},
@@ -129,16 +129,17 @@ def test_member_cannot_steal_a_task_assignment_directly(
 def test_member_cannot_forge_a_comment_directly(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
-    """pz_discussions, which plan 0014's matrix omitted and the first pass
+    """pw_discussions, which plan 0014's matrix omitted and the first pass
     missed. `create_discussion` never takes `author` from the client, and
     plan 0015 carried that rule onto the graph door
     (`discussion_author_forbidden` / `discussion_forbidden`) — but both live
-    in Python, and 0011_discussions.sql granted `authenticated` full DML
+    in Python, and 0002_pw_baseline.sql section 0011_discussions.sql granted `authenticated` full
+    DML
     behind a membership-only policy. So a member could post a comment
     attributed to the admin, straight at PostgREST. Same bypass class as the
     other six; it needed the grant, not a new rule."""
     res = http.post(
-        f"{target.rest}/pz_discussions",
+        f"{target.rest}/pw_discussions",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "project_id": fixture.project_id,
@@ -152,7 +153,7 @@ def test_member_cannot_forge_a_comment_directly(
     )
     _denied(res)
     check = http.get(
-        f"{target.rest}/pz_discussions",
+        f"{target.rest}/pw_discussions",
         headers=target.service_headers(),
         params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
     )
@@ -169,7 +170,7 @@ def test_member_cannot_overwrite_another_members_comment_directly(
     on the service key the way apps/cloud writes it."""
     discussion_id = str(uuid.uuid4())
     seed = http.post(
-        f"{target.rest}/pz_discussions",
+        f"{target.rest}/pw_discussions",
         headers=target.service_headers(),
         json={
             "id": discussion_id,
@@ -184,14 +185,14 @@ def test_member_cannot_overwrite_another_members_comment_directly(
     assert seed.status_code in (200, 201), seed.text
 
     res = http.patch(
-        f"{target.rest}/pz_discussions",
+        f"{target.rest}/pw_discussions",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{discussion_id}"},
         json={"body": "Rewritten by somebody else.", "author": fixture.member.id},
     )
     _denied(res)
     check = http.get(
-        f"{target.rest}/pz_discussions",
+        f"{target.rest}/pw_discussions",
         headers=target.service_headers(),
         params={"id": f"eq.{discussion_id}", "select": "body,author"},
     )
@@ -201,15 +202,16 @@ def test_member_cannot_overwrite_another_members_comment_directly(
 def test_member_cannot_write_a_repo_analysis_directly(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
-    """Plan 0027, migration 0034: `pz_repo_analyses` is born service-only.
+    """Plan 0027, migration 0034: `pw_repo_analyses` is born service-only.
     Analysing a repository and editing its baseline are admin-only in
     `app/api/repo_analysis.py` and nowhere else, and the baseline is what an
     imported project's plan and tasks are generated against — so a member
     planting one straight through PostgREST would open the planning gate and
-    steer every later stage. 0006_grants.sql's default privileges would have
+    steer every later stage. 0002_pw_baseline.sql section 0006_grants.sql's default privileges would
+    have
     granted exactly that; the migration's revoke is what this pins."""
     res = http.post(
-        f"{target.rest}/pz_repo_analyses",
+        f"{target.rest}/pw_repo_analyses",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "project_id": fixture.project_id,
@@ -223,7 +225,7 @@ def test_member_cannot_write_a_repo_analysis_directly(
     )
     _denied(res)
     check = http.get(
-        f"{target.rest}/pz_repo_analyses",
+        f"{target.rest}/pw_repo_analyses",
         headers=target.service_headers(),
         params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
     )
@@ -231,7 +233,7 @@ def test_member_cannot_write_a_repo_analysis_directly(
     assert check.json() == [], "a member's direct repo-analysis write landed"
 
     read = http.get(
-        f"{target.rest}/pz_repo_analyses",
+        f"{target.rest}/pw_repo_analyses",
         headers=target.user_headers(fixture.member.access_token),
         params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
     )
@@ -244,14 +246,14 @@ def test_member_cannot_read_graph_tables_directly_either(
     """`revoke all` takes SELECT too, so the data API stops being a read path
     for these tables as well. Recorded as its own case because it is a real
     behaviour change beyond the three writes the plan names: a client that
-    read `pz_tasks` over PostgREST today would break, and plan 0014's
+    read `pw_tasks` over PostgREST today would break, and plan 0014's
     recommendation rests on the claim that no such client exists
     (`apps/web/src/lib/auth.tsx` uses supabase-js for sessions only; every
     graph read goes through `apiFetch`). If that claim ever stops holding,
     this is the case that says where to look.
     """
     res = http.get(
-        f"{target.rest}/pz_tasks",
+        f"{target.rest}/pw_tasks",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{fixture.task_id}", "select": "*"},
     )
@@ -270,20 +272,20 @@ def test_member_cannot_read_graph_tables_directly_either(
 def test_member_cannot_write_server_owned_project_columns(
     http: httpx.Client, target: Target, fixture: Fixture, patch: dict
 ) -> None:
-    """Plan 0027 N1, migration 0036: `pz_projects` is written by the server
+    """Plan 0027 N1, migration 0036: `pw_projects` is written by the server
     only. `repo_origin` decides whether an adopted repository gets the
     overwriting seed, and `repo_url` which repository the platform writes
     secrets, a webhook and a seed commit into — both were a member's to set
-    through PostgREST while `pz_projects_rw` tested membership alone."""
+    through PostgREST while `pw_projects_rw` tested membership alone."""
     res = http.patch(
-        f"{target.rest}/pz_projects",
+        f"{target.rest}/pw_projects",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{fixture.project_id}"},
         json=patch,
     )
     _denied(res)
     check = http.get(
-        f"{target.rest}/pz_projects",
+        f"{target.rest}/pw_projects",
         headers=target.service_headers(),
         params={"id": f"eq.{fixture.project_id}", "select": ",".join(patch)},
     )
@@ -298,7 +300,7 @@ def test_member_cannot_insert_or_delete_a_project_directly(
     planted = str(uuid.uuid4())
     _denied(
         http.post(
-            f"{target.rest}/pz_projects",
+            f"{target.rest}/pw_projects",
             headers=headers,
             json={
                 "id": planted,
@@ -311,13 +313,13 @@ def test_member_cannot_insert_or_delete_a_project_directly(
     )
     _denied(
         http.delete(
-            f"{target.rest}/pz_projects",
+            f"{target.rest}/pw_projects",
             headers=headers,
             params={"id": f"eq.{fixture.project_id}"},
         )
     )
     rows = http.get(
-        f"{target.rest}/pz_projects",
+        f"{target.rest}/pw_projects",
         headers=target.service_headers(),
         params={"id": f"in.({planted},{fixture.project_id})", "select": "id"},
     ).json()
@@ -330,7 +332,7 @@ def test_member_still_reads_their_own_project(
     """0036 revokes writes only: the scoped read `list_projects` and
     `get_project` depend on is still granted and still membership-scoped."""
     res = http.get(
-        f"{target.rest}/pz_projects",
+        f"{target.rest}/pw_projects",
         headers=target.user_headers(fixture.member.access_token),
         params={"id": f"eq.{fixture.project_id}", "select": "id"},
     )

@@ -112,7 +112,7 @@ export default function TopBar({
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [acctError, setAcctError] = useState<string | null>(null);
-  // Manual fallback for the ADR 0014 browser handoff: the promptconnext://
+  // Manual fallback for the ADR 0014 browser handoff: the promptworkspace://
   // redirect relies on the OS having a registered handler for the scheme,
   // which macOS only sets up for a bundled+installed .app (Info.plist) — an
   // unbundled `tauri dev` binary has no such registration and the browser
@@ -255,7 +255,7 @@ export default function TopBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Deep-link round trip (ADR 0014): the Rust shell forwards a promptconnext://
+  // Deep-link round trip (ADR 0014): the Rust shell forwards a promptworkspace://
   // callback here as `{ url }`; we pull code/state off the query string and
   // redeem it against the engine. Under the enforced gate the App-level AuthGate
   // owns first sign-in, but this keeps in-app re-auth working in relaxed mode.

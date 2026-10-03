@@ -36,7 +36,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
   template({
     id: "static-r2",
     provider: "platform-r2",
-    provider_label: "PromptZone hosting",
+    provider_label: "PromptWorkspace hosting",
     provider_is_platform_owned: true,
     provider_credential_owner: "platform",
   }),
@@ -159,9 +159,9 @@ describe("DeployConnectionsPanel", () => {
     render(<DeployConnectionsPanel workspaceId="ws-1" />);
 
     await screen.findByRole("heading", { name: "Vercel" });
-    // Platform-owned: PromptConnext mints it per workspace.
+    // Platform-owned: PromptWorkspace mints it per workspace.
     expect(
-      screen.queryByRole("heading", { name: "PromptZone hosting" }),
+      screen.queryByRole("heading", { name: "PromptWorkspace hosting" }),
     ).not.toBeInTheDocument();
     // Host-owned: the git host hands the workflow its own token, and the
     // server refuses this connection with `provider_is_host_owned`.

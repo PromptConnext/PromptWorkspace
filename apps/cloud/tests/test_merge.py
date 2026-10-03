@@ -31,7 +31,7 @@ def test_first_write_stamps_field_versions():
     assert dropped == []
 
 
-def test_pmo_cannot_clobber_pz_field():
+def test_pmo_cannot_clobber_pw_field():
     t0 = utcnow()
     stored, _ = merge_entity(None, _row(status="in_progress"), TASK_AUTH, "pz", t0)
 
@@ -43,7 +43,7 @@ def test_pmo_cannot_clobber_pz_field():
     assert dropped == ["status"]
 
 
-def test_pz_cannot_clobber_pmo_field():
+def test_pw_cannot_clobber_pmo_field():
     t0 = utcnow()
     stored, _ = merge_entity(None, _row(assignee="alice"), TASK_AUTH, "pmo", t0)
 
@@ -164,7 +164,7 @@ def test_dropped_empty_on_clean_first_write():
 # --------------------------------------------------------------------------- #
 # The first write is gated too (plan 0015 M3 / review finding 17)
 # --------------------------------------------------------------------------- #
-def test_a_pmo_first_write_cannot_author_a_pz_field():
+def test_a_pmo_first_write_cannot_author_a_pw_field():
     """The gate an update applies, applied to the insert: inventing a new id was
     a way to author a field the writer could not have changed a millisecond
     later. A gated field falls back to its model default rather than being

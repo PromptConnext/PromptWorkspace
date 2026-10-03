@@ -17,7 +17,7 @@ functions only sequence reads — `build_snapshot` one file at a time,
 and credential files are dropped from the path list before anything else looks
 at it, so they are not listed, not summarised, not excerpted and not stored —
 the model reading the snapshot never sees one, and neither does
-`pz_repo_analyses`. Repository content is still untrusted prompt input after
+`pw_repo_analyses`. Repository content is still untrusted prompt input after
 that filter; the prompt that reads it treats it as data (app/generation/
 prompts.py::codebase_baseline_prompt), which is a separate defence against a
 separate problem. And a file that passes the filter can still quote a key

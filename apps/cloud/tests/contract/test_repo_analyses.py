@@ -1,4 +1,4 @@
-"""`pz_repo_analyses` on either adapter (plan 0027 M1).
+"""`pw_repo_analyses` on either adapter (plan 0027 M1).
 
 The row carries a nested `snapshot` — a jsonb column in Postgres, a model in
 the dict — so the case that matters is the round trip: what goes in as a

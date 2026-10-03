@@ -13,20 +13,20 @@ const originalFetch = global.fetch;
 const TEMPLATES: DeploymentTemplateOut[] = [
   {
     id: "static-r2",
-    name: "Static site → PromptZone hosting",
-    description: "A plain site published to PromptZone-managed storage.",
+    name: "Static site → PromptWorkspace hosting",
+    description: "A plain site published to PromptWorkspace-managed storage.",
     stack: "static",
     delivery_kind: "embedded_url",
     provider: "platform-r2",
-    provider_label: "PromptZone hosting",
+    provider_label: "PromptWorkspace hosting",
     provider_is_platform_owned: true,
     provider_credential_owner: "platform",
     // Nothing to name per project: the platform already minted the bucket and
     // this project is a prefix inside it.
     provider_project_fields: [],
     embeddable: true,
-    required_secrets: ["PZ_R2_ACCESS_KEY_ID"],
-    required_vars: ["PZ_PROJECT_ID"],
+    required_secrets: ["PROMPTWORKSPACE_R2_ACCESS_KEY_ID"],
+    required_vars: ["PROMPTWORKSPACE_PROJECT_ID"],
     scaffold_paths: [".github/workflows/deploy.yml", "site/index.html"],
     workflow_preview: "name: Deploy preview\non:\n  push:\n",
     notes: [],
@@ -45,8 +45,8 @@ const TEMPLATES: DeploymentTemplateOut[] = [
       { name: "project_id", label: "Vercel project ID", secret: false, scope: "project" },
     ],
     embeddable: true,
-    required_secrets: ["PZ_VERCEL_TOKEN"],
-    required_vars: ["PZ_PROJECT_ID"],
+    required_secrets: ["PROMPTWORKSPACE_VERCEL_TOKEN"],
+    required_vars: ["PROMPTWORKSPACE_PROJECT_ID"],
     scaffold_paths: [".github/workflows/deploy.yml", "app/page.tsx"],
     workflow_preview: "name: Deploy preview\n",
     notes: ["Vercel bills this project to your own account."],
@@ -122,7 +122,7 @@ describe("DeploymentTemplatePanel", () => {
         onChange={() => {}}
       />,
     );
-    await screen.findByText("Static site → PromptZone hosting");
+    await screen.findByText("Static site → PromptWorkspace hosting");
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(2);
     // Single-select is the structural difference from PolicyScopePanel: a
@@ -140,7 +140,7 @@ describe("DeploymentTemplatePanel", () => {
         onChange={onChange}
       />,
     );
-    await screen.findByText("Static site → PromptZone hosting");
+    await screen.findByText("Static site → PromptWorkspace hosting");
     fireEvent.click(screen.getAllByRole("radio")[0]);
 
     await waitFor(() =>
@@ -175,7 +175,7 @@ describe("DeploymentTemplatePanel", () => {
       />,
     );
 
-    await screen.findByText("Static site → PromptZone hosting");
+    await screen.findByText("Static site → PromptWorkspace hosting");
     expect(screen.queryByLabelText("Vercel project ID")).not.toBeInTheDocument();
   });
 
@@ -245,7 +245,7 @@ describe("DeploymentTemplatePanel", () => {
         onChange={() => {}}
       />,
     );
-    await screen.findByText("Static site → PromptZone hosting");
+    await screen.findByText("Static site → PromptWorkspace hosting");
     fireEvent.click(screen.getAllByRole("radio")[0]);
 
     expect(await screen.findByText(/Locked after repository creation/i)).toBeInTheDocument();
@@ -262,7 +262,7 @@ describe("DeploymentTemplatePanel", () => {
         onChange={() => {}}
       />,
     );
-    await screen.findByText("Static site → PromptZone hosting");
+    await screen.findByText("Static site → PromptWorkspace hosting");
     fireEvent.click(screen.getAllByRole("button", { name: /See what it commits/i })[0]);
 
     expect(await screen.findByText("site/index.html")).toBeInTheDocument();

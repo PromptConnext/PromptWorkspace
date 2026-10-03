@@ -20,11 +20,11 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SecretsLike, StorageLike } from "@promptconnext/pz-cloud";
+import type { SecretsLike, StorageLike } from "@promptworkspace/cloud-client";
 
-// Distinct from apps/engine's keychain account ("promptconnext"), so the two
+// Distinct from apps/engine's keychain account ("promptworkspace"), so the two
 // never read or overwrite each other's items on a machine running both.
-const ACCOUNT = "promptconnext-mcp";
+const ACCOUNT = "promptworkspace-mcp";
 
 const STATE_FILE = "session.json";
 /** The pending status writes, in their own file beside the session. Same class,
@@ -127,7 +127,7 @@ function fileRead(file: string): string | undefined {
  *
  *  Synchronous underneath (the engine's port is `execFileSync`) but async at the
  *  surface, because `SecretsLike` is the interface apps/vscode wrote for VS
- *  Code's genuinely-async SecretStorage and pz-cloud is shared with it. */
+ *  Code's genuinely-async SecretStorage and cloud-client is shared with it. */
 export class KeychainSecrets implements SecretsLike {
   private readonly dir: string;
 

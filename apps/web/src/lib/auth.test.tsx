@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthProvider, useAuth } from "./auth";
 
-const STUB_USER_KEY = "pz_stub_user_id";
+const STUB_USER_KEY = "pw_stub_user_id";
 
 function Consumer() {
   const { user, loading, signInStub } = useAuth();

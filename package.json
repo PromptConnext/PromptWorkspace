@@ -1,5 +1,5 @@
 {
-  "name": "promptconnext",
+  "name": "promptworkspace",
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@9.11.0",
@@ -14,9 +14,6 @@
   "pnpm": {
     "overrides": {
       "@vscode/ripgrep": "1.15.9",
-      "drivelist": "file:apps/desktop-theia/stubs/drivelist",
-      "keytar": "file:apps/desktop-theia/stubs/keytar",
-      "native-keymap": "file:apps/desktop-theia/stubs/native-keymap",
       "@wdio/native-utils": "2.5.0"
     },
     "packageExtensions": {

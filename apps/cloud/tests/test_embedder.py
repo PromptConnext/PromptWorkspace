@@ -1,7 +1,7 @@
 """`HttpEmbeddingProvider`'s request shape.
 
 The `dimensions` parameter is load-bearing for any model whose native width
-does not match pz_rag_chunks.embedding's fixed vector(1536): Gemini's
+does not match pw_rag_chunks.embedding's fixed vector(1536): Gemini's
 gemini-embedding-001 returns 3072 by default and must be asked to truncate,
 or every insert fails. It is equally load-bearing that the field is *absent*
 when unconfigured, since self-hosted gateways (Ollama, TEI) may reject an

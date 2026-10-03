@@ -16,22 +16,22 @@ these cases are the only ones that can.
 ENVIRONMENT
 Three dedicated variables, deliberately *not* `SUPABASE_URL`/`SUPABASE_KEY`
 (the root `tests/conftest.py` deletes those before `app.config` is imported)
-and deliberately *not* `PZ_CONTRACT_SUPABASE_*` either: this harness needs a
+and deliberately *not* `PROMPTWORKSPACE_CONTRACT_SUPABASE_*` either: this harness needs a
 third value plan 0020's has no use for — the **anon key**, which is the
 `apikey` a browser presents to GoTrue to sign up and to PostgREST alongside a
-user JWT. Reusing `PZ_CONTRACT_SUPABASE_KEY` for it would silently hand these
+user JWT. Reusing `PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY` for it would silently hand these
 probes a service-role token, which bypasses RLS *and* keeps its grants, and
 every assertion below would pass for the wrong reason.
 
-    PZ_RLS_SUPABASE_URL          # e.g. http://127.0.0.1:54321 (the API, not the db)
-    PZ_RLS_SUPABASE_ANON_KEY     # `ANON_KEY` from `supabase start`
-    PZ_RLS_SUPABASE_SERVICE_KEY  # `SERVICE_ROLE_KEY` from `supabase start`
+    PROMPTWORKSPACE_RLS_SUPABASE_URL          # e.g. http://127.0.0.1:54321 (the API, not the db)
+    PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY     # `ANON_KEY` from `supabase start`
+    PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY  # `SERVICE_ROLE_KEY` from `supabase start`
 
 Unset (the default, and the state of every ordinary `pytest` run) means each
 case **skips with a reason naming the missing variable** — never silently
-dropped. `PZ_RLS_REQUIRE_SUPABASE=1` turns that skip into a failure, for a job
+dropped. `PROMPTWORKSPACE_RLS_REQUIRE_SUPABASE=1` turns that skip into a failure, for a job
 whose whole purpose is to reach the database (mirrors plan 0020's
-`PZ_CONTRACT_REQUIRE_SUPABASE`).
+`PROMPTWORKSPACE_CONTRACT_REQUIRE_SUPABASE`).
 
 STANDING THE TARGET UP, from the repository root:
 
@@ -39,17 +39,18 @@ STANDING THE TARGET UP, from the repository root:
     cd apps/cloud
     DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
       scripts/migrate.py apply --var embed_dim=1024   # 0023 refuses without the var
-    export PZ_RLS_SUPABASE_URL=http://127.0.0.1:54321
-    export PZ_RLS_SUPABASE_ANON_KEY=<ANON_KEY from `supabase start`>
-    export PZ_RLS_SUPABASE_SERVICE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
+    export PROMPTWORKSPACE_RLS_SUPABASE_URL=http://127.0.0.1:54321
+    export PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY=<ANON_KEY from `supabase start`>
+    export PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
     pytest -q -m rls
 
 The extra grant in the middle is plan 0020 M2's step, and it is needed for the
 same reason: a local stack does not expose migration-created tables to the
 Data API roles at all (`supabase/config.toml`'s `auto_expose_new_tables`,
-unset), and `migrations/0006_grants.sql` names only `authenticated`. Migration
+unset), and `migrations/0002_pw_baseline.sql, section 0006_grants.sql` names only `authenticated`.
+Migration
 0030 grants `service_role` on the six graph tables itself, but the setup here
-also writes `pz_workspaces`, `pz_workspace_members` and `pz_projects`, which
+also writes `pw_workspaces`, `pw_workspace_members` and `pw_projects`, which
 it does not — hence the schema-wide grant:
 
     psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
@@ -74,10 +75,10 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
-_URL_VAR = "PZ_RLS_SUPABASE_URL"
-_ANON_VAR = "PZ_RLS_SUPABASE_ANON_KEY"
-_SERVICE_VAR = "PZ_RLS_SUPABASE_SERVICE_KEY"
-_REQUIRE_VAR = "PZ_RLS_REQUIRE_SUPABASE"
+_URL_VAR = "PROMPTWORKSPACE_RLS_SUPABASE_URL"
+_ANON_VAR = "PROMPTWORKSPACE_RLS_SUPABASE_ANON_KEY"
+_SERVICE_VAR = "PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY"
+_REQUIRE_VAR = "PROMPTWORKSPACE_RLS_REQUIRE_SUPABASE"
 
 # Postgres' insufficient_privilege. The one SQLSTATE that proves the *grant*
 # denied the write, as distinct from an RLS policy declining a row (which
@@ -230,9 +231,9 @@ def fixture(http: httpx.Client, target: Target) -> Fixture:
         res = http.post(f"{target.rest}/{table}", headers=headers, json=row)
         assert res.status_code in (200, 201), f"setup {table} failed: {res.status_code} {res.text}"
 
-    insert("pz_workspaces", {"id": workspace_id, "name": "rls-probe", "created_by": admin.id})
+    insert("pw_workspaces", {"id": workspace_id, "name": "rls-probe", "created_by": admin.id})
     insert(
-        "pz_workspace_members",
+        "pw_workspace_members",
         {
             "workspace_id": workspace_id,
             "user_id": admin.id,
@@ -241,10 +242,10 @@ def fixture(http: httpx.Client, target: Target) -> Fixture:
         },
     )
     # The attacker in every probe below: a genuine, non-malicious *member*.
-    # Membership is real, which is what makes `pz_is_member` — the only
+    # Membership is real, which is what makes `pw_is_member` — the only
     # predicate the graph-table policies test — evaluate true for them.
     insert(
-        "pz_workspace_members",
+        "pw_workspace_members",
         {
             "workspace_id": workspace_id,
             "user_id": member.id,
@@ -253,7 +254,7 @@ def fixture(http: httpx.Client, target: Target) -> Fixture:
         },
     )
     insert(
-        "pz_projects",
+        "pw_projects",
         {
             "id": project_id,
             "workspace_id": workspace_id,
@@ -262,7 +263,7 @@ def fixture(http: httpx.Client, target: Target) -> Fixture:
         },
     )
     insert(
-        "pz_tasks",
+        "pw_tasks",
         {
             "id": task_id,
             "project_id": project_id,

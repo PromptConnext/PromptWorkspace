@@ -35,7 +35,7 @@ Keyless (plan 0008 M1): `resolve_assistant_models` (app/rag/models.py)
 resolves BYO-then-managed the same way generation's `select_model` does, but
 returns a *pair* — chat + a possibly-`None` embed connection, since the
 managed Typhoon chat model has no embeddings of its own. A project's chunks
-must stay embedded with one model (`pz_rag_chunks.embedding` is fixed-width);
+must stay embedded with one model (`pw_rag_chunks.embedding` is fixed-width);
 `get_project_embed_model` catches a switch and asks for a reindex instead of
 silently comparing incompatible vectors.
 """
@@ -79,7 +79,7 @@ from app.rag.lineage import compute_facts, facts_to_text, resolve_target
 from app.rag.models import resolve_assistant_models
 from app.rag.queue import EmbedQueue
 
-logger = logging.getLogger("promptconnext.assistant")
+logger = logging.getLogger("promptworkspace.assistant")
 router = APIRouter(tags=["assistant"])
 
 
@@ -316,14 +316,14 @@ async def chat(
                 ),
             )
         # Width sibling of the model-name check above (migration 0023): once
-        # pz_rag_chunks.embedding stopped being a fixed vector(1536) column,
+        # pw_rag_chunks.embedding stopped being a fixed vector(1536) column,
         # two connections can share an embed_model name and still disagree
         # on dimension (e.g. an MRL-truncated width), and that mismatch is
         # worse than a name mismatch — the stored vectors are not even the
         # same shape as the query vector, so comparing them isn't "wrong
         # answer", it's a query-time error against the column/index.
         # Width sibling of the model-name check above (migration 0023): once
-        # pz_rag_chunks.embedding stopped being a fixed vector(1536) column,
+        # pw_rag_chunks.embedding stopped being a fixed vector(1536) column,
         # two connections can share an embed_model name and still disagree
         # on dimension (e.g. an MRL-truncated width), and that mismatch is
         # worse than a name mismatch — the stored vectors are not even the

@@ -11,7 +11,7 @@ import type { ActiveProject } from "../link/activeProject.ts";
 import type { RepoDocs, RepoDocContents } from "./repoDocs.ts";
 
 export class ContextViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "promptconnext.context";
+  public static readonly viewType = "promptworkspace.context";
 
   private view: vscode.WebviewView | undefined;
   private watchers: vscode.FileSystemWatcher[] = [];

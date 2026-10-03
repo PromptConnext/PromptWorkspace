@@ -1,7 +1,7 @@
 """Plan 0019 M5 — a tracker reference belongs to an account, not to a provider.
 
 The defect these cases pin (finding 16 of docs/cloud-codebase-review-2026-09-06
-.md): `pz_task_links` was keyed `(provider, external_key)` and the inbound
+.md): `pw_task_links` was keyed `(provider, external_key)` and the inbound
 webhook route resolved a delivery on exactly that pair. A Jira issue key is
 unique within a *site*, so two workspaces that each connect their own Atlassian
 tenant and each run a project keyed `PZ` both address `('jira', 'PZ-1')` —
@@ -234,7 +234,7 @@ def test_site_a_secret_cannot_sign_for_site_b(jira_client, monkeypatch):
 def test_unconfigured_site_is_dropped_before_any_link_lookup(jira_client, monkeypatch):
     """Route-before-verify, from the refused end.
 
-    A payload whose host matches no `pz_workspace_integrations` row has no
+    A payload whose host matches no `pw_workspace_integrations` row has no
     secret to be checked against and no account to be attributed to, so nothing
     is trusted and `find_task_link_by_key` is never called — the same
     "unrecognized identity, untrusted payload" rule `github_webhook` applies to

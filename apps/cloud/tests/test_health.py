@@ -4,7 +4,7 @@ import re
 def test_root(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert res.json()["service"] == "promptconnext-cloud"
+    assert res.json()["service"] == "promptworkspace-cloud"
 
 
 def test_health(client):

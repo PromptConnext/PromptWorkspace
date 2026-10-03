@@ -3,11 +3,11 @@
 // Three things are pinned here, in increasing order of how much they matter:
 //
 //   1. The vendored copy at src/git/taskRefs.ts is byte-for-byte the file at
-//      packages/pz-cloud/src/taskRefs.ts. This is the whole cost of vendoring
+//      packages/cloud-client/src/taskRefs.ts. This is the whole cost of vendoring
 //      instead of depending, and it is one assertion.
 //   2. The grammar answers exactly what docs/contracts/task-ref-cases.json
 //      says it answers. That same file is read by
-//      packages/pz-cloud/test/taskRefs.test.ts and apps/cloud/tests/
+//      packages/cloud-client/test/taskRefs.test.ts and apps/cloud/tests/
 //      test_task_refs.py, so all three implementations are held to one table
 //      rather than to three sets of hand-written cases that can drift apart.
 //   3. The defect the plan opens with is actually closed: a project numbering
@@ -30,12 +30,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..", "..");
 
 const VENDORED = join(here, "..", "src", "git", "taskRefs.ts");
-const REFERENCE = join(repoRoot, "packages", "pz-cloud", "src", "taskRefs.ts");
+const REFERENCE = join(repoRoot, "packages", "cloud-client", "src", "taskRefs.ts");
 const CASES = join(repoRoot, "docs", "contracts", "task-ref-cases.json");
 
 // --------------------------------------------------------------- drift ----
 
-test("the vendored grammar is byte-for-byte the pz-cloud reference", () => {
+test("the vendored grammar is byte-for-byte the cloud-client reference", () => {
   const vendored = readFileSync(VENDORED, "utf8");
   const reference = readFileSync(REFERENCE, "utf8");
 
@@ -48,7 +48,7 @@ test("the vendored grammar is byte-for-byte the pz-cloud reference", () => {
   );
   assert.ok(
     vendored.endsWith(reference),
-    "apps/engine/src/git/taskRefs.ts has drifted from packages/pz-cloud/src/taskRefs.ts. " +
+    "apps/engine/src/git/taskRefs.ts has drifted from packages/cloud-client/src/taskRefs.ts. " +
       "Re-vendor it verbatim rather than editing the copy — see the header in that file " +
       "and docs/contracts/task-ref-grammar.md.",
   );
@@ -128,11 +128,11 @@ for (const c of table.collisions) {
 
 const dataDir = mkdtempSync(join(tmpdir(), "pz-taskrefs-"));
 process.env.HOME = dataDir;
-process.env.PROMPTCONNEXT_DATA_DIR = dataDir;
+process.env.PROMPTWORKSPACE_DATA_DIR = dataDir;
 process.env.CLOUD_API_URL = "";
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_ANON_KEY;
-delete process.env.PROMPTCONNEXT_AUTH_TOKEN;
+delete process.env.PROMPTWORKSPACE_AUTH_TOKEN;
 
 const { Hono } = await import("hono");
 const { projects: projectRoutes } = await import("../src/routes/projects.ts");

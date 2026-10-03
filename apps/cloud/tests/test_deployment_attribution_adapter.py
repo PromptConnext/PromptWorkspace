@@ -109,19 +109,19 @@ def test_freezing_issues_exactly_one_rpc(client):
     repo = _repo(client)
     assert repo.freeze_deployment_tasks("d1", ["t1", "t2"], utcnow()) is True
 
-    assert client.calls == ["rpc.pz_freeze_deployment_tasks"]
+    assert client.calls == ["rpc.pw_freeze_deployment_tasks"]
     name, params = client.rpc_args[0]
-    assert name == "pz_freeze_deployment_tasks"
+    assert name == "pw_freeze_deployment_tasks"
     assert params == {"p_deployment_id": "d1", "p_task_ids": ["t1", "t2"]}
 
 
 def test_freezing_never_issues_a_bare_delete(client):
-    """The specific regression. `pz_deployment_tasks` has exactly one writer
+    """The specific regression. `pw_deployment_tasks` has exactly one writer
     now, and it is the function."""
     repo = _repo(client)
     repo.freeze_deployment_tasks("d1", ["t1"], utcnow())
 
-    assert not any("pz_deployment_tasks" in call for call in client.calls)
+    assert not any("pw_deployment_tasks" in call for call in client.calls)
     assert not any(call.endswith(".delete") for call in client.calls)
 
 
@@ -132,7 +132,7 @@ def test_an_empty_set_is_still_one_rpc(client):
     repo = _repo(client)
     repo.freeze_deployment_tasks("d1", [], utcnow())
 
-    assert client.calls == ["rpc.pz_freeze_deployment_tasks"]
+    assert client.calls == ["rpc.pw_freeze_deployment_tasks"]
     assert client.rpc_args[0][1]["p_task_ids"] == []
 
 
@@ -146,15 +146,15 @@ def test_an_already_frozen_row_is_reported_as_not_written():
 
 def test_clearing_touches_only_the_deployment_row(client):
     """The correction path writes the two attribution columns on
-    pz_deployments and nothing else — in particular it must not clear the
+    pw_deployments and nothing else — in particular it must not clear the
     join table, or a failed recompute would destroy the record it was meant
     to improve."""
     client._table_data = [{"id": "d1"}]
     repo = _repo(client)
     assert repo.clear_deployment_attribution("d1") is True
 
-    assert client.calls == ["pz_deployments.update:['attributed_at', 'attribution_state']"]
-    assert not any("pz_deployment_tasks" in call for call in client.calls)
+    assert client.calls == ["pw_deployments.update:['attributed_at', 'attribution_state']"]
+    assert not any("pw_deployment_tasks" in call for call in client.calls)
 
 
 def test_clearing_an_unknown_deployment_reports_it():

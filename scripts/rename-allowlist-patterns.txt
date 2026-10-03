@@ -1,0 +1,25 @@
+# Rename gate allowlist (scripts/rename/check.py). One regex per line.
+# Each entry matches a TOKEN SPAN, never a whole line: the checker blanks the
+# span and re-searches the rest of the line. Rationale: docs/rename-allowlist.md.
+# Keep in step with PROTECTED in scripts/rename/patterns.py.
+github\.com/PromptConnext/
+git@github\.com:PromptConnext/
+PromptConnext/(?=(?:PromptWorkspace|promptconnext-corp-web|promptconnext-projects)(?![A-Za-z0-9-]))
+promptconnext-corp-web(?![A-Za-z0-9-])
+promptconnext-projects(?![A-Za-z0-9-])
+"publisher": "promptconnext"
+promptconnext\.promptworkspace(?![A-Za-z0-9-])
+com\.promptconnext\.promptworkspace(?![A-Za-z0-9-])
+no-reply@promptconnext\.com(?![A-Za-z0-9-])
+promptconnext\.truthledgers\.com(?![A-Za-z0-9-])
+promptconnext\.com(?![A-Za-z0-9-])
+©\s*\d{4}(?:[–-]\d{4})?\s+PromptConnext
+Copyright \(c\) \d{4}(?:[–-]\d{4})? PromptConnext
+PromptConnext Co\.
+(?:hosted|managed|minted|supplied|built|made|operated)\s+by\s+PromptConnext(?!\s+(?:Cloud|Workspace|Desktop|MCP|extension))
+PromptConnext company
+PromptConnext is the company
+permission from PromptConnext
+PRE_BASELINE_TABLE_PREFIX = "pz_"
+promptzone-(?:design-system-plan|diagrams|platform-architecture|product-roadmap)\.md
+promptzone-graph\.png

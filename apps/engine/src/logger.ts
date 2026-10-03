@@ -2,14 +2,14 @@
 // (WP3). No external dependency: each call emits one line of JSON to
 // stdout (info) or stderr (warn/error) shaped as
 // `{ ts, level, msg, ...meta }`. Filtering is controlled by
-// PROMPTCONNEXT_LOG_LEVEL (default "info"): "error" shows only errors,
+// PROMPTWORKSPACE_LOG_LEVEL (default "info"): "error" shows only errors,
 // "warn" shows warnings and errors, "info" (default) shows everything.
 type Level = "info" | "warn" | "error";
 
 const LEVEL_ORDER: Record<Level, number> = { error: 0, warn: 1, info: 2 };
 
 function configuredLevel(): Level {
-  const raw = process.env.PROMPTCONNEXT_LOG_LEVEL;
+  const raw = process.env.PROMPTWORKSPACE_LOG_LEVEL;
   if (raw === "error" || raw === "warn" || raw === "info") return raw;
   return "info";
 }

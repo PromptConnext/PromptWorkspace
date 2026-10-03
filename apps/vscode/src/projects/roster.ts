@@ -13,7 +13,7 @@ import {
   type CloudProject,
   type LifecycleStatus,
   type Workspace,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 import type { ProjectCandidate } from "../link/projectLink.ts";
 
 /** `local` = on this machine · `remote-only` = clonable · `no-repo` = nothing

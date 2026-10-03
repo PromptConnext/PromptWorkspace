@@ -100,7 +100,7 @@ export default function TerminalPane({ projectId }: { projectId: string }) {
         <div className="setup-panel">
           <p className="muted">
             Paste these into this shell, then run <code>claude</code> — it will use{" "}
-            <strong>{setup.model}</strong> through PromptConnext's translation layer (tool
+            <strong>{setup.model}</strong> through PromptWorkspace's translation layer (tool
             calls included). A developer who prefers their own Claude account can skip this.
           </p>
           <pre>{setup.commands}</pre>

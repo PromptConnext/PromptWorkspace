@@ -25,7 +25,7 @@ def normalize_account_key(url: str) -> str:
     `https://acme.atlassian.net/rest/api/3/issue/10002` all normalize to
     `https://acme.atlassian.net`. Returns `""` for anything that is not an
     absolute http(s) URL with a host — callers treat that as "no account
-    identity", never as a wildcard, and `pz_workspace_integrations.account_key`
+    identity", never as a wildcard, and `pw_workspace_integrations.account_key`
     carries a `<> ''` check constraint so an empty key can never match a row.
 
     The default port is dropped rather than kept, and that is not cosmetic: an

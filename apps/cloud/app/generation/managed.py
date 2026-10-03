@@ -15,7 +15,7 @@ from app.models.schemas import ModelConnection
 from app.secrets import SecretStore
 
 # Not a real workspace — this connection is synthesized per request and
-# never written to pz_workspace_model_connections, so there's no real id to
+# never written to pw_workspace_model_connections, so there's no real id to
 # use. Present only so ModelConnection's required field is satisfied.
 MANAGED_WORKSPACE_MARKER = "__managed__"
 

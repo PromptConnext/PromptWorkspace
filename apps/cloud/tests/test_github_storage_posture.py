@@ -1,4 +1,4 @@
-"""M11's own named exit criterion: "a dump of all PromptConnext-cloud storage
+"""M11's own named exit criterion: "a dump of all PromptWorkspace-cloud storage
 contains no source-code plaintext (embeddings + refs only) — verified by
 test." This runs a full index (push webhook -> queue drain) + chat cycle
 (which fetches the same file again, on demand, for answer context) against

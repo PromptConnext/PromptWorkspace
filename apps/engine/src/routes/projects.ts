@@ -141,7 +141,7 @@ function registerLocalProject(
 // for a cloud project it's about to hydrate.
 export function createLocalProjectShell(name: string, path?: string): ProjectRow {
   const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
-  const resolvedPath = path ?? join(homedir(), "PromptConnext-Projects", slug);
+  const resolvedPath = path ?? join(homedir(), "PromptWorkspace-Projects", slug);
 
   const dup = db.prepare("SELECT id FROM projects WHERE path = ?").get(resolvedPath);
   if (dup) throw new ProjectCollisionError(resolvedPath);
@@ -167,7 +167,7 @@ function isNonEmptyDir(path: string): boolean {
 // string). Two concrete exploits this closes: (1) `ext::sh -c <cmd>` — git's
 // `ext` transport runs an arbitrary shell command, direct RCE; (2) a value
 // starting with `-` gets parsed by git as a flag (e.g. `--upload-pack=<cmd>`).
-// Allowlist only the two transports PromptConnext actually needs: `https://`
+// Allowlist only the two transports PromptWorkspace actually needs: `https://`
 // and the `git@<host>:<path>` SSH shorthand (not restricted to github.com —
 // GitHub Enterprise hosts are legitimate). Everything else, including
 // `file://` and `ext::`, is rejected before git is ever invoked.
@@ -192,7 +192,7 @@ export function cloneLocalProjectShell(name: string, repoUrl: string, path?: str
   assertCloneableRepoUrl(repoUrl);
 
   const slug = name.trim().replace(/[^\w-]+/g, "-").toLowerCase();
-  const resolvedPath = path ?? join(homedir(), "PromptConnext-Projects", slug);
+  const resolvedPath = path ?? join(homedir(), "PromptWorkspace-Projects", slug);
 
   const dup = db.prepare("SELECT id FROM projects WHERE path = ?").get(resolvedPath);
   if (dup) throw new ProjectCollisionError(resolvedPath);
@@ -634,7 +634,7 @@ projects.post("/engine/tasks/:taskId/run", async (c) => {
 
   // The one-shot loop and façade-routed Claude Code run on the connected BYO
   // model; agents that bring their own account/model (Gemini/Codex/custom) do
-  // not need a PromptConnext code connection.
+  // not need a PromptWorkspace code connection.
   const needsCodeModel = !useAgent || adapter.bringsOwnModel === false;
   const conn = connectionForRoleStrict("code");
   if (needsCodeModel && !conn) {
@@ -753,7 +753,7 @@ projects.post("/engine/projects/:id/stages/:stage/approve", async (c) => {
 // build that can never say what is in it.
 //
 // The grammar is NOT defined here. It is the vendored copy at
-// ../git/taskRefs.ts, byte-identical to packages/pz-cloud/src/taskRefs.ts and
+// ../git/taskRefs.ts, byte-identical to packages/cloud-client/src/taskRefs.ts and
 // held that way by apps/engine/test/task-refs.test.ts, so the engine, the
 // extension and the cloud resolve a commit to the same task. Writing a third
 // grammar here is what produced the defect plan 0024 M1 closes: /\bT\d{3}\b/

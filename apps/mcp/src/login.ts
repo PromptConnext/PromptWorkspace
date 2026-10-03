@@ -1,4 +1,4 @@
-// `promptconnext-mcp login` — browser sign-in without an editor.
+// `promptworkspace-mcp login` — browser sign-in without an editor.
 //
 // apps/vscode/src/auth/signIn.ts builds a callback from `env.uriScheme` plus its
 // own extension id and receives the one-time code through a URI handler the
@@ -58,7 +58,7 @@ export async function runLogin(): Promise<number> {
   if (!config.cloudApiUrl) {
     process.stderr.write(
       `No cloudApiUrl configured. Set it in ${configDir()}/config.json or ` +
-        "PROMPTCONNEXT_CLOUD_API_URL.\n",
+        "PROMPTWORKSPACE_CLOUD_API_URL.\n",
     );
     return 1;
   }
@@ -79,7 +79,7 @@ export async function runLogin(): Promise<number> {
   if (!config.cloudWebUrl) {
     process.stderr.write(
       `No cloudWebUrl configured. Set it in ${configDir()}/config.json or ` +
-        "PROMPTCONNEXT_CLOUD_WEB_URL.\n",
+        "PROMPTWORKSPACE_CLOUD_WEB_URL.\n",
     );
     return 1;
   }
@@ -89,7 +89,7 @@ export async function runLogin(): Promise<number> {
     `${config.cloudWebUrl}/login?desktop=1&state=${encodeURIComponent(state)}`;
 
   process.stdout.write(
-    "Sign in to PromptConnext in your browser, then copy the code it shows.\n\n" +
+    "Sign in to PromptWorkspace in your browser, then copy the code it shows.\n\n" +
       `  ${url}\n\n`,
   );
   openInBrowser(url);

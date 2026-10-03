@@ -8,7 +8,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { AUTH_MODE, SUPABASE_ANON_KEY, SUPABASE_URL } from "./config";
 
-const STUB_USER_KEY = "pz_stub_user_id";
+const STUB_USER_KEY = "pw_stub_user_id";
 
 export interface AuthUser {
   id: string;
@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (AUTH_MODE === "stub") {
       const stored = typeof window !== "undefined" ? localStorage.getItem(STUB_USER_KEY) : null;
-      if (stored) setUser({ id: stored, email: `${stored}@promptconnext.local` });
+      if (stored) setUser({ id: stored, email: `${stored}@promptworkspace.local` });
       setLoading(false);
       return;
     }
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInStub = useCallback((userId: string) => {
     localStorage.setItem(STUB_USER_KEY, userId);
-    setUser({ id: userId, email: `${userId}@promptconnext.local` });
+    setUser({ id: userId, email: `${userId}@promptworkspace.local` });
   }, []);
 
   const signInSupabase = useCallback(async (email: string, password: string) => {
