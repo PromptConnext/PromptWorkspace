@@ -56,7 +56,7 @@ const STAGE_ORDER: StageMeta[] = [
     label: "Project rules (do this first)",
     buttonLabel: "Generate rules",
     blurb:
-      "Do this first. The project's standing rules. They steer every later stage and become AGENTS.md in the " +
+      "The project's standing rules. They steer every later stage and become AGENTS.md in the " +
       "repository — what the coding agent reads before it writes anything. The repository can't " +
       "be created without them.",
   },

@@ -43,6 +43,7 @@ from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
 from app.generation.prefill import parse_prefill
 from app.generation.prompts import (
+    CURRENT_SERVICES_RULE,
     UNTRUSTED_SECURITY_RULE,
     StageKind,
     driver_prompt,
@@ -434,11 +435,11 @@ async def prefill(
     fields = [f.model_dump() for f in body.fields]
     user_content = build_prefill_prompt(fields, context)
     # The baseline segments are marked untrusted; say what that means.
-    system_prompt = (
-        f"{PREFILL_SYSTEM_PROMPT}\n{UNTRUSTED_SECURITY_RULE}"
-        if codebase is not None
-        else PREFILL_SYSTEM_PROMPT
-    )
+    system_prompt = PREFILL_SYSTEM_PROMPT
+    if stage == "plan":
+        system_prompt = f"{system_prompt}\n{CURRENT_SERVICES_RULE}"
+    if codebase is not None:
+        system_prompt = f"{system_prompt}\n{UNTRUSTED_SECURITY_RULE}"
 
     secret_store = request.app.state.secret_store
     api_key = secret_store.decrypt(conn.secret_ref)
