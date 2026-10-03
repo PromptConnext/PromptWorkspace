@@ -63,6 +63,52 @@ def strip_template_scaffolding(doc: str) -> str:
     return text.strip()
 
 
+_H1_RE = re.compile(r"^# (.+)$", re.MULTILINE)
+_H1_PREFIX_RE = re.compile(r"^(?:Feature Specification|Implementation Plan|Tasks)\s*:\s*", re.I)
+_BRANCH_LINE_RE = re.compile(r"(\*\*(?:Feature )?Branch\*\*:\s*`)([^`\n]*)(`)")
+_BRACKET_BRANCH_RE = re.compile(r"\[###-[^\]\n]*\]")
+
+
+def _h1_feature_name(doc: str) -> str | None:
+    m = _H1_RE.search(doc)
+    if not m:
+        return None
+    name = _H1_PREFIX_RE.sub("", m.group(1)).strip()
+    if not name or "[" in name or "$" in name:
+        return None
+    return name
+
+
+def _kebab(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def fix_template_placeholders(doc: str) -> str:
+    """Deterministically fix template placeholders a model left half-filled.
+    The platform's single feature always lives in specs/001-*, so a `###-`
+    branch prefix becomes `001-`; a wholly bracketed branch value is derived
+    from the H1 title. Bare `[FEATURE NAME]` / `[FEATURE]` become the H1-derived
+    name. Conservative: `$ARGUMENTS`, `[DATE]`, `[NEEDS CLARIFICATION: ...]`,
+    `[P]`, `[US1]` and links are left untouched."""
+    name = _h1_feature_name(doc)
+    derived = f"001-{_kebab(name)}" if name and _kebab(name) else None
+
+    def fix_branch(m: re.Match[str]) -> str:
+        value = m.group(2).strip()
+        if value.startswith("###-") and len(value) > 4 and "[" not in value:
+            value = "001-" + value[4:]
+        elif _BRACKET_BRANCH_RE.fullmatch(value) and derived:
+            value = derived
+        return m.group(1) + value + m.group(3)
+
+    text = _BRANCH_LINE_RE.sub(fix_branch, doc)
+    if derived:
+        text = text.replace("[###-feature-name]", derived).replace("[###-feature]", derived)
+    if name:
+        text = re.sub(r"\[FEATURE(?: NAME)?\](?!\()", lambda _m: name, text)
+    return text
+
+
 def extract_json_object(raw: str) -> dict | None:
     """Pull the first JSON object out of a completion. Models wrap JSON in a
     ```json fence, prefix it with "Here you go:", or both — asking nicely in

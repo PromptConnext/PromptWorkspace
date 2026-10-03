@@ -6,7 +6,11 @@ generated document instead of treating it as instructions to itself.
 
 from __future__ import annotations
 
-from app.generation.parsing import parse_task_lines, strip_template_scaffolding
+from app.generation.parsing import (
+    fix_template_placeholders,
+    parse_task_lines,
+    strip_template_scaffolding,
+)
 
 
 def test_strips_html_comment_blocks():
@@ -91,3 +95,54 @@ def test_task_lines_ignore_ac_before_any_task_and_non_ac_sub_bullets():
         },
         {"ref": "T002", "title": "Persist sessions", "parallel": False, "acceptance_criteria": []},
     ]
+
+
+def _spec(branch: str, title: str = "Feature Specification: Task Tracker") -> str:
+    return f"# {title}\n\n**Feature Branch**: `{branch}`\n**Created**: 2026-10-03\n"
+
+
+def test_branch_hash_prefix_becomes_001():
+    assert "`001-task-tracker`" in fix_template_placeholders(_spec("###-task-tracker"))
+
+
+def test_bracket_branch_derived_from_h1():
+    assert "`001-task-tracker`" in fix_template_placeholders(_spec("[###-feature-name]"))
+
+
+def test_plan_branch_and_input_paths():
+    doc = (
+        "# Implementation Plan: Task Tracker\n\n**Branch**: `###-task-tracker` | **Date**: x\n"
+        "**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`\n"
+    )
+    out = fix_template_placeholders(doc)
+    assert "**Branch**: `001-task-tracker`" in out
+    assert "/specs/001-task-tracker/spec.md" in out
+
+
+def test_good_branch_untouched():
+    doc = _spec("001-task-tracker")
+    assert fix_template_placeholders(doc) == doc
+
+
+def test_bracket_branch_without_title_left_alone():
+    doc = "# Feature Specification: [FEATURE NAME]\n\n**Feature Branch**: `[###-feature-name]`\n"
+    assert fix_template_placeholders(doc) == doc
+
+
+def test_feature_name_placeholder_replaced_in_body():
+    out = fix_template_placeholders(_spec("001-x") + "\nBuild [FEATURE NAME] now.\n")
+    assert "Build Task Tracker now." in out
+
+
+def test_unambiguous_markers_untouched():
+    body = (
+        "- FR-1: [NEEDS CLARIFICATION: auth?]\n- [P] item [US1]\n"
+        "See [docs](http://x) and $ARGUMENTS and [DATE]\n"
+    )
+    doc = _spec("001-x") + body
+    assert fix_template_placeholders(doc) == doc
+
+
+def test_tasks_lines_unaffected():
+    doc = "# Tasks: Task Tracker\n\n- [ ] T001 [P] [US1] Create model in src/a.py\n"
+    assert fix_template_placeholders(doc) == doc
