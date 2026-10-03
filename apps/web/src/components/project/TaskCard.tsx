@@ -274,7 +274,7 @@ export function InlineCodeText({ text }: { text: string }) {
         s.code ? (
           <code
             key={i}
-            className="break-all rounded bg-slate-100 px-1 py-px font-mono text-[0.85em] text-slate-800"
+            className="[overflow-wrap:anywhere] rounded bg-slate-100 px-1 py-px font-mono text-[0.85em] text-slate-800"
           >
             {s.text}
           </code>
