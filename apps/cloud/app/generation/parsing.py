@@ -12,6 +12,8 @@ import re
 _FILE_BLOCK_RE = re.compile(r"```file:([^\n]+)\n(.*?)```", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$")
+# An indented `- AC: <criterion>` sub-bullet under a task line.
+_TASK_AC_RE = re.compile(r"^[ \t]+[-*]\s+(?:AC|Acceptance)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->\n?", re.DOTALL)
 _SPECKIT_MARKER_LINE_RE = re.compile(r"^.*__SPECKIT_COMMAND_[A-Z]+__.*\n?", re.MULTILINE)
 
@@ -79,12 +81,26 @@ def extract_json_object(raw: str) -> dict | None:
 
 
 def parse_task_lines(doc: str) -> list[dict[str, object]]:
-    """Pull `- [ ] T001 [P] Description` checklist lines out of a tasks.md."""
+    """Pull `- [ ] T001 [P] Description` checklist lines out of a tasks.md,
+    each with the indented `  - AC: <criterion>` sub-bullets beneath it as
+    `acceptance_criteria` (empty when it has none). Other sub-bullets, and an
+    AC line before the first task, are ignored."""
     tasks: list[dict[str, object]] = []
+    criteria: list[str] | None = None
     for line in doc.split("\n"):
         m = _TASK_LINE_RE.match(line)
         if m:
+            criteria = []
             tasks.append(
-                {"ref": m.group(1), "title": m.group(3).strip(), "parallel": bool(m.group(2))}
+                {
+                    "ref": m.group(1),
+                    "title": m.group(3).strip(),
+                    "parallel": bool(m.group(2)),
+                    "acceptance_criteria": criteria,
+                }
             )
+            continue
+        ac = _TASK_AC_RE.match(line)
+        if ac and ac.group(1) and criteria is not None:
+            criteria.append(ac.group(1))
     return tasks

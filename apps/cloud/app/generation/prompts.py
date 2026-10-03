@@ -67,6 +67,12 @@ def driver_prompt(kind: StageKind, existing_codebase: bool = False) -> str:
             "Every task line MUST keep the exact checklist shape `- [ ] T001 [P] Description` "
             "([P] only when parallelizable) so the platform can ingest it."
         )
+        lines.append(
+            "Under each task line, add 1-4 indented sub-bullets of the form "
+            "`  - AC: <observable, testable outcome>`, derived from the specification's "
+            "acceptance scenarios and requirements for that task's user story. Each criterion "
+            "states a verifiable behaviour or artifact; never restate the task title."
+        )
     if existing_codebase:
         lines.append(UNTRUSTED_SECURITY_RULE)
     if existing_codebase and kind in ("plan", "tasks"):

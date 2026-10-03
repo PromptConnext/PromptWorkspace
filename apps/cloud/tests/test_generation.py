@@ -203,6 +203,7 @@ def test_tasks_creates_tasks_with_text_acceptance_criteria(client: TestClient):
     for task in tasks:
         assert task.acceptance_criteria
         assert all(hasattr(c, "text") for c in task.acceptance_criteria)
+        assert task.title not in [c.text for c in task.acceptance_criteria]
 
 
 def test_non_member_cannot_generate(client: TestClient):
