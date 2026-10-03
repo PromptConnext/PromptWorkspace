@@ -67,4 +67,11 @@ describe("workspace home", () => {
     fireEvent.click(screen.getByRole("button", { name: "New Project" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
+
+  it("hides empty state when fetch error occurs", async () => {
+    state.projects = { data: undefined, loading: false, error: "Failed to load projects" };
+    await renderPage();
+    expect(await screen.findByText("Failed to load projects")).toBeInTheDocument();
+    expect(screen.queryByText("No projects yet. Create your first project to start planning.")).toBeNull();
+  });
 });

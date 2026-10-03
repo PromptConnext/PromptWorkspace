@@ -115,7 +115,7 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {!loading && (projects?.length ?? 0) === 0 ? (
+        {!loading && !error && (projects?.length ?? 0) === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 px-6 py-10 text-center">
             <p className="text-sm text-slate-500">
               No projects yet. Create your first project to start planning.

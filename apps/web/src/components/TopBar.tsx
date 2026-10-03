@@ -19,7 +19,7 @@ export function TopBar({
   return (
     <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-6">
       <nav className="flex min-w-0 items-center gap-2 text-sm">
-        <Link href="/" className="min-w-0 shrink-0 truncate font-semibold text-slate-900">
+        <Link href="/" className="shrink-0 font-semibold text-slate-900">
           PromptWorkspace
         </Link>
         {/* Rendered from one membership up, not two: a user with a single
