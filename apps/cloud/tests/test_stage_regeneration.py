@@ -265,7 +265,7 @@ def test_a_hand_edited_tasks_document_that_parses_reports_current(client: TestCl
     assert {t.feature_tag: t.id for t in tasks} == before
     edited_task = next(t for t in tasks if t.feature_tag == "T002")
     assert edited_task.title == "Persist the payment ledger"
-    assert [c.text for c in edited_task.acceptance_criteria] == ["Persist the payment ledger"]
+    assert edited_task.acceptance_criteria == []
     assert client.app.state.repository.get_stage_document(pid, "tasks").content == edited
 
 
@@ -286,3 +286,71 @@ def test_a_hand_edited_tasks_document_that_does_not_parse_reports_failed(client:
     # when the graph rejects it.
     assert client.app.state.repository.get_stage_document(pid, "tasks").content == prose
     assert {(t.id, t.feature_tag, t.title) for t in _live_tasks(client, pid)} == before
+
+
+TASKS_WITH_AC = (
+    "# Tasks\n\n"
+    "Enough prose here for the document parser's minimum-length check to accept this as a "
+    "real generated document rather than a token stub.\n\n"
+    "- [ ] T001 [P] Add the payment intent endpoint\n"
+    "  - AC: POST /payment-intents returns 201 with the intent id\n"
+    "  - AC: An unknown currency is rejected with 422\n"
+    "- [ ] T002 Persist the payment record\n"
+)
+
+
+def test_tasks_store_the_checklist_acceptance_criteria_not_the_title(client: TestClient):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT, TASKS_WITH_AC)
+    assert res.status_code == 200, res.text
+
+    by_tag = {t.feature_tag: t for t in _live_tasks(client, pid)}
+    assert [c.model_dump() for c in by_tag["T001 [P]"].acceptance_criteria] == [
+        {"text": "POST /payment-intents returns 201 with the intent id"},
+        {"text": "An unknown currency is rejected with 422"},
+    ]
+    assert by_tag["T002"].acceptance_criteria == []
+
+
+def test_regenerating_tasks_updates_criteria_on_the_existing_rows(client: TestClient):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, TASKS_WITH_AC)
+    before = {t.feature_tag: t.id for t in _live_tasks(client, pid)}
+
+    regenerated = TASKS_WITH_AC.replace(
+        "  - AC: An unknown currency is rejected with 422\n", ""
+    ).replace(
+        "- [ ] T002 Persist the payment record\n",
+        "- [ ] T002 Persist the payment record\n  - AC: The record survives a restart\n",
+    )
+    res = _generate(client, pid, "tasks", TASKS_INPUT, regenerated)
+    assert res.status_code == 200, res.text
+
+    tasks = _live_tasks(client, pid)
+    assert {t.feature_tag: t.id for t in tasks} == before
+    by_tag = {t.feature_tag: t for t in tasks}
+    assert [c.text for c in by_tag["T001 [P]"].acceptance_criteria] == [
+        "POST /payment-intents returns 201 with the intent id"
+    ]
+    assert [c.text for c in by_tag["T002"].acceptance_criteria] == ["The record survives a restart"]
+
+
+def test_ac_lines_added_by_hand_in_the_planner_editor_land_on_the_task(client: TestClient):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+
+    edited = THREE_TASKS.replace(
+        "- [ ] T002 Persist the payment record\n",
+        "- [ ] T002 Persist the payment record\n  * AC: A duplicate payment id is rejected\n",
+    )
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/tasks", json={"content": edited}, headers=ALICE
+    )
+
+    assert res.status_code == 200, res.text
+    task = next(t for t in _live_tasks(client, pid) if t.feature_tag == "T002")
+    assert [c.text for c in task.acceptance_criteria] == ["A duplicate payment id is rejected"]
