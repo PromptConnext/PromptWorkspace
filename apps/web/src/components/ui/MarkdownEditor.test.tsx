@@ -1,22 +1,62 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MarkdownEditor } from "./MarkdownEditor";
+import { defaultEditorMode, MarkdownEditor } from "./MarkdownEditor";
 
 afterEach(() => {
   cleanup();
 });
 
 describe("MarkdownEditor", () => {
-  it("shows the raw textarea by default with the given value", () => {
+  it("opens a document with content as a preview", () => {
     render(<MarkdownEditor value="# Hello" onChange={vi.fn()} onSave={vi.fn()} />);
-    const textarea = screen.getByRole("textbox");
-    expect(textarea).toHaveValue("# Hello");
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hello" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens an empty document on the raw textarea", () => {
+    render(<MarkdownEditor value="" onChange={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("stays on raw while the document is streaming in", () => {
+    render(<MarkdownEditor value="# Hel" onChange={vi.fn()} onSave={vi.fn()} streaming />);
+    expect(screen.getByRole("textbox")).toHaveValue("# Hel");
+  });
+
+  it("picks the default mode from content and streaming", () => {
+    expect(defaultEditorMode("")).toBe("raw");
+    expect(defaultEditorMode("  \n")).toBe("raw");
+    expect(defaultEditorMode("# Doc")).toBe("preview");
+    expect(defaultEditorMode("# Doc", true)).toBe("raw");
+  });
+
+  it("keeps an explicit Raw choice once content arrives", () => {
+    const { rerender } = render(<MarkdownEditor value="" onChange={vi.fn()} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+    rerender(<MarkdownEditor value="# Hello" onChange={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole("textbox")).toHaveValue("# Hello");
+  });
+
+  it("stays on raw while someone types into an empty document", () => {
+    const { rerender } = render(<MarkdownEditor value="" onChange={vi.fn()} onSave={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "#" } });
+    rerender(<MarkdownEditor value="#" onChange={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole("textbox")).toHaveValue("#");
+  });
+
+  it("names the textarea with the given label", () => {
+    render(
+      <MarkdownEditor value="" onChange={vi.fn()} onSave={vi.fn()} label="Tasks document" />,
+    );
+    expect(screen.getByRole("textbox", { name: "Tasks document" })).toBeInTheDocument();
   });
 
   it("calls onChange when the raw textarea is edited", () => {
     const onChange = vi.fn();
     render(<MarkdownEditor value="# Hello" onChange={onChange} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Hello world" } });
     expect(onChange).toHaveBeenCalledWith("# Hello world");
   });
