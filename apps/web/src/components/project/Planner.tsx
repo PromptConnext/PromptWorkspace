@@ -235,6 +235,8 @@ function StageSection({
   const { authHeaders } = useAuth();
   const fields = STAGE_FIELDS[stage];
   const [answers, setAnswers] = useState<StageAnswers>({});
+  // Saves the form's pending answers now rather than after the debounce.
+  const flushAnswers = useRef<(() => void) | null>(null);
   const { status, streamedText, result, error, generate } = useStageGeneration(projectId);
 
   const [docContent, setDocContent] = useState("");
@@ -380,6 +382,7 @@ function StageSection({
                 canPrefill={PREFILLABLE_STAGES.includes(stage)}
                 prefill={prefill}
                 prefillHint={prefillHint}
+                flushRef={flushAnswers}
               />
             </div>
           )}
@@ -388,7 +391,10 @@ function StageSection({
             disabled={
               status === "generating" || !ready || Boolean(blockedBy) || Boolean(analysisGate)
             }
-            onClick={() => generate(stage, userInput)}
+            onClick={() => {
+              flushAnswers.current?.();
+              generate(stage, userInput);
+            }}
             className={hasDoc ? SECONDARY_BUTTON : PRIMARY_BUTTON}
           >
             {status === "generating" ? "Generating…" : buttonLabel}

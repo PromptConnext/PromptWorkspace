@@ -402,6 +402,16 @@ export interface StageDocumentOut {
   updated_at: string | null;
 }
 
+/** The Planner form answers behind a stage (GET/PUT
+ *  /projects/{id}/stage-inputs/{stage}), shared by the project's members.
+ *  `inputs` is empty until someone saves. */
+export interface StageInputsOut {
+  stage: StageKind;
+  inputs: Record<string, string>;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
 /** A save knows something a read cannot: whether the graph now reflects the
  *  document (PATCH only, apps/cloud/app/api/stage_documents.py). */
 export interface StageDocumentSaved extends StageDocumentOut {
