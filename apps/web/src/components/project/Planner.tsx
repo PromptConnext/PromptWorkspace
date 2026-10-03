@@ -1,7 +1,7 @@
 // apps/web/src/components/project/Planner.tsx
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   apiFetch,
   getRepoAnalysis,
@@ -17,7 +17,7 @@ import { DocumentPreview } from "./DocumentPreview";
 import { DeploymentTemplatePanel } from "./DeploymentTemplatePanel";
 import { PolicyScopePanel } from "./PolicyScopePanel";
 import { useStageGeneration } from "./useStageGeneration";
-import { StageInputForm } from "./StageInputForm";
+import { StageInputForm, type PrefillOption } from "./StageInputForm";
 import {
   composeStageInput,
   PREFILLABLE_STAGES,
@@ -27,6 +27,7 @@ import {
   type StageAnswers,
 } from "./stage-forms";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
+import { stripStreamFence } from "@/lib/planner-sse";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
@@ -52,10 +53,10 @@ type StageMeta = {
 const STAGE_ORDER: StageMeta[] = [
   {
     stage: "constitution",
-    label: "Project rules",
+    label: "Step 1 · Project rules",
     buttonLabel: "Generate rules",
     blurb:
-      "The project's standing rules. They steer every later stage and become AGENTS.md in the " +
+      "Do this first. The project's standing rules. They steer every later stage and become AGENTS.md in the " +
       "repository — what the coding agent reads before it writes anything. The repository can't " +
       "be created without them.",
   },
@@ -69,10 +70,10 @@ const STAGE_ORDER: StageMeta[] = [
   },
   {
     stage: "plan",
-    label: "2 · Plan",
+    label: "Step 2 · Implementation plan",
     buttonLabel: "Generate plan",
     blurb:
-      "The Tech Lead's step. These fields become the plan's Technical Context — the stack, " +
+      "Then this — the plan is written against the specification and the rules above. These fields become the plan's Technical Context — the stack, " +
       "storage, and constraints the task breakdown and the seeded repository are derived from.",
     requires: "specify",
   },
@@ -98,20 +99,45 @@ const STAGE_ORDER: StageMeta[] = [
 // could press Generate and get the cloud's `spec_document_required` with no
 // visible way to fix it. Authorship, not visibility, is what the role gates
 // (ADMIN_ONLY_STAGES below) — matching the cloud, which lets anyone read.
-type TabMeta = { key: string; label: string; stages: StageKind[] };
+type TabMeta = { key: string; label: string; title: string; stages: StageKind[] };
 
 const TABS: TabMeta[] = [
   // Planning *inputs* — the PRD upload and the policy scope — live one step
   // before the first generated document, so the numbered strip reads as the
   // order the work actually happens in.
-  { key: "foundation", label: "0 · Foundation", stages: [] },
-  { key: "specify", label: "1 · Specify", stages: ["specify"] },
-  { key: "plan", label: "2 · Plan", stages: ["constitution", "plan"] },
-  { key: "tasks", label: "3 · Tasks", stages: ["tasks"] },
+  { key: "foundation", label: "0 · Foundation", title: "Foundation", stages: [] },
+  { key: "specify", label: "1 · Specify", title: "Specify", stages: ["specify"] },
+  { key: "plan", label: "2 · Plan", title: "Plan", stages: ["constitution", "plan"] },
+  { key: "tasks", label: "3 · Tasks", title: "Tasks", stages: ["tasks"] },
   // Last on purpose: creating the repository seeds it with the documents the
   // earlier steps produced, so it can only be the final act.
-  { key: "repository", label: "4 · Repository", stages: [] },
+  { key: "repository", label: "4 · Repository", title: "Repository", stages: [] },
 ];
+
+// The one action a stage panel wants next, and everything else beside it.
+const PRIMARY_BUTTON =
+  "rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 " +
+  "focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60";
+const SECONDARY_BUTTON =
+  "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 " +
+  "disabled:cursor-not-allowed disabled:opacity-60";
+
+// Names each stage editor for a screen reader, which otherwise met an
+// unlabeled textbox.
+const EDITOR_LABEL: Partial<Record<StageKind, string>> = {
+  constitution: "Project rules document",
+  specify: "Specification document",
+  plan: "Implementation plan document",
+  tasks: "Tasks document",
+};
+
+const PLAN_HELPER = "Not technical? Use Suggest from Spec, then review.";
+// Advice, not a lock: generate/plan runs without a constitution
+// (app/api/generation.py only folds one in when it exists).
+const CONSTITUTION_RECOMMENDATION =
+  "Recommended: generate Step 1 · Project rules first — the plan follows them when they exist.";
 
 const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
   STAGE_ORDER.map((meta) => [meta.stage, meta]),
@@ -173,6 +199,10 @@ function StageSection({
   analysisGate,
   onOpenAnalysis,
   readOnly = false,
+  helper,
+  recommendation,
+  prefill,
+  prefillHint,
 }: {
   projectId: string;
   stage: StageKind;
@@ -195,6 +225,12 @@ function StageSection({
   /** Switches to the Foundation tab's codebase analysis panel. */
   onOpenAnalysis?: () => void;
   readOnly?: boolean;
+  /** One line under the heading for whoever isn't sure how to fill the form. */
+  helper?: string;
+  /** Advice that doesn't lock anything — e.g. an earlier step worth doing first. */
+  recommendation?: string;
+  prefill?: PrefillOption;
+  prefillHint?: ReactNode;
 }) {
   const { authHeaders } = useAuth();
   const fields = STAGE_FIELDS[stage];
@@ -300,16 +336,23 @@ function StageSection({
   // are injected server-side as context, so there is nothing left to ask.
   const userInput = fields ? composeStageInput(fields, answers) : TASKS_INPUT;
   const ready = fields ? requiredFieldsFilled(fields, answers) : true;
+  // Until the stage has a document, generating it is the thing to do here;
+  // after that the tab's "Continue to …" takes over as the primary action.
+  const hasDoc = docContent.trim().length > 0;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
       <h3 className="text-sm font-medium text-slate-900">{label}</h3>
       <p className="mb-3 mt-1 text-xs text-slate-500">{blurb}</p>
+      {helper && !readOnly && <p className="mb-3 text-xs text-slate-600">{helper}</p>}
       {note && <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{note}</p>}
       {!readOnly && (
         <>
           {blockedBy && (
             <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{blockedBy}</p>
+          )}
+          {recommendation && !blockedBy && (
+            <p className="mb-3 rounded bg-sky-50 p-3 text-xs text-sky-900">{recommendation}</p>
           )}
           {analysisGate && (
             <div className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">
@@ -335,6 +378,8 @@ function StageSection({
                 onChange={setAnswers}
                 disabled={status === "generating" || Boolean(blockedBy) || Boolean(analysisGate)}
                 canPrefill={PREFILLABLE_STAGES.includes(stage)}
+                prefill={prefill}
+                prefillHint={prefillHint}
               />
             </div>
           )}
@@ -344,7 +389,7 @@ function StageSection({
               status === "generating" || !ready || Boolean(blockedBy) || Boolean(analysisGate)
             }
             onClick={() => generate(stage, userInput)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-60"
+            className={hasDoc ? SECONDARY_BUTTON : PRIMARY_BUTTON}
           >
             {status === "generating" ? "Generating…" : buttonLabel}
           </button>
@@ -356,7 +401,7 @@ function StageSection({
 
           {status === "generating" && streamedText && (
             <pre className="mt-3 whitespace-pre-wrap rounded bg-slate-50 p-3 text-xs text-slate-700">
-              {streamedText}
+              {stripStreamFence(streamedText)}
             </pre>
           )}
           {status === "error" && error && (
@@ -425,6 +470,8 @@ function StageSection({
             saving={docSaving}
             error={docError}
             readOnly={readOnly}
+            streaming={status === "generating"}
+            label={EDITOR_LABEL[stage]}
           />
           {docUpdatedAt && (
             <p className="mt-1 text-xs text-slate-500">
@@ -469,7 +516,16 @@ function StageSection({
 // visible — and previewable — in every lifecycle state, not just while the
 // business user is still uploading. A Tech Lead reviewing the project reads
 // the source document here rather than asking for it out of band.
-function SourceDocuments({ projectId, canUpload }: { projectId: string; canUpload: boolean }) {
+function SourceDocuments({
+  projectId,
+  canUpload,
+  onPrdPresence,
+}: {
+  projectId: string;
+  canUpload: boolean;
+  /** Whether any upload has extracted text — what "Draft from PRD" reads. */
+  onPrdPresence?: (present: boolean) => void;
+}) {
   const { authHeaders } = useAuth();
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentsError, setDocumentsError] = useState(false);
@@ -499,6 +555,11 @@ function SourceDocuments({ projectId, canUpload }: { projectId: string; canUploa
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  const hasPrd = documents.some((d) => d.status === "extracted");
+  useEffect(() => {
+    if (!documentsLoading) onPrdPresence?.(hasPrd);
+  }, [documentsLoading, hasPrd, onPrdPresence]);
 
   const preview = documents.find((d) => d.id === previewId) ?? null;
 
@@ -595,6 +656,22 @@ export function Planner({
   const notePresence = useCallback((stage: StageKind, present: boolean) => {
     setDocPresent((prev) => (prev[stage] === present ? prev : { ...prev, [stage]: present }));
   }, []);
+  // Whether an uploaded PRD has text to draft from. Undefined while the
+  // document list loads, so neither the draft button nor its "upload one
+  // first" hint flashes up before it is known which applies.
+  const [hasPrd, setHasPrd] = useState<boolean | undefined>(undefined);
+
+  // The "Continue to …" buttons: switch the tab and bring the strip — and
+  // keyboard focus — to it, since the button pressed lived on the panel that
+  // just hid.
+  const goTo = useCallback((key: string) => {
+    setActive(key);
+    requestAnimationFrame(() => {
+      const tab = document.getElementById(`planner-tab-${key}`);
+      tab?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+      tab?.focus();
+    });
+  }, []);
 
   // Only the finished project is frozen. Earlier states stay editable: the
   // explicit "Send to Tech Lead" handoff is gone, so there is no moment at
@@ -679,6 +756,82 @@ export function Planner({
     return `Waiting on ${label} — generate that document first.`;
   }
 
+  // What each tab's progress mark reads. Foundation's inputs are optional, so
+  // it counts as done once either one is given.
+  function tabDone(key: string): boolean {
+    switch (key) {
+      case "foundation":
+        return hasPolicyScope(project) || hasPrd === true;
+      case "specify":
+        return docPresent.specify === true;
+      case "plan":
+        return docPresent.plan === true;
+      case "tasks":
+        return docPresent.tasks === true;
+      case "repository":
+        return lifecycle === "repo_created";
+      default:
+        return false;
+    }
+  }
+
+  // The draft button is one prefill call (app/api/generation.py::prefill); it
+  // is named after what that call will actually read. Specify reads uploads
+  // (and an imported project's codebase baseline); Plan reads those plus the
+  // specification, which is the better source once it exists.
+  const baselineReady = analysis?.status === "baseline_ready";
+  function prefillFor(stage: StageKind): PrefillOption | undefined {
+    const editNote = " — yours to edit.";
+    if (stage === "plan" && docPresent.specify) {
+      return {
+        label: "Suggest from Spec",
+        busyLabel: "Reading the specification…",
+        ariaLabel: "Suggest the plan fields from the specification",
+        description: `Fills the blank fields from the specification${hasPrd ? " and the PRD" : ""}${editNote}`,
+      };
+    }
+    if (hasPrd) {
+      return {
+        label: "Draft from PRD",
+        busyLabel: "Reading the PRD…",
+        ariaLabel: `Draft the ${stage} fields from the PRD`,
+        description: `Fills the blank fields from the uploaded document${editNote}`,
+      };
+    }
+    if (baselineReady) {
+      return {
+        label: "Draft from codebase",
+        busyLabel: "Reading the codebase…",
+        ariaLabel: `Draft the ${stage} fields from the codebase baseline`,
+        description: `Fills the blank fields from the repository analysis${editNote}`,
+      };
+    }
+    if (stage === "plan" && hasPrd === false) {
+      return {
+        label: "Suggest from Spec",
+        busyLabel: "Reading the specification…",
+        ariaLabel: "Suggest the plan fields from the specification",
+        description: "",
+        disabledReason:
+          "Nothing to suggest from yet — write the specification (or upload a PRD in Foundation) first.",
+      };
+    }
+    return undefined;
+  }
+  const specifyPrefillHint =
+    hasPrd === false && !baselineReady ? (
+      <>
+        <button
+          type="button"
+          onClick={() => goTo("foundation")}
+          className="rounded underline hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        >
+          Upload a PRD in Foundation
+        </button>{" "}
+        to draft these answers automatically.
+      </>
+    ) : undefined;
+
   return (
     <div className="space-y-4">
       {lifecycle === "repo_created" && (
@@ -756,31 +909,75 @@ export function Planner({
         />
       ) : (
       <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 border-b border-slate-200">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={active === tab.key}
-            onClick={() => setActive(tab.key)}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm ${
-              active === tab.key
-                ? "border-slate-900 font-medium text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const done = tabDone(tab.key);
+          const current = active === tab.key;
+          return (
+            <button
+              key={tab.key}
+              id={`planner-tab-${tab.key}`}
+              type="button"
+              role="tab"
+              aria-selected={current}
+              aria-controls={`planner-panel-${tab.key}`}
+              data-status={done ? "done" : current ? "current" : "not-started"}
+              onClick={() => setActive(tab.key)}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
+                current
+                  ? "border-slate-900 font-medium text-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {/* Progress at a glance: a check once the step has produced
+                  something, a hollow ring before (filled while it is the
+                  open tab). "current" is already aria-selected, so only
+                  "completed" needs saying to a screen reader. */}
+              {done ? (
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 16 16"
+                  className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                >
+                  <path d="M3 8.5l3.5 3.5L13 4.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className={`h-2 w-2 shrink-0 rounded-full border ${
+                    current ? "border-slate-900 bg-slate-900" : "border-slate-400"
+                  }`}
+                />
+              )}
+              {tab.label}
+              {done && <span className="sr-only"> completed</span>}
+            </button>
+          );
+        })}
       </div>
       )}
 
       {/* Every stage stays mounted so a half-typed intake form survives
-          switching tabs; the inactive ones are hidden rather than unmounted. */}
-      {TABS.map((tab) => (
-        <div key={tab.key} hidden={active !== tab.key} className="space-y-4">
+          switching tabs; the inactive ones are hidden rather than unmounted,
+          which also keeps them out of the accessibility tree. */}
+      {TABS.map((tab, index) => (
+        <div
+          key={tab.key}
+          id={`planner-panel-${tab.key}`}
+          role="tabpanel"
+          aria-labelledby={`planner-tab-${tab.key}`}
+          hidden={active !== tab.key}
+          className="space-y-4"
+        >
           {tab.key === "foundation" && (
             <>
+              <p className="text-sm text-slate-600">
+                Foundation is the background the later steps are written from: the PRD that
+                describes the product, and the policies it must follow. Both parts are optional —
+                skip straight to Specify if you have neither.
+              </p>
               {/* First on the tab for an imported project: it is the one
                   input the later steps can't start without, and the tab a
                   fresh import lands on. */}
@@ -792,8 +989,15 @@ export function Planner({
                   onChange={setAnalysis}
                 />
               )}
-              <SourceDocuments projectId={projectId} canUpload={!readOnly} />
+              <SourceDocuments
+                projectId={projectId}
+                canUpload={!readOnly}
+                onPrdPresence={setHasPrd}
+              />
               <PolicyScopePanel project={project} readOnly={readOnly} onChange={onChange} />
+              <button type="button" onClick={() => goTo("specify")} className={PRIMARY_BUTTON}>
+                Continue to Specify
+              </button>
             </>
           )}
           {tab.stages.map((stage) => {
@@ -819,22 +1023,36 @@ export function Planner({
                 analysisGate={stage === "plan" || stage === "tasks" ? analysisGate : undefined}
                 onOpenAnalysis={analysisRequired ? openAnalysis : undefined}
                 readOnly={stageReadOnly}
+                helper={stage === "plan" ? PLAN_HELPER : undefined}
+                recommendation={
+                  stage === "plan" && docPresent.constitution === false
+                    ? CONSTITUTION_RECOMMENDATION
+                    : undefined
+                }
+                prefill={PREFILLABLE_STAGES.includes(stage) ? prefillFor(stage) : undefined}
+                prefillHint={stage === "specify" ? specifyPrefillHint : undefined}
               />
             );
           })}
-          {/* Generation is where the task graph is born; the board is where it
-              is worked. Without this the only route between them is the page's
-              own tab strip, which reads as navigation rather than as the next
-              step. Shown whenever tasks exist, not only in the moment after a
-              generation, so it is still there on the next visit. */}
-          {tab.key === "tasks" && docPresent.tasks && onOpenTasks && (
-            <button
-              type="button"
-              onClick={onOpenTasks}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300"
-            >
-              Open the task board
-            </button>
+          {/* The next step, said once this one has produced its document —
+              after a generation or a save, and still there on the next visit.
+              Generation is where the task graph is born and the board is where
+              it is worked, so on Tasks the board comes first. */}
+          {tab.stages.length > 0 && tabDone(tab.key) && TABS[index + 1] && (
+            <div className="flex flex-wrap items-center gap-2">
+              {tab.key === "tasks" && onOpenTasks && (
+                <button type="button" onClick={onOpenTasks} className={PRIMARY_BUTTON}>
+                  Open the task board
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => goTo(TABS[index + 1].key)}
+                className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
+              >
+                Continue to {TABS[index + 1].title}
+              </button>
+            </div>
           )}
           {tab.key === "repository" && !isTechLead && !readOnly && (
             <p className="rounded bg-slate-50 p-3 text-xs text-slate-600">

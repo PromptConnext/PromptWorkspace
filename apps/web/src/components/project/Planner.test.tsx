@@ -72,7 +72,7 @@ describe("Planner", () => {
 
   it("renders the document upload and stage stepper for a planning-stage project", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
-    expect(screen.getByText(/upload a prd/i)).toBeInTheDocument();
+    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
     await screen.findByRole("tab", { name: /specify/i });
     openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
@@ -367,9 +367,17 @@ describe("Planner", () => {
 
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
 
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("# Existing spec")).toBeInTheDocument();
-    });
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    // A document with content opens rendered, not as raw markdown.
+    expect(await screen.findByRole("heading", { name: "Existing spec" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Specification document" })).toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByRole("tabpanel")).getByRole("button", { name: "Raw" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Specification document" })).toHaveValue(
+      "# Existing spec",
+    );
   });
 
   it("shows when a persisted stage document was last saved", async () => {
@@ -745,9 +753,9 @@ describe("Planner", () => {
     const tasks = within(
       screen.getByRole("heading", { name: /3 · tasks/i }).closest("div") as HTMLElement,
     );
-    const editor = (await waitFor(() =>
-      tasks.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && !el.id),
-    )) as HTMLTextAreaElement;
+    await screen.findByRole("region", { name: "Tasks document" });
+    fireEvent.click(tasks.getByRole("button", { name: "Raw" }));
+    const editor = screen.getByRole("textbox", { name: "Tasks document" });
     fireEvent.change(editor, { target: { value: "# Tasks\n\nNo checklist here." } });
     fireEvent.click(tasks.getByRole("button", { name: /^save$/i }));
 
@@ -770,6 +778,9 @@ describe("Planner", () => {
       if (href.includes("/prefill/specify")) {
         return Promise.resolve({ ok: true, json: async () => prefill() });
       }
+      if (href.endsWith("/projects/p1/documents")) {
+        return Promise.resolve({ ok: true, json: async () => [MARKDOWN_DOC] });
+      }
       if (href.includes("/stage-documents/")) {
         return Promise.resolve({
           ok: true,
@@ -787,7 +798,9 @@ describe("Planner", () => {
     fireEvent.change(screen.getByLabelText(/what are we building\?/i), {
       target: { value: "My own title" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /draft the specify fields from the prd/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /draft the specify fields from the prd/i }),
+    );
 
     expect(await screen.findByDisplayValue("Cards are the only option")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Pay with a QR code")).toBeInTheDocument();
@@ -795,7 +808,7 @@ describe("Planner", () => {
     expect(screen.getByText(/drafted 2 fields from prd\.md, keeping 1/i)).toBeInTheDocument();
   });
 
-  it("explains why a draft is unavailable when the project has no source material", async () => {
+  it("explains a draft the cloud refused for want of source material", async () => {
     global.fetch = vi.fn((url: RequestInfo | URL) => {
       const href = url.toString();
       if (href.includes("/prefill/specify")) {
@@ -804,6 +817,10 @@ describe("Planner", () => {
           status: 409,
           json: async () => ({ detail: "no_source_material" }),
         });
+      }
+      // A PRD whose text the cloud then finds nothing in.
+      if (href.endsWith("/projects/p1/documents")) {
+        return Promise.resolve({ ok: true, json: async () => [MARKDOWN_DOC] });
       }
       if (href.includes("/stage-documents/")) {
         return Promise.resolve({
@@ -817,7 +834,9 @@ describe("Planner", () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
     await screen.findByRole("tab", { name: /specify/i });
     openTab(/specify/i);
-    fireEvent.click(screen.getByRole("button", { name: /draft the specify fields from the prd/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /draft the specify fields from the prd/i }),
+    );
 
     expect(await screen.findByText(/upload a prd \(or write the specification\) first/i)).toBeInTheDocument();
   });
@@ -842,7 +861,7 @@ describe("Planner", () => {
     const foundation = await screen.findByRole("tab", { name: /foundation/i });
     expect(foundation).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("heading", { name: /policy scope/i })).toBeInTheDocument();
-    expect(screen.getByText(/upload a prd/i)).toBeInTheDocument();
+    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
   });
 
   it("disables the policy scope panel once the project is repo_created", async () => {
@@ -868,5 +887,239 @@ describe("Planner", () => {
     );
 
     expect(await screen.findByRole("checkbox", { name: /gdpr/i })).toBeDisabled();
+  });
+
+  it("offers no PRD draft without a PRD, and points at Foundation instead", async () => {
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    const hint = await screen.findByRole("button", { name: /upload a prd in foundation/i });
+    expect(screen.getByText(/to draft these answers automatically/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /draft from prd/i })).not.toBeInTheDocument();
+
+    fireEvent.click(hint);
+    expect(screen.getByRole("tab", { name: /foundation/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("names the plan draft after the specification it reads, once one exists", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/2 · plan/i);
+
+    const suggest = await screen.findByRole("button", {
+      name: /suggest the plan fields from the specification/i,
+    });
+    expect(suggest).toHaveTextContent("Suggest from Spec");
+    expect(suggest).toBeEnabled();
+    expect(screen.getByText(/not technical\? use suggest from spec, then review/i)).toBeInTheDocument();
+  });
+
+  it("disables the plan suggestion, saying why, with neither a spec nor a PRD", async () => {
+    mockStageDocuments({});
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/2 · plan/i);
+
+    const suggest = await screen.findByRole("button", {
+      name: /suggest the plan fields from the specification/i,
+    });
+    expect(suggest).toBeDisabled();
+    expect(screen.getByText(/nothing to suggest from yet/i)).toBeInTheDocument();
+  });
+
+  it("labels the Plan tab's two generations as ordered steps", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/2 · plan/i);
+
+    expect(screen.getByRole("heading", { name: "Step 1 · Project rules" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Step 2 · Implementation plan" }),
+    ).toBeInTheDocument();
+    // The cloud plans without the rules, so missing rules advise rather than lock.
+    expect(await screen.findByText(/recommended: generate step 1/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/language \/ runtime version/i)).toBeEnabled();
+  });
+
+  it("drops the rules recommendation once the rules exist", async () => {
+    mockStageDocuments({ specify: "# Spec", constitution: "# Rules" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/2 · plan/i);
+    await screen.findByRole("region", { name: "Project rules document" });
+    expect(screen.queryByText(/recommended: generate step 1/i)).not.toBeInTheDocument();
+  });
+
+  it("names every stage editor for assistive technology", async () => {
+    mockStageDocuments({});
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+
+    openTab(/specify/i);
+    expect(
+      await screen.findByRole("textbox", { name: "Specification document" }),
+    ).toBeInTheDocument();
+    openTab(/2 · plan/i);
+    expect(screen.getByRole("textbox", { name: "Project rules document" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Implementation plan document" }),
+    ).toBeInTheDocument();
+    openTab(/tasks/i);
+    expect(screen.getByRole("textbox", { name: "Tasks document" })).toBeInTheDocument();
+  });
+
+  it("keeps the inactive stage panels out of the accessibility tree", async () => {
+    mockStageDocuments({});
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    const panels = screen.getAllByRole("tabpanel");
+    expect(panels).toHaveLength(1);
+    expect(panels[0]).toHaveAttribute("aria-labelledby", "planner-tab-specify");
+    // The rules form lives on the Plan tab and must not surface here.
+    expect(screen.queryByRole("textbox", { name: /engineering principles/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /project rules/i })).not.toBeInTheDocument();
+  });
+
+  it("makes Generate the primary action until the stage has a document", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/2 · plan/i);
+
+    await screen.findByRole("button", { name: /suggest the plan fields/i });
+    expect(screen.getByRole("button", { name: /generate plan/i })).toHaveClass("bg-slate-900");
+    openTab(/specify/i);
+    await screen.findByRole("region", { name: "Specification document" });
+    expect(screen.getByRole("button", { name: /generate specification/i })).not.toHaveClass(
+      "bg-slate-900",
+    );
+    expect(screen.getByRole("button", { name: "Continue to Plan" })).toHaveClass("bg-slate-900");
+  });
+
+  it("marks each tab done once its step has produced something", async () => {
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    expect(await screen.findByRole("tab", { name: "1 · Specify completed" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "2 · Plan completed" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "3 · Tasks" })).toHaveAttribute(
+      "data-status",
+      "not-started",
+    );
+    expect(screen.getByRole("tab", { name: "4 · Repository" })).toBeInTheDocument();
+    // Neither a PRD nor a policy scope yet; Foundation is just the open tab.
+    expect(screen.getByRole("tab", { name: "0 · Foundation" })).toHaveAttribute(
+      "data-status",
+      "current",
+    );
+  });
+
+  it("marks Foundation done for a saved policy scope or an uploaded PRD", async () => {
+    render(
+      <Planner
+        project={makeProject({ policy_scope: { selected: ["gdpr"], custom_text: "" } })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(
+      await screen.findByRole("tab", { name: "0 · Foundation completed" }),
+    ).toBeInTheDocument();
+
+    cleanup();
+    mockDocument(MARKDOWN_DOC, "# PRD", "text/markdown");
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    expect(
+      await screen.findByRole("tab", { name: "0 · Foundation completed" }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks Repository done once the repository is created", async () => {
+    render(
+      <Planner
+        project={makeProject({ lifecycle_status: "repo_created" })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(
+      await screen.findByRole("tab", { name: "4 · Repository completed" }),
+    ).toBeInTheDocument();
+  });
+
+  it("introduces Foundation as optional and continues to Specify", async () => {
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /foundation/i });
+
+    expect(screen.getByText(/both parts are optional/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Specify" }));
+    expect(screen.getByRole("tab", { name: /specify/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("offers the next stage once a stage has its document, and walks the flow", async () => {
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    const onOpenTasks = vi.fn();
+    render(
+      <Planner
+        project={makeProject()}
+        projectId="p1"
+        onChange={vi.fn()}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to Plan" }));
+    expect(screen.getByRole("tab", { name: /2 · plan/i })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Tasks" }));
+    expect(screen.getByRole("tab", { name: /3 · tasks/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    // On Tasks the board is the primary next step; Repository sits beside it.
+    const board = screen.getByRole("button", { name: /^open the task board$/i });
+    expect(board).toHaveClass("bg-slate-900");
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Repository" }));
+    expect(screen.getByRole("tab", { name: /4 · repository/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("shows no Continue before the stage has a document", async () => {
+    mockStageDocuments({});
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    await screen.findByRole("textbox", { name: "Specification document" });
+    expect(screen.queryByRole("button", { name: /continue to plan/i })).not.toBeInTheDocument();
+  });
+
+  it("offers Continue after a manual save gives the stage a document", async () => {
+    mockStageDocuments({});
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    const editor = await screen.findByRole("textbox", { name: "Specification document" });
+    fireEvent.change(editor, { target: { value: "# Hand-written spec" } });
+    const panel = within(screen.getByRole("tabpanel"));
+    fireEvent.click(panel.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByRole("button", { name: "Continue to Plan" })).toBeInTheDocument();
   });
 });
