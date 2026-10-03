@@ -8,7 +8,7 @@ How to develop PromptWorkspace and how to build the desktop app for **both macOS
 |---|---|---|
 | `apps/desktop` | Tauri 2 (Rust shell) + React/Vite webview | The app window; spawns the engine as a sidecar |
 | `apps/engine` | Node 24 / TypeScript (Hono, `node:sqlite`, `node-pty`) | Local engine on `127.0.0.1:47131` — runs TS natively, no build step |
-| `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to production (`https://api.workspace.promptconnext.com`), override with `CLOUD_API_URL`, or set it to `""` to disable |
+| `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to production (`https://workspace-api.promptconnext.com`), override with `CLOUD_API_URL`, or set it to `""` to disable |
 | `apps/vscode` | VS Code extension (TypeScript, esbuild) | Assigned tasks, project coding rules and commit-driven task close, straight against `apps/cloud` — no sidecar (ADR 0019) |
 
 Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptWorkspace orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTWORKSPACE_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
@@ -76,7 +76,7 @@ Point the engine at it with `CLOUD_API_URL=http://localhost:8080` — otherwise 
 
 **Local Supabase after the rename.** `supabase/config.toml`'s `project_id` is now `"PromptWorkspace"`. The CLI names its Docker containers and volumes after it, so a stack started before the rename is not reused: run `supabase stop --all --no-backup` once to drop every local stack's containers and volumes, then `supabase start` and re-apply the two-file baseline (`python scripts/migrate.py apply --var embed_dim=1024` from `apps/cloud`).
 
-**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTWORKSPACE_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to production, `https://api.workspace.promptconnext.com`; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTWORKSPACE_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
+**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTWORKSPACE_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to production, `https://workspace-api.promptconnext.com`; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTWORKSPACE_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
 
 ## How packaging works — read this before any cross-build
 

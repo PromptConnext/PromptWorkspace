@@ -7,7 +7,7 @@ export const ENGINE_PORT = Number(process.env.PROMPTWORKSPACE_ENGINE_PORT ?? 471
 // default below copy packages/cloud-client/src/defaults.ts (the engine does not
 // depend on that package); packages/cloud-client/test/defaults.test.ts fails if
 // they drift.
-const DEFAULT_CLOUD_API_URL = "https://api.workspace.promptconnext.com";
+const DEFAULT_CLOUD_API_URL = "https://workspace-api.promptconnext.com";
 export const CLOUD_API_URL =
   process.env.CLOUD_API_URL === ""
     ? null

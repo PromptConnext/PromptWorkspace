@@ -718,5 +718,5 @@ test("with no file and no env the config is exactly the production defaults", ()
     PROMPTWORKSPACE_MCP_CONFIG_DIR: "/nonexistent-promptworkspace-mcp",
   } as NodeJS.ProcessEnv);
   assert.deepEqual(bare, { ...PRODUCTION_DEFAULTS });
-  assert.equal(bare.cloudApiUrl, "https://api.workspace.promptconnext.com");
+  assert.equal(bare.cloudApiUrl, "https://workspace-api.promptconnext.com");
 });

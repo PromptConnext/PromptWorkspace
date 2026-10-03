@@ -123,11 +123,11 @@ environment variables work, environment winning:
 | `supabaseAnonKey` | `PROMPTWORKSPACE_SUPABASE_ANON_KEY` |
 
 The file is `config.json` in the config directory below, and holds those same
-four keys. Unset, all four default to production (`https://api.workspace.promptconnext.com`,
+four keys. Unset, all four default to production (`https://workspace-api.promptconnext.com`,
 `https://workspace.promptconnext.com` and the production Supabase project), from
 the one shared list in `packages/cloud-client/src/defaults.ts` that `apps/vscode`
 copies. Point a develop/staging run at that stack by overriding all four (e.g.
-`PROMPTWORKSPACE_CLOUD_API_URL=https://api.promptworkspace.truthledgers.com`).
+`PROMPTWORKSPACE_CLOUD_API_URL=https://promptworkspace-api.truthledgers.com`).
 Setting `supabaseUrl`/`supabaseAnonKey` to empty puts the client in the cloud's
 stub auth mode, which is local development only — a real deployment rejects it.
 

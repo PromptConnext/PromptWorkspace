@@ -38,7 +38,7 @@ FIXTURES = [
     ("promptconnext.commitScanLimit", "promptworkspace.commitScanLimit"),
     ("https://promptconnext.com", "https://promptconnext.com"),
     ("https://promptconnext.com/pricing", "https://promptconnext.com/pricing"),
-    ("https://api.workspace.promptconnext.com", "https://api.workspace.promptconnext.com"),
+    ("https://workspace-api.promptconnext.com", "https://workspace-api.promptconnext.com"),
     ("https://promptconnext.truthledgers.com", "https://promptconnext.truthledgers.com"),
     ("no-reply@promptconnext.com", "no-reply@promptconnext.com"),
     ("© 2026 PromptConnext", "© 2026 PromptConnext"),
