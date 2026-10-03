@@ -910,7 +910,7 @@ export function Planner({
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
         />
       ) : (
-      <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 border-b border-slate-200">
+      <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 overflow-x-auto overscroll-x-contain border-b border-slate-200">
         {TABS.map((tab) => {
           const done = tabDone(tab.key);
           const current = active === tab.key;
@@ -924,7 +924,7 @@ export function Planner({
               aria-controls={`planner-panel-${tab.key}`}
               data-status={done ? "done" : current ? "current" : "not-started"}
               onClick={() => setActive(tab.key)}
-              className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
+              className={`-mb-px flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-4 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
                 current
                   ? "border-slate-900 font-medium text-slate-900"
                   : "border-transparent text-slate-500 hover:text-slate-700"
