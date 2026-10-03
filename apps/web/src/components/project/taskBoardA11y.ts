@@ -77,9 +77,26 @@ export const SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
     "then press Space or Enter to drop it, or Escape to cancel.",
 };
 
-function columnOf(id: string | number | undefined): TaskStatus | null {
-  const status = id === undefined ? null : (String(id) as TaskStatus);
-  return status && COLUMN_STATUSES.includes(status) ? status : null;
+/**
+ * Swimlanes repeat the four columns once per group, and dnd-kit needs every
+ * droppable id unique, so a lane's column is `${laneKey}::${status}`. The
+ * status is always the part after the last separator, which keeps a lane key
+ * that itself contains "::" (a sprint name, say) unambiguous. An ungrouped
+ * board uses the bare status, which parses the same way.
+ */
+const LANE_SEPARATOR = "::";
+
+export function laneDropId(laneKey: string, status: TaskStatus): string {
+  return `${laneKey}${LANE_SEPARATOR}${status}`;
+}
+
+/** The column a droppable id names, or null when it names none. */
+export function columnOf(id: string | number | undefined | null): TaskStatus | null {
+  if (id === undefined || id === null) return null;
+  const raw = String(id);
+  const at = raw.lastIndexOf(LANE_SEPARATOR);
+  const status = (at === -1 ? raw : raw.slice(at + LANE_SEPARATOR.length)) as TaskStatus;
+  return COLUMN_STATUSES.includes(status) ? status : null;
 }
 
 /**

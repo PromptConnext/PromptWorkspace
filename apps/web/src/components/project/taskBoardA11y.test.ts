@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Active, Over } from "@dnd-kit/core";
 import type { Task } from "@/lib/types";
-import { buildAnnouncements, explain } from "./taskBoardA11y";
+import { buildAnnouncements, columnOf, explain, laneDropId } from "./taskBoardA11y";
 
 function task(overrides: Partial<Task> & { id: string }): Task {
   return {
@@ -70,5 +70,26 @@ describe("explain", () => {
     const text = explain(new Error("x".repeat(200)));
     expect(text).toMatch(/^Something went wrong saving this change\./);
     expect(text).toContain(`(code: ${"x".repeat(60)}…)`);
+  });
+});
+
+describe("lane drop ids", () => {
+  it("round-trips a status through a lane-scoped id", () => {
+    expect(columnOf(laneDropId("u2", "in_progress"))).toBe("in_progress");
+    expect(columnOf(laneDropId("__none__", "verified"))).toBe("verified");
+  });
+
+  it("reads the status after the last separator, whatever the lane key holds", () => {
+    expect(columnOf(laneDropId("Sprint::2", "todo"))).toBe("todo");
+  });
+
+  it("still reads a bare status from an ungrouped board", () => {
+    expect(columnOf("implemented")).toBe("implemented");
+  });
+
+  it("names no column for anything else", () => {
+    expect(columnOf(undefined)).toBeNull();
+    expect(columnOf("lane::done")).toBeNull();
+    expect(columnOf("u2")).toBeNull();
   });
 });

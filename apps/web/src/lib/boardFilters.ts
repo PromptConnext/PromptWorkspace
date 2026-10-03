@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import type { ProjectGraph, Task } from "./types";
 
 /**
  * The task board's filter and grouping state, and the pure functions that read
@@ -102,6 +102,20 @@ export function applyBoardFilters(tasks: Task[], f: BoardFilters, viewerId: stri
       (f.sprint === null || t.sprint === f.sprint) &&
       (f.spec === null || t.spec_id === f.spec),
   );
+}
+
+/**
+ * What people call a spec: the title of the requirement it specifies. A spec
+ * row has no name of its own. Undefined when the spec isn't in this graph, so
+ * the caller decides how to say "missing" in its own context.
+ */
+export function specLabel(
+  graph: Pick<ProjectGraph, "spec_documents" | "requirements">,
+  specId: string,
+): string | undefined {
+  const spec = graph.spec_documents.find((s) => s.id === specId);
+  if (!spec) return undefined;
+  return graph.requirements.find((r) => r.id === spec.requirement_id)?.title ?? "Untitled spec";
 }
 
 export interface TaskGroup {

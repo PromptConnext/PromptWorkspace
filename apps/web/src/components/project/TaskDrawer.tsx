@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { specLabel } from "@/lib/boardFilters";
 import { taskRefLabel } from "@/lib/taskOrder";
 import type {
   AgentRun,
@@ -12,6 +13,7 @@ import type {
   TaskStatus,
   WorkspaceMember,
 } from "@/lib/types";
+import { STATUS_LABEL } from "./taskBoardA11y";
 
 /**
  * A task's full record, as a right-side sheet over the board.
@@ -27,13 +29,6 @@ import type {
  * second copy of either would be a second place for the permission rules to
  * drift.
  */
-
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  todo: "To Do",
-  in_progress: "In Progress",
-  implemented: "Implemented",
-  verified: "Verified",
-};
 
 const STATUS_STYLE: Record<TaskStatus, string> = {
   todo: "bg-slate-100 text-slate-700",
@@ -282,9 +277,6 @@ export function TaskDrawer({
   const ref = taskRefLabel(task) ?? task.feature_tag;
   const criteria = task.acceptance_criteria;
   const spec = task.spec_id ? graph.spec_documents.find((s) => s.id === task.spec_id) : undefined;
-  const requirement = spec
-    ? graph.requirements.find((r) => r.id === spec.requirement_id)
-    : undefined;
   const artifacts = graph.artifacts.filter((a) => a.task_id === task.id && !a.deleted_at);
   const runs = graph.agent_runs
     .filter((r) => r.task_id === task.id && !r.deleted_at)
@@ -405,7 +397,7 @@ export function TaskDrawer({
           <Section title="Spec">
             {spec ? (
               <p className="text-sm text-slate-700">
-                <span className="break-words">{requirement?.title ?? "Untitled spec"}</span>
+                <span className="break-words">{specLabel(graph, spec.id)}</span>
                 <span className="ml-2 text-xs text-slate-400">
                   v{spec.version} · {spec.status === "approved" ? "Approved" : "Draft"}
                 </span>

@@ -110,6 +110,8 @@ export function BoardToolbar({
           ref={searchInputRef}
           type="search"
           aria-label="Search tasks"
+          aria-keyshortcuts="/"
+          title="Search tasks (/)"
           placeholder="Search tasks…"
           autoComplete="off"
           spellCheck={false}
@@ -126,16 +128,28 @@ export function BoardToolbar({
             onChange({ q: "" });
           }}
           className={[
-            "h-9 w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-sm text-slate-700 shadow-sm",
+            "h-9 w-full rounded-lg border border-slate-300 bg-white pl-8 pr-8 text-sm text-slate-700 shadow-sm",
             "placeholder:text-slate-400 transition-colors hover:border-slate-400",
             "focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200",
           ].join(" ")}
         />
+        {/* The shortcut, where people look for it; it steps aside once there
+            is text, which is also where the browser puts its clear button. */}
+        {text === "" && (
+          <kbd
+            aria-hidden
+            className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-slate-200 px-1 font-sans text-[10px] leading-4 text-slate-400"
+          >
+            /
+          </kbd>
+        )}
       </div>
 
       <button
         type="button"
         aria-pressed={mine}
+        aria-keyshortcuts="m"
+        title="Show only tasks assigned to you (M)"
         onClick={() => onChange({ assignee: mine ? null : "me" })}
         className={[
           "h-9 rounded-lg border px-3 text-sm font-medium shadow-sm transition-colors",

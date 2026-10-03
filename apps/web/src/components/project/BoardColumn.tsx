@@ -26,15 +26,18 @@ export function BoardColumn({
   tasks,
   activeTask,
   viewer,
+  dropId = column.status,
   children,
 }: {
   column: Column;
   tasks: Task[];
   activeTask: Task | null;
   viewer: Viewer;
+  /** Unique per swimlane (see `laneDropId`); the bare status otherwise. */
+  dropId?: string;
   children: React.ReactNode;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: column.status });
+  const { setNodeRef, isOver } = useDroppable({ id: dropId });
   // Highlight only where the card in hand can actually land, so an illegal
   // move is refused before the drop rather than rolled back after it.
   const foreign = activeTask !== null && activeTask.status !== column.status;

@@ -14,21 +14,29 @@ import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { applyBoardFilters, groupBoardTasks, specLabel } from "@/lib/boardFilters";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
 import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
 import { BOARD_ROW, BoardColumn, BoardSkeleton } from "./BoardColumn";
+import { BoardToolbar } from "./BoardToolbar";
 import { memberShortName } from "./MemberChip";
 import {
   buildAnnouncements,
+  columnOf,
+  COLUMN_STATUSES,
   COLUMNS,
   explain,
+  laneDropId,
   moveDeniedFor,
   SCREEN_READER_INSTRUCTIONS,
   STATUS_LABEL,
 } from "./taskBoardA11y";
-import { CardBody, TaskCard } from "./TaskCard";
-import { canMoveTo } from "./taskPermissions";
+import { AssigneeControl, CardBody, LockNote, MoveMenu, TaskCard } from "./TaskCard";
+import { TaskDrawer } from "./TaskDrawer";
+import { canMoveAnywhere, canMoveTo, moveDeniedReason } from "./taskPermissions";
+import { useBoardShortcuts } from "./useBoardShortcuts";
+import { useBoardUrlState } from "./useBoardUrlState";
 import { useOptimisticTasks } from "./useOptimisticTasks";
 
 /**
@@ -47,6 +55,12 @@ const NO_MEMBERS: WorkspaceMember[] = [];
 
 // Long enough to notice the toast and reach Undo; a confirmation, not a read.
 const UNDO_DURATION = 5000;
+
+const NUMERIC = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function countLabel(n: number): string {
+  return `${n} ${n === 1 ? "task" : "tasks"}`;
+}
 
 export function TaskBoard({
   graph,
@@ -67,6 +81,11 @@ export function TaskBoard({
   const [membersState, setMembersState] = useState<MembersState>({ status: "loading" });
   const [membersAttempt, setMembersAttempt] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Collapsed swimlanes, keyed `${group}:${laneKey}` so "Unassigned" folded
+  // under Assignee doesn't fold "No sprint" when the grouping changes.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const searchRef = useRef<HTMLInputElement>(null);
+  const { filters, setFilters, clearFilters, openTaskId, openTask, closeTask } = useBoardUrlState();
   const board = useOptimisticTasks(graph.tasks);
   // Undo and the drag announcer run after later renders; they read the
   // current rows rather than the ones captured when they were created.
@@ -102,6 +121,44 @@ export function TaskBoard({
     }),
     [user, members],
   );
+
+  const sprints = useMemo(
+    () =>
+      [...new Set(graph.tasks.map((t) => t.sprint?.trim()).filter((s): s is string => !!s))].sort(
+        NUMERIC.compare,
+      ),
+    [graph.tasks],
+  );
+
+  // Only specs some task points at: a filter option that empties the board is
+  // a dead end.
+  const specs = useMemo(
+    () =>
+      [...new Set(graph.tasks.map((t) => t.spec_id).filter((id): id is string => id !== null))]
+        .map((id) => ({ id, label: specLabel(graph, id) ?? "Unknown spec" }))
+        .sort((a, b) => NUMERIC.compare(a.label, b.label)),
+    [graph],
+  );
+
+  const membersLoading = membersState.status === "loading";
+
+  useBoardShortcuts({
+    onSearch: () => searchRef.current?.focus(),
+    onToggleMine: () => setFilters({ assignee: filters.assignee === "me" ? null : "me" }),
+    // The search box clears itself on Esc and the drawer closes itself; a
+    // board-level Esc on top of either would act twice on one key press.
+    onEscape: () => {},
+    enabled: !membersLoading && graph.tasks.length > 0,
+  });
+
+  // A `?task=` link to a task that has since been deleted (or never existed
+  // here) quietly drops the param rather than showing an empty drawer. Waits
+  // for members, since the board — and with it the drawer — isn't up before.
+  const openStale =
+    openTaskId !== null && !membersLoading && !board.tasks.some((t) => t.id === openTaskId);
+  useEffect(() => {
+    if (openStale) closeTask();
+  }, [openStale, closeTask]);
 
   const artifactsByTask = useMemo(() => {
     const byTask = new Map<string, Artifact[]>();
@@ -210,8 +267,11 @@ export function TaskBoard({
     if (!target) return;
     const task = board.tasks.find((t) => t.id === String(event.active.id));
     if (!task) return;
-    const next = String(target) as TaskStatus;
-    if (next === task.status) return;
+    // Only the column counts. A swimlane is a view of the assignee, sprint or
+    // spec, not a control for it: dropping into another lane changes status
+    // alone, never reassigns or re-plans the task.
+    const next = columnOf(target);
+    if (!next || next === task.status) return;
     if (!canMoveTo(task, viewer, next)) {
       toast({
         variant: "error",
@@ -245,9 +305,62 @@ export function TaskBoard({
 
   if (membersState.status === "loading") return <BoardSkeleton />;
 
-  // Where the board's filter (search, assignee, …) plugs in: everything below
-  // renders from this list, so narrowing it narrows every column.
-  const visibleTasks = board.tasks;
+  // Everything below renders from this list, so narrowing it narrows every
+  // column and every lane.
+  const visibleTasks = applyBoardFilters(board.tasks, filters, viewer.userId);
+  // The optimistic row, so the drawer shows a pending move or assignment.
+  const openedTask = openTaskId ? (board.tasks.find((t) => t.id === openTaskId) ?? null) : null;
+
+  function toggleLane(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }
+
+  function columnsFor(tasks: Task[], laneKey: string | null) {
+    return (
+      <div className={`${BOARD_ROW} ${activeTask ? "select-none" : ""}`}>
+        {COLUMNS.map((column) => {
+          const inColumn = tasks.filter((t) => t.status === column.status);
+          return (
+            <BoardColumn
+              key={column.status}
+              column={column}
+              tasks={inColumn}
+              activeTask={activeTask}
+              viewer={viewer}
+              dropId={laneKey === null ? column.status : laneDropId(laneKey, column.status)}
+            >
+              {inColumn.map((t) => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  members={members}
+                  viewer={viewer}
+                  saving={board.savingIds.has(t.id)}
+                  readOnly={readOnly}
+                  artifacts={artifactsByTask.get(t.id)}
+                  onAssign={(task, next) => void assign(task, next)}
+                  onMove={(task, next) => void move(task, next)}
+                  onOpen={(task) => openTask(task.id)}
+                />
+              ))}
+            </BoardColumn>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const lanes =
+    filters.group === "none"
+      ? null
+      : groupBoardTasks(visibleTasks, filters.group, {
+          memberLabel: (id) => memberName(id ?? ""),
+          specLabel: (id) => (id ? (specLabel(graph, id) ?? "Unknown spec") : "No spec"),
+        });
 
   return (
     <>
@@ -273,55 +386,139 @@ export function TaskBoard({
           </button>
         </div>
       )}
-      <DndContext
-        sensors={sensors}
-        // Columns are tall and a card is smaller than the one it is leaving;
-        // requiring rect *intersection* makes the last few pixels before a
-        // neighbouring column a dead zone. Nearest corner always names a column.
-        collisionDetection={closestCorners}
-        accessibility={{ announcements, screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={() => setActiveId(null)}
-      >
-        <div className={`${BOARD_ROW} ${activeTask ? "select-none" : ""}`}>
-          {COLUMNS.map((column) => {
-            const tasks = visibleTasks.filter((t) => t.status === column.status);
-            return (
-              <BoardColumn
-                key={column.status}
-                column={column}
-                tasks={tasks}
-                activeTask={activeTask}
-                viewer={viewer}
-              >
-                {tasks.map((t) => (
-                  <TaskCard
-                    key={t.id}
-                    task={t}
-                    members={members}
-                    viewer={viewer}
-                    saving={board.savingIds.has(t.id)}
-                    readOnly={readOnly}
-                    artifacts={artifactsByTask.get(t.id)}
-                    onAssign={(task, next) => void assign(task, next)}
-                    onMove={(task, next) => void move(task, next)}
-                  />
-                ))}
-              </BoardColumn>
-            );
-          })}
+      <div className="mb-4">
+        <BoardToolbar
+          filters={filters}
+          onChange={setFilters}
+          onClear={clearFilters}
+          members={members}
+          sprints={sprints}
+          specs={specs}
+          viewerId={viewer.userId}
+          resultCount={visibleTasks.length}
+          totalCount={board.tasks.length}
+          searchInputRef={searchRef}
+        />
+      </div>
+      {visibleTasks.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-900">No tasks match these filters</p>
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="mt-4 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+          >
+            Clear Filters
+          </button>
         </div>
-        {/* dnd-kit sizes the overlay to the card being dragged; the clone just
-            fills it, so it doesn't change width as it leaves the column. */}
-        <DragOverlay dropAnimation={null}>
-          {activeTask && (
-            <div className="relative w-full rotate-1 rounded-lg border border-slate-300 bg-white p-3 shadow-xl">
-              <CardBody task={activeTask} dragging />
+      ) : (
+        <DndContext
+          sensors={sensors}
+          // Columns are tall and a card is smaller than the one it is leaving;
+          // requiring rect *intersection* makes the last few pixels before a
+          // neighbouring column a dead zone. Nearest corner always names a column.
+          collisionDetection={closestCorners}
+          accessibility={{ announcements, screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveId(null)}
+        >
+          {lanes === null ? (
+            columnsFor(visibleTasks, null)
+          ) : (
+            <div className="flex flex-col gap-5">
+              {lanes.map((lane) => {
+                const foldKey = `${filters.group}:${lane.key}`;
+                const open = !collapsed.has(foldKey);
+                return (
+                  <section
+                    key={lane.key}
+                    aria-label={`${lane.label}, ${countLabel(lane.tasks.length)}`}
+                  >
+                    <h3 className="mb-2">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => toggleLane(foldKey)}
+                        className="flex items-center gap-2 rounded px-1 text-sm font-semibold text-slate-800 transition-colors hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      >
+                        <ChevronIcon open={open} />
+                        <span>{lane.label}</span>
+                        <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-medium tabular-nums text-slate-700">
+                          {lane.tasks.length}
+                        </span>
+                      </button>
+                    </h3>
+                    {open && columnsFor(lane.tasks, lane.key)}
+                  </section>
+                );
+              })}
             </div>
           )}
-        </DragOverlay>
-      </DndContext>
+          {/* dnd-kit sizes the overlay to the card being dragged; the clone just
+              fills it, so it doesn't change width as it leaves the column. */}
+          <DragOverlay dropAnimation={null}>
+            {activeTask && (
+              <div className="relative w-full rotate-1 rounded-lg border border-slate-300 bg-white p-3 shadow-xl">
+                <CardBody task={activeTask} dragging />
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
+      )}
+      <TaskDrawer
+        task={openedTask}
+        graph={graph}
+        members={members}
+        onClose={closeTask}
+        // The card's own controls and write path, so a change made here gets
+        // the same permission rules, optimistic update and Undo toast.
+        renderAssignee={(t) => (
+          <AssigneeControl
+            task={t}
+            members={members}
+            owner={members.find((m) => m.user_id === t.assigned_user_id)}
+            viewer={viewer}
+            readOnly={readOnly}
+            onAssign={(task, next) => void assign(task, next)}
+          />
+        )}
+        renderMove={
+          readOnly
+            ? undefined
+            : (t) => (
+                <span className="flex items-center gap-2">
+                  <span className="text-slate-700">{STATUS_LABEL[t.status]}</span>
+                  {canMoveAnywhere(t, viewer, COLUMN_STATUSES) ? (
+                    <MoveMenu
+                      task={t}
+                      viewer={viewer}
+                      onMove={(task, next) => void move(task, next)}
+                    />
+                  ) : (
+                    <LockNote reason={moveDeniedReason(t, viewer)} />
+                  )}
+                </span>
+              )
+        }
+      />
     </>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className={`h-3.5 w-3.5 text-slate-500 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
   );
 }

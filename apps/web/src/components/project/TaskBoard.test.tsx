@@ -15,6 +15,29 @@ vi.mock("@/lib/auth", () => ({
   }),
 }));
 
+// A URL that answers back: the board reads its filters and open task from the
+// query string, so a write has to re-render the board the way Next would.
+const nav = vi.hoisted(() => ({ query: "", listeners: new Set<() => void>() }));
+const router = vi.hoisted(() => ({
+  replace: (url: string) => {
+    nav.query = url.split("?")[1] ?? "";
+    nav.listeners.forEach((notify) => notify());
+  },
+}));
+
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (notify: () => void) => {
+    nav.listeners.add(notify);
+    return () => nav.listeners.delete(notify);
+  };
+  return {
+    useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => nav.query)),
+    usePathname: () => "/w/ws1/p/p1",
+    useRouter: () => router,
+  };
+});
+
 const listMembers = vi.fn();
 const assignTask = vi.fn();
 const setTaskStatus = vi.fn();
@@ -103,6 +126,7 @@ const THREE = [
 ];
 
 beforeEach(() => {
+  nav.query = "tab=tasks";
   auth.userId = "u1";
   listMembers.mockResolvedValue([
     { user_id: "u1", email: "admin@example.com", role: "admin" },
@@ -255,8 +279,11 @@ describe("TaskBoard members", () => {
     expect(screen.getByText("Task t1")).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(UUID))).not.toBeInTheDocument();
     expect(screen.getByText("Unknown member")).toBeInTheDocument();
-    // Read-only: no picker, no move menu, no drag handle.
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    // Read-only: no picker, no move menu, no drag handle. (The toolbar's
+    // filters only read, so they stay.)
+    expect(
+      screen.queryByRole("combobox", { name: /^Assignee for|to another column$/ }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Move task/ })).not.toBeInTheDocument();
 
     await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
@@ -406,5 +433,152 @@ describe("TaskBoard status", () => {
 
     await pick(screen.getByRole("combobox", { name: "Move T001 to another column" }), "Verified");
     await waitFor(() => expect(columnOrder("Verified")).toEqual(["Task t1"]));
+  });
+});
+
+describe("TaskBoard filters, lanes and drawer", () => {
+  const MIXED = [
+    task({ id: "t1", feature_tag: "T001", title: "Login form", assigned_user_id: "u1" }),
+    task({ id: "t2", feature_tag: "T002", title: "Signup page", assigned_user_id: "u2" }),
+    task({ id: "t3", feature_tag: "T003", title: "Password reset" }),
+  ];
+
+  function cardTitles(): string[] {
+    return screen
+      .queryAllByRole("button", { name: /^(Login form|Signup page|Password reset)$/ })
+      .map((el) => el.textContent ?? "");
+  }
+
+  it("narrows the cards to a search", async () => {
+    board(MIXED);
+    await screen.findByText("Login form");
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search tasks" }), "sign");
+
+    await waitFor(() => expect(cardTitles()).toEqual(["Signup page"]));
+    expect(new URLSearchParams(nav.query).get("q")).toBe("sign");
+    expect(screen.getByText("Showing 1 of 3 tasks")).toBeInTheDocument();
+  });
+
+  it("shows only the viewer's tasks under My Tasks, and from the m shortcut", async () => {
+    board(MIXED);
+    await screen.findByText("Login form");
+
+    await userEvent.click(screen.getByRole("button", { name: "My Tasks" }));
+    await waitFor(() => expect(cardTitles()).toEqual(["Login form"]));
+    expect(new URLSearchParams(nav.query).get("assignee")).toBe("me");
+
+    await userEvent.keyboard("m");
+    await waitFor(() => expect(cardTitles()).toHaveLength(3));
+  });
+
+  it("focuses search on /", async () => {
+    board(MIXED);
+    await screen.findByText("Login form");
+
+    await userEvent.keyboard("/");
+    expect(screen.getByRole("searchbox", { name: "Search tasks" })).toHaveFocus();
+  });
+
+  it("says when filters hide every task, and clears them", async () => {
+    nav.query = "tab=tasks&q=nothing-matches&group=assignee";
+    board(MIXED);
+
+    expect(await screen.findByText("No tasks match these filters")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /^To Do/ })).not.toBeInTheDocument();
+
+    const empty = screen.getByText("No tasks match these filters").parentElement as HTMLElement;
+    await userEvent.click(within(empty).getByRole("button", { name: "Clear Filters" }));
+
+    await waitFor(() => expect(cardTitles()).toHaveLength(3));
+    // Grouping is a layout, not a filter; it survives Clear.
+    expect(nav.query).toBe("tab=tasks&group=assignee");
+  });
+
+  it("opens a task's details from its title and closes them again", async () => {
+    board(MIXED);
+    await userEvent.click(await screen.findByRole("button", { name: "Signup page" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Signup page" });
+    expect(new URLSearchParams(nav.query).get("task")).toBe("t2");
+    // The card's assignee picker, reused in the drawer.
+    expect(within(dialog).getByRole("combobox", { name: "Assignee for T002" })).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close task details" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(new URLSearchParams(nav.query).get("task")).toBeNull();
+  });
+
+  it("moves a task from the drawer through the board's write path", async () => {
+    setTaskStatus.mockResolvedValue({ ...MIXED[0], status: "in_progress" });
+    nav.query = "tab=tasks&task=t1";
+    board(MIXED);
+
+    const dialog = await screen.findByRole("dialog", { name: "Login form" });
+    await pick(
+      within(dialog).getByRole("combobox", { name: "Move T001 to another column" }),
+      "In Progress",
+    );
+
+    await waitFor(() =>
+      expect(within(dialog).getByText("In Progress", { selector: "dd span" })).toBeInTheDocument(),
+    );
+    expect(setTaskStatus).toHaveBeenCalledWith("p1", "t1", "in_progress", expect.anything());
+    await waitFor(() => expect(notifications()).toHaveTextContent("Moved T001 to In Progress"));
+  });
+
+  it("drops a link to a task that isn't on the board", async () => {
+    nav.query = "tab=tasks&task=gone";
+    board(MIXED);
+    await screen.findByText("Login form");
+
+    await waitFor(() => expect(nav.query).toBe("tab=tasks"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("groups into collapsible swimlanes by assignee", async () => {
+    nav.query = "tab=tasks&group=assignee";
+    board(MIXED);
+    await screen.findByText("Login form");
+
+    // A lane is the region its expand toggle heads; the columns inside are
+    // regions too.
+    const lanes = screen
+      .getAllByRole("button", { expanded: true })
+      .map((toggle) => toggle.closest("section") as HTMLElement);
+    expect(lanes.map((l) => l.getAttribute("aria-label"))).toEqual([
+      "admin, 1 task",
+      "dev, 1 task",
+      "Unassigned, 1 task",
+    ]);
+    expect(within(lanes[1]).getByText("Signup page")).toBeInTheDocument();
+    expect(within(lanes[1]).getByRole("region", { name: "To Do, 1 task" })).toBeInTheDocument();
+
+    const toggle = within(lanes[1]).getByRole("button", { name: /^dev/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(lanes[1]).queryByText("Signup page")).not.toBeInTheDocument();
+  });
+
+  it("moves a card's status inside its lane", async () => {
+    setTaskStatus.mockResolvedValue({ ...MIXED[1], status: "in_progress" });
+    nav.query = "tab=tasks&group=assignee";
+    board(MIXED);
+    await screen.findByText("Signup page");
+
+    await pick(
+      screen.getByRole("combobox", { name: "Move T002 to another column" }),
+      "In Progress",
+    );
+
+    const lane = screen.getByRole("region", { name: "dev, 1 task" });
+    await waitFor(() =>
+      expect(
+        within(within(lane).getByRole("region", { name: "In Progress, 1 task" })).getByText(
+          "Signup page",
+        ),
+      ).toBeInTheDocument(),
+    );
   });
 });

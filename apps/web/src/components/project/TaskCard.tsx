@@ -77,7 +77,7 @@ function trackerDiffers(tracker: string | null, owner: WorkspaceMember | undefin
   return t !== email && t !== email.slice(0, email.indexOf("@"));
 }
 
-function AssigneeControl({
+export function AssigneeControl({
   task,
   members,
   owner,
@@ -176,7 +176,7 @@ function AssigneeControl({
  * trigger rather than a second copy of the status; illegal targets stay listed
  * but disabled, so the menu still explains the shape of the workflow.
  */
-function MoveMenu({
+export function MoveMenu({
   task,
   viewer,
   onMove,
@@ -219,7 +219,7 @@ function MoveMenu({
  * reason a card won't move is also in the accessibility tree, next to a lock
  * that tells sighted users there *is* a reason.
  */
-function LockNote({ reason }: { reason: string }) {
+export function LockNote({ reason }: { reason: string }) {
   return (
     <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-slate-500" title={reason}>
       <LockIcon />
