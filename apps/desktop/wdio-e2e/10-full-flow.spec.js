@@ -41,7 +41,7 @@ describe("full 3S + sync + implement flow", () => {
     } catch {}
 
     await browser.pause(1500);
-    const token = await browser.execute(() => window.__PROMPTCONNEXT_TOKEN__);
+    const token = await browser.execute(() => window.__PROMPTWORKSPACE_TOKEN__);
     console.log("ENGINE_TOKEN=" + token);
     await shot("10-01-initial.png");
 

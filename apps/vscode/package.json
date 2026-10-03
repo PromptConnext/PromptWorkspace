@@ -1,14 +1,14 @@
 {
-  "name": "promptconnext-vscode",
-  "displayName": "PromptConnext",
-  "description": "Your assigned PromptConnext tasks, project context and AI coding rules, inside the editor.",
-  "version": "0.2.0",
+  "name": "promptworkspace",
+  "displayName": "PromptWorkspace",
+  "description": "Your assigned PromptWorkspace tasks, project context and AI coding rules, inside the editor.",
+  "version": "0.3.0",
   "publisher": "promptconnext",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/9haroon/prompt-zone.git",
+    "url": "https://github.com/PromptConnext/PromptWorkspace.git",
     "directory": "apps/vscode"
   },
   "engines": {
@@ -40,24 +40,24 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "promptconnext",
-          "title": "PromptConnext",
+          "id": "promptworkspace",
+          "title": "PromptWorkspace",
           "icon": "media/activity-bar.svg"
         }
       ]
     },
     "views": {
-      "promptconnext": [
+      "promptworkspace": [
         {
-          "id": "promptconnext.projects",
+          "id": "promptworkspace.projects",
           "name": "Projects"
         },
         {
-          "id": "promptconnext.tasks",
+          "id": "promptworkspace.tasks",
           "name": "My Tasks"
         },
         {
-          "id": "promptconnext.context",
+          "id": "promptworkspace.context",
           "name": "Project Context",
           "type": "webview"
         }
@@ -65,297 +65,297 @@
     },
     "viewsWelcome": [
       {
-        "view": "promptconnext.projects",
-        "when": "!promptconnext.signedIn",
-        "contents": "Sign in to see your workspaces and projects.\n[Sign in](command:promptconnext.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptconnext.signInWithCode)"
+        "view": "promptworkspace.projects",
+        "when": "!promptworkspace.signedIn",
+        "contents": "Sign in to see your workspaces and projects.\n[Sign in](command:promptworkspace.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptworkspace.signInWithCode)"
       },
       {
-        "view": "promptconnext.projects",
-        "when": "promptconnext.signedIn",
-        "contents": "No workspaces yet.\n[Refresh](command:promptconnext.refreshProjects)\n\nWorkspaces and projects are created in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)"
+        "view": "promptworkspace.projects",
+        "when": "promptworkspace.signedIn",
+        "contents": "No workspaces yet.\n[Refresh](command:promptworkspace.refreshProjects)\n\nWorkspaces and projects are created in the web app.\n[Open the web app](command:promptworkspace.openProjectInWeb)"
       },
       {
-        "view": "promptconnext.tasks",
-        "when": "!promptconnext.signedIn",
-        "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptconnext.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptconnext.signInWithCode)"
+        "view": "promptworkspace.tasks",
+        "when": "!promptworkspace.signedIn",
+        "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptworkspace.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptworkspace.signInWithCode)"
       },
       {
-        "view": "promptconnext.tasks",
-        "when": "promptconnext.signedIn && !promptconnext.hasActiveProject",
-        "contents": "This folder is not linked to a PromptConnext project yet.\n\nPick a project to clone or open in the Projects view above, or link the folder you already have.\n[Link This Folder to a Project…](command:promptconnext.linkProject)"
+        "view": "promptworkspace.tasks",
+        "when": "promptworkspace.signedIn && !promptworkspace.hasActiveProject",
+        "contents": "This folder is not linked to a PromptWorkspace project yet.\n\nPick a project to clone or open in the Projects view above, or link the folder you already have.\n[Link This Folder to a Project…](command:promptworkspace.linkProject)"
       },
       {
-        "view": "promptconnext.tasks",
-        "when": "promptconnext.signedIn && promptconnext.hasActiveProject",
-        "contents": "No tasks are assigned to you in this project.\n[Refresh](command:promptconnext.refreshTasks)\n\nPlan and assign work in the web app.\n[Open the web app](command:promptconnext.openProjectInWeb)"
+        "view": "promptworkspace.tasks",
+        "when": "promptworkspace.signedIn && promptworkspace.hasActiveProject",
+        "contents": "No tasks are assigned to you in this project.\n[Refresh](command:promptworkspace.refreshTasks)\n\nPlan and assign work in the web app.\n[Open the web app](command:promptworkspace.openProjectInWeb)"
       }
     ],
     "commands": [
       {
-        "command": "promptconnext.signIn",
+        "command": "promptworkspace.signIn",
         "title": "Sign In",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.signInWithCode",
+        "command": "promptworkspace.signInWithCode",
         "title": "Sign In with a Code",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.signOut",
+        "command": "promptworkspace.signOut",
         "title": "Sign Out",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(sign-out)"
       },
       {
-        "command": "promptconnext.refreshTasks",
+        "command": "promptworkspace.refreshTasks",
         "title": "Refresh Tasks",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(refresh)"
       },
       {
-        "command": "promptconnext.startTask",
+        "command": "promptworkspace.startTask",
         "title": "Start Task",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(play)"
       },
       {
-        "command": "promptconnext.setTaskStatus",
+        "command": "promptworkspace.setTaskStatus",
         "title": "Set Task Status…",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.copyTaskContext",
+        "command": "promptworkspace.copyTaskContext",
         "title": "Copy Task Context",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(clippy)"
       },
       {
-        "command": "promptconnext.openTaskInWeb",
+        "command": "promptworkspace.openTaskInWeb",
         "title": "Open Task in the Web App",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.openProjectInWeb",
+        "command": "promptworkspace.openProjectInWeb",
         "title": "Open Project in the Web App",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(link-external)"
       },
       {
-        "command": "promptconnext.linkProject",
+        "command": "promptworkspace.linkProject",
         "title": "Link This Folder to a Project…",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.flushQueue",
+        "command": "promptworkspace.flushQueue",
         "title": "Retry Pending Task Updates",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.showLog",
+        "command": "promptworkspace.showLog",
         "title": "Show Log",
-        "category": "PromptConnext"
+        "category": "PromptWorkspace"
       },
       {
-        "command": "promptconnext.refreshProjects",
+        "command": "promptworkspace.refreshProjects",
         "title": "Refresh Projects",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(refresh)"
       },
       {
-        "command": "promptconnext.cloneProject",
+        "command": "promptworkspace.cloneProject",
         "title": "Clone Repository",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(repo-clone)"
       },
       {
-        "command": "promptconnext.openProjectFolder",
+        "command": "promptworkspace.openProjectFolder",
         "title": "Open Project Folder",
-        "category": "PromptConnext",
+        "category": "PromptWorkspace",
         "icon": "$(folder-opened)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "promptconnext.refreshTasks",
-          "when": "view == promptconnext.tasks",
+          "command": "promptworkspace.refreshTasks",
+          "when": "view == promptworkspace.tasks",
           "group": "navigation"
         },
         {
-          "command": "promptconnext.signIn",
-          "when": "view == promptconnext.tasks && !promptconnext.signedIn",
+          "command": "promptworkspace.signIn",
+          "when": "view == promptworkspace.tasks && !promptworkspace.signedIn",
           "group": "1_account@1"
         },
         {
-          "command": "promptconnext.signInWithCode",
-          "when": "view == promptconnext.tasks && !promptconnext.signedIn",
+          "command": "promptworkspace.signInWithCode",
+          "when": "view == promptworkspace.tasks && !promptworkspace.signedIn",
           "group": "1_account@2"
         },
         {
-          "command": "promptconnext.signOut",
-          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "command": "promptworkspace.signOut",
+          "when": "view == promptworkspace.tasks && promptworkspace.signedIn",
           "group": "1_account@1"
         },
         {
-          "command": "promptconnext.openProjectInWeb",
-          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "command": "promptworkspace.openProjectInWeb",
+          "when": "view == promptworkspace.tasks && promptworkspace.signedIn",
           "group": "2_open@1"
         },
         {
-          "command": "promptconnext.linkProject",
-          "when": "view == promptconnext.tasks && promptconnext.signedIn",
+          "command": "promptworkspace.linkProject",
+          "when": "view == promptworkspace.tasks && promptworkspace.signedIn",
           "group": "2_open@2"
         },
         {
-          "command": "promptconnext.showLog",
-          "when": "view == promptconnext.tasks",
+          "command": "promptworkspace.showLog",
+          "when": "view == promptworkspace.tasks",
           "group": "9_diagnostics@1"
         },
         {
-          "command": "promptconnext.refreshProjects",
-          "when": "view == promptconnext.projects",
+          "command": "promptworkspace.refreshProjects",
+          "when": "view == promptworkspace.projects",
           "group": "navigation"
         },
         {
-          "command": "promptconnext.signIn",
-          "when": "view == promptconnext.projects && !promptconnext.signedIn",
+          "command": "promptworkspace.signIn",
+          "when": "view == promptworkspace.projects && !promptworkspace.signedIn",
           "group": "1_account@1"
         },
         {
-          "command": "promptconnext.signOut",
-          "when": "view == promptconnext.projects && promptconnext.signedIn",
+          "command": "promptworkspace.signOut",
+          "when": "view == promptworkspace.projects && promptworkspace.signedIn",
           "group": "1_account@1"
         },
         {
-          "command": "promptconnext.showLog",
-          "when": "view == promptconnext.projects",
+          "command": "promptworkspace.showLog",
+          "when": "view == promptworkspace.projects",
           "group": "9_diagnostics@1"
         }
       ],
       "view/item/context": [
         {
-          "command": "promptconnext.cloneProject",
-          "when": "view == promptconnext.projects && viewItem == promptconnext.project.remote-only",
+          "command": "promptworkspace.cloneProject",
+          "when": "view == promptworkspace.projects && viewItem == promptworkspace.project.remote-only",
           "group": "inline"
         },
         {
-          "command": "promptconnext.openProjectFolder",
-          "when": "view == promptconnext.projects && viewItem == promptconnext.project.local",
+          "command": "promptworkspace.openProjectFolder",
+          "when": "view == promptworkspace.projects && viewItem == promptworkspace.project.local",
           "group": "inline"
         },
         {
-          "command": "promptconnext.openProjectInWeb",
-          "when": "view == promptconnext.projects && viewItem =~ /^promptconnext\\.project\\./",
+          "command": "promptworkspace.openProjectInWeb",
+          "when": "view == promptworkspace.projects && viewItem =~ /^promptworkspace\\.project\\./",
           "group": "inline"
         },
         {
-          "command": "promptconnext.openProjectInWeb",
-          "when": "view == promptconnext.projects && viewItem =~ /^promptconnext\\.project\\./",
+          "command": "promptworkspace.openProjectInWeb",
+          "when": "view == promptworkspace.projects && viewItem =~ /^promptworkspace\\.project\\./",
           "group": "1_open@1"
         },
         {
-          "command": "promptconnext.startTask",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
+          "command": "promptworkspace.startTask",
+          "when": "view == promptworkspace.tasks && viewItem == promptworkspace.task",
           "group": "inline"
         },
         {
-          "command": "promptconnext.copyTaskContext",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
+          "command": "promptworkspace.copyTaskContext",
+          "when": "view == promptworkspace.tasks && viewItem == promptworkspace.task",
           "group": "inline"
         },
         {
-          "command": "promptconnext.setTaskStatus",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.task"
+          "command": "promptworkspace.setTaskStatus",
+          "when": "view == promptworkspace.tasks && viewItem == promptworkspace.task"
         },
         {
-          "command": "promptconnext.openTaskInWeb",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.task"
+          "command": "promptworkspace.openTaskInWeb",
+          "when": "view == promptworkspace.tasks && viewItem == promptworkspace.task"
         },
         {
-          "command": "promptconnext.startTask",
-          "when": "view == promptconnext.tasks && viewItem == promptconnext.task",
+          "command": "promptworkspace.startTask",
+          "when": "view == promptworkspace.tasks && viewItem == promptworkspace.task",
           "group": "1_task@0"
         }
       ],
       "commandPalette": [
         {
-          "command": "promptconnext.signIn",
-          "when": "!promptconnext.signedIn"
+          "command": "promptworkspace.signIn",
+          "when": "!promptworkspace.signedIn"
         },
         {
-          "command": "promptconnext.signInWithCode",
-          "when": "!promptconnext.signedIn"
+          "command": "promptworkspace.signInWithCode",
+          "when": "!promptworkspace.signedIn"
         },
         {
-          "command": "promptconnext.signOut",
-          "when": "promptconnext.signedIn"
+          "command": "promptworkspace.signOut",
+          "when": "promptworkspace.signedIn"
         },
         {
-          "command": "promptconnext.setTaskStatus",
+          "command": "promptworkspace.setTaskStatus",
           "when": "false"
         },
         {
-          "command": "promptconnext.copyTaskContext",
+          "command": "promptworkspace.copyTaskContext",
           "when": "false"
         },
         {
-          "command": "promptconnext.openTaskInWeb",
+          "command": "promptworkspace.openTaskInWeb",
           "when": "false"
         },
         {
-          "command": "promptconnext.openProjectInWeb",
-          "when": "promptconnext.signedIn"
+          "command": "promptworkspace.openProjectInWeb",
+          "when": "promptworkspace.signedIn"
         },
         {
-          "command": "promptconnext.cloneProject",
+          "command": "promptworkspace.cloneProject",
           "when": "false"
         },
         {
-          "command": "promptconnext.openProjectFolder",
+          "command": "promptworkspace.openProjectFolder",
           "when": "false"
         },
         {
-          "command": "promptconnext.refreshProjects",
-          "when": "promptconnext.signedIn"
+          "command": "promptworkspace.refreshProjects",
+          "when": "promptworkspace.signedIn"
         }
       ]
     },
     "configuration": {
-      "title": "PromptConnext",
+      "title": "PromptWorkspace",
       "properties": {
-        "promptconnext.cloudApiUrl": {
+        "promptworkspace.cloudApiUrl": {
           "type": "string",
-          "default": "https://p01--promptconnect-cloud-api--sj64fy5ygbzy.code.run",
-          "description": "Base URL of the PromptConnext cloud API."
+          "default": "https://api.workspace.promptconnext.com",
+          "description": "Base URL of the PromptWorkspace cloud API."
         },
-        "promptconnext.cloudWebUrl": {
+        "promptworkspace.cloudWebUrl": {
           "type": "string",
-          "default": "https://prompt-zone-web-app.vercel.app",
-          "description": "Base URL of the PromptConnext web app, which hosts the sign-in pages."
+          "default": "https://workspace.promptconnext.com",
+          "description": "Base URL of the PromptWorkspace web app, which hosts the sign-in pages."
         },
-        "promptconnext.supabaseUrl": {
+        "promptworkspace.supabaseUrl": {
           "type": "string",
-          "default": "",
-          "description": "Supabase project URL. Leave empty to use the cloud's stub auth mode (local development only)."
+          "default": "__PROD_SUPABASE_URL__",
+          "description": "Supabase project URL. Set it to empty to use the cloud's stub auth mode (local development only)."
         },
-        "promptconnext.supabaseAnonKey": {
+        "promptworkspace.supabaseAnonKey": {
           "type": "string",
-          "default": "",
-          "description": "Supabase anon key. Required alongside supabaseUrl for real authentication."
+          "default": "__PROD_SUPABASE_PUBLISHABLE_KEY__",
+          "description": "Supabase publishable (anon) key. Required alongside supabaseUrl for real authentication."
         },
-        "promptconnext.projectId": {
+        "promptworkspace.projectId": {
           "type": "string",
           "default": "",
           "scope": "resource",
           "description": "Cloud project this folder belongs to. Set by 'Link This Folder to a Project…'; safe to commit in .vscode/settings.json — a project id is not a secret."
         },
-        "promptconnext.closeTasksFromCommits": {
+        "promptworkspace.closeTasksFromCommits": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Close tasks from git activity at all. Superseded by `#promptconnext.closeTasksOn#`, which decides *when*; setting this to `false` still turns the whole feature off."
+          "markdownDescription": "Close tasks from git activity at all. Superseded by `#promptworkspace.closeTasksOn#`, which decides *when*; setting this to `false` still turns the whole feature off."
         },
-        "promptconnext.closeTasksOn": {
+        "promptworkspace.closeTasksOn": {
           "type": "string",
           "enum": [
             "push",
@@ -368,7 +368,7 @@
           "default": "push",
           "markdownDescription": "When a commit that names a task closes it. `push` is the default: a commit only your machine has is not evidence the work is done. A repository with no upstream branch falls back to `commit` and says so in the log."
         },
-        "promptconnext.commitScanLimit": {
+        "promptworkspace.commitScanLimit": {
           "type": "number",
           "default": 1000,
           "minimum": 10,
@@ -379,7 +379,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run typecheck && npm run build",
+    "vscode:prepublish": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ../../packages/cloud-client/scripts/assert-defaults-filled.mjs && npm run typecheck && npm run build",
     "build": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
@@ -389,7 +389,7 @@
     "publish": "vsce publish --no-dependencies"
   },
   "devDependencies": {
-    "@promptconnext/pz-cloud": "workspace:*",
+    "@promptworkspace/cloud-client": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/vscode": "1.85.0",
     "@vscode/vsce": "^3.2.1",

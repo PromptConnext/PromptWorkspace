@@ -50,7 +50,7 @@ from app.requestlog import REQUEST_ID_HEADER, RequestIdMiddleware, configure_log
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
 
-logger = logging.getLogger("promptconnext")
+logger = logging.getLogger("promptworkspace")
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
@@ -69,6 +69,7 @@ def _schema_version() -> str:
 
 def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
+    settings.require_valid_encryption_key()
     settings.require_auth()
     for warning in settings.require_production_safety():
         logger.warning(warning)
@@ -215,7 +216,7 @@ async def lifespan(app: FastAPI):
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
     logger.info(
-        "PromptConnext Cloud %s started (backend=%s)",
+        "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,
         app.state.repository.backend_name,
     )
@@ -241,9 +242,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="PromptConnext Cloud",
+        title="PromptWorkspace Cloud",
         version=__version__,
-        summary="Thin sync + collaboration backend for the PromptConnext task graph.",
+        summary="Thin sync + collaboration backend for the PromptWorkspace task graph.",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -296,7 +297,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", tags=["health"])
     def root() -> dict:
-        return {"service": "promptconnext-cloud", "version": __version__, "docs": "/docs"}
+        return {"service": "promptworkspace-cloud", "version": __version__, "docs": "/docs"}
 
     return app
 

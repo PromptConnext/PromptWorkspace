@@ -1,13 +1,13 @@
 """The commit-subject -> task-ref rule (ADR 0023 decision 3).
 
 One rule expressed three times, not three rules. `app/integrations/task_refs.py`
-is a hand-written port of `packages/pz-cloud/src/taskRefs.ts`, because there is
+is a hand-written port of `packages/cloud-client/src/taskRefs.ts`, because there is
 no sane way to share a TypeScript module with FastAPI; `apps/engine` vendors
 that same file byte-for-byte and checks the copy in its own suite.
 
 A port has no compiler holding it to its original, so its tripwire is the
 shared case table at `docs/contracts/task-ref-cases.json` (plan 0024 M1), read
-below and read identically by `packages/pz-cloud/test/taskRefs.test.ts` and
+below and read identically by `packages/cloud-client/test/taskRefs.test.ts` and
 `apps/engine/test/task-refs.test.ts`. If the port ever drifts, all three
 suites are looking at the same list of facts and one of them fails. The prose
 statement of the rule, including why the server never reads a branch, is

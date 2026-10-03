@@ -31,7 +31,7 @@ export function DeployConnectionsPanel({ workspaceId }: { workspaceId: string })
     <section className="mb-10 rounded-xl border border-slate-200 bg-white p-5">
       <h2 className="mb-1 text-sm font-medium text-slate-900">Deployment providers</h2>
       <p className="mb-4 text-xs text-slate-500">
-        A project&apos;s pipeline deploys using credentials PromptConnext writes into its
+        A project&apos;s pipeline deploys using credentials PromptWorkspace writes into its
         repository when the repository is created. Connect the provider a project&apos;s
         deployment template uses before creating its repository — the token is verified here
         and stored encrypted, and is never shown again.

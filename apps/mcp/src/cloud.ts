@@ -8,7 +8,7 @@ import {
   StatusQueue,
   type LoggerLike,
   type QueueEntry,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 import { ensureConfigDir, readConfig, type McpConfig } from "./config.ts";
 import { JsonState, KeychainSecrets, QUEUE_FILE } from "./tokenStore.ts";
 
@@ -16,9 +16,9 @@ import { JsonState, KeychainSecrets, QUEUE_FILE } from "./tokenStore.ts";
  *  is a stdio server, and a stray line on it corrupts the stream for the client
  *  — a failure that shows up as an unrelated parse error much later. */
 export const stderrLog: LoggerLike = {
-  info: (message) => process.stderr.write(`[promptconnext-mcp] ${message}\n`),
-  warn: (message) => process.stderr.write(`[promptconnext-mcp] warn: ${message}\n`),
-  error: (message) => process.stderr.write(`[promptconnext-mcp] error: ${message}\n`),
+  info: (message) => process.stderr.write(`[promptworkspace-mcp] ${message}\n`),
+  warn: (message) => process.stderr.write(`[promptworkspace-mcp] warn: ${message}\n`),
+  error: (message) => process.stderr.write(`[promptworkspace-mcp] error: ${message}\n`),
 };
 
 export interface CloudContext {

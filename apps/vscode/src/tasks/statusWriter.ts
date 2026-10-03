@@ -7,11 +7,11 @@
 // version of this bug.
 
 import * as vscode from "vscode";
-import { CloudHttpError, CloudNotLoggedInError } from "@promptconnext/pz-cloud";
-import type { CloudClient } from "@promptconnext/pz-cloud";
-import type { StatusArtifact, TaskStatus } from "@promptconnext/pz-cloud";
+import { CloudHttpError, CloudNotLoggedInError } from "@promptworkspace/cloud-client";
+import type { CloudClient } from "@promptworkspace/cloud-client";
+import type { StatusArtifact, TaskStatus } from "@promptworkspace/cloud-client";
 import type { OutputLogger } from "../util/log.ts";
-import type { StatusQueue } from "@promptconnext/pz-cloud";
+import type { StatusQueue } from "@promptworkspace/cloud-client";
 import type { TaskStore } from "./taskStore.ts";
 
 export interface StatusWriteRequest {
@@ -65,7 +65,7 @@ export class StatusWriter {
       if (err instanceof CloudNotLoggedInError) {
         if (previous) this.store.applyLocalStatus(req.taskId, previous);
         if (!req.silent) {
-          void vscode.window.showWarningMessage("Sign in to PromptConnext first.");
+          void vscode.window.showWarningMessage("Sign in to PromptWorkspace first.");
         }
         return false;
       }
@@ -106,7 +106,7 @@ export class StatusWriter {
       case "task_not_found":
         return "That task no longer exists in the cloud. Refreshing.";
       default:
-        return `PromptConnext refused the update: ${err.message}`;
+        return `PromptWorkspace refused the update: ${err.message}`;
     }
   }
 }

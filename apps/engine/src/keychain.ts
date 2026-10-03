@@ -11,10 +11,10 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const ACCOUNT = "promptconnext";
+const ACCOUNT = "promptworkspace";
 
 function service(credentialRef: string): string {
-  return `promptconnext.${credentialRef}`;
+  return `promptworkspace.${credentialRef}`;
 }
 
 function darwinStore(credentialRef: string, secret: string): void {
@@ -52,7 +52,7 @@ function darwinDelete(credentialRef: string): void {
 }
 
 function credentialDir(): string {
-  const dir = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "promptconnext", "credentials");
+  const dir = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "promptworkspace", "credentials");
   mkdirSync(dir, { recursive: true });
   return dir;
 }

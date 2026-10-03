@@ -13,10 +13,10 @@
 // neither, this extension does not guess, and says so.
 
 import * as vscode from "vscode";
-import { CloudHttpError } from "@promptconnext/pz-cloud";
-import type { AssignedTask } from "@promptconnext/pz-cloud";
+import { CloudHttpError } from "@promptworkspace/cloud-client";
+import type { AssignedTask } from "@promptworkspace/cloud-client";
 import type { GitBridge } from "../git/gitBridge.ts";
-import { branchNameForTask, taskRefFromFeatureTag } from "@promptconnext/pz-cloud";
+import { branchNameForTask, taskRefFromFeatureTag } from "@promptworkspace/cloud-client";
 import type { ProjectLink } from "../link/projectLink.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { StatusWriter } from "./statusWriter.ts";
@@ -96,7 +96,7 @@ export async function startTask(
 async function claim(entry: AssignedTask, deps: StartTaskDeps): Promise<boolean> {
   const me = deps.currentUserId();
   if (!me) {
-    void vscode.window.showWarningMessage("Sign in to PromptConnext first.");
+    void vscode.window.showWarningMessage("Sign in to PromptWorkspace first.");
     return false;
   }
 
@@ -118,7 +118,7 @@ async function claim(entry: AssignedTask, deps: StartTaskDeps): Promise<boolean>
     const detail = err instanceof CloudHttpError ? err.message : String(err);
     deps.log.warn(`claim refused: ${detail}`);
     void vscode.window.showWarningMessage(
-      `PromptConnext would not assign that task: ${detail}`,
+      `PromptWorkspace would not assign that task: ${detail}`,
     );
     return false;
   }

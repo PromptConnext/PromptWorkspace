@@ -10,11 +10,11 @@ import { useAuth } from "./auth";
 import { useCloudGet } from "./hooks";
 import type { Workspace, WorkspaceMember } from "./types";
 
-const ACTIVE_KEY = "pz_active_workspace";
+const ACTIVE_KEY = "pw_active_workspace";
 // Memberships are cached per user id so a reload can paint workspace names
 // immediately instead of showing raw ids until /workspaces answers. Keying by
 // user keeps one account's roster from surfacing under another's session.
-const CACHE_KEY_PREFIX = "pz_memberships:";
+const CACHE_KEY_PREFIX = "pw_memberships:";
 
 function cacheKey(userId: string) {
   return `${CACHE_KEY_PREFIX}${userId}`;

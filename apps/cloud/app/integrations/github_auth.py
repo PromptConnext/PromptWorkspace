@@ -18,7 +18,7 @@ import logging
 
 from app.models.schemas import Workspace
 
-logger = logging.getLogger("promptconnext.github")
+logger = logging.getLogger("promptworkspace.github")
 
 
 def github_config(workspace: Workspace | None) -> dict | None:

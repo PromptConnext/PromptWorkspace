@@ -58,7 +58,7 @@ function driverPrompt(kind: StageKind): string {
   const stage = STAGES[kind];
   const doc = template(stage.template);
   return [
-    `You are the ${stage.role} engine inside PromptConnext.`,
+    `You are the ${stage.role} engine inside PromptWorkspace.`,
     `Fill in the following template completely, based on the user's input. Replace every placeholder. Do not leave template markers like [FEATURE NAME] or $ARGUMENTS in the output. Mark genuine unknowns with [NEEDS CLARIFICATION: question].`,
     ...(kind === "tasks"
       ? [
@@ -141,7 +141,7 @@ export async function runStage(
   const firstLine = files[0].content.split("\n").find((l) => l.startsWith("# "));
   const title = firstLine ? firstLine.replace(/^#\s*/, "").trim() : userInput.slice(0, 80);
 
-  commitAll(projectPath, `promptconnext: ${kind} output`);
+  commitAll(projectPath, `promptworkspace: ${kind} output`);
 
   return { files, title, raw: result.content };
 }
@@ -202,7 +202,7 @@ export async function runImplementation(
   onDelta: (text: string) => void = () => {},
 ): Promise<{ files: StageOutput["files"]; raw: string; commitSha: string }> {
   const system = [
-    "You are the implementation engine inside PromptConnext. Complete the given task by writing code into the repository.",
+    "You are the implementation engine inside PromptWorkspace. Complete the given task by writing code into the repository.",
     "Always write COMPLETE file contents — partial edits or diffs are not accepted. Keep changes scoped to the task.",
     "OUTPUT FORMAT (mandatory): return each created or modified file as a fenced block that starts with ```file:<relative-path> and ends with ```. No prose outside fenced blocks.",
   ].join("\n");
@@ -216,6 +216,6 @@ export async function runImplementation(
     throw new AgentError("bad-output", "model output contained no file blocks — nothing to apply");
   }
   writeFiles(projectPath, files);
-  const commitSha = commitAll(projectPath, `promptconnext: ${taskLabel}`);
+  const commitSha = commitAll(projectPath, `promptworkspace: ${taskLabel}`);
   return { files, raw: result.content, commitSha };
 }

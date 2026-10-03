@@ -11,11 +11,11 @@ import { join } from "node:path";
 // Env must be set before importing the SUT (db.ts + config.ts read it at import).
 const dataDir = mkdtempSync(join(tmpdir(), "pz-clone-url-validation-"));
 process.env.HOME = dataDir;
-process.env.PROMPTCONNEXT_DATA_DIR = dataDir;
+process.env.PROMPTWORKSPACE_DATA_DIR = dataDir;
 delete process.env.CLOUD_API_URL;
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_ANON_KEY;
-delete process.env.PROMPTCONNEXT_AUTH_TOKEN;
+delete process.env.PROMPTWORKSPACE_AUTH_TOKEN;
 
 const { assertCloneableRepoUrl, CloneFailedError } = await import("../src/routes/projects.ts");
 

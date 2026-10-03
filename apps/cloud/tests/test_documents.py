@@ -1,7 +1,7 @@
 """Project knowledge base: upload -> extract -> embed (M0, plan 0007).
 
 Exit criteria under test: a markdown upload produces chunks in
-pz_rag_chunks-equivalent (vector_search) for that project; a born-digital PDF
+pw_rag_chunks-equivalent (vector_search) for that project; a born-digital PDF
 extracts via the text layer (OCR never called); a scanned/image-only PDF
 falls back to the stubbed OCR provider; a non-member is 403; an oversize or
 unsupported-type upload is 413/415; another workspace provably cannot

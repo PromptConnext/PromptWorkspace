@@ -9,8 +9,8 @@
 // vscode.EventEmitter, which is what lets `node --test` import it with no
 // editor host. TaskStore is not being retrofitted to match; that is unrelated.
 
-import type { CloudClient, LoggerLike } from "@promptconnext/pz-cloud";
-import { CACHE_FILES, type JsonCache } from "@promptconnext/pz-cloud";
+import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
+import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { RosterEntry } from "./roster.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;

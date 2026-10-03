@@ -39,7 +39,7 @@ from app.deployments.plan_profile import (
 from app.integrations.typesafe import TypeSafeClient, TypeSafeError
 from app.models.schemas import RepoSnapshot, StackJudgment
 
-logger = logging.getLogger("promptconnext.stack_judge")
+logger = logging.getLogger("promptworkspace.stack_judge")
 
 # The plan is the whole evidence for a scratch project; a very long one is
 # cut rather than refused. Manifests are short by nature, and only their head

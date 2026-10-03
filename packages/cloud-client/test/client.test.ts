@@ -1,4 +1,4 @@
-// Run:  node --test packages/pz-cloud/test/client.test.ts
+// Run:  node --test packages/cloud-client/test/client.test.ts
 //
 // Same strategy as apps/engine's suite: no mocking library, a real
 // http.createServer on port 0 standing in for the cloud, and the code under

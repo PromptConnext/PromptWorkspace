@@ -1,9 +1,9 @@
 # Builds this repository's container, ships it to your Docker host over SSH,
 # brings it up with Docker Compose, and reports the result back as a GitHub
-# Deployment. PromptZone reads that deployment over this repository's webhook
+# Deployment. PromptWorkspace reads that deployment over this repository's webhook
 # and shows the running application in the project's Preview tab.
 #
-# This file belongs to you. Edit it freely — PromptZone seeded it once at
+# This file belongs to you. Edit it freely — PromptWorkspace seeded it once at
 # repository creation and does not overwrite it.
 
 name: Deploy preview
@@ -40,12 +40,12 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
-      APP_SLUG: ${{ vars.PZ_APP_SLUG }}
-      HOST_PORT: ${{ vars.PZ_HOST_PORT }}
-      SSH_HOST: ${{ vars.PZ_SSH_HOST }}
-      SSH_USER: ${{ vars.PZ_SSH_USER }}
-      WEB_ORIGIN: ${{ vars.PZ_WEB_ORIGIN }}
-      PREVIEW_URL: ${{ vars.PZ_PREVIEW_URL }}
+      APP_SLUG: ${{ vars.PROMPTWORKSPACE_APP_SLUG }}
+      HOST_PORT: ${{ vars.PROMPTWORKSPACE_HOST_PORT }}
+      SSH_HOST: ${{ vars.PROMPTWORKSPACE_SSH_HOST }}
+      SSH_USER: ${{ vars.PROMPTWORKSPACE_SSH_USER }}
+      WEB_ORIGIN: ${{ vars.PROMPTWORKSPACE_WEB_ORIGIN }}
+      PREVIEW_URL: ${{ vars.PROMPTWORKSPACE_PREVIEW_URL }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -58,14 +58,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
-          PROJECT_ID: ${{ vars.PZ_PROJECT_ID }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
+          PROJECT_ID: ${{ vars.PROMPTWORKSPACE_PROJECT_ID }}
         run: |
           set -euo pipefail
           deployment_id=$(gh api "repos/$REPO/deployments" \
             -f ref="$SHA" \
             -f environment="$ENVIRONMENT" \
-            -f description="PromptZone preview for project $PROJECT_ID" \
+            -f description="PromptWorkspace preview for project $PROJECT_ID" \
             -F auto_merge=false \
             -F transient_environment=false \
             -f 'required_contexts[]' \
@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           docker build -t "$APP_SLUG:${{ github.sha }}" -t "$APP_SLUG:current" .
 
-      # Host key checking stays ON. PZ_SSH_KNOWN_HOSTS is the `ssh-keyscan`
+      # Host key checking stays ON. PROMPTWORKSPACE_SSH_KNOWN_HOSTS is the `ssh-keyscan`
       # line the workspace admin supplied when connecting the Docker host, so
       # this job talks to the machine they named and not to whatever answers
       # on that address today. Do not replace it by scanning for the host key
@@ -90,8 +90,8 @@ jobs:
       - name: Authorize the Docker host
         shell: bash
         env:
-          SSH_KEY: ${{ secrets.PZ_SSH_KEY }}
-          KNOWN_HOSTS: ${{ vars.PZ_SSH_KNOWN_HOSTS }}
+          SSH_KEY: ${{ secrets.PROMPTWORKSPACE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.PROMPTWORKSPACE_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -142,7 +142,7 @@ jobs:
           # run would leave a volume nobody can open.
           db_password=""
           if [ -f .env ]; then
-            db_password=$(grep -E '^PZ_DB_PASSWORD=' .env | cut -d= -f2- || true)
+            db_password=$(grep -E '^PROMPTWORKSPACE_DB_PASSWORD=' .env | cut -d= -f2- || true)
           fi
           if [ -z "$db_password" ]; then
             db_password=$(openssl rand -hex 24)
@@ -150,11 +150,11 @@ jobs:
 
           umask 077
           cat > .env <<EOF
-          PZ_APP_SLUG=$slug
-          PZ_IMAGE=$slug:current
-          PZ_HOST_PORT=$host_port
-          PZ_WEB_ORIGIN=$web_origin
-          PZ_DB_PASSWORD=$db_password
+          PROMPTWORKSPACE_APP_SLUG=$slug
+          PROMPTWORKSPACE_IMAGE=$slug:current
+          PROMPTWORKSPACE_HOST_PORT=$host_port
+          PROMPTWORKSPACE_WEB_ORIGIN=$web_origin
+          PROMPTWORKSPACE_DB_PASSWORD=$db_password
           EOF
 
           docker compose up -d --remove-orphans
@@ -189,7 +189,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           DEPLOYMENT_ID: ${{ steps.open.outputs.id }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

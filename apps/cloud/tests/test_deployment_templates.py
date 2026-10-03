@@ -128,7 +128,7 @@ def test_workflows_declare_the_preview_environment():
     for template in BUILTIN_TEMPLATES:
         workflow = _files(template.id)[template.workflow_path]
         assert "deployments: write" in workflow
-        assert "PZ_ENVIRONMENT" in workflow
+        assert "PROMPTWORKSPACE_ENVIRONMENT" in workflow
     assert PREVIEW_ENVIRONMENT == "preview"
 
 

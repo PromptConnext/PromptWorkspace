@@ -18,7 +18,7 @@ def health(request: Request, repo: Repository = Depends(get_repository)) -> dict
     state = request.app.state
     return {
         "status": "ok",
-        "service": "promptconnext-cloud",
+        "service": "promptworkspace-cloud",
         "version": __version__,
         "backend": repo.backend_name,
         "schema_version": getattr(state, "schema_version", "unknown"),

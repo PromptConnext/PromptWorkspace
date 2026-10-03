@@ -33,54 +33,44 @@ describe("safeNext", () => {
 
 describe("desktopScheme", () => {
   it("passes through the shipping Tauri scheme", () => {
-    expect(desktopScheme("promptconnext")).toBe("promptconnext");
-  });
-
-  it("passes through the Theia shell's own scheme", () => {
-    expect(desktopScheme("promptconnext-theia")).toBe("promptconnext-theia");
+    expect(desktopScheme("promptworkspace")).toBe("promptworkspace");
   });
 
   it("falls back to the shipping scheme when absent", () => {
-    expect(desktopScheme(null)).toBe("promptconnext");
+    expect(desktopScheme(null)).toBe("promptworkspace");
   });
 
   it("refuses an unknown scheme rather than handing it the auth code", () => {
-    expect(desktopScheme("evilapp")).toBe("promptconnext");
+    expect(desktopScheme("evilapp")).toBe("promptworkspace");
   });
 
   it("refuses a scheme that merely prefixes a known one", () => {
-    expect(desktopScheme("promptconnext-evil")).toBe("promptconnext");
+    expect(desktopScheme("promptworkspace-evil")).toBe("promptworkspace");
   });
 
   it("refuses an embedded javascript: URL", () => {
-    expect(desktopScheme("javascript:alert(1)//")).toBe("promptconnext");
+    expect(desktopScheme("javascript:alert(1)//")).toBe("promptworkspace");
   });
 });
 
 describe("desktopRedirect", () => {
-  const OLD = "promptconnext://auth/callback?code=abc%20123&state=s1";
+  const OLD = "promptworkspace://auth/callback?code=abc%20123&state=s1";
 
   it("builds the shell's authority-less callback when no redirect_uri is given", () => {
-    expect(desktopRedirect(null, "promptconnext", "abc 123", "s1")).toBe(OLD);
-  });
-
-  it("keeps the Theia shell working unchanged", () => {
-    expect(desktopRedirect(null, "promptconnext-theia", "c", "s")).toBe(
-      "promptconnext-theia://auth/callback?code=c&state=s",
-    );
+    expect(desktopRedirect(null, "promptworkspace", "abc 123", "s1")).toBe(OLD);
   });
 
   it("preserves the extension-id authority a VS Code URI handler requires", () => {
     const url = new URL(
       desktopRedirect(
-        "vscode://promptconnext.promptconnext/auth/callback",
+        "vscode://promptconnext.promptworkspace/auth/callback",
         null,
         "c",
         "s",
       ),
     );
     expect(url.protocol).toBe("vscode:");
-    expect(url.host).toBe("promptconnext.promptconnext");
+    expect(url.host).toBe("promptconnext.promptworkspace");
     expect(url.pathname).toBe("/auth/callback");
     expect(url.searchParams.get("code")).toBe("c");
     expect(url.searchParams.get("state")).toBe("s");
@@ -89,7 +79,7 @@ describe("desktopRedirect", () => {
   it("accepts the forks' own schemes", () => {
     for (const scheme of ["cursor", "windsurf", "vscode-insiders", "vscodium"]) {
       const url = new URL(
-        desktopRedirect(`${scheme}://promptconnext.promptconnext/auth/callback`, null, "c", "s"),
+        desktopRedirect(`${scheme}://promptconnext.promptworkspace/auth/callback`, null, "c", "s"),
       );
       expect(url.protocol).toBe(`${scheme}:`);
     }
@@ -97,7 +87,7 @@ describe("desktopRedirect", () => {
 
   it("preserves a query param the callback already carried", () => {
     const url = new URL(
-      desktopRedirect("vscode://promptconnext.promptconnext/cb?windowId=3", null, "c", "s"),
+      desktopRedirect("vscode://promptconnext.promptworkspace/cb?windowId=3", null, "c", "s"),
     );
     expect(url.searchParams.get("windowId")).toBe("3");
     expect(url.searchParams.get("code")).toBe("c");
@@ -112,7 +102,7 @@ describe("desktopRedirect", () => {
   });
 
   it("refuses a scheme that merely prefixes a known one", () => {
-    expect(desktopRedirect("promptconnext-evil://cb", null, "abc 123", "s1")).toBe(OLD);
+    expect(desktopRedirect("promptworkspace-evil://cb", null, "abc 123", "s1")).toBe(OLD);
   });
 
   it("refuses a redirect_uri that pins its own code", () => {
@@ -129,7 +119,7 @@ describe("desktopRedirect", () => {
 });
 
 describe("LoginPage (stub mode submit)", () => {
-  const STUB_USER_KEY = "pz_stub_user_id";
+  const STUB_USER_KEY = "pw_stub_user_id";
 
   beforeEach(() => {
     localStorage.clear();
@@ -163,7 +153,7 @@ describe("LoginPage (stub mode submit)", () => {
 // native app. A session the browser already carries is not consent to grant
 // one, so the page must ask — and must offer a way to sign in as someone else.
 describe("LoginPage (desktop handoff with an existing browser session)", () => {
-  const STUB_USER_KEY = "pz_stub_user_id";
+  const STUB_USER_KEY = "pw_stub_user_id";
 
   beforeEach(() => {
     localStorage.clear();

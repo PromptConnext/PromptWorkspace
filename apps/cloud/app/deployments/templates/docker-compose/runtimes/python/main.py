@@ -1,6 +1,6 @@
 """Minimal Python service. Replace it with your application — the pipeline
 around it (Dockerfile, compose.yaml, .github/workflows/deploy.yml) is what
-PromptZone seeded, and it does not care what this file grows into.
+PromptWorkspace seeded, and it does not care what this file grows into.
 
 Standard library only, so the seeded image builds before this project has
 picked a framework.
@@ -11,10 +11,10 @@ import os
 import pathlib
 
 PORT = int(os.environ.get("PORT", "8080"))
-# Passed in by compose from the deploy workflow. Naming the PromptZone web
+# Passed in by compose from the deploy workflow. Naming the PromptWorkspace web
 # origin as a frame ancestor is what lets the project's Preview tab embed this
 # app instead of falling back to a link card.
-WEB_ORIGIN = os.environ.get("PZ_WEB_ORIGIN", "")
+WEB_ORIGIN = os.environ.get("PROMPTWORKSPACE_WEB_ORIGIN", "")
 
 PUBLIC = pathlib.Path.cwd() / "public"
 TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript"}

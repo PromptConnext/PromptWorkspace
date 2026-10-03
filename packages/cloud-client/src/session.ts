@@ -34,9 +34,9 @@ export interface CloudSession {
   email?: string;
 }
 
-const ACCESS_SECRET = "promptconnext.cloud.access";
-const REFRESH_SECRET = "promptconnext.cloud.refresh";
-const SESSION_KEY = "promptconnext.cloud.session";
+const ACCESS_SECRET = "promptworkspace.cloud.access";
+const REFRESH_SECRET = "promptworkspace.cloud.refresh";
+const SESSION_KEY = "promptworkspace.cloud.session";
 
 /** Decode the `email` claim for display. NOT an auth decision — the signature
  *  is never verified here, and must never be trusted for one. Ported verbatim

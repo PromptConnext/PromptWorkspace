@@ -1,4 +1,4 @@
-// Tells PromptZone's Preview tab that this page actually rendered inside its
+// Tells PromptWorkspace's Preview tab that this page actually rendered inside its
 // iframe.
 //
 // Why this exists: a browser cannot tell an embedded page apart from a blocked
@@ -8,7 +8,7 @@
 // This message is the only positive proof, and it proves all three at once:
 // the frame was allowed, the page was found, and its scripts ran.
 //
-// Its absence proves nothing, and PromptZone treats it that way: it falls back
+// Its absence proves nothing, and PromptWorkspace treats it that way: it falls back
 // to showing a link instead of claiming the app refuses embedding. Deleting
 // this file is therefore safe — you get the link card.
 (function () {

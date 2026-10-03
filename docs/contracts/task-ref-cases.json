@@ -1,5 +1,5 @@
 {
-  "$schema_note": "Not a package. A committed specification artifact, read as data by three separate test suites (packages/pz-cloud/test/taskRefs.test.ts, apps/engine/test/task-refs.test.ts, apps/cloud/tests/test_task_refs.py). No workspace entry, no build step, no dependency edge between apps. Prose statement of the rule: docs/contracts/task-ref-grammar.md.",
+  "$schema_note": "Not a package. A committed specification artifact, read as data by three separate test suites (packages/cloud-client/test/taskRefs.test.ts, apps/engine/test/task-refs.test.ts, apps/cloud/tests/test_task_refs.py). No workspace entry, no build step, no dependency edge between apps. Prose statement of the rule: docs/contracts/task-ref-grammar.md.",
   "$normalize_note": "taskRefFromFeatureTag / task_ref_from_feature_tag. The cloud stores feature_tag zero-padded and may append a parallel marker, so both sides normalise numerically before they meet.",
   "normalize": [
     { "name": "padded three-digit tag", "tag": "T001", "expect": "T1" },

@@ -5,9 +5,9 @@ import ConnectForm from "./ConnectForm";
 export default function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <main className="onboarding">
-      <h1>Welcome to PromptConnext</h1>
+      <h1>Welcome to PromptWorkspace</h1>
       <p>
-        PromptConnext orchestrates the AI models <em>you</em> bring — it ships none of
+        PromptWorkspace orchestrates the AI models <em>you</em> bring — it ships none of
         its own. Connect one model to get started. No AI subscription? Pick{" "}
         <strong>Local Ollama</strong>: free, private, nothing to sign up for.
       </p>

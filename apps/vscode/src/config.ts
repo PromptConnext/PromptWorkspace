@@ -7,7 +7,7 @@
 
 import * as vscode from "vscode";
 
-export const SECTION = "promptconnext";
+export const SECTION = "promptworkspace";
 
 /** When a commit becomes a status write. `push` holds the close until the
  *  commit reaches the remote (ADR 0022); `commit` is the pre-0.3 behaviour,

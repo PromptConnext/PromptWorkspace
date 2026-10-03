@@ -155,7 +155,7 @@ def test_assign_missing_task_404(client):
     assert res.status_code == 404
 
 
-def test_pmo_assignee_and_pz_assigned_user_id_coexist(client):
+def test_pmo_assignee_and_pw_assigned_user_id_coexist(client):
     ws, project, task_id = _setup(client)
     # The pmo tracker mirror sets the free-text assignee. It writes in-process,
     # through the repository, exactly as the signature-verified webhook does

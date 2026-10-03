@@ -165,8 +165,8 @@ describe("CreateRepositoryPanel", () => {
 
     it("renders what will be added, moved aside and left alone", async () => {
       mockPreview({
-        write: ["docs/promptzone/README.md", "docs/scope.md", "AGENTS.md"],
-        relocated: [{ from: "README.md", to: "docs/promptzone/README.md" }],
+        write: ["docs/promptworkspace/README.md", "docs/scope.md", "AGENTS.md"],
+        relocated: [{ from: "README.md", to: "docs/promptworkspace/README.md" }],
         skipped: ["Dockerfile"],
         conflicts: [],
       });
@@ -181,12 +181,12 @@ describe("CreateRepositoryPanel", () => {
         />,
       );
 
-      expect(await screen.findByText("README.md → docs/promptzone/README.md")).toBeInTheDocument();
+      expect(await screen.findByText("README.md → docs/promptworkspace/README.md")).toBeInTheDocument();
       expect(screen.getByText("docs/scope.md")).toBeInTheDocument();
       expect(screen.getByText("AGENTS.md")).toBeInTheDocument();
       expect(screen.getByText("Dockerfile")).toBeInTheDocument();
       // A relocated file is listed once, under its move — not again as an add.
-      expect(screen.queryByText("docs/promptzone/README.md")).not.toBeInTheDocument();
+      expect(screen.queryByText("docs/promptworkspace/README.md")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: /create repository/i })).toBeEnabled();
     });
 

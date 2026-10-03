@@ -24,7 +24,7 @@ export const config = {
       {
         appBinaryPath: path.join(
           __dirname,
-          "src-tauri/target/debug/promptconnext-desktop",
+          "src-tauri/target/debug/promptworkspace-desktop",
         ),
         driverProvider: "embedded",
         webdriverPort: 4445,

@@ -1,13 +1,12 @@
 """Unit tests for scripts/migrate.py — everything here is pure-function
-logic exercised without a live database. Live-database behaviour (actually
-applying migrations, rolling back on failure, refusing a tampered checksum,
-0023's required variable end to end, and — added for `status` — the
-no-ledger/fully-migrated/partial/adopted/drifted cases plus a read-only
-proof) was exercised by hand against a throwaway pgvector/pgvector:pg16
-Docker container; see .claude/overnight/logs/mig-task-3-report.md and
-.claude/overnight/logs/mig-task-5-report.md for those session transcripts —
-deliberately not repeated here as automated tests, since this suite must
-stay runnable with no live database and no new dependencies."""
+logic exercised without a live database (the one `cmd_apply` test stubs out
+the two functions that would touch one). Live-database behaviour — applying
+the real two-file baseline from scratch — is exercised by
+.github/workflows/cloud-contract.yml and by
+scripts/baseline/verify_squash.sh at the repo root, which also proves the
+baseline equivalent to the pre-baseline 36-file chain; deliberately not
+repeated here, since this suite must stay runnable with no live database
+and no new dependencies."""
 
 from __future__ import annotations
 
@@ -91,14 +90,46 @@ def test_required_vars_parses_multiple_comma_separated(tmp_path):
     assert migrate.Migration(path).required_vars() == ["foo", "bar", "baz"]
 
 
-def test_real_0023_declares_embed_dim():
+BASELINE = migrate.MIGRATIONS_DIR_DEFAULT / "0002_pw_baseline.sql"
+LEDGER = migrate.MIGRATIONS_DIR_DEFAULT / "0001_pw_schema_migrations_ledger.sql"
+
+
+def test_real_baseline_declares_embed_dim():
     """Regression guard tying the real repo file to the convention this
-    runner reads — if someone edits 0023's header and drops the
-    declaration, this test fails instead of the runner silently applying a
-    destructive migration with no guard."""
-    path = migrate.MIGRATIONS_DIR_DEFAULT / "0023_configurable_embed_dim.sql"
-    assert path.exists(), "expected apps/cloud/migrations/0023_configurable_embed_dim.sql to exist"
-    assert migrate.Migration(path).required_vars() == ["embed_dim"]
+    runner reads — if someone regenerates the baseline and drops the
+    declaration, this test fails instead of the runner silently applying
+    fixed-width vector DDL with no width."""
+    assert BASELINE.exists(), f"expected {BASELINE} to exist"
+    assert migrate.Migration(BASELINE).required_vars() == ["embed_dim"]
+
+
+def test_real_migrations_are_the_two_file_baseline():
+    names = [m.filename for m in migrate.discover_migrations(migrate.MIGRATIONS_DIR_DEFAULT)]
+    assert names == [LEDGER.name, BASELINE.name]
+
+
+def test_real_ledger_is_migration_1():
+    """The bootstrap applies LEDGER_MIGRATION_NUMBER first on a fresh
+    database; that file must be the one that creates LEDGER_TABLE."""
+    assert migrate.LEDGER_TABLE == "pw_schema_migrations"
+    assert migrate.LEDGER_MIGRATION_NUMBER == 1
+    ledger = migrate.Migration(LEDGER)
+    assert ledger.number == migrate.LEDGER_MIGRATION_NUMBER
+    assert "create table if not exists pw_schema_migrations" in ledger.text()
+    assert ledger.required_vars() == []
+
+
+def test_real_baseline_has_no_top_level_tx():
+    """The runner wraps the baseline in --single-transaction and appends its
+    ledger row inside that transaction. A top-level begin;/commit; left over
+    from the old 0023 would make the runner treat the file as
+    self-transactional instead (and nest or split the transaction)."""
+    text = BASELINE.read_text()
+    assert not migrate.SELF_TX_BEGIN_RE.search(text)
+    assert not migrate.TOP_LEVEL_COMMIT_RE.search(text)
+    assert migrate.Migration(BASELINE).is_self_transactional() is False
+    # 0023's own plain-psql guard survives the squash.
+    assert "\\if :{?embed_dim}" in text
 
 
 # --- self-transactional detection + splicing ----------------------------------
@@ -120,9 +151,9 @@ def test_build_execution_script_appends_for_plain_migration_and_wants_single_tx(
 
     assert single_tx is True
     assert script.startswith("create table t (id int);")
-    assert "insert into pz_schema_migrations" in script
+    assert "insert into pw_schema_migrations" in script
     # ledger write must come after the migration's own SQL
-    assert script.index("create table") < script.index("insert into pz_schema_migrations")
+    assert script.index("create table") < script.index("insert into pw_schema_migrations")
 
 
 def test_build_execution_script_splices_before_final_commit_for_self_tx_migration(tmp_path):
@@ -134,7 +165,7 @@ def test_build_execution_script_splices_before_final_commit_for_self_tx_migratio
     script, single_tx = migrate.build_execution_script(migrate.Migration(path))
 
     assert single_tx is False
-    insert_pos = script.index("insert into pz_schema_migrations")
+    insert_pos = script.index("insert into pw_schema_migrations")
     create_pos = script.index("create table")
     commit_pos = script.rindex("commit;")
     # ledger write lands between the migration's own DDL and its own commit
@@ -239,13 +270,89 @@ def test_resolve_db_url_raises_when_nothing_set(monkeypatch):
         migrate.resolve_db_url(args)
 
 
-def test_adopt_through_0024_or_later_is_rejected(monkeypatch, tmp_path):
+def test_adopt_subcommand_is_gone():
+    assert not hasattr(migrate, "cmd_adopt")
+    with pytest.raises(SystemExit):
+        migrate.build_parser().parse_args(["adopt", "--through", "0001"])
+
+
+# --- apply: ledger bootstrap ------------------------------------------------------
+
+
+def _stub_fresh_database(monkeypatch):
+    """table_exists -> False (no ledger yet); apply_one records its calls
+    and succeeds, so cmd_apply never reaches a real psql."""
+    applied: list[str] = []
+
+    def fake_apply_one(db_url, migration, extra_vars, **kwargs):
+        applied.append(migration.filename)
+        return migrate.subprocess.CompletedProcess([], 0, "", "")
+
     monkeypatch.setenv("DATABASE_URL", "postgres://unused/db")
-    write(tmp_path, "0024_schema_migrations_ledger.sql", "create table pz_schema_migrations ();\n")
-    args = migrate.build_parser().parse_args(
-        ["--migrations-dir", str(tmp_path), "adopt", "--through", "0024", "--yes"]
+    monkeypatch.setattr(migrate, "pre_baseline_ledger_exists", lambda db_url: False)
+    monkeypatch.setattr(migrate, "table_exists", lambda db_url: False)
+    monkeypatch.setattr(migrate, "apply_one", fake_apply_one)
+    return applied
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_apply_refuses_pre_baseline_database(monkeypatch, tmp_path, capsys, dry_run):
+    real_probe = migrate.pre_baseline_ledger_exists
+    applied = _stub_fresh_database(monkeypatch)
+    monkeypatch.setattr(migrate, "pre_baseline_ledger_exists", real_probe)
+    probed: list[str] = []
+
+    def fake_table_exists(db_url, table):
+        probed.append(table)
+        return table == migrate.PRE_BASELINE_LEDGER_TABLE
+
+    monkeypatch.setattr(migrate, "_public_table_exists", fake_table_exists)
+    write(tmp_path, "0001_ledger.sql", "create table pw_schema_migrations ();\n")
+    argv = ["--migrations-dir", str(tmp_path), "apply", "--var", "embed_dim=1536"]
+    if dry_run:
+        argv.append("--dry-run")
+
+    assert migrate.cmd_apply(migrate.build_parser().parse_args(argv)) == 2
+    assert applied == []
+    assert probed == [migrate.PRE_BASELINE_LEDGER_TABLE]
+    err = capsys.readouterr().err
+    assert "pre-baseline database (" in err
+    assert "reset it — fresh-start decision, see docs/DEPLOYMENT.md" in err
+
+
+def test_pre_baseline_ledger_name_is_the_old_ledger():
+    prefix = migrate.PRE_BASELINE_TABLE_PREFIX
+    assert migrate.PRE_BASELINE_LEDGER_TABLE == prefix + "schema_migrations"
+    assert migrate.PRE_BASELINE_LEDGER_TABLE != migrate.LEDGER_TABLE
+
+
+def test_bootstrap_refuses_missing_required_vars(monkeypatch, tmp_path, capsys):
+    applied = _stub_fresh_database(monkeypatch)
+    write(
+        tmp_path,
+        "0001_ledger.sql",
+        "-- migration-runner: requires-vars=embed_dim\ncreate table pw_schema_migrations ();\n",
     )
-    assert migrate.cmd_adopt(args) != 0
+    args = migrate.build_parser().parse_args(["--migrations-dir", str(tmp_path), "apply"])
+
+    assert migrate.cmd_apply(args) == 2
+    assert applied == []
+    assert "REFUSING TO APPLY 0001_ledger.sql" in capsys.readouterr().err
+
+
+def test_bootstrap_applies_migration_1_first(monkeypatch, tmp_path):
+    applied = _stub_fresh_database(monkeypatch)
+    ledger = write(tmp_path, "0001_ledger.sql", "create table pw_schema_migrations ();\n")
+    write(tmp_path, "0002_rest.sql", "select 1;\n")
+    # After the bootstrap, the ledger holds 0001's own row.
+    recorded = {ledger.name: migrate.Migration(ledger).checksum()}
+    monkeypatch.setattr(migrate, "load_ledger", lambda db_url: recorded)
+    args = migrate.build_parser().parse_args(
+        ["--migrations-dir", str(tmp_path), "apply", "--var", "embed_dim=1536"]
+    )
+
+    assert migrate.cmd_apply(args) == 0
+    assert applied == ["0001_ledger.sql", "0002_rest.sql"]
 
 
 # --- status: ledger row parsing -------------------------------------------------
@@ -338,14 +445,15 @@ def test_build_status_report_flags_orphaned_ledger_rows_with_no_file_on_disk(tmp
 # --- status: text formatting -------------------------------------------------
 
 
-def test_format_status_report_no_ledger_says_history_unknown_and_points_at_adopt(tmp_path):
+def test_format_status_report_no_ledger_says_history_unknown_and_points_at_apply(tmp_path):
     report = migrate.StatusReport(
         ledger_present=False, applied=[], pending=[], orphaned=[], mismatches=[]
     )
     text = migrate.format_status_report(tmp_path, "postgres://host/db", report)
 
     assert "history unknown" in text
-    assert "adopt" in text
+    assert "migrate.py apply" in text
+    assert "adopt" not in text
     # must not claim knowledge it doesn't have
     assert "0001" not in text
 

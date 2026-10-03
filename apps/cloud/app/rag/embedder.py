@@ -36,7 +36,7 @@ class HttpEmbeddingProvider:
         url = base_url.rstrip("/") + "/embeddings"
         payload: dict[str, object] = {"input": texts, "model": model}
         # `dimensions` is sent only when the connection configures one. Some
-        # models return a width that does not fit pz_rag_chunks.embedding
+        # models return a width that does not fit pw_rag_chunks.embedding
         # unless asked to truncate — Gemini's gemini-embedding-001 defaults to
         # 3072 and supports MRL truncation to 1536, and OpenAI's
         # text-embedding-3-* accept the same parameter. It is deliberately

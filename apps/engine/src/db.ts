@@ -133,14 +133,14 @@ CREATE TABLE IF NOT EXISTS discussions (
 
 export function dataDir(): string {
   const dir =
-    process.env.PROMPTCONNEXT_DATA_DIR ??
-    join(homedir(), "Library", "Application Support", "PromptConnext");
+    process.env.PROMPTWORKSPACE_DATA_DIR ??
+    join(homedir(), "Library", "Application Support", "PromptWorkspace");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 export function dbFilePath(): string {
-  return join(dataDir(), "promptconnext.db");
+  return join(dataDir(), "promptworkspace.db");
 }
 
 export const db = new DatabaseSync(dbFilePath());

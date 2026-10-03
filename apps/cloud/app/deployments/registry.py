@@ -33,7 +33,7 @@ convention rather than a per-template branch (ADR 0026):
 Future org-owned custom templates (deferred, designed-for) resolve through
 this same module, exactly as app/policies/registry.py describes for policy
 templates: built-in IDs are bare slugs that never contain ":", and namespaced
-`ws:<uuid>` IDs will resolve against a `pz_workspace_deployment_templates`
+`ws:<uuid>` IDs will resolve against a `pw_workspace_deployment_templates`
 table instead. Nothing here needs to change shape when that lands, and
 `GET /deployment-templates` already accepts the `workspace_id` it will need.
 
@@ -43,7 +43,7 @@ What a new template may be, and what it may not:
   (3) optionally one DeployProvider entry in app/integrations/
   deploy_providers.py. It must not change the SeedFile shape, the webhook
   contract (environment "preview", environment_url set, one GitHub Deployment
-  per run), the pz_deployments row shape, DeploymentConfig/DeploymentState, or
+  per run), the pw_deployments row shape, DeploymentConfig/DeploymentState, or
   the lifecycle state machine — and it cannot introduce a new inbound
   callback, a cloud-side build step, a per-template route or a per-template
   database column. A template that needs one of those is an ADR, not a
@@ -107,7 +107,7 @@ class SecretSpec:
 class VarSpec:
     """One GitHub Actions *variable* — plaintext, visible in repo settings.
 
-    Variables exist here for a specific reason: `PZ_WEB_ORIGIN` feeds the
+    Variables exist here for a specific reason: `PROMPTWORKSPACE_WEB_ORIGIN` feeds the
     seeded frame-ancestors config, and if the web app ever changes origin,
     every project's preview would break. As a variable it is repairable with
     one API call and no commit; as a baked-in file it would need a commit to
@@ -176,9 +176,9 @@ class DeploymentTemplate:
 BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
     DeploymentTemplate(
         id="static-r2",
-        name="Static site → PromptZone hosting",
+        name="Static site → PromptWorkspace hosting",
         description=(
-            "A plain HTML/CSS/JS site published to PromptZone-managed storage. "
+            "A plain HTML/CSS/JS site published to PromptWorkspace-managed storage. "
             "No third-party account to create — the fastest way to get a live "
             "preview a business user can open."
         ),
@@ -187,28 +187,28 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         provider_credential_kind=None,
         scaffold_dir="static-r2",
         required_secrets=(
-            SecretSpec("PZ_R2_ACCESS_KEY_ID", "Storage access key id"),
-            SecretSpec("PZ_R2_SECRET_ACCESS_KEY", "Storage secret access key"),
+            SecretSpec("PROMPTWORKSPACE_R2_ACCESS_KEY_ID", "Storage access key id"),
+            SecretSpec("PROMPTWORKSPACE_R2_SECRET_ACCESS_KEY", "Storage secret access key"),
         ),
         required_vars=(
-            VarSpec("PZ_R2_BUCKET", "Preview bucket", "provider:bucket"),
-            VarSpec("PZ_R2_ENDPOINT", "Storage S3 endpoint", "provider:endpoint"),
-            VarSpec("PZ_PREVIEW_URL", "Public preview URL", "preview_url"),
-            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
-            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+            VarSpec("PROMPTWORKSPACE_R2_BUCKET", "Preview bucket", "provider:bucket"),
+            VarSpec("PROMPTWORKSPACE_R2_ENDPOINT", "Storage S3 endpoint", "provider:endpoint"),
+            VarSpec("PROMPTWORKSPACE_PREVIEW_URL", "Public preview URL", "preview_url"),
+            VarSpec("PROMPTWORKSPACE_PROJECT_ID", "PromptWorkspace project id", "project_id"),
+            VarSpec("PROMPTWORKSPACE_ENVIRONMENT", "Deployment environment", "environment"),
         ),
         # Public bucket URLs send neither X-Frame-Options nor a CSP, so they
         # frame by default. Worth stating plainly rather than implying we set
         # a permissive header here: for this template we *cannot* set
         # frame-ancestors — the host serves no custom headers — and "no
         # restriction" is the reason embedding works. That is also why this
-        # template declares no PZ_WEB_ORIGIN: nothing here could read it.
+        # template declares no PROMPTWORKSPACE_WEB_ORIGIN: nothing here could read it.
         embeddable=True,
         health_path="/index.html",
         url_kind="platform",
         platform_url_source="platform_r2",
         notes=(
-            "Preview storage is managed by PromptZone; there is no account to "
+            "Preview storage is managed by PromptWorkspace; there is no account to "
             "create and no bill to pay for it.",
             "Public preview URLs are rate-limited and intended for review, not "
             "production traffic.",
@@ -219,7 +219,7 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         name="Static site → GitHub Pages",
         description=(
             "A plain HTML/CSS/JS site published to GitHub Pages, out of the "
-            "repository PromptZone already created for this project. Nothing "
+            "repository PromptWorkspace already created for this project. Nothing "
             "to connect and nothing to pay for — but the repository must be "
             "public unless your GitHub plan allows Pages on private ones."
         ),
@@ -235,8 +235,8 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         # already gives the run, which is the whole point of this template.
         required_secrets=(),
         required_vars=(
-            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
-            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+            VarSpec("PROMPTWORKSPACE_PROJECT_ID", "PromptWorkspace project id", "project_id"),
+            VarSpec("PROMPTWORKSPACE_ENVIRONMENT", "Deployment environment", "environment"),
         ),
         # Measured rather than assumed (ADR 0023's amendment): Pages-hosted
         # sites return neither X-Frame-Options nor a CSP, so the frame probe
@@ -258,7 +258,7 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             "The repository must be public for Pages to serve it, unless the "
             "organisation's GitHub plan includes Pages on private "
             "repositories. A public repository exposes the source, this "
-            "document, and every commit subject — choose the PromptZone "
+            "document, and every commit subject — choose the PromptWorkspace "
             "hosting template instead if that is not acceptable.",
             "The workflow enables Pages itself on its first run and sets the "
             "source to GitHub Actions; nobody has to switch it on in the "
@@ -291,9 +291,9 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
             # variable rather than a baked-in file for the same reason the
             # docker-compose template uses one: a web-app origin change is
             # then one API call, not a commit to every repository ever created.
-            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
-            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
-            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+            VarSpec("PROMPTWORKSPACE_WEB_ORIGIN", "PromptWorkspace web origin", "web_origin"),
+            VarSpec("PROMPTWORKSPACE_PROJECT_ID", "PromptWorkspace project id", "project_id"),
+            VarSpec("PROMPTWORKSPACE_ENVIRONMENT", "Deployment environment", "environment"),
         ),
         # Stronger than static-r2's claim: this template controls its own
         # response headers and names the web app as a frame ancestor, rather
@@ -335,29 +335,39 @@ BUILTIN_TEMPLATES: list[DeploymentTemplate] = [
         scaffold_dir="docker-compose",
         delivery_kind="embedded_url",
         required_secrets=(
-            SecretSpec("PZ_SSH_KEY", "SSH private key for the Docker host", from_provider="token"),
+            SecretSpec(
+                "PROMPTWORKSPACE_SSH_KEY",
+                "SSH private key for the Docker host",
+                from_provider="token",
+            ),
         ),
         required_vars=(
-            VarSpec("PZ_SSH_HOST", "Docker host address", "provider:host"),
-            VarSpec("PZ_SSH_USER", "SSH user", "provider:ssh_user"),
+            VarSpec("PROMPTWORKSPACE_SSH_HOST", "Docker host address", "provider:host"),
+            VarSpec("PROMPTWORKSPACE_SSH_USER", "SSH user", "provider:ssh_user"),
             # Host key checking stays on in the seeded workflow, so the run
             # talks to the machine the admin named rather than to whatever
             # answers on that address at deploy time.
-            VarSpec("PZ_SSH_KNOWN_HOSTS", "Docker host SSH host key", "provider:known_hosts"),
-            VarSpec("PZ_APP_SLUG", "Compose project name", "provider:app_slug"),
-            VarSpec("PZ_HOST_PORT", "Published port on the host", "provider:host_port"),
+            VarSpec(
+                "PROMPTWORKSPACE_SSH_KNOWN_HOSTS",
+                "Docker host SSH host key",
+                "provider:known_hosts",
+            ),
+            VarSpec("PROMPTWORKSPACE_APP_SLUG", "Compose project name", "provider:app_slug"),
+            VarSpec(
+                "PROMPTWORKSPACE_HOST_PORT", "Published port on the host", "provider:host_port"
+            ),
             # This template's workflow needs the URL it is deploying to — it
             # health-checks it before reporting success, and nothing on the
             # runner could otherwise derive the address of a customer's box.
-            VarSpec("PZ_PREVIEW_URL", "Public preview URL", "preview_url"),
+            VarSpec("PROMPTWORKSPACE_PREVIEW_URL", "Public preview URL", "preview_url"),
             # The seeded server sends `frame-ancestors <origin>`; a variable
             # rather than a baked-in file so a web-app origin change is one API
             # call, not a commit to every repository ever created.
-            VarSpec("PZ_WEB_ORIGIN", "PromptZone web origin", "web_origin"),
-            VarSpec("PZ_PROJECT_ID", "PromptZone project id", "project_id"),
-            VarSpec("PZ_ENVIRONMENT", "Deployment environment", "environment"),
+            VarSpec("PROMPTWORKSPACE_WEB_ORIGIN", "PromptWorkspace web origin", "web_origin"),
+            VarSpec("PROMPTWORKSPACE_PROJECT_ID", "PromptWorkspace project id", "project_id"),
+            VarSpec("PROMPTWORKSPACE_ENVIRONMENT", "Deployment environment", "environment"),
         ),
-        # Every runtime scaffold here sets frame-ancestors from PZ_WEB_ORIGIN,
+        # Every runtime scaffold here sets frame-ancestors from PROMPTWORKSPACE_WEB_ORIGIN,
         # so this is the same strong claim next-vercel makes. Whether it holds
         # is still narrowed by the server-side header probe: a reverse proxy
         # in front of the host can add a framing header we never see here.
@@ -530,12 +540,12 @@ def render_deployment_doc(
         "",
         "Every push to the default branch runs "
         f"`{template.workflow_path}`, which builds this project and publishes "
-        "it, then records the result as a GitHub Deployment. PromptZone reads "
+        "it, then records the result as a GitHub Deployment. PromptWorkspace reads "
         "that deployment over the repository's webhook and shows the live "
         "application in the project's Preview tab, so business stakeholders "
         "can review real progress without a development environment.",
         "",
-        "PromptZone does not build or host anything itself — this repository's "
+        "PromptWorkspace does not build or host anything itself — this repository's "
         "own CI does the work, using credentials stored as repository secrets. "
         "The workflow is an ordinary file: edit it freely.",
         "",
@@ -565,7 +575,7 @@ def render_deployment_doc(
         lines += [
             "## Repository secrets",
             "",
-            "Written by PromptZone at repository creation. Rotate them by "
+            "Written by PromptWorkspace at repository creation. Rotate them by "
             "reconnecting the provider in workspace settings and re-provisioning "
             "— editing them here will be overwritten.",
             "",

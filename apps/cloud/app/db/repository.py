@@ -63,7 +63,7 @@ from app.models.schemas import (
 class TrackerAccountConflict(ValueError):
     """Another workspace is already bound to this tracker account.
 
-    `pz_workspace_integrations` is unique on `(provider, account_key)` since
+    `pw_workspace_integrations` is unique on `(provider, account_key)` since
     migration 0032, and that uniqueness is the whole mechanism of plan 0019: if
     two workspaces could both claim `https://acme.atlassian.net`, an inbound
     delivery from that site would again have two possible owners and the
@@ -464,7 +464,7 @@ class Repository(abc.ABC):
         """Single-field pz write of `status`, stamping its field version. The
         twin of `assign_task`, and for the same reason (ADR 0020): a full-graph
         push cannot express "only the status changed" — `title` is shared
-        authority and `acceptance_criteria` is a pz-owned list that a
+        authority and `acceptance_criteria` is a pw-owned list that a
         `model_dump` cannot distinguish from "cleared".
 
         Raises KeyError if the task doesn't exist."""
@@ -508,7 +508,7 @@ class Repository(abc.ABC):
     def find_task_link_by_key(
         self, provider: str, account_key: str, external_key: str
     ) -> TaskLink | None:
-        """Resolve an inbound webhook's external key to a PromptConnext task.
+        """Resolve an inbound webhook's external key to a PromptWorkspace task.
 
         `account_key` is not optional and not a convenience filter: an external
         key identifies an issue only within one provider account (plan 0019), so
@@ -600,7 +600,7 @@ class Repository(abc.ABC):
     def get_project_embed_dim(self, workspace_id: str, project_id: str) -> int | None:
         """The embed dimension recorded on this project's existing chunks,
         or `None` if it has none yet (migration 0023) — the width sibling of
-        `get_project_embed_model`. Needed once `pz_rag_chunks.embedding`'s
+        `get_project_embed_model`. Needed once `pw_rag_chunks.embedding`'s
         width stopped being a fixed `vector(1536)` constant: two connections
         can share an `embed_model` name and still disagree on width (e.g. an
         MRL-truncated dimension), and a width mismatch is worse than a name
@@ -1439,7 +1439,7 @@ class InMemoryRepository(Repository):
         self, provider: str, account_key: str
     ) -> WorkspaceIntegration | None:
         if not account_key:
-            # `''` is the pre-0032 backfill value on pz_task_links.account_key
+            # `''` is the pre-0032 backfill value on pw_task_links.account_key
             # and is forbidden on the integration row by a check constraint. Bail
             # here too rather than relying on no row happening to match.
             return None

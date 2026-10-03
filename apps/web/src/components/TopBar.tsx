@@ -15,7 +15,7 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
     <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
       <nav className="flex items-center gap-2 text-sm">
         <Link href="/" className="font-semibold text-slate-900">
-          PromptConnext
+          PromptWorkspace
         </Link>
         {/* Rendered from one membership up, not two: a user with a single
             workspace still needs to see which one they are in, and the

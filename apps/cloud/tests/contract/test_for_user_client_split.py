@@ -25,7 +25,7 @@ wrong in the opposite direction.
 
 Needs the same three variables as `tests/rls/` (a real end-user JWT means a
 real GoTrue signup, which needs the anon key), not just
-`PZ_CONTRACT_SUPABASE_*`; it skips naming whichever is missing.
+`PROMPTWORKSPACE_CONTRACT_SUPABASE_*`; it skips naming whichever is missing.
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ def test_scoped_repository_still_writes_graph_tables(
 def test_scoping_is_still_real_outside_the_graph_tables(
     scoped_and_base: tuple[SupabaseRepository, SupabaseRepository, str, str],
 ) -> None:
-    """`for_user` must not have quietly become a no-op: pz_workspaces keeps its
-    grant and its `pz_is_member` policy, so a workspace this user does not
+    """`for_user` must not have quietly become a no-op: pw_workspaces keeps its
+    grant and its `pw_is_member` policy, so a workspace this user does not
     belong to is invisible to the scoped client and visible to the base one."""
     base, scoped, own_workspace_id, _ = scoped_and_base
     stranger = new_id()

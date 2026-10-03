@@ -4,14 +4,14 @@
 
 export class CloudNotConfiguredError extends Error {
   constructor() {
-    super("PromptConnext cloud is not configured.");
+    super("PromptWorkspace cloud is not configured.");
     this.name = "CloudNotConfiguredError";
   }
 }
 
 export class CloudNotLoggedInError extends Error {
   constructor() {
-    super("Not signed in to PromptConnext.");
+    super("Not signed in to PromptWorkspace.");
     this.name = "CloudNotLoggedInError";
   }
 }

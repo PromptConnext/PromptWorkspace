@@ -1,13 +1,13 @@
 {
-  "name": "@promptconnext/pz-cloud",
+  "name": "@promptworkspace/cloud-client",
   "version": "0.1.0",
   "private": true,
-  "description": "The portable half of a PromptConnext task client — cloud transport, wire types, session store, retry queue, task-ref grammar and the JSON cache. No editor, no filesystem, no vscode import.",
+  "description": "The portable half of a PromptWorkspace task client — cloud transport, wire types, session store, retry queue, task-ref grammar and the JSON cache. No editor, no filesystem, no vscode import.",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/9haroon/prompt-zone.git",
-    "directory": "packages/pz-cloud"
+    "url": "https://github.com/PromptConnext/PromptWorkspace.git",
+    "directory": "packages/cloud-client"
   },
   "exports": {
     ".": {
@@ -24,7 +24,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "assert-defaults-filled": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/assert-defaults-filled.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

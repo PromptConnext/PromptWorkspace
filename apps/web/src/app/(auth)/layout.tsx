@@ -4,7 +4,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
           <span className="text-sm font-semibold uppercase tracking-widest text-indigo-600">
-            PromptConnext
+            PromptWorkspace
           </span>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">

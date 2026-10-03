@@ -1,8 +1,8 @@
-# Publishes site/ to PromptZone-managed preview storage and reports the result
-# back as a GitHub Deployment. PromptZone reads that deployment over this
+# Publishes site/ to PromptWorkspace-managed preview storage and reports the result
+# back as a GitHub Deployment. PromptWorkspace reads that deployment over this
 # repository's webhook and shows the live site in the project's Preview tab.
 #
-# This file belongs to you. Edit it freely — PromptZone seeded it once at
+# This file belongs to you. Edit it freely — PromptWorkspace seeded it once at
 # repository creation and does not overwrite it.
 
 name: Deploy preview
@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Open the deployment first so PromptZone can show "building" while the
+      # Open the deployment first so PromptWorkspace can show "building" while the
       # upload runs, instead of showing nothing until it finishes.
       - name: Open deployment
         id: open
@@ -58,13 +58,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
         run: |
           set -euo pipefail
           deployment_id=$(gh api "repos/$REPO/deployments" \
             -f ref="$SHA" \
             -f environment="$ENVIRONMENT" \
-            -f description="PromptZone preview" \
+            -f description="PromptWorkspace preview" \
             -F auto_merge=false \
             -F transient_environment=false \
             -f 'required_contexts[]' \
@@ -79,12 +79,12 @@ jobs:
         # Values reach the shell through env, never inline in the script — an
         # inline ${{ }} would be substituted into the command text itself.
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.PZ_R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.PZ_R2_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.PROMPTWORKSPACE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PROMPTWORKSPACE_R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          BUCKET: ${{ vars.PZ_R2_BUCKET }}
-          ENDPOINT: ${{ vars.PZ_R2_ENDPOINT }}
-          PROJECT_ID: ${{ vars.PZ_PROJECT_ID }}
+          BUCKET: ${{ vars.PROMPTWORKSPACE_R2_BUCKET }}
+          ENDPOINT: ${{ vars.PROMPTWORKSPACE_R2_ENDPOINT }}
+          PROJECT_ID: ${{ vars.PROMPTWORKSPACE_PROJECT_ID }}
         run: |
           set -euo pipefail
           aws s3 sync site "s3://$BUCKET/previews/$PROJECT_ID/" \
@@ -101,8 +101,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           DEPLOYMENT_ID: ${{ steps.open.outputs.id }}
-          PREVIEW_URL: ${{ vars.PZ_PREVIEW_URL }}
-          ENVIRONMENT: ${{ vars.PZ_ENVIRONMENT }}
+          PREVIEW_URL: ${{ vars.PROMPTWORKSPACE_PREVIEW_URL }}
+          ENVIRONMENT: ${{ vars.PROMPTWORKSPACE_ENVIRONMENT }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

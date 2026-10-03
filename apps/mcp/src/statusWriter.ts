@@ -22,7 +22,7 @@
 // `CloudNotConfiguredError` are rethrown rather than queued. They are not
 // "offline" — no amount of retrying fixes an absent session — and server.ts's
 // catch block already turns them into the one message that does help ("run
-// promptconnext-mcp login"). apps/vscode reaches the same conclusion by showing
+// promptworkspace-mcp login"). apps/vscode reaches the same conclusion by showing
 // a toast and dropping the write.
 
 import {
@@ -34,7 +34,7 @@ import {
   type StatusArtifact,
   type StatusQueue,
   type TaskStatus,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 
 export interface StatusWriteRequest {
   projectId: string;
@@ -54,7 +54,7 @@ export type StatusWriteOutcome =
 export interface QueueState {
   size: number;
   /** Entries that have exhausted their attempts. Backoff-then-park is
-   *  deliberate (see packages/pz-cloud/src/queue.ts): an entry that has failed
+   *  deliberate (see packages/cloud-client/src/queue.ts): an entry that has failed
    *  four times needs a human to look, not a tighter loop. */
   parked: number;
 }
@@ -127,7 +127,7 @@ function explain(err: CloudHttpError): string {
   switch (err.message) {
     case "status_forbidden":
       return (
-        "That task is assigned to someone else, or to nobody. PromptConnext only " +
+        "That task is assigned to someone else, or to nobody. PromptWorkspace only " +
         "lets you close your own work — ask an admin to assign it to you."
       );
     case "verified_requires_admin":
@@ -138,6 +138,6 @@ function explain(err: CloudHttpError): string {
     case "task_not_found":
       return "That task no longer exists in the cloud.";
     default:
-      return `PromptConnext refused the update: ${err.message}`;
+      return `PromptWorkspace refused the update: ${err.message}`;
   }
 }

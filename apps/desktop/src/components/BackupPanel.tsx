@@ -65,7 +65,7 @@ export default function BackupPanel() {
       </div>
       <p className="hint">
         Your projects, specs and tasks live in a single database file on this machine. A backup
-        copies it somewhere safe; to restore one, quit PromptConnext and put the file back at{" "}
+        copies it somewhere safe; to restore one, quit PromptWorkspace and put the file back at{" "}
         <code>{dbPath || "the database path"}</code>.
       </p>
 

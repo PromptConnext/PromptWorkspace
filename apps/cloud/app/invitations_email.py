@@ -14,7 +14,7 @@ from typing import Protocol
 
 from app.config import Settings
 
-logger = logging.getLogger("promptconnext")
+logger = logging.getLogger("promptworkspace")
 
 
 class InvitationMailer(Protocol):

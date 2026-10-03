@@ -1,4 +1,4 @@
-// The portable half of a PromptConnext task client.
+// The portable half of a PromptWorkspace task client.
 //
 // Everything here was `apps/vscode/src` until plan 0025 M1 needed a second
 // consumer (`apps/mcp`). The selection rule is not "code that happened to be
@@ -20,6 +20,7 @@
 
 export * from "./cache.ts";
 export * from "./client.ts";
+export * from "./defaults.ts";
 export * from "./errors.ts";
 export * from "./queue.ts";
 export * from "./repoUrl.ts";

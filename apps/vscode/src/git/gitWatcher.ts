@@ -24,11 +24,11 @@
 // watch both or a push would look like nothing happened.
 
 import * as vscode from "vscode";
-import type { AssignedTask } from "@promptconnext/pz-cloud";
-import { isClosed } from "@promptconnext/pz-cloud";
+import type { AssignedTask } from "@promptworkspace/cloud-client";
+import { isClosed } from "@promptworkspace/cloud-client";
 import type { CloseTasksOn } from "../config.ts";
 import type { ProjectLink } from "../link/projectLink.ts";
-import { CACHE_FILES, type JsonCache } from "@promptconnext/pz-cloud";
+import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { StatusWriter } from "../tasks/statusWriter.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import type { OutputLogger } from "../util/log.ts";
@@ -39,7 +39,7 @@ import {
   refsForCommit,
   taskRefFromBranch,
   taskRefFromFeatureTag,
-} from "@promptconnext/pz-cloud";
+} from "@promptworkspace/cloud-client";
 
 const DEBOUNCE_MS = 1_500;
 const PAGE_SIZE = 100;

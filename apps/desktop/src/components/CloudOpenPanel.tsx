@@ -50,7 +50,7 @@ export default function CloudOpenPanel({
       </div>
       {mode === "clone" ? (
         <p className="muted">
-          This project&apos;s repository was created and seeded by PromptConnext Cloud. Choose a
+          This project&apos;s repository was created and seeded by PromptWorkspace Cloud. Choose a
           folder to clone <code>{repoUrl}</code> into, or use the default location.
         </p>
       ) : (
@@ -92,7 +92,7 @@ export function ProjectNotReadyPanel({
       ? "The Tech Lead is reviewing this project's plan. Once the repository is created, you'll be able to open it here."
       : lifecycleStatus === "pending_tech_review"
         ? "This project is waiting for tech review before its repository is created."
-        : "This project is still being planned in PromptConnext Cloud.";
+        : "This project is still being planned in PromptWorkspace Cloud.";
 
   return (
     <section className="cloud-open-panel">

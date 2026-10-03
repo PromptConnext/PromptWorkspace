@@ -68,7 +68,7 @@ export default function NoWorkspace({ onChanged }: { onChanged: () => void }) {
         </button>
       </div>
       <p className="hint">
-        Invited to a workspace? Accept the invitation in the PromptConnext web
+        Invited to a workspace? Accept the invitation in the PromptWorkspace web
         app, then return here — it appears on the next roster refresh.
       </p>
       <button type="button" className="link" disabled={busy} onClick={signOut}>

@@ -23,7 +23,7 @@ from app.deployments.state import DEPLOY_STATE_BY_GITHUB, refresh_deployment_sta
 from app.integrations.github_auth import resolve_token
 from app.models.schemas import Deployment, utcnow
 
-logger = logging.getLogger("promptconnext.deploy")
+logger = logging.getLogger("promptworkspace.deploy")
 
 
 def _repo_full_name(repo_url: str | None) -> str | None:

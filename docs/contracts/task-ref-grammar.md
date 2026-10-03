@@ -8,7 +8,7 @@ This file states the rule in prose. [`task-ref-cases.json`](task-ref-cases.json)
 
 ## Where the rule lives in code
 
-`packages/pz-cloud/src/taskRefs.ts` is the reference implementation. `apps/vscode` and `apps/mcp` both consume it directly through the `@promptconnext/pz-cloud` workspace dependency, so neither can drift from it at all.
+`packages/cloud-client/src/taskRefs.ts` is the reference implementation. `apps/vscode` and `apps/mcp` both consume it directly through the `@promptworkspace/cloud-client` workspace dependency, so neither can drift from it at all.
 
 The other two are derived copies, and each carries its own tripwire:
 
@@ -48,6 +48,6 @@ The consequence is worth stating plainly, because it is a rule a team can trip o
 
 ## Changing this
 
-The grammar is load-bearing for the delivery evidence chain, so widening it is a decision, not a refactor. Change `packages/pz-cloud/src/taskRefs.ts`, re-vendor the engine's copy verbatim, port the change to `apps/cloud/app/integrations/task_refs.py`, and add the new cases to `task-ref-cases.json`. The engine's byte-identity assertion and the three suites reading the case table will tell you if you missed one.
+The grammar is load-bearing for the delivery evidence chain, so widening it is a decision, not a refactor. Change `packages/cloud-client/src/taskRefs.ts`, re-vendor the engine's copy verbatim, port the change to `apps/cloud/app/integrations/task_refs.py`, and add the new cases to `task-ref-cases.json`. The engine's byte-identity assertion and the three suites reading the case table will tell you if you missed one.
 
 What must **not** change without a new ADR is the direction of the rule. It only ever decides *attribution* — which task a commit belongs to. It never decides *status*. ADR 0022 put status with the client that observed the publication, because a server cannot tell "implemented" from "pushed" and must not guess.

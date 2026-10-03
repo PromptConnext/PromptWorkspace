@@ -79,7 +79,7 @@ injectWebSocket(server);
 // When launched as the desktop app's sidecar, die with the parent even if it
 // was SIGKILLed and never ran its exit handler: once the shell is gone this
 // process is reparented and ppid changes.
-const parentPid = Number(process.env.PROMPTCONNEXT_PARENT_PID ?? 0);
+const parentPid = Number(process.env.PROMPTWORKSPACE_PARENT_PID ?? 0);
 if (parentPid > 0) {
   setInterval(() => {
     if (process.ppid !== parentPid) {

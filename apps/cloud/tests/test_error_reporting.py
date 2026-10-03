@@ -505,7 +505,7 @@ def test_log_record_arguments_never_reach_an_event(events: list[dict]):
     (the rendered string). Dropping only `params` — the obvious fix — still
     leaks via `formatted`, which is how this was caught. No call site
     interpolates a secret today; nothing prevents one."""
-    logging.getLogger("promptconnext.test").error("credential was %s", BEARER_TOKEN)
+    logging.getLogger("promptworkspace.test").error("credential was %s", BEARER_TOKEN)
 
     assert events, "an ERROR log record should have produced an event"
     event = events[-1]

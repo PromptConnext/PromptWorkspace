@@ -199,7 +199,7 @@ export class CloudNotConfiguredError extends Error {
 
 export class CloudNotLoggedInError extends Error {
   constructor() {
-    super("not logged in to PromptConnext Cloud");
+    super("not logged in to PromptWorkspace Cloud");
   }
 }
 
@@ -345,7 +345,7 @@ export async function supabaseRefresh(
   return { token: ok.access_token, refreshToken: ok.refresh_token };
 }
 
-// Exchange a one-time handoff code (from the promptconnext:// callback) for the
+// Exchange a one-time handoff code (from the promptworkspace:// callback) for the
 // Supabase session, via apps/cloud's unauthenticated redeem endpoint (ADR 0014).
 export async function redeemDesktopCode(
   code: string,

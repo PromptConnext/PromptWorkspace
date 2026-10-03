@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
-import type { LoggerLike } from "@promptconnext/pz-cloud";
+import type { LoggerLike } from "@promptworkspace/cloud-client";
 
 export class OutputLogger implements LoggerLike {
   private readonly channel: vscode.OutputChannel;
 
   constructor() {
-    this.channel = vscode.window.createOutputChannel("PromptConnext");
+    this.channel = vscode.window.createOutputChannel("PromptWorkspace");
   }
 
   info(message: string): void {

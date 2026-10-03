@@ -169,7 +169,7 @@ def test_graph_pull_keyset_pagination(client):
 # --------------------------------------------------------------------------- #
 # Milestone 3 — per-field conflict ownership (end-to-end through the API)
 # --------------------------------------------------------------------------- #
-def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
+def test_pmo_source_cannot_change_pw_fields_but_owns_pmo_fields(client):
     """The pmo writer is the tracker mirror, and it writes in-process.
 
     It used to be reachable by putting `"source": "pmo"` in a push body, which is
@@ -182,7 +182,7 @@ def test_pmo_source_cannot_change_pz_fields_but_owns_pmo_fields(client):
     pid = project["id"]
     headers = {"X-User-Id": "alice"}
 
-    # PromptConnext (the HTTP push, always "pz") sets an agent-driven status.
+    # PromptWorkspace (the HTTP push, always "pz") sets an agent-driven status.
     client.put(
         f"/sync/projects/{pid}/graph",
         json={"tasks": [{"id": "t1", "project_id": pid, "title": "X", "status": "in_progress"}]},

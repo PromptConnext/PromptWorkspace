@@ -1,7 +1,7 @@
 [project]
-name = "promptconnext-cloud"
+name = "promptworkspace-cloud"
 version = "0.1.0"
-description = "Thin sync + collaboration backend for the PromptConnext task graph."
+description = "Thin sync + collaboration backend for the PromptWorkspace task graph."
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
@@ -9,10 +9,10 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "eval: golden-question RAG eval harness (M10) — subset via `pytest -m eval`",
-    "rls: direct-PostgREST grant probes (plan 0014 M4) — need a real Supabase stack and two real Auth users; subset via `pytest -m rls`, configured through PZ_RLS_SUPABASE_* (see tests/rls/conftest.py)",
+    "rls: direct-PostgREST grant probes (plan 0014 M4) — need a real Supabase stack and two real Auth users; subset via `pytest -m rls`, configured through PROMPTWORKSPACE_RLS_SUPABASE_* (see tests/rls/conftest.py)",
     # Plan 0020. Both backends are collected by an ordinary `pytest`; the
     # supabase parameter skips itself, naming the missing variable, unless
-    # PZ_CONTRACT_SUPABASE_URL/_KEY point at a disposable instance. The marker
+    # PROMPTWORKSPACE_CONTRACT_SUPABASE_URL/_KEY point at a disposable instance. The marker
     # exists so the pair is selectable and reportable on its own:
     # `pytest -q -m contract`.
     "contract: repository contract cases, parametrised over both adapters",

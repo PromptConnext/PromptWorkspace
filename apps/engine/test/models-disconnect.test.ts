@@ -9,13 +9,13 @@
 // real in-process Hono app pattern — no mocking. Env must be set before
 // importing the SUT (db.ts + config.ts read it at import time).
 //
-// The keychain-secret assertion is opt-in behind PROMPTCONNEXT_TEST_KEYCHAIN=1,
+// The keychain-secret assertion is opt-in behind PROMPTWORKSPACE_TEST_KEYCHAIN=1,
 // same as keychain.test.ts: a sandboxed/headless session has no unlocked login
 // keychain, so `security add-generic-password` falls back to a blocking
 // "Keychain Not Found"/authorization GUI dialog that never resolves headlessly
 // instead of failing cleanly.
 //
-// Run:  PROMPTCONNEXT_TEST_KEYCHAIN=1 node --test apps/engine/test/models-disconnect.test.ts
+// Run:  PROMPTWORKSPACE_TEST_KEYCHAIN=1 node --test apps/engine/test/models-disconnect.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -25,10 +25,10 @@ import { join } from "node:path";
 
 const dataDir = mkdtempSync(join(tmpdir(), "pz-models-disconnect-"));
 process.env.HOME = dataDir;
-process.env.PROMPTCONNEXT_DATA_DIR = dataDir;
+process.env.PROMPTWORKSPACE_DATA_DIR = dataDir;
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_ANON_KEY;
-delete process.env.PROMPTCONNEXT_AUTH_TOKEN;
+delete process.env.PROMPTWORKSPACE_AUTH_TOKEN;
 
 const { Hono } = await import("hono");
 const { models: modelRoutes } = await import("../src/routes/models.ts");
@@ -58,8 +58,8 @@ test("DELETE /engine/models/:id clears verified_at/credential_ref and drops the 
     t.skip("keychain.ts has no libsecret implementation on Linux (see its module header)");
     return;
   }
-  if (process.env.PROMPTCONNEXT_TEST_KEYCHAIN !== "1") {
-    t.skip("set PROMPTCONNEXT_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
+  if (process.env.PROMPTWORKSPACE_TEST_KEYCHAIN !== "1") {
+    t.skip("set PROMPTWORKSPACE_TEST_KEYCHAIN=1 to run against a real OS keychain (avoids the blocking 'Keychain Not Found' dialog in sandboxed/headless runs)");
     return;
   }
 

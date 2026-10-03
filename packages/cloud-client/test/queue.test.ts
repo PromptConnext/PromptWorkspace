@@ -1,4 +1,4 @@
-// Run:  node --test packages/pz-cloud/test/queue.test.ts
+// Run:  node --test packages/cloud-client/test/queue.test.ts
 //
 // Clock and id generator are injected, so no timers and no randomness here.
 

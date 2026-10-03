@@ -72,7 +72,7 @@ from urllib.parse import urlsplit, urlunsplit
 import sentry_sdk
 from sentry_sdk.integrations.argv import ArgvIntegration
 
-logger = logging.getLogger("promptconnext")
+logger = logging.getLogger("promptworkspace")
 
 _REDACTED = "[redacted]"
 

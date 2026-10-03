@@ -3,7 +3,7 @@
 // This is apps/vscode/src/context/repoDocs.ts's reader, reimplemented rather
 // than reused, and plan 0025 §2 says why: its logic is portable but it reads
 // through `vscode.workspace.fs`, which does not exist outside the editor. What
-// IS shared, from @promptconnext/pz-cloud, is the part the two surfaces must
+// IS shared, from @promptworkspace/cloud-client, is the part the two surfaces must
 // never disagree about — the three paths, and what counts as drift.
 //
 // Same contract as the original, and the reason is the same: a missing file is
@@ -12,7 +12,7 @@
 
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { SEEDED_DOCS, type SeededDocKey } from "@promptconnext/pz-cloud";
+import { SEEDED_DOCS, type SeededDocKey } from "@promptworkspace/cloud-client";
 
 export interface RepoDocContents {
   key: SeededDocKey;

@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-process.env.PROMPTCONNEXT_AUTH_TOKEN = "secret-123";
+process.env.PROMPTWORKSPACE_AUTH_TOKEN = "secret-123";
 
 const { isAuthorized, AUTH_TOKEN } = await import("../src/security.ts");
 

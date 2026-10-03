@@ -23,7 +23,7 @@ Three kinds of provider, and the differences matter:
   The git host hands each workflow run an ephemeral token scoped to the
   repository it runs in, and the deploy uses that. It is the cheapest posture
   we can offer — no account, no secret to seal, nothing to rotate — and the
-  reason it is not simply "platform-owned with no minting" is that PromptZone
+  reason it is not simply "platform-owned with no minting" is that PromptWorkspace
   is not the one hosting the result.
 
 `actions_secrets`/`actions_vars` are the seam that keeps templates and
@@ -43,7 +43,7 @@ from typing import Any
 
 from app.models.schemas import Workspace
 
-logger = logging.getLogger("promptconnext.deploy")
+logger = logging.getLogger("promptworkspace.deploy")
 
 PLATFORM_R2 = "platform-r2"
 GITHUB_PAGES = "github-pages"
@@ -68,7 +68,7 @@ class CredentialField:
     secret: bool = False
     # "workspace" — belongs to the account the token belongs to, typed once in
     # workspace settings (a Fly organisation, a Vercel team).
-    # "project" — names the provider-side resource ONE PromptConnext project
+    # "project" — names the provider-side resource ONE PromptWorkspace project
     # deploys to (a Fly app, a Vercel project), so it is chosen per project in
     # the Planner and frozen into DeploymentConfig at repo creation.
     #
@@ -90,12 +90,12 @@ class DeployProvider:
     #
     #   "customer" a workspace admin connects a token they got from a vendor.
     #   "platform" the cloud is the provider and mints a scoped credential per
-    #              workspace; nothing to connect, and PromptZone is hosting.
+    #              workspace; nothing to connect, and PromptWorkspace is hosting.
     #   "host"     the git host hands the workflow an ephemeral token of its
-    #              own; nothing to connect, and PromptZone is NOT hosting.
+    #              own; nothing to connect, and PromptWorkspace is NOT hosting.
     #
     # Calling the last one "platform" would tell the picker to say "managed by
-    # PromptZone", which is not who is serving the site; calling it "customer"
+    # PromptWorkspace", which is not who is serving the site; calling it "customer"
     # would send an admin to a connect form with no fields.
     credential_owner: str = "customer"
     # What the provider's primary secret is called, and whether it spans more
@@ -147,7 +147,7 @@ async def verify_vercel_token(app, config: dict) -> dict:
     """Confirm the token can reach the team, before we store it.
 
     Deliberately does NOT check a project: which Vercel project a build goes
-    to is chosen per PromptConnext project, not per workspace (ADR 0025), so
+    to is chosen per PromptWorkspace project, not per workspace (ADR 0025), so
     at connect time there is no project to check yet. Listing under the team
     is the most this half can honestly assert.
     """
@@ -252,10 +252,10 @@ async def verify_ssh_docker_project(app, config: dict) -> dict:
 PROVIDERS: dict[str, DeployProvider] = {
     PLATFORM_R2: DeployProvider(
         id=PLATFORM_R2,
-        label="PromptZone hosting",
+        label="PromptWorkspace hosting",
         credential_owner="platform",
         notes=(
-            "Managed by PromptZone — nothing to connect, and no third-party "
+            "Managed by PromptWorkspace — nothing to connect, and no third-party "
             "account required.",
         ),
     ),
@@ -265,7 +265,7 @@ PROVIDERS: dict[str, DeployProvider] = {
         credential_owner="host",
         notes=(
             "Nothing to connect: the deploy runs on the token GitHub gives "
-            "each workflow run, in the repository PromptZone already created "
+            "each workflow run, in the repository PromptWorkspace already created "
             "for the project.",
             "The workspace's GitHub connection is what creates that "
             "repository, and it is configured under the GitHub integration "
@@ -277,7 +277,7 @@ PROVIDERS: dict[str, DeployProvider] = {
         label="Vercel",
         fields=(
             # One Vercel project holds one production deployment, so each
-            # PromptConnext project names its own.
+            # PromptWorkspace project names its own.
             CredentialField("project_id", "Vercel project ID", scope="project"),
             CredentialField("org_id", "Vercel team or personal account ID"),
         ),
@@ -392,7 +392,7 @@ def platform_r2_bucket_name(workspace_id: str) -> str:
     smallest thing a Cloudflare token can be scoped to — a shared bucket
     would mean every repo's credential could read and overwrite every other
     workspace's previews."""
-    return f"pz-preview-{workspace_id}"
+    return f"pw-preview-{workspace_id}"
 
 
 def platform_r2_preview_url(settings, project_id: str, health_path: str) -> str | None:
@@ -457,7 +457,7 @@ async def ensure_platform_r2_credential(app, workspace: Workspace) -> dict:
         account_id=settings.deploy_r2_account_id,
         api_token=settings.deploy_r2_api_token,
         bucket=platform_r2_bucket_name(workspace.id),
-        label=f"promptzone-preview-{workspace.id}",
+        label=f"promptworkspace-preview-{workspace.id}",
     )
 
     # Persist the minted credential the same way a customer-supplied one is

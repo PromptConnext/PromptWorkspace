@@ -48,7 +48,7 @@ models.get("/engine/local-llm-env", (c) => {
     model: `${conn.provider}/${conn.model}`,
     env: {
       ANTHROPIC_BASE_URL: `${base.protocol}//${base.host}/anthropic`,
-      ANTHROPIC_AUTH_TOKEN: "promptconnext-local",
+      ANTHROPIC_AUTH_TOKEN: "promptworkspace-local",
       CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
     },
   });

@@ -191,10 +191,10 @@ def _adf_to_text(node) -> str:
 
 def _reverse_status(jira_status_name: str, config: dict) -> TaskStatus | None:
     status_map = config.get("status_map") or _DEFAULT_STATUS_MAP
-    for pz_value, jira_name in status_map.items():
+    for pw_value, jira_name in status_map.items():
         if jira_name.lower() == jira_status_name.lower():
             try:
-                return TaskStatus(pz_value)
+                return TaskStatus(pw_value)
             except ValueError:
                 return None
     return None

@@ -1,4 +1,4 @@
-// Run:  node --test packages/pz-cloud/test/taskRefs.test.ts
+// Run:  node --test packages/cloud-client/test/taskRefs.test.ts
 //
 // Pins the two edges ADR 0019 names in the engine's syncTasksFromGit — the
 // three-digit-only regex, and the fact that widening it is not enough because

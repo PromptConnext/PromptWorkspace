@@ -3,7 +3,7 @@
 The freeze is the one place in this codebase where the two adapters enforce
 the same rule by completely different means: the in-memory backend compares a
 field and assigns, while `SupabaseRepository` delegates the whole thing —
-guard, delete, insert and stamp — to `pz_freeze_deployment_tasks` in migration
+guard, delete, insert and stamp — to `pw_freeze_deployment_tasks` in migration
 0033. Those are two independent implementations of one promise, and a
 memory-only suite cannot tell a working Postgres function from a missing one.
 It would pass just as happily against a database where the migration was never
@@ -32,8 +32,8 @@ pytestmark = pytest.mark.contract
 def _build(repo: Repository) -> tuple[Deployment, list[str]]:
     """A project with three tasks and one live deployment row.
 
-    Task ids are fresh uuids because `pz_deployment_tasks.task_id` is a `uuid`
-    column — it carries no FK to `pz_tasks` (0027: a task deleted after a build
+    Task ids are fresh uuids because `pw_deployment_tasks.task_id` is a `uuid`
+    column — it carries no FK to `pw_tasks` (0027: a task deleted after a build
     shipped must not take the record of what shipped with it), but it is still
     typed, so a "t1" would be rejected by Postgres and accepted by the dict.
     """

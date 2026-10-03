@@ -113,7 +113,7 @@ def _slugify(name: str) -> str:
     return slug or "project"
 
 router = APIRouter(tags=["sync"])
-logger = logging.getLogger("promptconnext.sync")
+logger = logging.getLogger("promptworkspace.sync")
 
 
 _REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
@@ -171,7 +171,7 @@ async def create_project(
         raise HTTPException(status_code=400, detail="repo_is_empty")
 
     # A second project importing the same repo would silently steal the
-    # first's webhook binding (pz_repo_webhooks is keyed by repo_full_name) —
+    # first's webhook binding (pw_repo_webhooks is keyed by repo_full_name) —
     # corrupting deploy state and build attribution for both with no error
     # anywhere downstream. Keyed on GitHub's numeric id, not full_name (a
     # rename/transfer changes the latter without changing the repo), and
@@ -390,7 +390,7 @@ async def create_repository(
     github_client = request.app.state.github_client
 
     name = body.name or _slugify(project.name)
-    description = f"PromptZone-managed repository for project {project.id}"
+    description = f"PromptWorkspace-managed repository for project {project.id}"
     # What an imported repository already holds at the head the seed will
     # parent on; None for a repository this project created, which is seeded
     # exactly as before.
@@ -625,7 +625,7 @@ async def create_repository(
     # keeps a forty-file scaffold inside one HTTP request.
     #
     # An imported repository that already carries every file this seed would
-    # write (docs/promptzone/* left by an earlier import) gets no commit at all:
+    # write (docs/promptworkspace/* left by an earlier import) gets no commit at all:
     # there is nothing to add, and an empty seed is not an error.
     #
     # An imported repository's commit is pinned to the head its tree was
@@ -638,7 +638,7 @@ async def create_repository(
                 full_name,
                 default_branch,
                 seed_files,
-                "chore: seed project context from PromptZone",
+                "chore: seed project context from PromptWorkspace",
                 expected_base_sha=existing_tree.head_sha if existing_tree is not None else None,
             )
     except GithubBranchMovedError as exc:
@@ -818,8 +818,8 @@ def _platform_created(project: Project, repo_row: dict, own_description: str) ->
 
     Decided by `project.repo_origin`, which only the server can write: the
     API never accepts it from a client, and since migration 0036 a member's
-    own JWT cannot write `pz_projects` through PostgREST either (before it,
-    `pz_projects_rw` tested membership alone and any member could set it —
+    own JWT cannot write `pw_projects` through PostgREST either (before it,
+    `pw_projects_rw` tested membership alone and any member could set it —
     so 0036 must be applied for this check to hold on Supabase). The
     repository description is a secondary check, never sufficient alone —
     anyone with admin on an imported repository can set it to the string
@@ -938,7 +938,7 @@ async def seed_preview(
 
     github_client = request.app.state.github_client
     adopted = await _adopt_repo(github_client, token, imported_full_name, "imported_repo_not_found")
-    description = f"PromptZone-managed repository for project {project.id}"
+    description = f"PromptWorkspace-managed repository for project {project.id}"
     existing_tree = await _existing_tree(
         github_client,
         token,
@@ -1062,10 +1062,10 @@ async def _resolve_deployment_provisioning(app, project: Project, workspace) -> 
 
 
 def _default_secret_key(secret_name: str) -> str:
-    """`PZ_R2_ACCESS_KEY_ID` -> `access_key_id`. Lets a template name the
+    """`PROMPTWORKSPACE_R2_ACCESS_KEY_ID` -> `access_key_id`. Lets a template name the
     Actions secret its workflow reads without the provider having to know
     that name, and vice versa."""
-    return secret_name.removeprefix("PZ_").lower().removeprefix("r2_")
+    return secret_name.removeprefix("PROMPTWORKSPACE_").lower().removeprefix("r2_")
 
 
 def _resolve_var(source, project, template, credential, settings, preview_url) -> str | None:
@@ -1127,7 +1127,7 @@ def set_task_status(
 
     Deliberately not `PUT /sync/projects/{id}/graph`: that route takes a full
     `Task`, whose `title` is *shared* authority (a naive "mark done" would
-    overwrite a tracker's rename) and whose `acceptance_criteria` is a pz-owned
+    overwrite a tracker's rename) and whose `acceptance_criteria` is a pw-owned
     list a `model_dump` cannot distinguish from "cleared". Same argument ADR
     0018 made for assignment, same answer.
     """
@@ -1184,8 +1184,8 @@ def push_graph(
     0012's M1 disabled the *interval* push; its M4 — not yet done — deletes
     `assembleSnapshot`/`pushProjectSnapshot` and replaces them with a status-write
     queue. Until then the route stays, constrained: `apps/vscode`, `apps/mcp` and
-    `packages/pz-cloud` never call it (and must not — see
-    packages/pz-cloud/src/client.ts), so when 0012 M4 lands nothing calls it and
+    `packages/cloud-client` never call it (and must not — see
+    packages/cloud-client/src/client.ts), so when 0012 M4 lands nothing calls it and
     it can go. Retiring it does not touch the tracker mirror: `tracker_webhook`
     reaches `repo.upsert_graph` in-process, never through this router.
 

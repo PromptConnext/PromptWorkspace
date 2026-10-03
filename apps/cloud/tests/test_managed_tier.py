@@ -251,7 +251,7 @@ def test_startup_warns_when_managed_tier_on_but_embed_unconfigured(
     monkeypatch.delenv("MANAGED_EMBED_MODEL", raising=False)
 
     app = create_app()
-    with caplog.at_level(logging.WARNING, logger="promptconnext"):
+    with caplog.at_level(logging.WARNING, logger="promptworkspace"):
         with TestClient(app):
             pass
 
@@ -267,7 +267,7 @@ def test_startup_silent_about_embeddings_when_managed_tier_off(
     monkeypatch.delenv("MANAGED_EMBED_MODEL", raising=False)
 
     app = create_app()
-    with caplog.at_level(logging.WARNING, logger="promptconnext"):
+    with caplog.at_level(logging.WARNING, logger="promptworkspace"):
         with TestClient(app):
             pass
 

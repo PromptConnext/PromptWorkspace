@@ -28,7 +28,7 @@ from app.documents.storage import DocumentNotStored
 from app.models.schemas import Document, DocumentOut, DocumentStatus
 from app.rag.queue import EmbedJob, enqueue
 
-logger = logging.getLogger("promptconnext.documents")
+logger = logging.getLogger("promptworkspace.documents")
 router = APIRouter(tags=["documents"])
 
 # Enforced server-side regardless of what a client claims — matches the

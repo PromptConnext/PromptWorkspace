@@ -1,6 +1,6 @@
-# PromptConnext for VS Code
+# PromptWorkspace for VS Code
 
-Your assigned PromptConnext tasks, the project's AI coding rules, and a way to close a task
+Your assigned PromptWorkspace tasks, the project's AI coding rules, and a way to close a task
 without leaving the editor.
 
 The cloud plans; you implement. This extension pulls the tasks assigned to you, shows the
@@ -20,7 +20,7 @@ task count on that project's row — since My Tasks itself only shows one projec
 
 **My Tasks** — the tasks assigned to you **in the project of the folder you currently have
 open**, not every assigned task across every workspace. Switch folders (or windows) and the list
-follows. Tick the checkbox to mark one implemented, or use *PromptConnext: Set Task Status…* for
+follows. Tick the checkbox to mark one implemented, or use *PromptWorkspace: Set Task Status…* for
 the full set of states.
 
 **Project Context** — `AGENTS.md`, `docs/conventions.md` and `.specify/memory/constitution.md`,
@@ -34,11 +34,11 @@ offline, works in every editor, works when nothing else does.
 
 **Close a task from a commit** — commit `T3: add retry` and the task closes in the cloud with
 the commit attached as evidence. `T003` and `T3` mean the same task. A `Revert "…"` does not
-re-close anything. Turn it off with `promptconnext.closeTasksFromCommits`.
+re-close anything. Turn it off with `promptworkspace.closeTasksFromCommits`.
 
 ## Setup
 
-1. **PromptConnext: Sign In** — signs you in through your browser. If the redirect never comes
+1. **PromptWorkspace: Sign In** — signs you in through your browser. If the redirect never comes
    back (common on Linux, where the URL scheme is often unregistered), choose *Paste code
    instead*.
 2. Open the **Projects** view. It lists every workspace you belong to; expand one to see its
@@ -50,7 +50,7 @@ re-close anything. Turn it off with `promptconnext.closeTasksFromCommits`.
 4. From here, **My Tasks** and **Project Context** follow whichever folder's window you're in.
    Opening a folder some other way (not through Clone or Open Project Folder) still works: the
    extension offers to link it the first time it sees a git remote matching one of your projects,
-   and writes `promptconnext.projectId` into `.vscode/settings.json`. A project id is not a
+   and writes `promptworkspace.projectId` into `.vscode/settings.json`. A project id is not a
    secret — commit it so your team shares it.
 
 Work assigned to you in a project you have not opened does not vanish — it shows up as a task
@@ -61,12 +61,12 @@ your current folder belongs to.
 
 | Setting | What it is |
 |---|---|
-| `promptconnext.cloudApiUrl` | The cloud API. Point at `http://localhost:8080` for local development. |
-| `promptconnext.cloudWebUrl` | The web app that hosts the sign-in pages. |
-| `promptconnext.supabaseUrl` / `supabaseAnonKey` | Real authentication. Leave empty and the extension talks to a cloud running in stub auth mode. |
-| `promptconnext.projectId` | Which cloud project a folder belongs to. Set by *Link This Folder to a Project…*. |
-| `promptconnext.closeTasksFromCommits` | Close tasks from commit subjects. Default on. |
-| `promptconnext.commitScanLimit` | How far back to read on a repository's first scan. Default 1000. |
+| `promptworkspace.cloudApiUrl` | The cloud API. Defaults to production (`https://api.workspace.promptconnext.com`); point at `https://api.promptworkspace.truthledgers.com` for staging or `http://localhost:8080` for local development. |
+| `promptworkspace.cloudWebUrl` | The web app that hosts the sign-in pages. Defaults to `https://workspace.promptconnext.com`. |
+| `promptworkspace.supabaseUrl` / `supabaseAnonKey` | Real authentication; default to the production project. Override both together with the other two to reach staging. Set both empty and the extension talks to a cloud running in stub auth mode. |
+| `promptworkspace.projectId` | Which cloud project a folder belongs to. Set by *Link This Folder to a Project…*. |
+| `promptworkspace.closeTasksFromCommits` | Close tasks from commit subjects. Default on. |
+| `promptworkspace.commitScanLimit` | How far back to read on a repository's first scan. Default 1000. |
 
 ## Offline
 
@@ -107,17 +107,17 @@ node apps/vscode/scripts/seed-local.mjs    # workspace + project + 3 assigned ta
 ```
 
 The script prints the settings to paste into the Extension Development Host's `settings.json`.
-Then: **PromptConnext: Sign In** → enter `dev-user` → the tree fills.
+Then: **PromptWorkspace: Sign In** → enter `dev-user` → the tree fills.
 
 Port **8081**, not the cloud's usual 8080: that port is commonly taken already, and the symptom
 is not a bind failure but a 404 from someone else's server, which reads like a routing bug in
-ours. Check with `lsof -iTCP:8081 -sTCP:LISTEN -n -P` and use `PZ_API` plus `--port` to move
+ours. Check with `lsof -iTCP:8081 -sTCP:LISTEN -n -P` and use `PROMPTWORKSPACE_API` plus `--port` to move
 both halves together if it is busy too.
 
 Host `127.0.0.1`, not `localhost`: uvicorn binds IPv4 only, macOS resolves `localhost` to `::1`
 first, and an unrelated IPv6 listener answers instead.
 
-To exercise the commit-close path, link a folder with **PromptConnext: Link This Folder to a
+To exercise the commit-close path, link a folder with **PromptWorkspace: Link This Folder to a
 Project…**, then `git commit --allow-empty -m "T1: add login retry"`. Within a couple of seconds
 the task flips to implemented with the commit attached. `T01`, `T001` and `T0001` all mean the
 same task; `T012` is seeded so you can check `T12` finds it too; and
@@ -129,7 +129,7 @@ Two things you cannot test this way, both worth knowing before you conclude some
   `repo_url`, and nothing sets `repo_url` outside real GitHub repo creation at tech-review exit.
   Locally, link manually — the same code path writes the same setting.
 - **The browser sign-in handoff.** Stub mode skips it. To exercise it you need Supabase
-  credentials and `pnpm web` running, with `promptconnext.cloudWebUrl` pointed at it.
+  credentials and `pnpm web` running, with `promptworkspace.cloudWebUrl` pointed at it.
 
 The memory backend keeps everything in process, so restarting uvicorn wipes the data and you
 re-run the seed. That is a feature — starting over costs nothing.

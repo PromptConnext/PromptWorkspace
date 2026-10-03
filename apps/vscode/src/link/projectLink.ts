@@ -1,6 +1,6 @@
 // Which cloud project does this folder belong to?
 //
-// Answer: a resource-scoped `promptconnext.projectId` setting, discovered by
+// Answer: a resource-scoped `promptworkspace.projectId` setting, discovered by
 // matching git remotes against the workspace roster, and written only after the
 // user confirms — with one exception, `applyPendingClone`, where the user
 // already confirmed by clicking Clone and a second prompt would be asking the
@@ -11,7 +11,7 @@
 // developer yet.
 //
 // Rejected, so they are not re-proposed:
-//   * A `.promptconnext` dotfile — a second config system to teach, a gitignore
+//   * A `.promptworkspace` dotfile — a second config system to teach, a gitignore
 //     decision to make, duplicating a mechanism VS Code users already know.
 //   * Pure remote matching with nothing persisted — breaks for forks, for a
 //     monorepo holding several cloud projects, and for any remote that is an
@@ -21,7 +21,7 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import { isCloneableRepoUrl, sameRepo, type StorageLike } from "@promptconnext/pz-cloud";
+import { isCloneableRepoUrl, sameRepo, type StorageLike } from "@promptworkspace/cloud-client";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
 import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
@@ -100,7 +100,7 @@ export class ProjectLink {
 
       if (matches.length === 1) {
         const choice = await vscode.window.showInformationMessage(
-          `Link "${folder.name}" to the PromptConnext project "${matches[0].projectName}"?`,
+          `Link "${folder.name}" to the PromptWorkspace project "${matches[0].projectName}"?`,
           "Link",
           "Not now",
         );
@@ -117,7 +117,7 @@ export class ProjectLink {
     if (!folder) return;
     if (candidates.length === 0) {
       void vscode.window.showInformationMessage(
-        "No PromptConnext projects with a repository to link to.",
+        "No PromptWorkspace projects with a repository to link to.",
       );
       return;
     }
@@ -190,7 +190,7 @@ export class ProjectLink {
         detail: c.repoUrl ?? undefined,
         candidate: c,
       })),
-      { title: `Link "${folder.name}" to a PromptConnext project` },
+      { title: `Link "${folder.name}" to a PromptWorkspace project` },
     );
     if (picked) await this.link(folder, picked.candidate);
   }

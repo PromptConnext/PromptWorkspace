@@ -76,15 +76,15 @@ def _write_together(repo: Repository, project_id: str, task_id: str) -> None:
         raise errors[0]
 
 
-def test_a_pmo_writer_cannot_author_pz_fields_on_creation(repo: Repository) -> None:
+def test_a_pmo_writer_cannot_author_pw_fields_on_creation(repo: Repository) -> None:
     ws, admin = h.workspace(repo)
     proj = h.project(repo, ws, admin)
 
     task = Task(
         project_id=proj.id,
         title="Mirrored from the tracker",
-        status=TaskStatus.verified,  # pz-owned
-        acceptance_criteria=[AcceptanceCriterion(text="pz-owned")],  # pz-owned
+        status=TaskStatus.verified,  # pw-owned
+        acceptance_criteria=[AcceptanceCriterion(text="pw-owned")],  # pw-owned
         assignee="jane",  # pmo-owned
         sprint="S-1",  # pmo-owned
     )

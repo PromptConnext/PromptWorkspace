@@ -1,4 +1,4 @@
-// Run:  node --test packages/pz-cloud/test/cache.test.ts
+// Run:  node --test packages/cloud-client/test/cache.test.ts
 
 import test from "node:test";
 import assert from "node:assert/strict";

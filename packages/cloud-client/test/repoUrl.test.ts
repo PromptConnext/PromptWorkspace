@@ -1,4 +1,4 @@
-// Run:  node --test packages/pz-cloud/test/repoUrl.test.ts
+// Run:  node --test packages/cloud-client/test/repoUrl.test.ts
 //
 // The guard half is ported from apps/engine (clone-url-validation.test.ts) and
 // keeps the same threat model: `ext::sh -c` is RCE, a leading `-` is argument

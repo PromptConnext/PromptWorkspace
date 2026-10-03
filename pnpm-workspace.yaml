@@ -1,6 +1,6 @@
 packages:
   - apps/*
-  # Shared libraries, not deployables. Added for plan 0025: `packages/pz-cloud`
+  # Shared libraries, not deployables. Added for plan 0025: `packages/cloud-client`
   # holds the modules apps/vscode and apps/mcp must not fix twice — the cloud
   # transport (and its refresh coalescing), the wire types, the session store,
   # the retry queue and the task-ref grammar.

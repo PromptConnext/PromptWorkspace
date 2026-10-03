@@ -71,7 +71,7 @@ def project_with_task(client: TestClient) -> tuple[str, str, str]:
     return ws["id"], project["id"], "t1"
 
 
-def test_pz_discussion_embeds_by_default(
+def test_pw_discussion_embeds_by_default(
     client: TestClient, project_with_task: tuple[str, str, str]
 ):
     ws_id, pid, task_id = project_with_task

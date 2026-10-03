@@ -1,6 +1,6 @@
-# PromptConnext — Development & Cross-Platform Build Guide
+# PromptWorkspace — Development & Cross-Platform Build Guide
 
-How to develop PromptConnext and how to build the desktop app for **both macOS and Windows from a Mac M1** (Apple Silicon). For deep macOS packaging detail (bundle contents, security posture, notarization), see [BUILD_AND_DISTRIBUTE.md](./BUILD_AND_DISTRIBUTE.md) — this guide covers the day-to-day workflow and extends it with the Windows story.
+How to develop PromptWorkspace and how to build the desktop app for **both macOS and Windows from a Mac M1** (Apple Silicon). For deep macOS packaging detail (bundle contents, security posture, notarization), see [BUILD_AND_DISTRIBUTE.md](./BUILD_AND_DISTRIBUTE.md) — this guide covers the day-to-day workflow and extends it with the Windows story.
 
 ## Layout
 
@@ -8,10 +8,10 @@ How to develop PromptConnext and how to build the desktop app for **both macOS a
 |---|---|---|
 | `apps/desktop` | Tauri 2 (Rust shell) + React/Vite webview | The app window; spawns the engine as a sidecar |
 | `apps/engine` | Node 24 / TypeScript (Hono, `node:sqlite`, `node-pty`) | Local engine on `127.0.0.1:47131` — runs TS natively, no build step |
-| `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to the hosted Railway instance, override with `CLOUD_API_URL`, or set it to `""` to disable |
+| `apps/cloud` | FastAPI + Supabase/Postgres | **Optional** sync/collaboration backend; defaults to production (`https://api.workspace.promptconnext.com`), override with `CLOUD_API_URL`, or set it to `""` to disable |
 | `apps/vscode` | VS Code extension (TypeScript, esbuild) | Assigned tasks, project coding rules and commit-driven task close, straight against `apps/cloud` — no sidecar (ADR 0019) |
 
-Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptConnext orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTCONNEXT_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
+Decisions live in `docs/decisions/` (ADRs 0001–0010). The two that shape everything: the app is a **Tauri shell + Node sidecar** (0001), and implementation is **BYO-agent** (0009) — PromptWorkspace orchestrates the AI subscription you already have (**Claude Code, Gemini CLI, Codex CLI**, or any CLI via `PROMPTWORKSPACE_AGENT_CMD`) rather than shipping a model runtime. Ollama (`ollama pull qwen3:8b`) is the zero-cost fallback for onboarding.
 
 ## Prerequisites (Mac M1)
 
@@ -63,7 +63,7 @@ pnpm --dir apps/vscode package   # produces a .vsix
 ```
 
 Open `apps/vscode` in VS Code and press **F5** for an Extension Development Host. Point it at a
-local cloud with the `promptconnext.cloudApiUrl` / `promptconnext.cloudWebUrl` settings — the
+local cloud with the `promptworkspace.cloudApiUrl` / `promptworkspace.cloudWebUrl` settings — the
 extension reads settings, never `process.env`, because nothing sets env for the extension host.
 Settings: `cloudApiUrl`, `cloudWebUrl`, `supabaseUrl`, `supabaseAnonKey`, `projectId`
 (resource-scoped, safe to commit), `closeTasksFromCommits`, `commitScanLimit`.
@@ -72,9 +72,11 @@ The one repo-level rule worth knowing: `src/git/git.d.ts` is a **vendored, pinne
 built-in Git extension's API, and `src/git/gitBridge.ts` is the only file allowed to import it.
 `pnpm --dir apps/vscode typecheck` is what catches it drifting.
 
-Point the engine at it with `CLOUD_API_URL=http://localhost:8080` — otherwise the engine talks to the hosted production instance by default. For real auth/persistence against your local instance, set `DATA_BACKEND=supabase`, `SUPABASE_URL`, `SUPABASE_KEY` (see `apps/cloud/README.md`).
+Point the engine at it with `CLOUD_API_URL=http://localhost:8080` — otherwise the engine talks to the hosted production instance by default. For real auth/persistence against your local instance, set `DATA_BACKEND=supabase`, `SUPABASE_URL`, `SUPABASE_KEY` and `RAG_KEY_ENCRYPTION_KEY` (the service refuses to start a supabase backend without it; see `apps/cloud/README.md`).
 
-**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTCONNEXT_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to the hosted Railway instance; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTCONNEXT_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
+**Local Supabase after the rename.** `supabase/config.toml`'s `project_id` is now `"PromptWorkspace"`. The CLI names its Docker containers and volumes after it, so a stack started before the rename is not reused: run `supabase stop --all --no-backup` once to drop every local stack's containers and volumes, then `supabase start` and re-apply the two-file baseline (`python scripts/migrate.py apply --var embed_dim=1024` from `apps/cloud`).
+
+**Key environment variables** (engine, `apps/engine/src/config.ts`): `PROMPTWORKSPACE_ENGINE_PORT` (default 47131), `CLOUD_API_URL` (defaults to production, `https://api.workspace.promptconnext.com`; set to `""` to disable cloud sync, or a `http://localhost:8080`-style URL to target a local `apps/cloud` checkout), `SUPABASE_URL` + `SUPABASE_ANON_KEY` (unset = stub cloud auth), `PROMPTWORKSPACE_AGENT_CMD` (custom coding-agent CLI; task text arrives in `$TASK_PROMPT`).
 
 ## How packaging works — read this before any cross-build
 
@@ -87,10 +89,10 @@ The consequence: **the bundled Node runtime and `node-pty` addon are host-platfo
 ```bash
 cd apps/desktop
 pnpm tauri build
-# → src-tauri/target/release/bundle/macos/PromptConnext.app  (~192 MB)
+# → src-tauri/target/release/bundle/macos/PromptWorkspace.app  (~192 MB)
 ```
 
-The result is fully self-contained (no repo, no system Node needed to run it). For a distributable disk image add `"dmg"` to `bundle.targets` in `tauri.conf.json`. The app is unsigned — testers must `xattr -dr com.apple.quarantine PromptConnext.app` or right-click → Open; signing/notarization steps are in [BUILD_AND_DISTRIBUTE.md §6](./BUILD_AND_DISTRIBUTE.md).
+The result is fully self-contained (no repo, no system Node needed to run it). For a distributable disk image add `"dmg"` to `bundle.targets` in `tauri.conf.json`. The app is unsigned — testers must `xattr -dr com.apple.quarantine PromptWorkspace.app` or right-click → Open; signing/notarization steps are in [BUILD_AND_DISTRIBUTE.md §6](./BUILD_AND_DISTRIBUTE.md).
 
 ## Build target 2 — macOS Intel / universal: one caveat
 
@@ -116,9 +118,7 @@ The three app changes this needed are done:
 ```yaml
 name: Desktop build
 on:
-  workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:   # dispatch-only; release tags are vscode-v* / mcp-v*
 
 jobs:
   build:
@@ -146,7 +146,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Trigger from the M1 with `git tag v0.0.1 && git push origin v0.0.1`, or `gh workflow run desktop-build.yml`. Artifacts: `.app`/`.dmg` from the macOS job, NSIS `.exe` installer from the Windows job. Windows code signing is deferred (users see SmartScreen warnings until then).
+Trigger from the M1 with `gh workflow run desktop-build.yml` (the workflow is dispatch-only; no tag starts it). Artifacts: `.app`/`.dmg` from the macOS job, NSIS `.exe` installer from the Windows job. Windows code signing is deferred (users see SmartScreen warnings until then).
 
 ## Build target 3b — Windows locally on the M1 (experimental, not recommended)
 

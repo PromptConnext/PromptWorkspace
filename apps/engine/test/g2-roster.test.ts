@@ -157,11 +157,11 @@ const port = (server.address() as { port: number }).port;
 // Env MUST be set before importing the SUT (db.ts + config.ts read it at import).
 const dataDir = mkdtempSync(join(tmpdir(), "pz-g2-"));
 process.env.HOME = dataDir; // keep createLocalProjectShell's project dirs out of the real homedir
-process.env.PROMPTCONNEXT_DATA_DIR = dataDir;
+process.env.PROMPTWORKSPACE_DATA_DIR = dataDir;
 process.env.CLOUD_API_URL = `http://127.0.0.1:${port}`;
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_ANON_KEY;
-delete process.env.PROMPTCONNEXT_AUTH_TOKEN;
+delete process.env.PROMPTWORKSPACE_AUTH_TOKEN;
 
 const { Hono } = await import("hono");
 const { cloud: cloudRoutes } = await import("../src/routes/cloud.ts");
