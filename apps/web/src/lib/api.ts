@@ -17,6 +17,7 @@ import type {
   SeedPreview,
   StageDocumentOut,
   StageDocumentSaved,
+  StageInputsOut,
   StageKind,
   Task,
   TaskStatus,
@@ -186,6 +187,27 @@ export function updateStageDocument(
       body: JSON.stringify({ content }),
     },
   );
+}
+
+export function getStageInputs(
+  projectId: string,
+  stage: StageKind,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageInputsOut>(`/projects/${projectId}/stage-inputs/${stage}`, authHeaders);
+}
+
+/** Replaces the stage's stored answers wholesale. */
+export function putStageInputs(
+  projectId: string,
+  stage: StageKind,
+  inputs: Record<string, string>,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageInputsOut>(`/projects/${projectId}/stage-inputs/${stage}`, authHeaders, {
+    method: "PUT",
+    body: JSON.stringify({ inputs }),
+  });
 }
 
 // Idempotent — the design doc calls this "automatic on first Tech Lead

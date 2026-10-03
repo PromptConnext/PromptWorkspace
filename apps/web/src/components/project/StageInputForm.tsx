@@ -1,8 +1,8 @@
 // apps/web/src/components/project/StageInputForm.tsx
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { prefillStage } from "@/lib/api";
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
+import { getStageInputs, prefillStage, putStageInputs } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
   initialAnswers,
@@ -37,10 +37,15 @@ export type PrefillOption = {
   disabledReason?: string;
 };
 
-// Answers are the only part of a stage the server never stores — the endpoint
-// keeps the generated document, not the prompt that produced it. Persisting
-// them locally means reopening the project shows what was asked for, so a
-// regeneration is an edit rather than a retype.
+/** How long typing has to pause before the answers are saved to the cloud. */
+export const AUTOSAVE_DELAY_MS = 800;
+
+// The answers live in the cloud (GET/PUT /projects/{id}/stage-inputs/{stage}),
+// so a teammate or another device reopens the form filled in and a
+// regeneration is an edit rather than a retype. localStorage is only a cache
+// of edits the cloud hasn't acknowledged yet: the draft itself, plus a flag
+// saying it is ahead of the server. On load the server's answers win unless
+// that flag is set.
 function loadDraft(projectId: string, stage: StageKind): StageAnswers {
   try {
     const raw = localStorage.getItem(stageDraftKey(projectId, stage));
@@ -49,6 +54,42 @@ function loadDraft(projectId: string, stage: StageKind): StageAnswers {
     return {};
   }
 }
+
+function unsavedKey(projectId: string, stage: StageKind): string {
+  return `${stageDraftKey(projectId, stage)}:unsaved`;
+}
+
+function hasUnsaved(projectId: string, stage: StageKind): boolean {
+  try {
+    return localStorage.getItem(unsavedKey(projectId, stage)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markUnsaved(projectId: string, stage: StageKind, unsaved: boolean) {
+  try {
+    if (unsaved) localStorage.setItem(unsavedKey(projectId, stage), "1");
+    else localStorage.removeItem(unsavedKey(projectId, stage));
+  } catch {
+    // Losing the flag only means the server's copy wins on the next load.
+  }
+}
+
+function hasContent(answers: StageAnswers): boolean {
+  return Object.values(answers).some((v) => typeof v === "string" && v.trim().length > 0);
+}
+
+// Key order is not preserved by the server (jsonb), so compare sorted pairs.
+function answersKey(answers: StageAnswers): string {
+  return JSON.stringify(
+    Object.keys(answers)
+      .sort()
+      .map((k) => [k, answers[k]]),
+  );
+}
+
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 export function StageInputForm({
   projectId,
@@ -60,6 +101,7 @@ export function StageInputForm({
   canPrefill = true,
   prefill,
   prefillHint,
+  flushRef,
 }: {
   projectId: string;
   stage: StageKind;
@@ -75,16 +117,101 @@ export function StageInputForm({
   /** Said instead of the button when `prefill` is absent — e.g. where to
    *  upload the PRD the draft would read. */
   prefillHint?: ReactNode;
+  /** Set to a function that saves pending answers right away — the Planner
+   *  calls it when Generate is pressed, so the answers behind a generation
+   *  don't wait out the debounce. */
+  flushRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { authHeaders } = useAuth();
   const [hydrated, setHydrated] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState<string | null>(null);
+  // Autosave waits for the server's answers, so a stale local draft can never
+  // overwrite them before they've been seen.
+  const [serverLoaded, setServerLoaded] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+  // answersKey() of what the server holds; null until known.
+  const serverKeyRef = useRef<string | null>(null);
+  // Only answers somebody actually wrote are saved — opening the form must
+  // not write its defaults back.
+  const dirtyRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef(0);
+
+  async function save() {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const snapshot = answersRef.current;
+    const key = answersKey(snapshot);
+    const seq = ++saveSeqRef.current;
+    setSaveState("saving");
+    try {
+      await putStageInputs(projectId, stage, snapshot, authHeaders());
+      if (seq !== saveSeqRef.current) return;
+      serverKeyRef.current = key;
+      if (answersKey(answersRef.current) === key) markUnsaved(projectId, stage, false);
+      setSaveState("saved");
+    } catch {
+      if (seq !== saveSeqRef.current) return;
+      setSaveState("error");
+    }
+  }
+
+  function pending(): boolean {
+    return dirtyRef.current && answersKey(answersRef.current) !== serverKeyRef.current;
+  }
 
   useEffect(() => {
-    onChange(initialAnswers(fields, loadDraft(projectId, stage)));
+    if (!flushRef) return;
+    flushRef.current = () => {
+      if (pending()) void save();
+    };
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const local = loadDraft(projectId, stage);
+    const localAhead = hasUnsaved(projectId, stage);
+    dirtyRef.current = false;
+    serverKeyRef.current = null;
+    setServerLoaded(false);
+    setSaveState("idle");
+    onChange(initialAnswers(fields, local));
     setHydrated(true);
+
+    getStageInputs(projectId, stage, authHeaders())
+      .then((res) => {
+        if (cancelled) return;
+        const raw = res?.inputs;
+        const server: StageAnswers =
+          raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+        serverKeyRef.current = answersKey(server);
+        if (hasContent(server) && !localAhead && !dirtyRef.current) {
+          const restored = initialAnswers(fields, server);
+          answersRef.current = restored;
+          onChange(restored);
+        } else if (hasContent(local) && (localAhead || !hasContent(server))) {
+          // Edits this browser never got acknowledged, or a draft from before
+          // answers were stored server-side: keep it and send it up.
+          dirtyRef.current = true;
+        }
+      })
+      .catch(() => {
+        // Unreachable cloud: the local draft stays on screen, and the first
+        // edit tries to save it.
+      })
+      .finally(() => {
+        if (!cancelled) setServerLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+      // Leaving with a save still pending sends it rather than dropping it.
+      if (timerRef.current) void save();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, stage]);
 
@@ -97,8 +224,21 @@ export function StageInputForm({
     }
   }, [hydrated, answers, projectId, stage]);
 
+  useEffect(() => {
+    if (!hydrated || !serverLoaded || !pending()) return;
+    markUnsaved(projectId, stage, true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => void save(), AUTOSAVE_DELAY_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, serverLoaded, answers, projectId, stage]);
+
+  function update(next: StageAnswers) {
+    dirtyRef.current = true;
+    onChange(next);
+  }
+
   function set(key: string, value: string) {
-    onChange({ ...answers, [key]: value });
+    update({ ...answers, [key]: value });
   }
 
   // Drafting fills blanks only. Overwriting an answer someone typed is the one
@@ -125,7 +265,7 @@ export function StageInputForm({
           filled += 1;
         }
       }
-      onChange(next);
+      update(next);
       setDraftNote(
         filled === 0
           ? "Nothing new to add — the source material doesn't answer the blank fields."
@@ -227,6 +367,22 @@ export function StageInputForm({
         );
         })}
       </div>
+      <p aria-live="polite" className="mt-2 min-h-4 text-right text-xs text-slate-500">
+        {saveState === "saving" && "Saving…"}
+        {saveState === "saved" && "Saved"}
+        {saveState === "error" && (
+          <span className="text-amber-800">
+            Couldn&apos;t save —{" "}
+            <button
+              type="button"
+              onClick={() => void save()}
+              className="underline hover:text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              retry
+            </button>
+          </span>
+        )}
+      </p>
     </>
   );
 }
