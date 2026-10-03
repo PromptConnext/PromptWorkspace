@@ -115,9 +115,9 @@ function TabSkeleton({ tab }: { tab: Tab }) {
       <span className="sr-only" role="status">
         Loading project…
       </span>
-      {["h-8 w-1/3", "h-24 w-full", "h-24 w-full", "h-24 w-2/3"].map((size) => (
+      {["h-8 w-1/3", "h-24 w-full", "h-24 w-full", "h-24 w-2/3"].map((size, i) => (
         <div
-          key={size}
+          key={i}
           aria-hidden
           className={`${size} animate-pulse rounded-lg bg-slate-100 motion-reduce:animate-none`}
         />
