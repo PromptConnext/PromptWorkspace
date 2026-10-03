@@ -80,11 +80,11 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
     <>
       <TopBar crumbs={[{ label: workspaceName }]} />
       <main className="mx-auto max-w-3xl px-4 py-10">
-        <div className="mb-8 flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-slate-900">
             {workspaceName}
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setCreating(true)}
@@ -98,7 +98,9 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
             >
               {members && members.length > 0 && <MemberStack members={members} />}
               <span className="text-sm text-slate-500">
-                {members?.length ?? 0} {members?.length === 1 ? "member" : "members"}
+                {members
+                  ? `${members.length} ${members.length === 1 ? "member" : "members"}`
+                  : "Members"}
               </span>
             </Link>
             <Link
@@ -116,8 +118,15 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         {!loading && (projects?.length ?? 0) === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 px-6 py-10 text-center">
             <p className="text-sm text-slate-500">
-              No projects yet. Create one above, or link one from the desktop app.
+              No projects yet. Create your first project to start planning.
             </p>
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              New Project
+            </button>
           </div>
         ) : (
           <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
