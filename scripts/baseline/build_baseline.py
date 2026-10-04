@@ -185,7 +185,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         stale = [n for n, t in outputs.items() if not (args.out / n).exists()
                  or (args.out / n).read_text() != t]
-        others = sorted(p.name for p in args.out.glob("*.sql") if p.name not in outputs)
+        # Migrations numbered past the baseline are additive changes written
+        # after the squash (0003 onwards); they are migrate.py's concern, not
+        # this generator's. Anything else in the baseline's own number range
+        # is a stray file the baseline doesn't produce.
+        last_baseline = max(int(n[:4]) for n in outputs)
+        others = sorted(
+            p.name
+            for p in args.out.glob("*.sql")
+            if p.name not in outputs
+            and not (p.name[:4].isdigit() and int(p.name[:4]) > last_baseline)
+        )
         for name in stale:
             print(f"stale: {args.out / name}", file=sys.stderr)
         for name in others:
