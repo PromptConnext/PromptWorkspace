@@ -314,6 +314,81 @@ def test_a_failing_mirror_write_still_returns_the_resolved_decision(
     assert repo.get_decision(project, did).status == "approved"
 
 
+def _after_save_decision(monkeypatch, repo, then):
+    """Run `then()` right after the route's decision write commits, to stand
+    in for whatever else happens while the request is still running."""
+    save = repo.save_decision
+
+    def save_then(decision):
+        saved = save(decision)
+        then()
+        return saved
+
+    monkeypatch.setattr(repo, "save_decision", save_then)
+
+
+def test_a_failing_stage_read_after_an_approval_still_returns_it_without_a_snapshot(
+    client, project, monkeypatch
+):
+    did = _request(client, project, "intent_approval").json()["id"]
+    repo = client.app.state.repository
+
+    def boom(*_a, **_k):
+        raise RuntimeError("database unreachable")
+
+    _after_save_decision(
+        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+    )
+    res = _resolve(client, project, did)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+    assert res.json()["snapshot"] is None  # the client refetches
+    assert repo.get_decision(project, did).status == "approved"
+
+
+def test_a_failing_stage_read_after_a_request_still_returns_it_without_a_snapshot(
+    client, project, monkeypatch
+):
+    repo = client.app.state.repository
+
+    def boom(*_a, **_k):
+        raise RuntimeError("database unreachable")
+
+    _after_save_decision(
+        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+    )
+    res = _request(client, project, "intent_approval")
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "open"
+    assert res.json()["snapshot"] is None
+
+
+def test_an_edit_landing_during_an_approval_shows_stale_and_keeps_the_spec_draft(
+    client, project, monkeypatch
+):
+    _save_tasks(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    repo = client.app.state.repository
+    workspace_id = repo.get_project(project).workspace_id
+    edited = TASKS + "- [ ] T003 Edited while the approval was in flight\n"
+
+    # Another member's tasks save lands after the approval's subject check and
+    # its decision write; that save's own mirror sync ran before the decision
+    # existed, so this request's mirror is the last word.
+    _after_save_decision(
+        monkeypatch, repo,
+        lambda: repo.upsert_stage_document(project, workspace_id, "tasks", edited, "bob"),
+    )
+    body = _resolve(client, project, did).json()
+
+    assert body["status"] == "approved"
+    assert body["snapshot"]["states"]["plan"] == "stale"
+    spec = repo.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
 def test_a_failing_mirror_write_never_fails_the_stage_save(client, project, monkeypatch):
     import app.generation.stage_apply as stage_apply
 

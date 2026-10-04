@@ -96,6 +96,15 @@ describe("ApprovalControl", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it("refetches when the API sends a null snapshot", async () => {
+    data = states("none");
+    requestDecision.mockResolvedValue({ id: "d1", snapshot: null });
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
+    expect(refetch).toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("shows the server's refusal", async () => {
     data = states("none");
     requestDecision.mockRejectedValue(new Error("delivery_plan_missing"));

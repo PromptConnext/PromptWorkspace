@@ -4,7 +4,10 @@ Every repository method is one PostgREST request on the Supabase adapter
 (`get_graph` is several), and the API and the database do not share a region,
 so each call costs a cross-region round trip (~170-200 ms). These bounds pin
 the counts after the dedupe in plan 0029's latency fix; raising one should be
-a deliberate choice, not an accident of a refactor.
+a deliberate choice, not an accident of a refactor. The two decision writes
+each read both stage documents after their write (one read more than the
+minimum), so the snapshot and the approval mirror reflect an edit that lands
+while the request runs.
 """
 
 from __future__ import annotations
@@ -98,7 +101,7 @@ def test_requesting_a_decision(client, project):
                           headers=BOB)
     assert res.status_code == 200, res.text
     print("POST /decisions:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 8, repo.calls
+    assert len(repo.calls) <= 9, repo.calls
     assert repo.calls.count("get_membership") == 1, repo.calls
 
 
@@ -110,7 +113,7 @@ def test_approving_a_decision(client, project):
                           json={"outcome": "approved"}, headers=ALICE)
     assert res.status_code == 200, res.text
     print("POST /decisions/{id}/resolve:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 11, repo.calls
+    assert len(repo.calls) <= 12, repo.calls
     assert repo.calls.count("get_membership") == 1, repo.calls
     assert repo.calls.count("list_decisions") + repo.calls.count("get_decision") == 1
 

@@ -28,7 +28,7 @@ function DecisionRow({
   decision: Decision;
   members: WorkspaceMember[];
   /** Receives the listing as it stands after the resolve. */
-  onResolved: (snapshot: DecisionsOut | undefined) => void;
+  onResolved: (snapshot: DecisionsOut | null | undefined) => void;
 }) {
   const { authHeaders } = useAuth();
   const [reason, setReason] = useState("");
@@ -112,8 +112,9 @@ function DecisionRow({
  * decision behind them, with the resolve form for decisions routed to me. */
 export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; workspaceId: string }) {
   const { data, error, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
-  // Apply the resolve's snapshot; an API older than the snapshot sends none.
-  const onResolved = (snapshot: DecisionsOut | undefined) => (snapshot ? mutate(snapshot) : refetch());
+  // Apply the resolve's snapshot; refetch when it carries none.
+  const onResolved = (snapshot: DecisionsOut | null | undefined) =>
+    snapshot ? mutate(snapshot) : refetch();
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
 
   if (error) return <p className="text-sm text-rose-700">{error}</p>;

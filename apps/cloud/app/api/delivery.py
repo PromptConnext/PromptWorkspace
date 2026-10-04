@@ -173,10 +173,11 @@ class DecisionsOut(BaseModel):
 
 class DecisionMutationOut(DecisionOut):
     """The requested or resolved decision, plus `snapshot`: the project's
-    `GET /decisions` as it stands after the write, built from what the route
-    already read, so a client applies it instead of refetching."""
+    `GET /decisions` as it stands after the write, so a client applies it
+    instead of refetching. `None` when the stage documents could not be read
+    after the write; the client refetches then."""
 
-    snapshot: DecisionsOut
+    snapshot: DecisionsOut | None = None
 
 
 class DecisionRequest(BaseModel):
@@ -214,18 +215,34 @@ def _routing_context(repo: Repository, project, user: User, role: Role | None = 
     return roles, member_ids, role == Role.admin
 
 
+def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
+    """The stage hashes read after this request's write, so the mirror and the
+    snapshot describe the documents as they are now, including an edit that
+    landed while the request ran. `None` when the read fails: the write is
+    committed and must not become a 500, so the caller skips the mirror (it
+    is rewritten on the next resolve or stage save) and sends no snapshot."""
+    try:
+        return stage_hashes(repo, project_id)
+    except Exception:
+        logger.exception("stage hash read failed after a decision write, project=%s",
+                         project_id)
+        return None
+
+
 def _mutation_out(
     decision: Decision,
     decisions: list[Decision],
-    hashes: dict[str, str | None],
+    hashes: dict[str, str | None] | None,
     out: Callable[[Decision], DecisionOut],
 ) -> DecisionMutationOut:
     """`decision` with the listing after the write: `decisions` are the
     project's decisions as they now stand (newest first), `hashes` the stage
-    hashes read in this request."""
-    snapshot = DecisionsOut(
-        decisions=[out(d) for d in decisions], states=states_of(decisions, hashes)
-    )
+    hashes read after it (no snapshot without them)."""
+    snapshot = None
+    if hashes is not None:
+        snapshot = DecisionsOut(
+            decisions=[out(d) for d in decisions], states=states_of(decisions, hashes)
+        )
     return DecisionMutationOut(**out(decision).model_dump(), snapshot=snapshot)
 
 
@@ -265,8 +282,6 @@ def request_decision(
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin)
-    # Read before any write, so a failing read cannot 500 a committed request.
-    hashes = stage_hashes(repo, project_id, {stage: current})
 
     try:
         decisions = repo.list_decisions(project_id)
@@ -274,13 +289,13 @@ def request_decision(
         if latest is not None and latest.status == "approved" and latest.subject_hash == current:
             # Already approved as it stands: asking again must not demote it
             # to pending (which would also close the create-repository gate).
-            return _mutation_out(latest, decisions, hashes, out)
+            return _mutation_out(latest, decisions, _hashes_after_write(repo, project_id), out)
         after = list(decisions)  # the listing as this request leaves it
         for i, existing in enumerate(decisions):
             if existing.kind != body.kind or existing.status != "open":
                 continue
             if existing.subject_hash == current:
-                return _mutation_out(existing, after, hashes, out)
+                return _mutation_out(existing, after, _hashes_after_write(repo, project_id), out)
             after[i] = repo.save_decision(existing.model_copy(update={"status": "withdrawn"}))
         decision = repo.save_decision(
             Decision(
@@ -296,7 +311,7 @@ def request_decision(
         )
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
-    return _mutation_out(decision, [decision, *after], hashes, out)
+    return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
 
 
 @router.post(
@@ -328,9 +343,6 @@ def resolve_decision(
     rationale = (body.rationale or "").strip() or None
     if body.outcome == "rejected" and rationale is None:
         raise HTTPException(status_code=422, detail="rationale_required")
-    # Read before the write, so a failing read cannot 500 a committed decision.
-    hashes = stage_hashes(repo, project_id, {decision.subject_stage: current})
-
     resolved = decision.model_copy(
         update={
             "status": body.outcome,
@@ -344,13 +356,15 @@ def resolve_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     after = [resolved if d.id == resolved.id else d for d in decisions]
-    try:
-        sync_approval_mirrors(repo, project_id, decisions=after, hashes=hashes)
-    except Exception:
-        # The decision is saved; the mirror is derived and rewritten on the
-        # next resolve or stage save, so a failed write must not turn a
-        # committed approval into a 500.
-        logger.exception("approval mirror sync failed for project=%s", project_id)
+    hashes = _hashes_after_write(repo, project_id)
+    if hashes is not None:
+        try:
+            sync_approval_mirrors(repo, project_id, decisions=after, hashes=hashes)
+        except Exception:
+            # The decision is saved; the mirror is derived and rewritten on the
+            # next resolve or stage save, so a failed write must not turn a
+            # committed approval into a 500.
+            logger.exception("approval mirror sync failed for project=%s", project_id)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin)
     return _mutation_out(resolved, after, hashes, out)

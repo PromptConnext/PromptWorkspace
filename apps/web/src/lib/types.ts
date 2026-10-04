@@ -691,9 +691,11 @@ export interface DecisionsOut {
 }
 
 /** A request or resolve's response: the decision, plus the project's
- *  `GET /decisions` as it stands after the write, to apply instead of refetching. */
+ *  `GET /decisions` as it stands after the write, to apply instead of refetching.
+ *  `null` when the API could not read the stage documents after the write
+ *  (absent from an API older than the snapshot): refetch then. */
 export interface DecisionMutationOut extends Decision {
-  snapshot: DecisionsOut;
+  snapshot?: DecisionsOut | null;
 }
 
 export interface ProjectRoleOut {

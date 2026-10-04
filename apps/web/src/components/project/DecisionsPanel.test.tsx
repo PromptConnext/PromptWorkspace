@@ -90,6 +90,17 @@ describe("DecisionsPanel", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it("refetches when the API sends a null snapshot", async () => {
+    decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
+    resolveDecision.mockResolvedValue({ snapshot: null });
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(refetch).toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("requires a reason to request changes", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({});

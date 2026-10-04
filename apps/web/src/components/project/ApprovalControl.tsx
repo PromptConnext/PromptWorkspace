@@ -60,7 +60,8 @@ export function ApprovalControl({
     try {
       // The response carries the listing after the request; applying it
       // saves a refetch (a second set of cross-region database round trips).
-      // An API older than the snapshot sends none: refetch then.
+      // No snapshot (the API could not read after its write, or predates
+      // snapshots): refetch then.
       const { snapshot } = await requestDecision(projectId, kind, authHeaders());
       if (snapshot) mutate(snapshot);
       else refetch();
