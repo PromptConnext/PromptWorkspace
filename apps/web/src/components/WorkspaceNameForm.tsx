@@ -77,9 +77,10 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
           >
             {busy ? "Saving…" : "Save"}
           </button>
-          {/* Always mounted: a live region that appears together with its
-              text is often not announced. */}
-          <p role="status" className="w-full text-sm text-emerald-700 empty:hidden">
+          {/* Always mounted and, while empty, only visually hidden (sr-only,
+              not display:none): a live region that enters the accessibility
+              tree together with its text is often not announced. */}
+          <p role="status" className="w-full text-sm text-emerald-700 empty:sr-only">
             {savedName !== null && trimmed === savedName && !error ? "Saved" : ""}
           </p>
           {error && (

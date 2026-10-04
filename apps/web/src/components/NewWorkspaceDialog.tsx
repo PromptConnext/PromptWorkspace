@@ -48,11 +48,25 @@ export function NewWorkspaceDialog({
   // Tab inside the dialog ourselves. Listening on the document, not the
   // dialog, keeps the trap working after a click on the backdrop has moved
   // focus to the page body. A create in flight can't be abandoned, so Escape
-  // (and Cancel) wait for it to settle. The ref always holds this render's
+  // (and Cancel) wait for it to settle. The ref holds the latest render's
   // handler, so the listener sees the current `busy` without re-subscribing.
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
-  keyHandler.current = (e: KeyboardEvent) => {
+  useEffect(() => {
+    keyHandler.current = onDocumentKeyDown;
+  });
+  useEffect(() => {
+    if (!open) return;
+    const listener = (e: KeyboardEvent) => keyHandler.current(e);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
+  }, [open]);
+
+  function onDocumentKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      // Handled here: preventDefault marks it for document listeners that
+      // check defaultPrevented; stopPropagation keeps window-level shortcut
+      // handlers (assistant panel, board) from acting behind the dialog.
+      e.preventDefault();
       e.stopPropagation();
       if (!busy) close();
       return;
@@ -72,13 +86,7 @@ export function NewWorkspaceDialog({
       e.preventDefault();
       first.focus();
     }
-  };
-  useEffect(() => {
-    if (!open) return;
-    const listener = (e: KeyboardEvent) => keyHandler.current(e);
-    document.addEventListener("keydown", listener);
-    return () => document.removeEventListener("keydown", listener);
-  }, [open]);
+  }
 
   if (!open) return null;
 

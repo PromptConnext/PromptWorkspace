@@ -220,7 +220,10 @@ def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | No
     snapshot describe the documents as they are now, including an edit that
     landed while the request ran. `None` when the read fails: the write is
     committed and must not become a 500, so the caller skips the mirror (it
-    is rewritten on the next resolve or stage save) and sends no snapshot."""
+    is rewritten on the next resolve or stage save) and sends no snapshot.
+    Not exact under concurrency: a stage save landing between this read and
+    the mirror write can still be overwritten by a mirror computed from these
+    hashes, until that next resolve or stage save corrects it."""
     try:
         return stage_hashes(repo, project_id)
     except Exception:

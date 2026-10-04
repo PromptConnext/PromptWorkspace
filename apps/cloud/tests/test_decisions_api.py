@@ -389,6 +389,25 @@ def test_an_edit_landing_during_an_approval_shows_stale_and_keeps_the_spec_draft
     assert spec.status == "draft" and spec.approved_by is None
 
 
+def test_an_edit_landing_during_a_request_shows_in_its_snapshot(
+    client, project, monkeypatch
+):
+    _save_tasks(client, project)
+    repo = client.app.state.repository
+    workspace_id = repo.get_project(project).workspace_id
+    edited = TASKS + "- [ ] T003 Edited while the request was in flight\n"
+
+    _after_save_decision(
+        monkeypatch, repo,
+        lambda: repo.upsert_stage_document(project, workspace_id, "tasks", edited, "bob"),
+    )
+    body = _request(client, project, "plan_approval").json()
+
+    assert body["status"] == "open"
+    # The request is for the tasks as they were; they have changed since.
+    assert body["snapshot"]["states"]["plan"] != "pending"
+
+
 def test_a_failing_mirror_write_never_fails_the_stage_save(client, project, monkeypatch):
     import app.generation.stage_apply as stage_apply
 

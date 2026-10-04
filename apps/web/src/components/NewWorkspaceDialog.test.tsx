@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NewWorkspaceDialog } from "./NewWorkspaceDialog";
 
@@ -112,18 +113,46 @@ describe("NewWorkspaceDialog", () => {
     expect(input).toHaveFocus();
   });
 
-  it("returns focus to the opener when it closes", async () => {
-    const opener = { current: null as HTMLButtonElement | null };
+  it("closes on Escape when focus has left the dialog, but not while creating", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi.fn(() => new Promise<void>(() => {}));
+    render(<NewWorkspaceDialog open onClose={onClose} onCreate={onCreate} />);
+    const input = screen.getByLabelText(/workspace name/i);
+    await userEvent.type(input, "Globex");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+    await screen.findByRole("button", { name: /creating/i });
+    (document.activeElement as HTMLElement | null)?.blur();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape pressed with focus on the page body", async () => {
+    const onClose = vi.fn();
+    render(<NewWorkspaceDialog open onClose={onClose} onCreate={vi.fn()} />);
+    (document.activeElement as HTMLElement | null)?.blur();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("returns focus to the opener after it closes and unmounts", async () => {
     function Harness() {
+      const opener = useRef<HTMLButtonElement>(null);
+      const [open, setOpen] = useState(true);
       return (
         <>
-          <button ref={(el) => { opener.current = el; }}>opener</button>
-          <NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} returnFocusRef={opener} />
+          <button ref={opener}>opener</button>
+          <NewWorkspaceDialog
+            open={open}
+            onClose={() => setOpen(false)}
+            onCreate={vi.fn()}
+            returnFocusRef={opener}
+          />
         </>
       );
     }
     render(<Harness />);
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "opener" })).toHaveFocus());
   });
 });
