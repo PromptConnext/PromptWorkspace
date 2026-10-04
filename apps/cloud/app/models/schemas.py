@@ -1232,6 +1232,32 @@ class StageInputs(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+DeliveryChangeKind = Literal["setup", "foundational", "story", "other", "polish", "unphased"]
+
+
+class DeliveryChange(BaseModel):
+    """One PR-sized slice of delivery, plan 0029's "Change", derived from one
+    `## Phase N:` section of tasks.md. Named DeliveryChange in code because
+    `/sync/projects/{id}/changes` already means the sync head. `ref` ("C3") is
+    assigned once at creation and never renumbered; `key` is what a
+    regeneration matches on ("setup", "story:2", ...)."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    ref: str
+    key: str
+    title: str
+    kind: DeliveryChangeKind
+    story: int | None = None
+    priority: str | None = None
+    position: int
+    depends_on: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    deleted_at: datetime | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
 # `generation_runs` is an audit/cost-accounting record, not itself part of
