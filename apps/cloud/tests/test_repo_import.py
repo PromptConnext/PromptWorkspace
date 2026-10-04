@@ -451,9 +451,13 @@ def test_import_refuses_when_the_default_branch_is_missing(client: TestClient):
     assert res.json()["detail"] == "repo_is_empty"
 
 
-@pytest.mark.parametrize("status", [403, 500])
+@pytest.mark.parametrize(
+    ("status", "detail"),
+    [(403, "github_repo_not_in_token_scope"), (401, "github_repo_not_in_token_scope"),
+     (500, "github_unreachable")],
+)
 def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(
-    client: TestClient, status: int
+    client: TestClient, status: int, detail: str
 ):
     ws_id = _workspace(client)
     _connect(client, ws_id, owner="acme")
@@ -465,8 +469,8 @@ def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(
         json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
         headers=ALICE,
     )
-    assert res.status_code == 502, res.text
-    assert res.json()["detail"] == "github_unreachable"
+    assert res.status_code == (400 if status in (401, 403) else 502), res.text
+    assert res.json()["detail"] == detail
 
 
 def test_import_without_github_connected(client: TestClient):

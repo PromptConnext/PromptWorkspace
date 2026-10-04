@@ -127,13 +127,20 @@ async def _has_commits(github_client, token: str, found: dict) -> bool:
     branches were all deleted, and refusing at import beats a seed-time
     failure. GitHub answers a ref read on a repository with no commits with
     409; 404 means the branch is missing, which also covers a renamed or
-    deleted default branch, and is treated as empty too. Any other error is
-    not an answer to this question and becomes 502 github_unreachable."""
+    deleted default branch, and is treated as empty too. 401/403 is the
+    token's scope (it can see the repository but not read its contents), as
+    for `get_repo`; any other error is not an answer to this question and
+    becomes 502 github_unreachable."""
     try:
         await github_client.get_branch_head(token, found["full_name"], found["default_branch"])
     except GithubWriteError as exc:
-        if getattr(exc, "status_code", None) in (404, 409):
+        status = getattr(exc, "status_code", None)
+        if status in (404, 409):
             return False
+        if status in (401, 403):
+            raise HTTPException(
+                status_code=400, detail="github_repo_not_in_token_scope"
+            ) from exc
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
     return True
 
@@ -186,9 +193,6 @@ async def create_project(
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
     if found is None:
         raise HTTPException(status_code=404, detail="repo_not_found")
-    if not await _has_commits(github_client, token, found):
-        raise HTTPException(status_code=400, detail="repo_is_empty")
-
     # A second project importing the same repo would silently steal the
     # first's webhook binding (pw_repo_webhooks is keyed by repo_full_name) —
     # corrupting deploy state and build attribution for both with no error
@@ -198,6 +202,9 @@ async def create_project(
     # sees repos another workspace already imported (plan 0016 M5).
     if repo.find_project_by_repo_id(found["id"]) is not None:
         raise HTTPException(status_code=409, detail="repo_already_imported")
+    # After the local collision check, which costs no GitHub round trip.
+    if not await _has_commits(github_client, token, found):
+        raise HTTPException(status_code=400, detail="repo_is_empty")
 
     return repo.create_project(
         workspace_id=body.workspace_id,

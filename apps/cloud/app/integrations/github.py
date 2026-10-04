@@ -494,9 +494,8 @@ def _repo_row(data: dict) -> dict:
     """The subset of a GitHub repository object this service uses.
 
     `empty` is derived from `size`: GitHub exposes no "has no commits" flag,
-    and a repository with no commits cannot be seeded at all — the seed step
-    reads the branch head first, which 404s. Catching it at the picker turns a
-    502 days later into a disabled row now. `size` is in KB and is eventually
+    and a repository with no commits cannot be seeded at all (its branch-head
+    read answers 409). The picker shows the flag as a hint. `size` is in KB and is eventually
     consistent — it can stay 0 for hours after the first push — so a push
     that landed after the repository was created overrides it (see
     `_pushed_after_creation`). Still advisory: the import route confirms every
