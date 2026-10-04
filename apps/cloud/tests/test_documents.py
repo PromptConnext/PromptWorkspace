@@ -11,11 +11,13 @@ pattern as every other RAG/graph cross-tenant test this session).
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.documents.extract import extract_text
 from app.documents.ocr import FakeOcrProvider
 from app.main import create_app
 from app.rag.chat import FakeChatProvider
@@ -272,3 +274,49 @@ def test_cross_workspace_cannot_retrieve_chunks(client: TestClient):
     zero_vector = [0.0] * FakeEmbeddingProvider.dim
     leaked = repo.vector_search(other_ws["id"], other_project["id"], zero_vector, top_k=100)
     assert leaked == []
+
+
+# Postgres `text` cannot store U+0000; Supabase rejects the extraction write
+# with "unsupported Unicode escape sequence" and the upload 500s. Extraction
+# strips it on every path, since each one can surface it: a text file can
+# carry raw NULs, pypdf decodes a PDF string's `\000` escape to one, and an
+# OCR provider is outside our control.
+
+
+def test_passthrough_extraction_strips_nul():
+    result = asyncio.run(
+        extract_text("text/plain", b"Thai\x00 payments\x00 PRD", FakeOcrProvider())
+    )
+    assert result.method == "passthrough"
+    assert result.text == "Thai payments PRD"
+
+
+def test_pdf_text_layer_extraction_strips_nul():
+    pdf = _make_pdf(
+        b"BT /F1 12 Tf 72 712 Td (Payments rollout\\000 covers Thai QR and PromptPay.) Tj ET"
+    )
+    result = asyncio.run(extract_text("application/pdf", pdf, FakeOcrProvider()))
+    assert result.method == "text_layer"
+    assert "\x00" not in result.text
+    assert "Payments rollout covers Thai QR" in result.text
+
+
+def test_ocr_extraction_strips_nul():
+    result = asyncio.run(
+        extract_text("application/pdf", SCANNED_PDF, FakeOcrProvider("scanned\x00 page"))
+    )
+    assert result.method == "ocr"
+    assert result.text == "scanned page"
+
+
+def test_upload_with_nul_bytes_stores_clean_text(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    res = client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.txt", b"Scope\x00 of the\x00 rollout", "text/plain")},
+        headers=ALICE,
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["status"] == "extracted"
+    stored = client.app.state.repository.get_document(pid, res.json()["id"])
+    assert stored.extracted_text == "Scope of the rollout"
