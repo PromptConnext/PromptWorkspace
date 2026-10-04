@@ -32,11 +32,9 @@ const BUTTON_LABEL: Record<DecisionKind, string> = {
  * Decisions tab show the same truth. */
 export function ApprovalControl({ projectId, kind }: { projectId: string; kind: DecisionKind }) {
   const { authHeaders } = useAuth();
-  const { data, refetch } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error: loadError, refetch } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const state: ApprovalState = data ? data.states[kind === "intent_approval" ? "intent" : "plan"] : "none";
-  const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
   async function request() {
     setBusy(true);
@@ -50,6 +48,21 @@ export function ApprovalControl({ projectId, kind }: { projectId: string; kind: 
       setBusy(false);
     }
   }
+
+  if (!data) {
+    // Until the states load there is nothing true to show, and a request
+    // button here could ask again over an approval the user can't see yet.
+    return loadError ? (
+      <p role="alert" className="text-xs text-rose-700">
+        {loadError}
+      </p>
+    ) : (
+      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">Loading…</span>
+    );
+  }
+
+  const state: ApprovalState = data.states[kind === "intent_approval" ? "intent" : "plan"];
+  const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -66,9 +79,9 @@ export function ApprovalControl({ projectId, kind }: { projectId: string; kind: 
           {BUTTON_LABEL[kind]}
         </button>
       )}
-      {error && (
+      {(error ?? loadError) && (
         <p role="alert" className="text-xs text-rose-700">
-          {error}
+          {error ?? loadError}
         </p>
       )}
     </div>

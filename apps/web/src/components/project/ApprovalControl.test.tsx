@@ -6,9 +6,10 @@ import type { DecisionsOut } from "@/lib/types";
 import { ApprovalControl } from "./ApprovalControl";
 
 let data: DecisionsOut | null = null;
+let loadError: string | null = null;
 const refetch = vi.fn();
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data, error: null, loading: false, refetch }),
+  useCloudGet: () => ({ data, error: loadError, loading: data === null && loadError === null, refetch }),
 }));
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({ Authorization: "Bearer t" }) }),
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", () => ({
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  loadError = null;
 });
 
 const states = (plan: DecisionsOut["states"]["plan"]): DecisionsOut => ({
@@ -66,5 +68,22 @@ describe("ApprovalControl", () => {
     render(<ApprovalControl projectId="p1" kind="plan_approval" />);
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("delivery_plan_missing");
+  });
+
+  it("offers nothing to click until the states have loaded", () => {
+    data = null;
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows a load error instead of a request button", () => {
+    data = null;
+    loadError = "Network down";
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Network down");
+    expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });

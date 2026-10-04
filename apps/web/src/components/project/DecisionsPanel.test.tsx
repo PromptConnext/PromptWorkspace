@@ -87,4 +87,15 @@ describe("DecisionsPanel", () => {
     render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("Split story 2.")).toBeInTheDocument();
   });
+
+  it("sends a reason typed before approving", async () => {
+    decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
+    resolveDecision.mockResolvedValue({});
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    await userEvent.type(screen.getByLabelText("Reason"), "  Looks right.  ");
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(resolveDecision).toHaveBeenCalledWith("p1", "d1", "approved", "Looks right.", {});
+  });
 });

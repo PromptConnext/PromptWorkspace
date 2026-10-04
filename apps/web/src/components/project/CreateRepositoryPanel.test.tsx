@@ -93,6 +93,27 @@ describe("CreateRepositoryPanel", () => {
     expect(screen.getByText(/first — the repository is seeded with them/i)).toBeInTheDocument();
   });
 
+  it("explains plan_approval_required and points to the Delivery tab", async () => {
+    mockFetch({ ok: false, status: 409, detail: "plan_approval_required" });
+    render(
+      <CreateRepositoryPanel
+        projectId="p1"
+        projectName="Widget App"
+        onCreated={vi.fn()}
+        constitutionReady
+        tasksReady
+        workspaceId="ws1"
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: /create repository/i });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+
+    expect(await screen.findByText(/approve the delivery plan/i)).toHaveTextContent(/Delivery tab/);
+    expect(screen.queryByText("plan_approval_required")).not.toBeInTheDocument();
+  });
+
   it("renders a human sentence for github_not_configured", async () => {
     mockFetch({ ok: false, status: 400, detail: "github_not_configured" });
     render(

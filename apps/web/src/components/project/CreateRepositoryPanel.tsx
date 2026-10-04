@@ -16,6 +16,13 @@ function slugify(name: string): string {
 // Maps apps/cloud/app/api/sync.py's create-repository `detail` codes to
 // sentences a business/tech-lead user can act on.
 const DETAIL_MESSAGES: Record<string, string> = {
+  // Plan 0029 delivery gates (on when the server sets REQUIRE_PLAN_APPROVAL).
+  constitution_required:
+    "Write the project rules (the Constitution step in the Planner) before creating the repository.",
+  tasks_required: "Generate the tasks in the Planner before creating the repository.",
+  plan_approval_required:
+    "The delivery plan needs approval first. Request it on the Delivery tab, then ask the tech " +
+    "steward (or a workspace admin) to approve the delivery plan from the Decisions tab.",
   not_in_tech_review: "This project isn't in tech review — refresh the page and try again.",
   github_repo_create_failed: "GitHub couldn't create the repository. Try again in a moment.",
   github_seed_failed:

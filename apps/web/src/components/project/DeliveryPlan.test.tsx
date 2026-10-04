@@ -37,8 +37,19 @@ describe("groupByWave", () => {
 describe("DeliveryPlan", () => {
   it("explains what to do when there is no plan yet", () => {
     plan = { changes: [], plan_approval: "none" };
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={{ tasks: [] } as unknown as ProjectGraph} projectId="p1" />);
     expect(screen.getByText(/Generate tasks in the Planner/)).toBeInTheDocument();
+  });
+
+  it("asks for a re-save when tasks exist from before changes were grouped", () => {
+    plan = { changes: [], plan_approval: "none" };
+    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    expect(
+      screen.getByText(
+        "Save the tasks document again in the Planner to group these tasks into Changes.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Generate tasks in the Planner/)).not.toBeInTheDocument();
   });
 
   it("lays changes out in waves with their tasks and dependencies", () => {

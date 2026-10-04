@@ -30,9 +30,13 @@ export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projec
   if (error) return <p className="text-sm text-rose-700">{error}</p>;
   if (!plan) return null;
   if (plan.changes.length === 0) {
+    // Tasks saved before Changes existed (plan 0029) have none to show until
+    // the tasks document is applied again.
     return (
       <p className="text-sm text-slate-500">
-        No delivery plan yet. Generate tasks in the Planner; each phase becomes a Change.
+        {graph.tasks.length > 0
+          ? "Save the tasks document again in the Planner to group these tasks into Changes."
+          : "No delivery plan yet. Generate tasks in the Planner; each phase becomes a Change."}
       </p>
     );
   }

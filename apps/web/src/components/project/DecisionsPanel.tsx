@@ -43,7 +43,7 @@ function DecisionRow({
         decision.project_id,
         decision.id,
         outcome,
-        outcome === "rejected" ? reason.trim() : null,
+        reason.trim() || null,
         authHeaders(),
       );
       onResolved();
