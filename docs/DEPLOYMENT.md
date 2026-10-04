@@ -81,6 +81,21 @@ psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations ord
 
 Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
 
+#### Region
+
+The API and its Supabase project must run in the same region. Every repository call is one PostgREST request, and a single route makes several in sequence, so the distance between the two is paid many times per click. Today the Northflank services run in `europe-west4` (Netherlands) while the Supabase projects are in `ap-southeast-1` (Singapore), which costs roughly 170–200 ms per database call; on the trust stack a decision action took 6–10 s end to end before the plan 0029 round-trip fixes, and it is still bounded by that per-call cost. Create every new service in the database's region, and move the existing ones.
+
+Northflank cannot move a running service between regions, so a move is a rebuild beside the old service followed by a DNS switch. Whether the plan offers an Asia-Southeast (Singapore) region is **not verified** — check in Northflank before starting.
+
+1. Lower the TTL on the API's CNAME (e.g. to 60 s) a day ahead, so the switch propagates quickly and a rollback is just as fast.
+2. Create a Northflank project in the Asia-Southeast (Singapore) region, if the plan offers it.
+3. Recreate each service there with identical build settings (§2.3: Dockerfile, context, branch, port, health checks, 1 instance, autoscaling off) and identical runtime variables (§2.4). **Reuse the same `RAG_KEY_ENCRYPTION_KEY` for each environment**: workspace model keys and GitHub tokens are stored encrypted under it, and a new key makes every stored credential unreadable.
+4. Attach the same custom domain to the new service and verify it in Northflank.
+5. Switch the CNAME to the new service's target, then check `curl -s $API/health` (§2.6) reports the expected `env` and `schema_version`, and that sign-in and one project page load in the web app.
+6. Delete the old service once the new one has served traffic cleanly, then restore the TTL.
+
+Webhook URLs registered with GitHub (`PUBLIC_API_URL`) and the web app's `NEXT_PUBLIC_CLOUD_*` variables do not change, because the domain does not.
+
 ### 2.4 Environment variables (Northflank → service → Runtime variables)
 
 Production values (develop differs only where noted in §2.7):
