@@ -3,7 +3,7 @@
 PromptConnext is the company; PromptWorkspace is the product this repository ships. Its live surfaces are:
 
 1. **Cloud app** (`apps/cloud`) — FastAPI sync/collaboration backend → **Northflank**, one service per environment.
-2. **Web app** (`apps/web`) — Next.js workspace UI → **Vercel** (project `promptworkspace-web`).
+2. **Web app** (`apps/web`) — Next.js workspace UI → **Vercel** (project `promptworkspace-app`).
 3. **VS Code extension** (`apps/vscode`) → Visual Studio Marketplace, ID `promptconnext.promptworkspace` (§3A).
 4. **MCP server** (`apps/mcp`) → GitHub Release `mcp-v*` (§3A).
 
@@ -194,7 +194,7 @@ Supabase's built-in sender only delivers to members of the Supabase org, so each
 secrets, no WebSocket server of its own (presence is a client-side connection
 *to* `apps/cloud`), so it deploys as a normal static/SSR Vercel project.
 
-1. Vercel project `promptworkspace-web`: Root Directory `apps/web`, "Include
+1. Vercel project `promptworkspace-app`: Root Directory `apps/web`, "Include
    files outside Root Directory" on, install command
    `corepack enable && pnpm install --frozen-lockfile --filter @promptworkspace/web...`,
    Production Branch `main`. The `develop` branch is attached to
@@ -393,12 +393,12 @@ Versioned paths are immutable (cache-friendly); `latest.json` is the one mutable
 
 | Host | Target | Env |
 |---|---|---|
-| `promptworkspace.truthledgers.com` | CNAME → Vercel (`promptworkspace-web`, branch `develop`) | develop |
+| `promptworkspace.truthledgers.com` | CNAME → Vercel (`promptworkspace-app`, branch `develop`) | develop |
 | `promptconnext.truthledgers.com` | CNAME → Vercel (`promptconnext-corp-web`, branch `develop`) | develop |
 | `promptworkspace-api.truthledgers.com` | CNAME → Northflank `promptworkspace` + verification TXT | develop |
-| `promptworkspace-trust.truthledgers.com` | CNAME → Vercel (`promptworkspace-web`, branch `feature/trust-outcome`); temporary, [§8](#8-trust-test-environment-plan-0029) | trust |
+| `promptworkspace-trust.truthledgers.com` | CNAME → Vercel (`promptworkspace-app`, branch `feature/trust-outcome`); temporary, [§8](#8-trust-test-environment-plan-0029) | trust |
 | `promptworkspace-trust-api.truthledgers.com` | CNAME → Northflank `promptworkspace-trust` + verification TXT; temporary, [§8](#8-trust-test-environment-plan-0029) | trust |
-| `workspace.promptconnext.com` | CNAME → Vercel (`promptworkspace-web`, Production) | main |
+| `workspace.promptconnext.com` | CNAME → Vercel (`promptworkspace-app`, Production) | main |
 | `promptconnext.com` / `www` | A `76.76.21.21` (or Vercel ALIAS) / CNAME → Vercel, `www` 308 → apex | main |
 | `workspace-api.promptconnext.com` | CNAME → Northflank `promptworkspace-prod` + verification TXT | main |
 

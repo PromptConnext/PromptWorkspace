@@ -18,7 +18,7 @@ function slugify(name: string): string {
 const DETAIL_MESSAGES: Record<string, string> = {
   // Plan 0029 delivery gates (on when the server sets REQUIRE_PLAN_APPROVAL).
   constitution_required:
-    "Write the project rules (the Constitution step in the Planner) before creating the repository.",
+    "Write the project rules (the Project rules step in the Planner) before creating the repository.",
   tasks_required: "Generate the tasks in the Planner before creating the repository.",
   plan_approval_required:
     "The delivery plan needs approval first. Request it on the Delivery tab, then ask the tech " +
