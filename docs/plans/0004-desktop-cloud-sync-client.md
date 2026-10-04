@@ -1,6 +1,6 @@
 # Plan — apps/engine: desktop client for the cloud sync API
 
-**Date:** 2026-07-10 · **Status:** Proposed · **Scope:** `apps/engine` (+ `apps/desktop` UI)
+**Date:** 2026-07-10 · **Status:** Superseded by [ADR 0020](../decisions/0020-cloud-is-the-source-of-truth.md) and [ADR 0028](../decisions/0028-desktop-repurposed-for-business-users.md). D1–D2 shipped; D3–D4 will not be built · **Scope:** `apps/engine` (+ `apps/desktop` UI)
 **Extends:** ADR 0010 (sync model), ADR 0001 (Tauri shell + Node sidecar)
 **Follows:** plan `0001-cloud-deletes-and-auth.md` (M1 deletes, M2 auth/workspaces) and
 plan `0002-cloud-conflict-sync-integrations.md` (M3 field ownership, M4 auto-sync,

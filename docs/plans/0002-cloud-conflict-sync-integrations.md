@@ -1,6 +1,6 @@
 # Plan — apps/cloud: conflict ownership, auto-sync, integrations, presence, ops
 
-**Date:** 2026-07-05 · **Status:** Proposed · **Scope:** `apps/cloud` (+ engine touchpoints)
+**Date:** 2026-07-05 · **Status:** Implemented (audited 2026-10-04). The Redis presence backplane is deliberately deferred ([plan 0021](0021-operational-floor.md) M4) · **Scope:** `apps/cloud` (+ engine touchpoints)
 **Extends:** ADR 0010 (sync model) · **Follows:** plan `0001-cloud-deletes-and-auth.md` (M1 deletes, M2 auth/workspaces)
 **Depth:** implementation-ready · Milestones **M3–M7**.
 

@@ -1,6 +1,6 @@
 # Plan — PromptConnext Marketing Website (IA · Content · SEO · Conversion)
 
-**Date:** 2026-07-06 · **Status:** Proposed · **Scope:** new `apps/website` (or separate repo)
+**Date:** 2026-07-06 · **Status:** Moved. Built as `apps/corp`, which moved to `PromptConnext/promptconnext-corp-web` on 2026-10-01; nothing remains in this repo · **Scope:** new `apps/website` (or separate repo)
 **Grounded in:** `docs/promptconnext-product-roadmap.md`, `docs/promptconnext-platform-architecture.md`, `docs/promptconnext-design-system-plan.md`, root `README.md`
 
 **Brand:** product is **PromptConnext** (renamed from PromptConnext). All site copy, brand keywords, comparison slugs, and the domain use *PromptConnext*. Internal repo/doc filenames (e.g. `docs/promptconnext-*.md`) are left as-is here and are covered by a separate repo-wide rename if the team wants one.

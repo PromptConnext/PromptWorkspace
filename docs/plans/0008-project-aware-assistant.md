@@ -1,6 +1,6 @@
 # Plan — Project-aware AI assistant for the business team (cloud chat)
 
-**Date:** 2026-07-17 · **Status:** Proposed · **Scope:** `apps/cloud` + `apps/web`
+**Date:** 2026-07-17 · **Status:** Partially implemented (audited 2026-10-04). M1 shipped; M2 (multi-turn, saved threads) and the persistent M3 drawer are open, carried into [plan 0029 §13](0029-agent-native-delivery.md#13-carried-over-open-work) · **Scope:** `apps/cloud` + `apps/web`
 **Implements:** ADR 0011 (RAG assistant) · **Depends on:** plan `0007-managed-thai-llm-tier-pilot.md` (M0 documents, M2 managed tier) · **Follows:** plan `0005-cloud-workspace-rag-assistant.md` (M9–M10)
 **Depth:** task-level, one milestone per session/PR.
 

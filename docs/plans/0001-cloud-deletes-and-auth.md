@@ -1,6 +1,6 @@
 # Plan — apps/cloud: soft-delete, then auth + workspaces/RLS
 
-**Date:** 2026-07-05 · **Status:** Proposed · **Scope:** `apps/cloud`
+**Date:** 2026-07-05 · **Status:** Implemented (audited 2026-10-04). Rollout step 4 (drop `pw_projects.owner_id`, make `workspace_id` NOT NULL) never ran; carried into [plan 0029 §13](0029-agent-native-delivery.md#13-carried-over-open-work) · **Scope:** `apps/cloud`
 **Extends:** ADR 0010 (sync model), architecture §3.1 (task-graph schema)
 **Depth:** implementation-ready · **Sequencing:** Milestone 1 (deletes) ships first and stands alone; Milestone 2 (auth + workspaces) builds on it.
 

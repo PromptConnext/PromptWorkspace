@@ -1,6 +1,6 @@
 # Plan — Cloud workspace & RAG project assistant
 
-**Date:** 2026-07-11 · **Status:** Proposed · **Scope:** `apps/cloud` + new `apps/web`
+**Date:** 2026-07-11 · **Status:** Implemented (M8–M12, audited 2026-10-04). Issue #1 (presence WebSocket token in the query string) is carried into [plan 0029 §13](0029-agent-native-delivery.md#13-carried-over-open-work) · **Scope:** `apps/cloud` + new `apps/web`
 **Implements:** ADR 0011 · **Follows:** plan `0002-cloud-conflict-sync-integrations.md` (M3–M7)
 **Depth:** milestone-level (implementation detail to be specced per milestone) · Milestones **M8–M12**.
 

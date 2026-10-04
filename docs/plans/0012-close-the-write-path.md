@@ -1,6 +1,6 @@
 # Plan 0012 — Close the write path
 
-**Date:** 2026-09-12 · **Status:** Ready for implementation (M1 is urgent) · **ADR:** [0020](../decisions/0020-cloud-is-the-source-of-truth.md)
+**Date:** 2026-09-12 · **Status:** M1 implemented; M2–M5 superseded by [ADR 0028](../decisions/0028-desktop-repurposed-for-business-users.md). Retiring `PUT /sync/projects/{id}/graph` and the engine's manual push is [plan 0029](0029-agent-native-delivery.md) phase 0 · **ADR:** [0020](../decisions/0020-cloud-is-the-source-of-truth.md)
 
 This plan stops an active data-loss path. ADR 0020 made the cloud authoritative for the task graph and gave one sequencing instruction above all others: disable the full-graph push from the engine before anything else, ahead of the pull work, even though that leaves the desktop temporarily read-only. That step was skipped. `startCloudSyncLoop` (`apps/engine/src/sync/loop.ts:494`) still calls `pushProjectSnapshot` on every tick at `apps/engine/src/sync/loop.ts:498`, and `assembleSnapshot` (`apps/engine/src/sync/loop.ts:126`) still builds a complete local picture of requirements, spec documents, tasks, artifacts and agent runs and sends it over cloud state that is now the authored original. The loop starts unconditionally at engine boot (`apps/engine/src/index.ts:64`), on a twenty-second default timer (`apps/engine/src/sync/loop.ts:12`).
 
