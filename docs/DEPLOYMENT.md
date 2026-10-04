@@ -428,3 +428,34 @@ Neither workflow deploys: Vercel's git integration and Northflank's per-service 
 - [ ] The scrubbing hook is on — `apps/cloud/app/observability.py` is what `sentry_sdk.init()` is called through, not a bare init, and `apps/cloud/tests/test_error_reporting.py` is green. Stack-frame locals, request bodies, `Authorization`/`X-User-Id` headers, log-record arguments, query strings and secret-bearing URL path segments must all be off; the web equivalent is `src/lib/sentry.ts`, covered by `src/lib/sentry.test.ts`
 - [ ] The production web bundle contains no `truthledgers`; the staging bundle no `workspace-api.promptconnext.com`
 - [ ] VSIX installed with no overrides signs in against production before `vsce publish`
+
+## 9. Trust test environment (plan 0029)
+
+A third, short-lived stack for the agent-native delivery work in [plan 0029](plans/0029-agent-native-delivery.md). It tracks branch `feature/trust-outcome`, never shares a database with staging or production (company ADR 0003, amended 2026-10-04), and is torn down when the branch merges into `develop`.
+
+| Piece | Value |
+|---|---|
+| Branch | `feature/trust-outcome` |
+| Web | `https://promptworkspace-trust.truthledgers.com` (Vercel project `promptworkspace-web`, branch domain) |
+| API | `https://promptworkspace-trust-api.truthledgers.com` (Northflank service `promptworkspace-trust` in project `promptworkspace`, 1 instance) |
+| Database | Supabase project `promptworkspace-trust` (Free plan, region ap-southeast-1) |
+| Extra setting | `REQUIRE_PLAN_APPROVAL=true` |
+
+### 9.1 Provisioning checklist (dashboard steps, in order)
+
+1. **Supabase.** Create project `promptworkspace-trust` (same org as `promptworkspace-develop`, Singapore, Free). Save the DB password. Record `SUPABASE_URL`, the secret key, the publishable key, the JWT secret and the **Session pooler** URI.
+   - Auth → URL Configuration: Site URL `https://promptworkspace-trust.truthledgers.com`; Redirect URLs `https://promptworkspace-trust.truthledgers.com/**` and `http://localhost:3000/**`.
+   - Auth → SMTP: the same Brevo settings as develop, sender name `PromptWorkspace (trust)`.
+2. **Schema, before any deploy.** From `apps/cloud`:
+   `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" apply --var embed_dim=1536`, then `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" status` must list `0004_pw_delivery_and_decisions` as applied.
+3. **Northflank.** In project `promptworkspace`, duplicate service `promptworkspace` as `promptworkspace-trust`: branch `feature/trust-outcome`, same Dockerfile/context/port/health checks, instances 1, autoscaling off. Runtime variables: copy from `promptworkspace`, then change `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`, `CORS_ORIGINS=https://promptworkspace-trust.truthledgers.com`, `WEB_APP_URL=https://promptworkspace-trust.truthledgers.com`, `PUBLIC_API_URL=https://promptworkspace-trust-api.truthledgers.com`, a **new** `RAG_KEY_ENCRYPTION_KEY`, and add `REQUIRE_PLAN_APPROVAL=true`. Custom domain `promptworkspace-trust-api.truthledgers.com`. Enable CI auto-deploy only after step 2.
+4. **Vercel** (project `promptworkspace-web`):
+   - Settings → Git → Ignored Build Step: add `feature/trust-outcome` to the branches that build. With a custom command: `if [[ "$VERCEL_GIT_COMMIT_REF" =~ ^(main|develop|feature/trust-outcome)$ ]]; then exit 1; else exit 0; fi` (exit 1 means "build").
+   - Settings → Environment Variables, scope **Preview**, branch `feature/trust-outcome`: `NEXT_PUBLIC_CLOUD_API_URL=https://promptworkspace-trust-api.truthledgers.com`, `NEXT_PUBLIC_CLOUD_WS_URL=wss://promptworkspace-trust-api.truthledgers.com`, `NEXT_PUBLIC_AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the trust project's publishable key).
+   - Settings → Domains: add `promptworkspace-trust.truthledgers.com` and connect it to Git branch `feature/trust-outcome`.
+5. **DNS** (truthledgers.com, proxy off): `promptworkspace-trust` CNAME → the Vercel target; `promptworkspace-trust-api` CNAME → the Northflank target.
+6. **Smoke check:** `curl -s https://promptworkspace-trust-api.truthledgers.com/health` reports `schema_version` `0004_pw_delivery_and_decisions`, and the web origin returns 200.
+
+### 9.2 Teardown
+
+When `feature/trust-outcome` merges into `develop`: delete the Vercel branch domain and its env vars, the Northflank service, the Supabase project (after 14 days) and both DNS records. Apply migration 0004 to develop's database **before** the merge deploys.
