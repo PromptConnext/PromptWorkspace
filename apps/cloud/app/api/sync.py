@@ -353,6 +353,11 @@ async def create_repository(
     if project.lifecycle_status != "tech_review":
         raise HTTPException(status_code=409, detail="not_in_tech_review")
 
+    # Plan 0029 delivery gates, before any external mutation. Behind a setting
+    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §9).
+    if request.app.state.settings.require_plan_approval:
+        _require_delivery_gates(repo, project_id)
+
     workspace = repo.get_workspace(project.workspace_id)
     resolved = resolve_token(request.app, workspace)
     if resolved is None:
@@ -741,6 +746,18 @@ def _seed_stage_docs(repo: Repository, project_id: str) -> dict[str, str | None]
         stage: (doc.content if doc else None)
         for stage, doc in ((s, repo.get_stage_document(project_id, s)) for s in _SEED_STAGES)
     }
+
+
+def _require_delivery_gates(repo: Repository, project_id: str) -> None:
+    from app.api.delivery import _decisions_state
+
+    docs = _seed_stage_docs(repo, project_id)
+    if not (docs["constitution"] or "").strip():
+        raise HTTPException(status_code=409, detail="constitution_required")
+    if not (docs["tasks"] or "").strip():
+        raise HTTPException(status_code=409, detail="tasks_required")
+    if _decisions_state(repo, project_id)["plan"] != "approved":
+        raise HTTPException(status_code=409, detail="plan_approval_required")
 
 
 def _detected_runtime(repo: Repository, project: Project) -> str | None:

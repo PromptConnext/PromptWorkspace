@@ -11,7 +11,9 @@ a dependency on graph pagination for a question that is not about the graph.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
+from app.api.delivery import DecisionOut, _routing_context, decision_out
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import AssignedTask, TaskStatus
@@ -37,3 +39,46 @@ def list_my_tasks(
         statuses=status or _OPEN_STATUSES,
         limit=limit,
     )
+
+
+class InboxItem(BaseModel):
+    decision: DecisionOut
+    project_id: str
+    project_name: str
+    workspace_id: str
+    workspace_name: str
+
+
+@router.get("/decisions", response_model=list[InboxItem])
+def list_my_decisions(
+    workspace_id: str | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[InboxItem]:
+    """Open decisions routed to the caller (plan 0029 Decision Inbox). One pass
+    over the caller's workspaces and projects: fine at today's scale; move to a
+    single indexed query (idx_pw_decisions_open) when it isn't."""
+    items: list[InboxItem] = []
+    for workspace in repo.list_workspaces(user.id):
+        if workspace_id is not None and workspace.id != workspace_id:
+            continue
+        for project in repo.list_projects_by_workspace(workspace.id):
+            decisions = [d for d in repo.list_decisions(project.id) if d.status == "open"]
+            if not decisions:
+                continue
+            roles, member_ids, is_admin = _routing_context(repo, project, user)
+            for decision in decisions:
+                out = decision_out(decision, user_id=user.id, roles=roles,
+                                   member_ids=member_ids, is_admin=is_admin)
+                if out.can_resolve:
+                    items.append(
+                        InboxItem(
+                            decision=out,
+                            project_id=project.id,
+                            project_name=project.name,
+                            workspace_id=workspace.id,
+                            workspace_name=workspace.name,
+                        )
+                    )
+    items.sort(key=lambda i: i.decision.created_at, reverse=True)
+    return items
