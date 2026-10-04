@@ -5,13 +5,20 @@ import type { DeliveryChange, DeliveryPlan as Plan, ProjectGraph } from "@/lib/t
 import { DeliveryPlan, groupByWave } from "./DeliveryPlan";
 
 let plan: Plan | null = null;
+let loading = false;
+let loadError: string | null = null;
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data: plan, error: null, loading: false, refetch: vi.fn() }),
+  useCloudGet: () => ({ data: plan, error: loadError, loading, refetch: vi.fn() }),
 }));
 vi.mock("./ApprovalControl", () => ({
   ApprovalControl: () => <div>approval-control</div>,
 }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  plan = null;
+  loading = false;
+  loadError = null;
+});
 
 const change = (o: Partial<DeliveryChange>): DeliveryChange => ({
   id: "c", ref: "C1", key: "setup", title: "Setup", kind: "setup", story: null,
@@ -35,6 +42,40 @@ describe("groupByWave", () => {
 });
 
 describe("DeliveryPlan", () => {
+  it("says the plan is loading instead of rendering nothing", () => {
+    plan = null;
+    loading = true;
+    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    expect(screen.getByText("Loading delivery plan…")).toBeInTheDocument();
+  });
+
+  it("shows the load error rather than the loading line", () => {
+    plan = null;
+    loadError = "Network down";
+    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    expect(screen.getByText("Network down")).toBeInTheDocument();
+    expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
+  });
+
+  it("lists a change's tasks by task number, not graph order, with unnumbered ones last", () => {
+    plan = {
+      plan_approval: "none",
+      changes: [change({ id: "c1", task_ids: ["a", "b", "c", "d", "e"] })],
+    };
+    const g = {
+      tasks: [
+        { id: "a", feature_tag: "T011", title: "Eleven", change_id: "c1" },
+        { id: "b", feature_tag: null, title: "No ref one", change_id: "c1" },
+        { id: "c", feature_tag: "T010 [P]", title: "Ten", change_id: "c1" },
+        { id: "d", feature_tag: "T002", title: "Two", change_id: "c1" },
+        { id: "e", feature_tag: "", title: "No ref two", change_id: "c1" },
+      ],
+    } as unknown as ProjectGraph;
+    render(<DeliveryPlan graph={g} projectId="p1" />);
+    const titles = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(titles).toEqual(["T002Two", "T010Ten", "T011Eleven", "No ref one", "No ref two"]);
+  });
+
   it("explains what to do when there is no plan yet", () => {
     plan = { changes: [], plan_approval: "none" };
     render(<DeliveryPlan graph={{ tasks: [] } as unknown as ProjectGraph} projectId="p1" />);

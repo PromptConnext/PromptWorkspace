@@ -21,6 +21,23 @@ export function groupByWave(changes: DeliveryChange[]): DeliveryChange[][] {
   return waves.filter(Boolean);
 }
 
+/** The number in a task's leading `T<digits>` ref; null when it has none. */
+function taskNumber(featureTag: string | null | undefined): number | null {
+  const match = /^T(\d+)/.exec(featureTag ?? "");
+  return match ? Number(match[1]) : null;
+}
+
+/** Tasks in ref order, those without a ref last. The sort is stable, so ties
+ * keep the graph's order. */
+function byTaskNumber<T extends { feature_tag?: string | null }>(tasks: T[]): T[] {
+  return [...tasks].sort((a, b) => {
+    const x = taskNumber(a.feature_tag);
+    const y = taskNumber(b.feature_tag);
+    if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
+    return x - y;
+  });
+}
+
 /** Plan 0029's Delivery Plan: Changes in dependency waves. Changes in one
  * wave can run in parallel; each wave waits for the one before it. */
 export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projectId: string }) {
@@ -28,7 +45,7 @@ export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projec
   const taskById = new Map(graph.tasks.map((t) => [t.id, t]));
 
   if (error) return <p className="text-sm text-rose-700">{error}</p>;
-  if (!plan) return null;
+  if (!plan) return <p className="text-sm text-slate-500">Loading delivery plan…</p>;
   if (plan.changes.length === 0) {
     // Tasks saved before Changes existed (plan 0029) have none to show until
     // the tasks document is applied again.
@@ -75,16 +92,17 @@ export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projec
                   <p className="mt-1 text-xs text-slate-500">After {change.depends_on.join(", ")}</p>
                 )}
                 <ul className="mt-2 flex flex-col gap-1">
-                  {change.task_ids.map((id) => {
-                    const task = taskById.get(id);
-                    if (!task) return null;
-                    return (
-                      <li key={id} className="flex gap-2 text-xs text-slate-600">
-                        <span className="font-mono">{(task.feature_tag ?? "").split(" ")[0]}</span>
-                        <span className="truncate">{task.title}</span>
-                      </li>
-                    );
-                  })}
+                  {byTaskNumber(
+                    change.task_ids.flatMap((id) => {
+                      const task = taskById.get(id);
+                      return task ? [task] : [];
+                    }),
+                  ).map((task) => (
+                    <li key={task.id} className="flex gap-2 text-xs text-slate-600">
+                      <span className="font-mono">{(task.feature_tag ?? "").split(" ")[0]}</span>
+                      <span className="truncate">{task.title}</span>
+                    </li>
+                  ))}
                 </ul>
               </article>
             ))}
