@@ -113,7 +113,7 @@ describe("NewWorkspaceDialog", () => {
     expect(input).toHaveFocus();
   });
 
-  it("closes on Escape when focus has left the dialog, but not while creating", async () => {
+  it("ignores Escape from outside the dialog while a create is in flight", async () => {
     const onClose = vi.fn();
     const onCreate = vi.fn(() => new Promise<void>(() => {}));
     render(<NewWorkspaceDialog open onClose={onClose} onCreate={onCreate} />);
@@ -129,7 +129,11 @@ describe("NewWorkspaceDialog", () => {
   it("closes on Escape pressed with focus on the page body", async () => {
     const onClose = vi.fn();
     render(<NewWorkspaceDialog open onClose={onClose} onCreate={vi.fn()} />);
-    (document.activeElement as HTMLElement | null)?.blur();
+    const input = screen.getByLabelText(/workspace name/i);
+    // Wait for the open-time focus first, or it would land after the blur.
+    await waitFor(() => expect(input).toHaveFocus());
+    input.blur();
+    expect(document.activeElement).toBe(document.body);
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
   });
