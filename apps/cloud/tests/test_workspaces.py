@@ -350,3 +350,72 @@ def test_jwt_required_when_auth_mode_supabase(jwt_client):
     res = jwt_client.post("/workspaces", json={"name": "W"}, headers=_bearer("user-123"))
     assert res.status_code == 201
     assert res.json()["created_by"] == "user-123"
+
+
+# --- workspace name validation (create + rename) -------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t\n", "x" * 101, "  " + "x" * 101 + "  "])
+def test_create_workspace_rejects_blank_or_overlong_name(client, name):
+    res = client.post("/workspaces", json={"name": name}, headers={"X-User-Id": "alice"})
+    assert res.status_code == 422, res.text
+
+
+def test_create_workspace_accepts_max_length_and_trims(client):
+    assert _ws(client, name="x" * 100)["name"] == "x" * 100
+    assert _ws(client, name="  Acme  ", user="bob")["name"] == "Acme"
+
+
+def test_create_workspace_stores_trimmed_name(client):
+    ws = _ws(client, name="  Acme  ")
+    got = client.get(f"/workspaces/{ws['id']}", headers={"X-User-Id": "alice"}).json()
+    assert got["name"] == "Acme"
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 101])
+def test_rename_workspace_rejects_blank_or_overlong_name(client, name):
+    ws = _ws(client, name="Acme")
+    res = client.patch(
+        f"/workspaces/{ws['id']}", json={"name": name}, headers={"X-User-Id": "alice"}
+    )
+    assert res.status_code == 422, res.text
+    got = client.get(f"/workspaces/{ws['id']}", headers={"X-User-Id": "alice"}).json()
+    assert got["name"] == "Acme"
+
+
+def test_rename_workspace_trims_and_stores(client):
+    ws = _ws(client, name="Acme")
+    res = client.patch(
+        f"/workspaces/{ws['id']}", json={"name": "  Globex  "}, headers={"X-User-Id": "alice"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["name"] == "Globex"
+
+
+def test_patch_without_name_leaves_name_unchanged(client):
+    ws = _ws(client, name="Acme")
+    res = client.patch(
+        f"/workspaces/{ws['id']}",
+        json={"rag_index_pmo_discussions": True},
+        headers={"X-User-Id": "alice"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["name"] == "Acme"
+
+
+def test_member_cannot_rename_workspace(client):
+    ws = _ws(client, name="Acme", user="alice")
+    inv = client.post(
+        f"/workspaces/{ws['id']}/invitations",
+        json={"email": "bob@x.com"},
+        headers={"X-User-Id": "alice"},
+    ).json()
+    client.post(
+        f"/invitations/{inv['invitation']['token']}/accept", headers={"X-User-Id": "bob"}
+    )
+    res = client.patch(
+        f"/workspaces/{ws['id']}", json={"name": "Hijacked"}, headers={"X-User-Id": "bob"}
+    )
+    assert res.status_code == 403
+    got = client.get(f"/workspaces/{ws['id']}", headers={"X-User-Id": "alice"}).json()
+    assert got["name"] == "Acme"

@@ -5,8 +5,8 @@ import { renameWorkspace } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useIsWorkspaceAdmin, useWorkspace, useWorkspaceName } from "@/lib/workspace";
 
-// The server (PATCH /workspaces/{id}) accepts any string, including blank, so
-// the only bounds on a workspace name are the ones enforced here.
+// Mirrors the server's WorkspaceName rule (apps/cloud/app/models/schemas.py):
+// trimmed, 1-100 characters. Enforced here too so the user is stopped before a 422.
 export const WORKSPACE_NAME_MAX_LENGTH = 100;
 
 const DETAIL_MESSAGES: Record<string, string> = {

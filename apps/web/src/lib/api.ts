@@ -90,8 +90,9 @@ export async function apiFetch<T>(
 }
 
 // PATCH /workspaces/{id} (apps/cloud/app/api/workspaces.py::update_workspace).
-// Admin-only: a member gets 403 `admin_required`. The server does not trim or
-// bound the name, so callers must (WorkspaceNameForm does).
+// Admin-only: a member gets 403 `admin_required`. The server trims the name
+// and rejects blank or >100-char names with 422; WorkspaceNameForm applies the
+// same rule up front.
 export function renameWorkspace(
   workspaceId: string,
   name: string,
