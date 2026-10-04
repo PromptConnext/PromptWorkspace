@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument
+from app.models.schemas import GraphUpsertRequest, Requirement, RequirementStatus, SpecDocument
 
 ALICE = {"X-User-Id": "alice"}  # admin
 BOB = {"X-User-Id": "bob"}  # member
@@ -205,3 +205,124 @@ def test_editing_tasks_after_plan_approval_makes_it_stale(client, project):
 
     plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()
     assert plan["plan_approval"] == "stale"
+
+
+def test_re_requesting_an_approved_unchanged_plan_keeps_it_approved(client, project):
+    _save_tasks(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _resolve(client, project, did)
+
+    again = _request(client, project, "plan_approval")
+
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == did
+    assert again.json()["status"] == "approved"
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert len(listing["decisions"]) == 1
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()
+    assert plan["plan_approval"] == "approved"
+
+
+def test_re_requesting_an_approved_intent_after_an_edit_opens_a_new_request(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did)
+    _save_specify(client, project, "# Spec\n\nBook and cancel a slot.")
+
+    again = _request(client, project, "intent_approval").json()
+
+    assert again["id"] != did and again["status"] == "open"
+    repo = client.app.state.repository
+    assert repo.get_decision(project, did).status == "approved"  # history stays
+
+
+def _save_specify(client, pid, content):
+    res = client.patch(f"/projects/{pid}/stage-documents/specify", json={"content": content},
+                       headers=ALICE)
+    assert res.status_code == 200, res.text
+
+
+def test_editing_tasks_after_plan_approval_returns_the_spec_to_draft(client, project):
+    _save_tasks(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _resolve(client, project, did)
+    repo = client.app.state.repository
+    assert repo.get_latest_spec_document(project).status == "approved"
+
+    _save_tasks(client, project, TASKS + "## Phase 3: Polish\n- [ ] T003 README\n")
+
+    spec = repo.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
+def test_editing_the_specification_after_intent_approval_returns_the_requirement_to_draft(
+    client, project
+):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did)
+    repo = client.app.state.repository
+    assert repo.get_latest_requirement(project).status == "approved"
+
+    _save_specify(client, project, "# Spec\n\nBook and cancel a slot.")
+
+    assert repo.get_latest_requirement(project).status == "draft"
+
+
+def test_saving_unchanged_tasks_keeps_the_spec_approved(client, project):
+    _save_tasks(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _resolve(client, project, did)
+
+    _save_tasks(client, project)
+
+    spec = client.app.state.repository.get_latest_spec_document(project)
+    assert spec.status == "approved" and spec.approved_by == "alice"
+
+
+def test_requesting_changes_leaves_the_mirror_at_draft(client, project):
+    repo = client.app.state.repository
+    requirement = repo.get_latest_requirement(project)
+    # A mirror left approved by an earlier write is corrected by the rejection.
+    repo.upsert_graph(
+        project,
+        GraphUpsertRequest(
+            requirements=[requirement.model_copy(update={"status": RequirementStatus.approved})]
+        ),
+        source="pz",
+    )
+    did = _request(client, project, "intent_approval").json()["id"]
+
+    res = _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    assert res.status_code == 200, res.text
+    assert repo.get_latest_requirement(project).status == "draft"
+
+
+def test_a_failing_mirror_write_still_returns_the_resolved_decision(
+    client, project, monkeypatch
+):
+    did = _request(client, project, "intent_approval").json()["id"]
+    repo = client.app.state.repository
+
+    def boom(*_a, **_k):
+        raise RuntimeError("graph down")
+
+    monkeypatch.setattr(repo, "upsert_graph", boom)
+    res = _resolve(client, project, did)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+    assert repo.get_decision(project, did).status == "approved"
+
+
+def test_a_failing_mirror_write_never_fails_the_stage_save(client, project, monkeypatch):
+    import app.generation.stage_apply as stage_apply
+
+    def boom(*_a, **_k):
+        raise RuntimeError("mirror down")
+
+    monkeypatch.setattr(stage_apply, "sync_approval_mirrors", boom)
+    res = client.patch(f"/projects/{project}/stage-documents/specify",
+                       json={"content": "# Spec\n\nBook a slot, again."}, headers=ALICE)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["projection"] == "current"

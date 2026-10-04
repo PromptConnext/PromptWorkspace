@@ -28,19 +28,23 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
 
+def latest_decision(decisions: list[Decision], kind: str) -> Decision | None:
+    """The newest non-withdrawn decision of `kind` — the one a state reads."""
+    return max(
+        (d for d in decisions if d.kind == kind and d.status != "withdrawn"),
+        key=lambda d: (d.created_at, d.id),
+        default=None,
+    )
+
+
 def approval_state(
     decisions: list[Decision], kind: str, current_hash: str | None
 ) -> ApprovalState:
     if current_hash is None:
         return "none"
-    history = sorted(
-        (d for d in decisions if d.kind == kind and d.status != "withdrawn"),
-        key=lambda d: (d.created_at, d.id),
-        reverse=True,
-    )
-    if not history:
+    latest = latest_decision(decisions, kind)
+    if latest is None:
         return "none"
-    latest = history[0]
     if latest.status == "rejected":
         return "changes_requested"
     if latest.subject_hash != current_hash:

@@ -36,6 +36,7 @@ from app.api._guards import (
     require_workspace,
 )
 from app.db.repository import CrossProjectWrite, Repository
+from app.delivery.approvals import decisions_state
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.plan_profile import StackProfile
 from app.deployments.preview_url import (
@@ -749,14 +750,12 @@ def _seed_stage_docs(repo: Repository, project_id: str) -> dict[str, str | None]
 
 
 def _require_delivery_gates(repo: Repository, project_id: str) -> None:
-    from app.api.delivery import _decisions_state
-
     docs = _seed_stage_docs(repo, project_id)
     if not (docs["constitution"] or "").strip():
         raise HTTPException(status_code=409, detail="constitution_required")
     if not (docs["tasks"] or "").strip():
         raise HTTPException(status_code=409, detail="tasks_required")
-    if _decisions_state(repo, project_id)["plan"] != "approved":
+    if decisions_state(repo, project_id)["plan"] != "approved":
         raise HTTPException(status_code=409, detail="plan_approval_required")
 
 

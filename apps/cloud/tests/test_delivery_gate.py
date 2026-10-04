@@ -112,3 +112,13 @@ def test_gate_on_requires_rules_tasks_and_an_approved_current_plan(monkeypatch):
         res = client.post(url, json={}, headers=ALICE)
         assert res.status_code == 200, res.text
         assert res.json()["lifecycle_status"] == "repo_created"
+
+
+def test_an_exported_plan_approval_setting_never_reaches_the_tests():
+    import os
+
+    # conftest.py pops it: a developer who exported the trust gate in their
+    # shell would otherwise flip every create-repository test to a 409.
+    assert "REQUIRE_PLAN_APPROVAL" not in os.environ
+    with TestClient(create_app()) as client:
+        assert client.app.state.settings.require_plan_approval is False

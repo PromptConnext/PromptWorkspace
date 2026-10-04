@@ -40,6 +40,7 @@ from typing import Any, Literal
 
 from app.db.merge import PLANNER_SEED_FIELDS
 from app.db.repository import Repository
+from app.delivery.approvals import sync_approval_mirrors
 from app.delivery.changes import reconcile_delivery_changes
 from app.generation.parsing import parse_task_lines
 from app.integrations.task_refs import task_ref_from_feature_tag
@@ -201,6 +202,16 @@ def apply_stage_content(
         # rather than in each route that happens to remember.
         for entity_id in entity_ids:
             _enqueue(app, project, node_type, entity_id)
+
+    if node_type is not None and projection == "current":
+        # The approval badges on the Requirement and SpecDocument follow the
+        # decisions; an edit that makes an approval stale takes the badge with
+        # it (plan 0029 §1.5). Derived data, so never worth failing the save.
+        try:
+            sync_approval_mirrors(repo, project.id)
+        except Exception:
+            logger.exception("approval mirror sync failed for project=%s stage=%s",
+                             project.id, stage)
 
     return StageApplyResult(
         stage=stage,
