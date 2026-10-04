@@ -8,6 +8,7 @@ writes answer 503 `delivery_store_unavailable`.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,8 +17,24 @@ from pydantic import BaseModel, ConfigDict
 from app.api._guards import require_admin, require_project
 from app.db.repository import DeliveryStoreUnavailable, Repository
 from app.delivery.changes import wave_of
-from app.delivery.decisions import STAGE_OF, ApprovalState, approval_state, content_hash
+from app.delivery.decisions import (
+    HAT_OF,
+    STAGE_OF,
+    TITLE_OF,
+    ApprovalState,
+    approval_state,
+    can_resolve,
+    content_hash,
+)
 from app.dependencies import User, get_current_user, get_repository
+from app.models.schemas import (
+    Decision,
+    GraphUpsertRequest,
+    RequirementStatus,
+    Role,
+    SpecStatus,
+    utcnow,
+)
 
 router = APIRouter(tags=["delivery"])
 
@@ -138,3 +155,195 @@ def put_project_role(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     return _roles_out(repo, project_id)
+
+
+DecisionKindIn = Literal["intent_approval", "plan_approval"]
+
+
+class DecisionOut(BaseModel):
+    id: str
+    project_id: str
+    workspace_id: str
+    kind: str
+    title: str
+    subject_stage: str
+    subject_hash: str
+    routed_hat: str
+    status: str
+    rationale: str | None
+    requested_by: str
+    resolved_by: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+    can_resolve: bool
+
+
+class DecisionsOut(BaseModel):
+    decisions: list[DecisionOut]
+    states: dict[str, ApprovalState]
+
+
+class DecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: DecisionKindIn
+
+
+class DecisionResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    outcome: Literal["approved", "rejected"]
+    rationale: str | None = None
+
+
+def decision_out(
+    decision: Decision,
+    *,
+    user_id: str,
+    roles,
+    member_ids: set[str],
+    is_admin: bool,
+) -> DecisionOut:
+    return DecisionOut(
+        **decision.model_dump(),
+        can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
+    )
+
+
+def _routing_context(repo: Repository, project, user: User):
+    roles = repo.list_project_roles(project.id)
+    member_ids = {m.user_id for m in repo.list_members(project.workspace_id)}
+    is_admin = repo.get_membership(project.workspace_id, user.id) == Role.admin
+    return roles, member_ids, is_admin
+
+
+@router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
+def list_project_decisions(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionsOut:
+    project = require_project(repo, project_id, user)
+    roles, member_ids, is_admin = _routing_context(repo, project, user)
+    return DecisionsOut(
+        decisions=[
+            decision_out(d, user_id=user.id, roles=roles, member_ids=member_ids,
+                         is_admin=is_admin)
+            for d in repo.list_decisions(project_id)
+        ],
+        states=_decisions_state(repo, project_id),
+    )
+
+
+@router.post("/projects/{project_id}/decisions", response_model=DecisionOut)
+def request_decision(
+    project_id: str,
+    body: DecisionRequest,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionOut:
+    project = require_project(repo, project_id, user)
+    stage = STAGE_OF[body.kind]
+    current = _current_hash(repo, project_id, stage)
+    if current is None:
+        raise HTTPException(status_code=409, detail="decision_subject_missing")
+    if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
+        raise HTTPException(status_code=409, detail="delivery_plan_missing")
+    roles, member_ids, is_admin = _routing_context(repo, project, user)
+
+    try:
+        for existing in repo.list_decisions(project_id):
+            if existing.kind != body.kind or existing.status != "open":
+                continue
+            if existing.subject_hash == current:
+                return decision_out(existing, user_id=user.id, roles=roles,
+                                    member_ids=member_ids, is_admin=is_admin)
+            repo.save_decision(existing.model_copy(update={"status": "withdrawn"}))
+        decision = repo.save_decision(
+            Decision(
+                project_id=project_id,
+                workspace_id=project.workspace_id,
+                kind=body.kind,
+                title=TITLE_OF[body.kind],
+                subject_stage=stage,
+                subject_hash=current,
+                routed_hat=HAT_OF[body.kind],
+                requested_by=user.id,
+            )
+        )
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    return decision_out(decision, user_id=user.id, roles=roles, member_ids=member_ids,
+                        is_admin=is_admin)
+
+
+def _record_approval(repo: Repository, project_id: str, kind: str, user_id: str) -> None:
+    """Write the approval onto the graph entity it approves — the fields the
+    schema always had and nothing wrote (plan 0029 §1.5)."""
+    if kind == "intent_approval":
+        requirement = repo.get_latest_requirement(project_id)
+        if requirement is not None:
+            repo.upsert_graph(
+                project_id,
+                GraphUpsertRequest(
+                    requirements=[
+                        requirement.model_copy(update={"status": RequirementStatus.approved})
+                    ]
+                ),
+                source="pz",
+            )
+    elif kind == "plan_approval":
+        spec = repo.get_latest_spec_document(project_id)
+        if spec is not None:
+            repo.upsert_graph(
+                project_id,
+                GraphUpsertRequest(
+                    spec_documents=[
+                        spec.model_copy(
+                            update={"status": SpecStatus.approved, "approved_by": user_id}
+                        )
+                    ]
+                ),
+                source="pz",
+            )
+
+
+@router.post(
+    "/projects/{project_id}/decisions/{decision_id}/resolve", response_model=DecisionOut
+)
+def resolve_decision(
+    project_id: str,
+    decision_id: str,
+    body: DecisionResolve,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionOut:
+    project = require_project(repo, project_id, user)
+    decision = repo.get_decision(project_id, decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    if decision.status != "open":
+        raise HTTPException(status_code=409, detail="decision_not_open")
+    roles, member_ids, is_admin = _routing_context(repo, project, user)
+    if not can_resolve(decision, user.id, roles, member_ids, is_admin):
+        raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
+    if _current_hash(repo, project_id, decision.subject_stage) != decision.subject_hash:
+        raise HTTPException(status_code=409, detail="decision_subject_changed")
+    rationale = (body.rationale or "").strip() or None
+    if body.outcome == "rejected" and rationale is None:
+        raise HTTPException(status_code=422, detail="rationale_required")
+
+    resolved = decision.model_copy(
+        update={
+            "status": body.outcome,
+            "rationale": rationale,
+            "resolved_by": user.id,
+            "resolved_at": utcnow(),
+        }
+    )
+    try:
+        repo.save_decision(resolved)
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    if body.outcome == "approved":
+        _record_approval(repo, project_id, decision.kind, user.id)
+    return decision_out(resolved, user_id=user.id, roles=roles, member_ids=member_ids,
+                        is_admin=is_admin)
