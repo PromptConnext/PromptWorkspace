@@ -29,6 +29,7 @@ from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import unwritten_fields as _unwritten_fields
 from app.db.repository import (
     CrossProjectWrite,
+    DeliveryStoreUnavailable,
     Repository,
     StageInputsUnavailable,
     TrackerAccountConflict,
@@ -41,6 +42,8 @@ from app.models.schemas import (
     ArtifactKind,
     AssignedTask,
     CodeChunkHit,
+    Decision,
+    DeliveryChange,
     Deployment,
     DeploymentConfig,
     DeploymentState,
@@ -54,6 +57,7 @@ from app.models.schemas import (
     PolicyScope,
     Project,
     ProjectGraph,
+    ProjectRole,
     PullRequest,
     RagChunkHit,
     RepoAnalysis,
@@ -110,6 +114,9 @@ _DOCUMENTS = "pw_documents"
 _GENERATION_RUNS = "pw_generation_runs"
 _STAGE_DOCUMENTS = "pw_stage_documents"
 _STAGE_INPUTS = "pw_stage_inputs"
+_DELIVERY_CHANGES = "pw_delivery_changes"
+_DECISIONS = "pw_decisions"
+_PROJECT_ROLES = "pw_project_roles"
 # PostgREST's "table not in the schema cache" and Postgres' undefined_table:
 # what a read of pw_stage_inputs returns on a database migration 0003 hasn't
 # reached yet. Matched on the error's `code` attribute rather than by
@@ -180,6 +187,11 @@ _SERVICE_ONLY_TABLES = frozenset(
         # The admin-only rule for constitution/plan answers lives in
         # app/api/_guards.py::require_stage_access alone.
         "pw_stage_inputs",
+        # Migration 0004 (plan 0029): born service-only. Every rule lives in
+        # app/api/delivery.py.
+        "pw_delivery_changes",
+        "pw_decisions",
+        "pw_project_roles",
     }
 )
 
@@ -1588,6 +1600,125 @@ class SupabaseRepository(Repository):
                 raise StageInputsUnavailable() from exc
             raise
         return row
+
+    # --- Delivery store (plan 0029) ---------------------------------------
+
+    @staticmethod
+    def _missing_table(exc: Exception) -> bool:
+        return getattr(exc, "code", None) in _MISSING_TABLE_CODES
+
+    def list_delivery_changes(
+        self, project_id: str, *, include_deleted: bool = False
+    ) -> list[DeliveryChange]:
+        try:
+            query = self._table(_DELIVERY_CHANGES).select("*").eq("project_id", project_id)
+            if not include_deleted:
+                query = query.is_("deleted_at", "null")
+            res = query.order("position").execute()
+        except Exception as exc:
+            if self._missing_table(exc):
+                return []
+            raise
+        return [DeliveryChange(**row) for row in res.data or []]
+
+    def upsert_delivery_changes(self, project_id: str, changes: list[DeliveryChange]) -> None:
+        if not changes:
+            return
+        try:
+            self._table(_DELIVERY_CHANGES).upsert(
+                [_dump(change) for change in changes], on_conflict="id"
+            ).execute()
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            raise
+
+    def list_decisions(self, project_id: str) -> list[Decision]:
+        try:
+            res = (
+                self._table(_DECISIONS)
+                .select("*")
+                .eq("project_id", project_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return []
+            raise
+        return [Decision(**row) for row in res.data or []]
+
+    def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
+        try:
+            res = (
+                self._table(_DECISIONS)
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("id", decision_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return None
+            raise
+        rows = res.data or []
+        return Decision(**rows[0]) if rows else None
+
+    def save_decision(self, decision: Decision) -> Decision:
+        try:
+            self._table(_DECISIONS).upsert(_dump(decision), on_conflict="id").execute()
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            raise
+        return decision
+
+    def list_project_roles(self, project_id: str) -> list[ProjectRole]:
+        try:
+            res = (
+                self._table(_PROJECT_ROLES)
+                .select("*")
+                .eq("project_id", project_id)
+                .order("hat")
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return []
+            raise
+        return [ProjectRole(**row) for row in res.data or []]
+
+    def set_project_role(
+        self,
+        project_id: str,
+        workspace_id: str,
+        hat: str,
+        user_id: str | None,
+        assigned_by: str,
+    ) -> None:
+        try:
+            if user_id is None:
+                (
+                    self._table(_PROJECT_ROLES)
+                    .delete()
+                    .eq("project_id", project_id)
+                    .eq("hat", hat)
+                    .execute()
+                )
+                return
+            row = ProjectRole(
+                project_id=project_id,
+                workspace_id=workspace_id,
+                hat=hat,
+                user_id=user_id,
+                assigned_by=assigned_by,
+            )
+            self._table(_PROJECT_ROLES).upsert(_dump(row), on_conflict="project_id,hat").execute()
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            raise
 
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
         res = (

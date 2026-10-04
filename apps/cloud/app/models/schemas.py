@@ -160,6 +160,9 @@ class Task(GraphEntity):
     # pw-owned: a workspace member's user_id, set by the app (ADR 0018).
     # Distinct from the pmo `assignee` free-text tracker name above.
     assigned_user_id: str | None = None
+    # pw-owned: the delivery change (plan 0029) this task is a step of, set by
+    # the Planner from tasks.md's phase headings.
+    change_id: str | None = None
 
 
 class Artifact(GraphEntity):
@@ -666,6 +669,7 @@ FIELD_AUTHORITY: dict[str, dict[str, str]] = {
         "assignee": "pmo",
         "sprint": "pmo",
         "assigned_user_id": "pz",
+        "change_id": "pz",
     },
     "requirements": {"title": "shared", "description": "shared", "status": "pz"},
     "spec_documents": {"content": "pz", "status": "pz", "version": "pz"},
@@ -1256,6 +1260,46 @@ class DeliveryChange(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     deleted_at: datetime | None = None
+
+
+ProjectHat = Literal["business_owner", "tech_steward"]
+
+
+class ProjectRole(BaseModel):
+    """Who wears a project hat (plan 0029 §5.2). No row means workspace admins
+    act for that hat."""
+
+    project_id: str
+    workspace_id: str
+    hat: ProjectHat
+    user_id: str
+    assigned_by: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+DecisionKind = Literal["intent_approval", "plan_approval"]
+DecisionStatus = Literal["open", "approved", "rejected", "withdrawn"]
+
+
+class Decision(BaseModel):
+    """A recorded human judgement (plan 0029 §5.1). This slice has two kinds,
+    both approvals of a stage document, bound to the SHA-256 of the content
+    the requester saw (`subject_hash`)."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    kind: DecisionKind
+    title: str
+    subject_stage: Literal["specify", "tasks"]
+    subject_hash: str
+    routed_hat: ProjectHat
+    status: DecisionStatus = "open"
+    rationale: str | None = None
+    requested_by: str
+    resolved_by: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    resolved_at: datetime | None = None
 
 
 # --------------------------------------------------------------------------- #
