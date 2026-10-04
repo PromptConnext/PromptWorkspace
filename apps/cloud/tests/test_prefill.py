@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.prefill import parse_prefill
+from app.generation.prompts import CURRENT_SERVICES_RULE
 from app.generation.service import FakeGenerationProvider
 from app.main import create_app
 from app.models.schemas import ModelConnection
@@ -117,6 +118,26 @@ def test_plan_draft_also_reads_the_specification_already_written(client: TestCli
     assert res.status_code == 200, res.text
     assert "CLEARWAY" in res.json()["fields"]["language"]
     assert "the specification" in res.json()["sources"]
+
+
+def test_only_the_plan_prefill_prompt_carries_the_current_services_rule(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _upload(client, pid)
+    fields = [{"key": "language", "label": "Language"}]
+    system_prompts: list[str] = []
+
+    class RecordingProvider(FakeGenerationProvider):
+        async def stream(self, system_prompt, *args, **kwargs):
+            system_prompts.append(system_prompt)
+            async for delta in super().stream(system_prompt, *args, **kwargs):
+                yield delta
+
+    client.app.state.generation_provider = RecordingProvider()
+
+    _prefill(client, pid, "specify", fields=fields)
+    assert CURRENT_SERVICES_RULE not in system_prompts[-1]
+    _prefill(client, pid, "plan", fields=fields)
+    assert CURRENT_SERVICES_RULE in system_prompts[-1]
 
 
 def test_a_project_with_no_source_material_is_rejected_rather_than_invented(client: TestClient):

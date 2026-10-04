@@ -100,6 +100,9 @@ describe("CodebaseAnalysisPanel", () => {
     );
     expect(screen.getByText(/42 files read/)).toBeInTheDocument();
     expect(screen.getByText("TypeScript")).toBeInTheDocument();
+    // A baseline with content opens as a preview; its raw text is readable,
+    // not writable.
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
     expect(screen.getByRole("textbox")).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: /analyze/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
@@ -116,6 +119,7 @@ describe("CodebaseAnalysisPanel", () => {
       <CodebaseAnalysisPanel projectId="p1" analysis={analysis()} canEdit onChange={onChange} />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Edited" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

@@ -1,6 +1,6 @@
 # Plan — desktop membership gate + cloud-projected roster (ADR 0015)
 
-**Date:** 2026-07-18 · **Status:** Proposed · **G4 implemented 2026-07-19** · **Scope:** `apps/cloud`, `apps/engine`, `apps/desktop`
+**Date:** 2026-07-18 · **Status:** Implemented (G1–G4, audited 2026-10-04) · **Scope:** `apps/cloud`, `apps/engine`, `apps/desktop`
 **Implements:** [`docs/decisions/0015-desktop-requires-workspace-membership.md`](../decisions/0015-desktop-requires-workspace-membership.md)
 **Extends:** ADR 0010 (sync model), ADR 0014 (browser auth), plan `0004-desktop-cloud-sync-client.md` (D1–D4 cloud client)
 **Depth:** implementation-ready · **Sequencing:** Milestones **G1–G4**, see §Sequencing summary.

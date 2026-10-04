@@ -1,6 +1,6 @@
 # Plan — Managed Thai-LLM tier (Typhoon): pilot slice
 
-**Date:** 2026-07-17 · **Status:** Proposed · **Scope:** `apps/cloud` + `apps/web`
+**Date:** 2026-07-17 · **Status:** M0–M2 implemented; M3 superseded by [ADR 0013](../decisions/0013-managed-thai-llm-tier-stage-routing.md)'s 2026-07-25 update (no routing table); M4 never planned · **Scope:** `apps/cloud` + `apps/web`
 **Implements:** ADR 0013 (Part B) · **Follows:** plan `0005-cloud-workspace-rag-assistant.md` (M8–M12)
 **Depth:** task-level, meant to be executed by Claude Code (Sonnet) one milestone per session/PR.
 

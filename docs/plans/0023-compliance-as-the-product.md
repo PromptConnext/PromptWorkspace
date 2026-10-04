@@ -1,6 +1,6 @@
 # Plan 0023 — Compliance as the product
 
-**Date:** 2026-09-12 · **Status:** Exploratory — needs an ADR before implementation
+**Date:** 2026-09-12 · **Status:** Exploratory — needs an ADR before implementation. Folded into [plan 0029](0029-agent-native-delivery.md) phase 5 (audit export)
 
 This is a direction document, not a build plan. Nothing below is sequenced into milestones, nothing is estimated, and no file is marked for editing. Its job is to make the first of the four bets in [the product vision](../product-vision-2026-09-12.md) §4.2 concrete enough that somebody can write the ADR it calls for. An implementation plan should follow the ADR, not this.
 

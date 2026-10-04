@@ -6,6 +6,15 @@ import ReactMarkdown from "react-markdown";
 
 type Mode = "raw" | "preview";
 
+/**
+ * The mode an editor opens in when nobody has picked one: a document that
+ * already says something is read first, an empty one
+ * is something to write in.
+ */
+export function defaultEditorMode(value: string): Mode {
+  return value.trim().length > 0 ? "preview" : "raw";
+}
+
 export function MarkdownEditor({
   value,
   onChange,
@@ -13,6 +22,7 @@ export function MarkdownEditor({
   saving = false,
   error = null,
   readOnly = false,
+  label,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -20,8 +30,18 @@ export function MarkdownEditor({
   saving?: boolean;
   error?: string | null;
   readOnly?: boolean;
+  /** Accessible name for the document, e.g. "Specification document". */
+  label?: string;
 }) {
-  const [mode, setMode] = useState<Mode>("raw");
+  // Null until someone presses Raw or Preview: the default follows the content
+  // (see defaultEditorMode), an explicit choice sticks.
+  const [chosen, setChosen] = useState<Mode | null>(null);
+  const mode = chosen ?? defaultEditorMode(value);
+
+  const toggleClass = (on: boolean) =>
+    `rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+      on ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+    }`;
 
   return (
     <div className="rounded-lg border border-slate-200">
@@ -29,19 +49,17 @@ export function MarkdownEditor({
         <div className="flex gap-1">
           <button
             type="button"
-            onClick={() => setMode("raw")}
-            className={`rounded px-2 py-1 text-xs ${
-              mode === "raw" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            }`}
+            aria-pressed={mode === "raw"}
+            onClick={() => setChosen("raw")}
+            className={toggleClass(mode === "raw")}
           >
             Raw
           </button>
           <button
             type="button"
-            onClick={() => setMode("preview")}
-            className={`rounded px-2 py-1 text-xs ${
-              mode === "preview" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            }`}
+            aria-pressed={mode === "preview"}
+            onClick={() => setChosen("preview")}
+            className={toggleClass(mode === "preview")}
           >
             Preview
           </button>
@@ -51,7 +69,7 @@ export function MarkdownEditor({
             type="button"
             disabled={saving}
             onClick={() => onSave()}
-            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs hover:border-slate-400 disabled:opacity-60"
+            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs hover:border-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-60"
           >
             {saving ? "Saving…" : "Save"}
           </button>
@@ -66,13 +84,23 @@ export function MarkdownEditor({
         {mode === "raw" ? (
           <textarea
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              // Typing is choosing Raw: the first keystroke into an empty
+              // document must not flip the editor to a preview of it.
+              setChosen("raw");
+              onChange(e.target.value);
+            }}
             readOnly={readOnly}
-            rows={12}
-            className="w-full rounded border border-slate-300 p-2 font-mono text-xs text-slate-800"
+            aria-label={label}
+            rows={16}
+            className="min-h-[24rem] w-full resize-y rounded border border-slate-300 p-2 font-mono text-xs text-slate-800"
           />
         ) : (
-          <div className="prose prose-sm max-w-none text-slate-800">
+          <div
+            role={label ? "region" : undefined}
+            aria-label={label}
+            className="prose prose-sm min-h-[24rem] max-w-none text-slate-800"
+          >
             <ReactMarkdown>{value}</ReactMarkdown>
           </div>
         )}

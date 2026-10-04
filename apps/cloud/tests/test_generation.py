@@ -203,6 +203,7 @@ def test_tasks_creates_tasks_with_text_acceptance_criteria(client: TestClient):
     for task in tasks:
         assert task.acceptance_criteria
         assert all(hasattr(c, "text") for c in task.acceptance_criteria)
+        assert task.title not in [c.text for c in task.acceptance_criteria]
 
 
 def test_non_member_cannot_generate(client: TestClient):
@@ -503,3 +504,111 @@ def test_truncation_markers_and_reduced_prd_budget_for_specify(client: TestClien
     # The PRD assembly ran on a budget smaller than the full 40k because the
     # policy summary + truncated constitution already consumed part of it.
     assert "context budget reached" in content
+
+
+# --------------------------------------------------------------------------- #
+# Specification grounding for plan and tasks
+# --------------------------------------------------------------------------- #
+SPEC_TEXT = "# Team Task Tracker for Small Agencies\n\nAgencies assign tasks. SPEC-MARKER-77."
+
+
+def _seed_requirement(client: TestClient, pid: str, title: str, description: str) -> None:
+    from app.models.schemas import GraphUpsertRequest, Requirement
+
+    requirement = Requirement(project_id=pid, title=title, description=description)
+    client.app.state.repository.upsert_graph(
+        pid, GraphUpsertRequest(requirements=[requirement]), source="pz"
+    )
+
+
+def test_plan_context_leads_with_the_specification_before_the_policy_block(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    _seed_requirement(client, pid, "Team Task Tracker", "requirement-description")
+    repo.upsert_stage_document(pid, ws_id, "specify", SPEC_TEXT, "alice")
+    repo.update_project_policy_scope(pid, PolicyScope(selected=["thai-pdpa"], custom_text=""))
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+    res = _generate(client, pid, "plan", PLAN_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    assert f"[specification]\n{SPEC_TEXT}" in content
+    assert content.index("[specification]") < content.index("## Policy Scope")
+
+
+def test_plan_specification_falls_back_to_the_requirement(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _seed_requirement(client, pid, "Team Task Tracker", "Agencies assign tasks REQ-MARKER-5.")
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+    res = _generate(client, pid, "plan", PLAN_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    spec_pos = content.index("[specification]")
+    assert content.index("Team Task Tracker") > spec_pos
+    assert content.index("REQ-MARKER-5") > spec_pos
+
+
+def test_plan_specification_is_capped_and_shrinks_the_prd_budget(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    _seed_requirement(client, pid, "R", "")
+    repo.upsert_stage_document(pid, ws_id, "specify", "S" * 30_000, "alice")
+    client.post(
+        f"/projects/{pid}/documents",
+        files={"file": ("prd.md", ("P" * 30_000).encode(), "text/markdown")},
+        headers=ALICE,
+    )
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+    res = _generate(client, pid, "plan", PLAN_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    segment = content.split("[specification]\n", 1)[1].split("\n\n...[truncated]", 1)[0]
+    assert set(segment) == {"S"}
+    assert len(segment) < 16_000
+    # 30k of PRD alone fits the 40k budget; it no longer does after the spec.
+    assert "context budget reached" in content
+
+
+def test_tasks_context_includes_the_specification_after_the_plan(client: TestClient):
+    ws_id, pid = _bootstrap(client)
+    repo = client.app.state.repository
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+    repo.upsert_stage_document(pid, ws_id, "specify", SPEC_TEXT, "alice")
+
+    provider = _RecordingProvider()
+    client.app.state.generation_provider = provider
+    res = _generate(client, pid, "tasks", TASKS_INPUT)
+    assert res.status_code == 200, res.text
+
+    content = provider.user_content
+    assert f"[specification]\n{SPEC_TEXT}" in content
+    assert content.index("[spec_documents:") < content.index("[specification]")
+
+
+def test_driver_prompt_grounds_plan_and_tasks_on_the_specification_only():
+    from app.generation.prompts import driver_prompt
+
+    for kind in ("constitution", "specify", "plan", "tasks"):
+        prompt = driver_prompt(kind)
+        grounded = "defines what is being built" in prompt
+        assert grounded == (kind in ("plan", "tasks")), kind
+
+
+def test_driver_prompt_states_todays_date_for_every_stage():
+    from datetime import date
+
+    from app.generation.prompts import driver_prompt
+    from app.models.schemas import utcnow
+
+    for kind in ("constitution", "specify", "plan", "tasks"):
+        assert "Today's date is 2026-10-03;" in driver_prompt(kind, today=date(2026, 10, 3)), kind
+        assert f"Today's date is {utcnow().date().isoformat()};" in driver_prompt(kind), kind

@@ -27,7 +27,12 @@ from datetime import datetime, timedelta
 from app.db.merge import _as_dt, merge_entity
 from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import unwritten_fields as _unwritten_fields
-from app.db.repository import CrossProjectWrite, Repository, TrackerAccountConflict
+from app.db.repository import (
+    CrossProjectWrite,
+    Repository,
+    StageInputsUnavailable,
+    TrackerAccountConflict,
+)
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
@@ -57,6 +62,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageInputs,
     Task,
     TaskLink,
     TaskStatus,
@@ -103,6 +109,13 @@ _CODE_MATCH_RPC = "pw_code_match_chunks"
 _DOCUMENTS = "pw_documents"
 _GENERATION_RUNS = "pw_generation_runs"
 _STAGE_DOCUMENTS = "pw_stage_documents"
+_STAGE_INPUTS = "pw_stage_inputs"
+# PostgREST's "table not in the schema cache" and Postgres' undefined_table:
+# what a read of pw_stage_inputs returns on a database migration 0003 hasn't
+# reached yet. Matched on the error's `code` attribute rather than by
+# importing postgrest's APIError, which would make this module need the
+# supabase package at import time.
+_MISSING_TABLE_CODES = frozenset({"PGRST205", "42P01"})
 _REPO_ANALYSES = "pw_repo_analyses"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
 _WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
@@ -163,6 +176,10 @@ _SERVICE_ONLY_TABLES = frozenset(
         # customer's source and the admin-only baseline — the rule that only
         # an admin analyses or edits lives in app/api/repo_analysis.py alone.
         "pw_repo_analyses",
+        # Migration 0003: born service-only like pw_stage_documents ended up.
+        # The admin-only rule for constitution/plan answers lives in
+        # app/api/_guards.py::require_stage_access alone.
+        "pw_stage_inputs",
     }
 )
 
@@ -1529,6 +1546,48 @@ class SupabaseRepository(Repository):
             _dump(doc), on_conflict="project_id,stage"
         ).execute()
         return doc
+
+    def get_stage_inputs(self, project_id: str, stage: str) -> StageInputs | None:
+        try:
+            res = (
+                self._table(_STAGE_INPUTS)
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("stage", stage)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            if getattr(exc, "code", None) in _MISSING_TABLE_CODES:
+                return None
+            raise
+        rows = res.data or []
+        return StageInputs(**rows[0]) if rows else None
+
+    def upsert_stage_inputs(
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        inputs: dict[str, str],
+        user_id: str,
+    ) -> StageInputs:
+        row = StageInputs(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            stage=stage,
+            inputs=dict(inputs),
+            updated_by=user_id,
+        )
+        try:
+            self._table(_STAGE_INPUTS).upsert(
+                _dump(row), on_conflict="project_id,stage"
+            ).execute()
+        except Exception as exc:
+            if getattr(exc, "code", None) in _MISSING_TABLE_CODES:
+                raise StageInputsUnavailable() from exc
+            raise
+        return row
 
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
         res = (

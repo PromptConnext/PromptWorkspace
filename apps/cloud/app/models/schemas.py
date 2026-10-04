@@ -1217,6 +1217,21 @@ class StageDocument(BaseModel):
     deleted_at: datetime | None = None
 
 
+class StageInputs(BaseModel):
+    """The Planner form answers a stage was (or will be) generated from — one
+    row per (project, stage), shared by the project's members. Kept apart
+    from StageDocument on purpose: an answers-only save must never look like
+    a generated stage to anything that reads stage documents (the Planner's
+    done-state, RAG, repository seeding)."""
+
+    project_id: str
+    workspace_id: str
+    stage: Literal["constitution", "specify", "plan"]
+    inputs: dict[str, str] = Field(default_factory=dict)
+    updated_by: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 # --------------------------------------------------------------------------- #
 # Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
 # `generation_runs` is an audit/cost-accounting record, not itself part of

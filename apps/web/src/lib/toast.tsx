@@ -14,7 +14,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
  *
  * Dismissal is deferred one frame past the exit transition rather than being
  * instant, so a toast leaving does not make the stack jump under the pointer of
- * someone reaching for its Retry button.
+ * someone reaching for its Retry button. For the same reason the countdown
+ * pauses while a toast is hovered or holds focus, and resumes with whatever
+ * time it had left.
  */
 
 export type ToastVariant = "error" | "success" | "info";
@@ -37,6 +39,17 @@ interface ToastRecord extends ToastInput {
   id: number;
   leaving: boolean;
 }
+
+/** A running toast's countdown, held while the pointer or focus is on it. */
+interface Countdown {
+  remaining: number;
+  startedAt: number;
+  hovered: boolean;
+  focused: boolean;
+}
+
+// A toast let go of with a moment left still gets long enough to be read.
+const MIN_RESUME = 1000;
 
 interface ToastApi {
   toast: (input: ToastInput) => number;
@@ -70,6 +83,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const nextId = useRef(1);
   // Cleared on unmount so a timer cannot fire into a torn-down tree.
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const countdowns = useRef(new Map<number, Countdown>());
 
   const remove = useCallback((id: number) => {
     setToasts((current) => current.filter((t) => t.id !== id));
@@ -82,6 +96,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         clearTimeout(timer);
         timers.current.delete(id);
       }
+      countdowns.current.delete(id);
       setToasts((current) => current.map((t) => (t.id === id ? { ...t, leaving: true } : t)));
       const exit = setTimeout(() => remove(id), 150);
       timers.current.set(-id, exit);
@@ -96,12 +111,41 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setToasts((current) => [...current, { ...input, variant, id, leaving: false }]);
       const duration = input.duration ?? DEFAULT_DURATION[variant];
       if (duration > 0) {
+        countdowns.current.set(id, {
+          remaining: duration,
+          startedAt: Date.now(),
+          hovered: false,
+          focused: false,
+        });
         timers.current.set(
           id,
           setTimeout(() => dismiss(id), duration),
         );
       }
       return id;
+    },
+    [dismiss],
+  );
+
+  const hold = useCallback(
+    (id: number, reason: "hovered" | "focused", on: boolean) => {
+      const c = countdowns.current.get(id);
+      if (!c) return;
+      const wasHeld = c.hovered || c.focused;
+      c[reason] = on;
+      const held = c.hovered || c.focused;
+      if (held && !wasHeld) {
+        clearTimeout(timers.current.get(id));
+        timers.current.delete(id);
+        c.remaining -= Date.now() - c.startedAt;
+      } else if (!held && wasHeld) {
+        c.startedAt = Date.now();
+        c.remaining = Math.max(c.remaining, MIN_RESUME);
+        timers.current.set(
+          id,
+          setTimeout(() => dismiss(id), c.remaining),
+        );
+      }
     },
     [dismiss],
   );
@@ -132,6 +176,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
+            onMouseEnter={() => hold(t.id, "hovered", true)}
+            onMouseLeave={() => hold(t.id, "hovered", false)}
+            onFocus={() => hold(t.id, "focused", true)}
+            onBlur={(e) => {
+              // Focus moving between the toast's own buttons is still focus.
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                hold(t.id, "focused", false);
+              }
+            }}
             className={[
               "pointer-events-auto flex gap-3 overflow-hidden rounded-lg border shadow-lg transition-all duration-150",
               VARIANT_STYLE[t.variant ?? "info"],

@@ -175,7 +175,13 @@ dump "$OUT/db-a"
 
 log "DB-B: apps/cloud/migrations via scripts/migrate.py, embed_dim=$EMBED_DIM"
 supabase db reset --workdir "$WORK" >&2
-python3 "$ROOT/apps/cloud/scripts/migrate.py" --db-url "$DB" apply --var embed_dim="$EMBED_DIM" >&2
+# Only the two baseline files: migrations from 0003 on are additive changes
+# made after the squash, so they are not part of what DB-A must equal.
+mkdir -p "$WORK/baseline-migrations"
+cp "$ROOT"/apps/cloud/migrations/0001_*.sql "$ROOT"/apps/cloud/migrations/0002_*.sql \
+  "$WORK/baseline-migrations/"
+python3 "$ROOT/apps/cloud/scripts/migrate.py" --db-url "$DB" \
+  --migrations-dir "$WORK/baseline-migrations" apply --var embed_dim="$EMBED_DIM" >&2
 "${PSQL[@]}" "$DB" -A -t -c 'select filename, source from pw_schema_migrations order by 1' \
   > "$OUT/db-b-ledger.txt"
 dump "$OUT/db-b"

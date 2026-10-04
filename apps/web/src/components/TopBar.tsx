@@ -6,15 +6,20 @@ import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
 
-export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[] }) {
+export function TopBar({
+  crumbs,
+}: {
+  /** `loading` shows a placeholder bar in place of a label not known yet. */
+  crumbs?: { label: string; href?: string; loading?: boolean }[];
+}) {
   const { user, signOut } = useAuth();
   const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace } = useWorkspace();
   const router = useRouter();
 
   return (
-    <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
-      <nav className="flex items-center gap-2 text-sm">
-        <Link href="/" className="font-semibold text-slate-900">
+    <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-6">
+      <nav className="flex min-w-0 items-center gap-2 text-sm">
+        <Link href="/" className="shrink-0 font-semibold text-slate-900">
           PromptWorkspace
         </Link>
         {/* Rendered from one membership up, not two: a user with a single
@@ -36,7 +41,7 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
               router.push(`/w/${id}`);
             }}
           >
-            <SelectTrigger aria-label="Active workspace" className="ml-2">
+            <SelectTrigger aria-label="Active workspace" className="ml-2 max-w-[8rem] min-w-0 sm:max-w-[14rem]">
               {/* The old blank <option> is a placeholder now — Radix reserves
                   the empty value for "nothing selected" and refuses it on an
                   item, which also means onValueChange can no longer hand back
@@ -53,22 +58,39 @@ export function TopBar({ crumbs }: { crumbs?: { label: string; href?: string }[]
             </SelectContent>
           </Select>
         )}
-        {crumbs?.map((c) => (
-          <span key={c.label} className="flex items-center gap-2 text-slate-500">
-            <span>/</span>
-            {c.href ? (
-              <Link href={c.href} className="hover:text-slate-900">
+        {crumbs?.map((c, i) => (
+          <span
+            key={c.label}
+            data-testid="crumb"
+            className={`min-w-0 items-center gap-2 text-slate-500 ${
+              i === crumbs.length - 1 ? "flex" : "hidden sm:flex"
+            }`}
+          >
+            <span aria-hidden>/</span>
+            {c.loading ? (
+              <span
+                data-testid="crumb-skeleton"
+                className="inline-block h-3.5 w-24 shrink-0 animate-pulse rounded bg-slate-200 motion-reduce:animate-none"
+              >
+                <span className="sr-only">{c.label}</span>
+              </span>
+            ) : c.href ? (
+              <Link href={c.href} title={c.label} className="min-w-0 max-w-[10rem] truncate hover:text-slate-900 sm:max-w-xs">
                 {c.label}
               </Link>
             ) : (
-              <span className="text-slate-900">{c.label}</span>
+              <span title={c.label} className="min-w-0 max-w-[10rem] truncate text-slate-900 sm:max-w-xs">
+                {c.label}
+              </span>
             )}
           </span>
         ))}
       </nav>
-      <div className="flex items-center gap-3 text-sm text-slate-500">
-        <span>{user?.email}</span>
-        <button onClick={() => void signOut()} className="rounded border border-slate-300 px-2 py-1">
+      <div className="flex shrink-0 items-center gap-3 text-sm text-slate-500">
+        <span className="hidden max-w-[16rem] truncate md:inline" title={user?.email}>
+          {user?.email}
+        </span>
+        <button onClick={() => void signOut()} className="shrink-0 whitespace-nowrap rounded border border-slate-300 px-2 py-1">
           Sign out
         </button>
       </div>

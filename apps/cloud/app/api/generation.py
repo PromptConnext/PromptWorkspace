@@ -43,6 +43,7 @@ from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
 from app.generation.prefill import parse_prefill
 from app.generation.prompts import (
+    CURRENT_SERVICES_RULE,
     UNTRUSTED_SECURITY_RULE,
     StageKind,
     driver_prompt,
@@ -155,8 +156,15 @@ async def generate(
         # applying to scope-less projects too), (3) PRDs get whatever's left
         # of the 40k document budget.
         segments: list[str] = []
-        policy_summary = _policy_block(project, stage)
         used = 0
+        # plan builds what the specification describes, so it leads; without
+        # it the model saw only the policy scope and invented a product from it.
+        if stage == "plan":
+            specification = _specification_segment(repo, project_id, requirement, 16_000)
+            if specification:
+                segments.append(specification)
+                used += len(specification)
+        policy_summary = _policy_block(project, stage)
         if policy_summary:
             segments.append(policy_summary)
             used += len(policy_summary)
@@ -183,6 +191,13 @@ async def generate(
         # constitution (capped tighter than specify/plan's — tasks needs less
         # of it), then the policy summary.
         segments = [f"[spec_documents:{spec.id}]\n{spec.content}"]
+        # The specification the plan was written from: its user stories are
+        # what the tasks template groups work by.
+        specification = _specification_segment(
+            repo, project_id, repo.get_latest_requirement(project_id), 10_000
+        )
+        if specification:
+            segments.append(specification)
         # Right after the plan it breaks down (plan 0027), so tasks are phrased
         # as changes to modules that exist rather than as a fresh build.
         if codebase is not None:
@@ -420,11 +435,11 @@ async def prefill(
     fields = [f.model_dump() for f in body.fields]
     user_content = build_prefill_prompt(fields, context)
     # The baseline segments are marked untrusted; say what that means.
-    system_prompt = (
-        f"{PREFILL_SYSTEM_PROMPT}\n{UNTRUSTED_SECURITY_RULE}"
-        if codebase is not None
-        else PREFILL_SYSTEM_PROMPT
-    )
+    system_prompt = PREFILL_SYSTEM_PROMPT
+    if stage == "plan":
+        system_prompt = f"{system_prompt}\n{CURRENT_SERVICES_RULE}"
+    if codebase is not None:
+        system_prompt = f"{system_prompt}\n{UNTRUSTED_SECURITY_RULE}"
 
     secret_store = request.app.state.secret_store
     api_key = secret_store.decrypt(conn.secret_ref)
@@ -524,6 +539,22 @@ def _truncate_with_marker(text: str, max_chars: int) -> str:
         return text
     cut = max(max_chars - len(_TRUNCATION_MARKER), 0)
     return text[:cut] + _TRUNCATION_MARKER
+
+
+def _specification_segment(
+    repo: Repository, project_id: str, requirement: Requirement | None, max_chars: int
+) -> str:
+    """`[specification]` for plan and tasks: the specify stage document, or
+    the latest requirement's title and description when there is none.
+    Returns "" when neither exists."""
+    spec_doc = repo.get_stage_document(project_id, "specify")
+    if spec_doc and spec_doc.content.strip():
+        text = spec_doc.content
+    elif requirement is not None:
+        text = f"{requirement.title}\n\n{requirement.description}".strip()
+    else:
+        return ""
+    return f"[specification]\n{_truncate_with_marker(text, max_chars)}"
 
 
 def _policy_block(project: Project, stage: str) -> str:
