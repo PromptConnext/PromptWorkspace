@@ -10,7 +10,7 @@ import { useWorkspaceName } from "@/lib/workspace";
 
 function InboxView({ workspaceId }: { workspaceId: string }) {
   const workspaceName = useWorkspaceName(workspaceId);
-  const { data: items, error } = useCloudGet<InboxItem[]>(
+  const { data: items, error, loading } = useCloudGet<InboxItem[]>(
     `/me/decisions?workspace_id=${encodeURIComponent(workspaceId)}`,
     true,
     { refreshOnFocus: true },
@@ -21,7 +21,12 @@ function InboxView({ workspaceId }: { workspaceId: string }) {
       <TopBar crumbs={[{ label: workspaceName, href: `/w/${workspaceId}` }, { label: "Inbox" }]} />
       <main className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="mb-6 text-2xl font-semibold tracking-tight text-slate-900">Decisions waiting on you</h1>
-        {error && <p className="text-sm text-rose-700">{error}</p>}
+        {error && (
+          <p role="alert" className="text-sm text-rose-700">
+            {error}
+          </p>
+        )}
+        {loading && !items && <p className="text-sm text-slate-500">Loading…</p>}
         {items && items.length === 0 && (
           <p className="text-sm text-slate-500">Nothing is waiting on you.</p>
         )}

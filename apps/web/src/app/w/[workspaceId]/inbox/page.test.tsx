@@ -3,7 +3,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import InboxPage from "./page";
 
-let items: unknown[] = [];
+let items: unknown[] | null = [];
+let error: string | null = null;
+let loading = false;
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return { ...actual, use: () => ({ workspaceId: "w1" }) };
@@ -14,9 +16,14 @@ vi.mock("@/components/RequireAuth", () => ({
 vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
 vi.mock("@/lib/workspace", () => ({ useWorkspaceName: () => "WS" }));
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data: items, error: null, loading: false, refetch: vi.fn() }),
+  useCloudGet: () => ({ data: items, error, loading, refetch: vi.fn() }),
 }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  items = [];
+  error = null;
+  loading = false;
+});
 
 describe("Inbox", () => {
   it("links each waiting decision to its project's Decisions tab", () => {
@@ -36,5 +43,19 @@ describe("Inbox", () => {
     items = [];
     render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
     expect(screen.getByText(/Nothing is waiting on you/)).toBeInTheDocument();
+  });
+
+  it("shows Loading… while the first fetch is in flight", () => {
+    items = null;
+    loading = true;
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+  });
+
+  it("shows the error as an alert", () => {
+    items = null;
+    error = "Could not load decisions";
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not load decisions");
   });
 });
