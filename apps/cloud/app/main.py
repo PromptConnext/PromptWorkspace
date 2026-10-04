@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api import (
     assistant,
+    delivery,
     deployments,
     desktop_auth,
     discussions,
@@ -292,6 +293,7 @@ def create_app() -> FastAPI:
     app.include_router(generation.router)
     app.include_router(stage_documents.router)
     app.include_router(stage_inputs.router)
+    app.include_router(delivery.router)
     app.include_router(repo_analysis.router)
     app.include_router(policies.router)
     app.include_router(deployments.router)
