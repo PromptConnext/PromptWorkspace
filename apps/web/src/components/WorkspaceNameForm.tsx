@@ -21,6 +21,10 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
   const [name, setName] = useState(currentName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Last name the server accepted. The roster refetch that updates
+  // `currentName` lands a beat after the PATCH returns; until then this keeps
+  // Save disabled (no double submit) and drives the "Saved" confirmation.
+  const [savedName, setSavedName] = useState<string | null>(null);
 
   // The roster can land after first paint (or change after a save); follow it
   // so the input never keeps a stale name.
@@ -29,7 +33,7 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
   }, [currentName]);
 
   const trimmed = name.trim();
-  const canSave = !busy && trimmed !== "" && trimmed !== currentName;
+  const canSave = !busy && trimmed !== "" && trimmed !== currentName && trimmed !== savedName;
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +42,7 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
     setError(null);
     try {
       await renameWorkspace(workspaceId, trimmed, authHeaders());
+      setSavedName(trimmed);
       // The provider's roster is the single source of every displayed name
       // (switcher, crumbs, workspace page); refetching it updates them all.
       refetch();
@@ -68,6 +73,11 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
           >
             {busy ? "Saving…" : "Save"}
           </button>
+          {savedName !== null && trimmed === savedName && !error && (
+            <p role="status" className="w-full text-sm text-emerald-700">
+              Saved
+            </p>
+          )}
           {error && (
             <p role="alert" className="w-full text-sm text-red-600">
               {error}

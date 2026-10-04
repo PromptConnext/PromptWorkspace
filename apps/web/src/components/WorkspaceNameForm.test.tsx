@@ -63,6 +63,24 @@ describe("WorkspaceNameForm", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps Save disabled after a successful save and confirms with a status", async () => {
+    renameWorkspace.mockResolvedValue({ id: "w1", name: "Globex" });
+    render(<WorkspaceNameForm workspaceId="w1" />);
+    const input = screen.getByLabelText(/workspace name/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "Globex");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved");
+    // The roster has not refetched here (refetch is a mock), so the current
+    // name is still "Acme": only the last-saved guard keeps Save disabled.
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(renameWorkspace).toHaveBeenCalledTimes(1);
+    // Editing again re-enables Save and clears the confirmation.
+    await userEvent.type(input, "!");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("shows the server error in an alert and does not refresh", async () => {
     renameWorkspace.mockRejectedValue(new Error("admin_required"));
     render(<WorkspaceNameForm workspaceId="w1" />);
@@ -70,7 +88,9 @@ describe("WorkspaceNameForm", () => {
     await userEvent.clear(input);
     await userEvent.type(input, "Globex");
     await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/admin_required|admin/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Only a workspace admin can rename this workspace.",
+    );
     expect(refetch).not.toHaveBeenCalled();
   });
 

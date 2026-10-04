@@ -84,3 +84,42 @@ describe("apiFetch request id", () => {
     expect(id).toMatch(/^web-[a-z0-9]+-[a-z0-9]+$/);
   });
 });
+
+describe("apiFetch error detail", () => {
+  function failWith(status: number, body: unknown) {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status,
+      json: async () => body,
+    })) as unknown as typeof fetch;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a string detail as the message", async () => {
+    failWith(403, { detail: "admin_required" });
+    await expect(apiFetch("/x", {})).rejects.toMatchObject({
+      status: 403,
+      message: "admin_required",
+    });
+  });
+
+  it("turns a pydantic 422 detail array into the first item's msg", async () => {
+    failWith(422, {
+      detail: [{ type: "string_too_short", loc: ["body", "name"], msg: "String should have at least 1 character" }],
+    });
+    await expect(apiFetch("/x", {})).rejects.toMatchObject({
+      status: 422,
+      message: "String should have at least 1 character",
+    });
+  });
+
+  it("falls back to invalid_request for an array with no usable msg", async () => {
+    failWith(422, { detail: [{ loc: ["body"] }] });
+    await expect(apiFetch("/x", {})).rejects.toMatchObject({ message: "invalid_request" });
+    failWith(422, { detail: [] });
+    await expect(apiFetch("/x", {})).rejects.toMatchObject({ message: "invalid_request" });
+  });
+});

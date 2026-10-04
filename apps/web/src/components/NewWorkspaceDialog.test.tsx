@@ -49,4 +49,51 @@ describe("NewWorkspaceDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("labels the dialog by its visible title", () => {
+    render(<NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("New workspace");
+    expect(screen.getByRole("dialog").getAttribute("aria-labelledby")).toBeTruthy();
+  });
+
+  it("focuses the name input when it opens", async () => {
+    render(<NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/workspace name/i)).toHaveFocus());
+  });
+
+  it("closes on Escape when idle", async () => {
+    const onClose = vi.fn();
+    render(<NewWorkspaceDialog open onClose={onClose} onCreate={vi.fn()} />);
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("ignores Escape and disables Cancel while a create is in flight", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi.fn(() => new Promise<void>(() => {}));
+    render(<NewWorkspaceDialog open onClose={onClose} onCreate={onCreate} />);
+    await userEvent.type(screen.getByLabelText(/workspace name/i), "Globex");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+    expect(await screen.findByRole("button", { name: /creating/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab and Shift+Tab inside the dialog", async () => {
+    render(
+      <>
+        <button>outside</button>
+        <NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} />
+      </>,
+    );
+    const input = screen.getByLabelText(/workspace name/i);
+    await userEvent.type(input, "Globex");
+    const create = screen.getByRole("button", { name: /^create$/i });
+    create.focus();
+    await userEvent.tab();
+    expect(input).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(create).toHaveFocus();
+  });
 });

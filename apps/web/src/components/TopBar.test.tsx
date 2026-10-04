@@ -76,6 +76,18 @@ describe("TopBar workspace switcher: new workspace", () => {
     expect(setActiveWorkspace).not.toHaveBeenCalled();
   });
 
+  it("moves focus into the dialog when the item is chosen with the keyboard", async () => {
+    memberships = [{ id: "w1", name: "Acme" }];
+    render(<TopBar />);
+    screen.getByRole("combobox", { name: "Active workspace" }).focus();
+    await userEvent.keyboard("{Enter}");
+    // Acme (selected), All workspaces…, New workspace…
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    await userEvent.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: "New workspace" });
+    await waitFor(() => expect(within(dialog).getByLabelText(/workspace name/i)).toHaveFocus());
+  });
+
   it("creates the workspace and navigates to it", async () => {
     createWorkspace.mockResolvedValue({ id: "w2", name: "Globex" });
     await openSwitcher();

@@ -34,6 +34,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * FastAPI's `detail` is a string for our own HTTPExceptions but a list of
+ * `{loc, msg, type}` objects for a pydantic 422. Passing the list to
+ * `Error(message)` renders "[object Object]", so flatten it here once for
+ * every caller: the first item's `msg`, or a stable code when there is none.
+ */
+function errorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const msg = (detail[0] as { msg?: unknown } | undefined)?.msg;
+    return typeof msg === "string" && msg ? msg : "invalid_request";
+  }
+  return fallback;
+}
+
 /** The header apps/cloud reads, echoes and logs (apps/cloud/app/requestlog.py). */
 const REQUEST_ID_HEADER = "X-Request-Id";
 
@@ -84,7 +99,10 @@ export async function apiFetch<T>(
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(res.status, (data as { detail?: string }).detail ?? `cloud HTTP ${res.status}`);
+    throw new ApiError(
+      res.status,
+      errorMessage((data as { detail?: unknown }).detail, `cloud HTTP ${res.status}`),
+    );
   }
   return data as T;
 }

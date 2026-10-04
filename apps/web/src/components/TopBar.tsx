@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
@@ -26,6 +26,10 @@ export function TopBar({
     useWorkspace();
   const router = useRouter();
   const [creating, setCreating] = useState(false);
+  // Set when the switcher closed because "New workspace…" was chosen, so its
+  // close handler can skip restoring focus to the trigger: that restore would
+  // pull focus out from under the dialog that is opening.
+  const choseNew = useRef(false);
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-6">
@@ -51,6 +55,7 @@ export function TopBar({
               if (id === "__new__") {
                 // An action, not a workspace: open the dialog and leave the
                 // selection and route alone.
+                choseNew.current = true;
                 setCreating(true);
                 return;
               }
@@ -65,7 +70,14 @@ export function TopBar({
                   the "" the previous handler had to guard against. */}
               <SelectValue placeholder="Select workspace…" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent
+              onCloseAutoFocus={(e) => {
+                if (choseNew.current) {
+                  e.preventDefault();
+                  choseNew.current = false;
+                }
+              }}
+            >
               {memberships.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
                   {w.name}
