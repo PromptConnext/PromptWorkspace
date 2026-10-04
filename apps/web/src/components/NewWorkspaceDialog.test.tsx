@@ -96,4 +96,34 @@ describe("NewWorkspaceDialog", () => {
     await userEvent.tab({ shift: true });
     expect(create).toHaveFocus();
   });
+
+  it("keeps Tab inside the dialog after focus has left it", async () => {
+    render(
+      <>
+        <button>outside</button>
+        <NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} />
+      </>,
+    );
+    const input = screen.getByLabelText(/workspace name/i);
+    await waitFor(() => expect(input).toHaveFocus());
+    // A click on the backdrop leaves focus on the page body.
+    input.blur();
+    await userEvent.tab();
+    expect(input).toHaveFocus();
+  });
+
+  it("returns focus to the opener when it closes", async () => {
+    const opener = { current: null as HTMLButtonElement | null };
+    function Harness() {
+      return (
+        <>
+          <button ref={(el) => { opener.current = el; }}>opener</button>
+          <NewWorkspaceDialog open onClose={vi.fn()} onCreate={vi.fn()} returnFocusRef={opener} />
+        </>
+      );
+    }
+    render(<Harness />);
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "opener" })).toHaveFocus());
+  });
 });

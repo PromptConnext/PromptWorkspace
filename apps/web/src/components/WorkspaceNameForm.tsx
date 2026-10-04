@@ -27,9 +27,13 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
   const [savedName, setSavedName] = useState<string | null>(null);
 
   // The roster can land after first paint (or change after a save); follow it
-  // so the input never keeps a stale name.
+  // so the input never keeps a stale name. A name that differs from the one
+  // saved here came from elsewhere (another admin's rename), so the saved-name
+  // guard no longer applies: without dropping it, renaming back to that name
+  // would stay disabled.
   useEffect(() => {
     setName(currentName);
+    setSavedName((saved) => (saved === currentName ? saved : null));
   }, [currentName]);
 
   const trimmed = name.trim();
@@ -73,11 +77,11 @@ export function WorkspaceNameForm({ workspaceId }: { workspaceId: string }) {
           >
             {busy ? "Saving…" : "Save"}
           </button>
-          {savedName !== null && trimmed === savedName && !error && (
-            <p role="status" className="w-full text-sm text-emerald-700">
-              Saved
-            </p>
-          )}
+          {/* Always mounted: a live region that appears together with its
+              text is often not announced. */}
+          <p role="status" className="w-full text-sm text-emerald-700 empty:hidden">
+            {savedName !== null && trimmed === savedName && !error ? "Saved" : ""}
+          </p>
           {error && (
             <p role="alert" className="w-full text-sm text-red-600">
               {error}

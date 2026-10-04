@@ -10,10 +10,13 @@ export function NewWorkspaceDialog({
   open,
   onClose,
   onCreate,
+  returnFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
   onCreate: (name: string) => Promise<void>;
+  /** Focused again when the dialog closes (the control that opened it). */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,6 +29,10 @@ export function NewWorkspaceDialog({
     setName("");
     setError(null);
     onClose();
+    // After a tick, once the dialog has unmounted, so the removal of the
+    // focused input cannot drop focus back onto the page body.
+    const target = returnFocusRef?.current;
+    if (target) setTimeout(() => target.focus(), 0);
   }
 
   // Focus the input after a tick rather than relying on autoFocus: the
@@ -35,6 +42,42 @@ export function NewWorkspaceDialog({
     if (!open) return;
     const id = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(id);
+  }, [open]);
+
+  // aria-modal is a promise to assistive tech, not a behavior: keep Escape and
+  // Tab inside the dialog ourselves. Listening on the document, not the
+  // dialog, keeps the trap working after a click on the backdrop has moved
+  // focus to the page body. A create in flight can't be abandoned, so Escape
+  // (and Cancel) wait for it to settle. The ref always holds this render's
+  // handler, so the listener sees the current `busy` without re-subscribing.
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandler.current = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      if (!busy) close();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    );
+    if (!focusable || focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  useEffect(() => {
+    if (!open) return;
+    const listener = (e: KeyboardEvent) => keyHandler.current(e);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
   }, [open]);
 
   if (!open) return null;
@@ -56,39 +99,12 @@ export function NewWorkspaceDialog({
     }
   }
 
-  // aria-modal is a promise to assistive tech, not a behavior: keep Escape and
-  // Tab inside the dialog ourselves. A create in flight can't be abandoned, so
-  // Escape (and Cancel) wait for it to settle.
-  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      if (!busy) close();
-      return;
-    }
-    if (e.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not([disabled]), input:not([disabled]), [href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-    );
-    if (!focusable || focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
     <div
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      onKeyDown={onKeyDown}
       className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4"
     >
       <form
