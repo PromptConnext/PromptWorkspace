@@ -64,6 +64,9 @@ def _seed_repo(
     archived: bool = False,
     empty: bool = False,
     pushed_at: str | None = "2026-09-15T00:00:00Z",
+    created_at: str | None = None,
+    size: int | None = None,
+    has_commits: bool = False,
 ) -> None:
     """Populate FakeGithubClient.existing_repos with the raw shape _repo_row
     normalizes, so list_repos and get_repo both see it."""
@@ -74,8 +77,10 @@ def _seed_repo(
         "default_branch": default_branch,
         "private": private,
         "archived": archived,
-        "size": 0 if empty else 100,
+        "size": size if size is not None else (0 if empty else 100),
         "pushed_at": pushed_at,
+        "created_at": created_at,
+        "has_commits": has_commits,
     }
 
 
@@ -97,6 +102,30 @@ def test_listing_filters_out_a_repo_under_a_different_owner(client: TestClient):
     assert res.status_code == 200, res.text
     full_names = [r["full_name"] for r in res.json()["repositories"]]
     assert full_names == ["acme/storyapp"]
+
+
+@pytest.mark.parametrize(
+    ("created_at", "pushed_at", "empty"),
+    [
+        # Pushed 18 s after creation (the marketing-studio case): a commit
+        # exists even though GitHub's size is still 0.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:42Z", False),
+        # Never pushed after creation: GitHub sets pushed_at to created_at.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:24Z", True),
+        # No timestamps to compare: fall back to size.
+        (None, None, True),
+    ],
+)
+def test_listing_overrides_a_lagging_zero_size_with_a_later_push(
+    client: TestClient, created_at, pushed_at, empty
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp", size=0, created_at=created_at, pushed_at=pushed_at)
+
+    res = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert res.json()["repositories"][0]["empty"] is empty
 
 
 def test_listing_reports_owner_even_when_empty(client: TestClient):
@@ -362,6 +391,38 @@ def test_import_empty_repo_refused(client: TestClient):
     )
     assert res.status_code == 400, res.text
     assert res.json()["detail"] == "repo_is_empty"
+
+
+def test_import_of_a_fresh_push_whose_size_github_has_not_recomputed(client: TestClient):
+    """GitHub's `size` can stay 0 for hours after the first push; the branch
+    head is the authority, so the import goes through."""
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    # created_at == pushed_at: the listing heuristic still says empty.
+    _seed_repo(client, "acme/storyapp", size=0, has_commits=True,
+               created_at="2026-10-04T14:55:24Z", pushed_at="2026-10-04T14:55:24Z")
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 201, res.text
+
+
+def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp", empty=True)
+    client.app.state.github_client.get_tree_failure_status = 500
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 502, res.text
+    assert res.json()["detail"] == "github_unreachable"
 
 
 def test_import_without_github_connected(client: TestClient):

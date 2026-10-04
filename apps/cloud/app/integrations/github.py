@@ -42,6 +42,7 @@ import hmac
 import posixpath
 import secrets
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
@@ -466,6 +467,22 @@ class GithubClient(Protocol):
     ) -> list[str]: ...
 
 
+# A repository created and pushed in one `gh repo create --push` can show a
+# few seconds between the two; an empty repository shows none.
+_FIRST_PUSH_GRACE = timedelta(seconds=2)
+
+
+def _pushed_after_creation(data: dict) -> bool:
+    """Whether GitHub recorded a push after creating the repository — proof
+    of a commit that `size` (recomputed lazily) may not reflect yet."""
+    try:
+        created = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+        pushed = datetime.fromisoformat(data["pushed_at"].replace("Z", "+00:00"))
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return False
+    return pushed - created > _FIRST_PUSH_GRACE
+
+
 # GitHub caps `per_page` at 100 on both repository listings.
 _REPO_PAGE_SIZE = 100
 
@@ -477,7 +494,10 @@ def _repo_row(data: dict) -> dict:
     and a repository with no commits cannot be seeded at all — the seed step
     reads the branch head first, which 404s. Catching it at the picker turns a
     502 days later into a disabled row now. `size` is in KB and is eventually
-    consistent, so treat `empty` as advisory, not as the guard.
+    consistent — it can stay 0 for hours after the first push — so a push
+    that landed after the repository was created overrides it (see
+    `_pushed_after_creation`). Still advisory: the import route confirms an
+    `empty` row against the branch head before refusing.
     """
     return {
         # GitHub's stable numeric id — immutable across a rename or transfer,
@@ -490,7 +510,7 @@ def _repo_row(data: dict) -> dict:
         "default_branch": data.get("default_branch", "main"),
         "private": bool(data.get("private", False)),
         "archived": bool(data.get("archived", False)),
-        "empty": data.get("size", 1) == 0,
+        "empty": data.get("size", 1) == 0 and not _pushed_after_creation(data),
         "pushed_at": data.get("pushed_at"),
         # The project-specific description create_org_repo wrote at creation
         # (api/sync.py) — the only signal available to recognize "our earlier
@@ -1489,6 +1509,10 @@ class FakeGithubClient:
                 f"fake get_branch_head failure for {repo}",
                 status_code=self.get_tree_failure_status,
             )
+        record = self.existing_repos.get(repo)
+        if record is not None and record.get("size") == 0 and not record.get("has_commits"):
+            # What GitHub answers for a ref read on a repository with no commits.
+            raise GithubWriteError(f"Git Repository is empty: {repo}", status_code=409)
         return self.branch_heads.get(repo, "fake-head-0")
 
     async def get_tree(self, token: str, repo: str, sha: str) -> tuple[list[str], bool]:

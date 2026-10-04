@@ -120,6 +120,22 @@ logger = logging.getLogger("promptworkspace.sync")
 _REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 
+async def _has_commits(github_client, token: str, found: dict) -> bool:
+    """Confirm a repository the listing flagged `empty` really has no commits.
+    The flag comes from GitHub's `size`, which can stay 0 for hours after a
+    first push, so refusing on it alone turns away a freshly pushed export
+    (the AI Studio / Lovable case the import exists for). GitHub answers a
+    ref read on a repository with no commits with 409 (404 for a missing
+    branch); anything else is not an answer to this question."""
+    try:
+        await github_client.get_branch_head(token, found["full_name"], found["default_branch"])
+    except GithubWriteError as exc:
+        if getattr(exc, "status_code", None) in (404, 409):
+            return False
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+    return True
+
+
 @router.post("/projects", response_model=Project, status_code=201)
 async def create_project(
     body: ProjectCreate,
@@ -168,7 +184,7 @@ async def create_project(
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
     if found is None:
         raise HTTPException(status_code=404, detail="repo_not_found")
-    if found.get("empty"):
+    if found.get("empty") and not await _has_commits(github_client, token, found):
         raise HTTPException(status_code=400, detail="repo_is_empty")
 
     # A second project importing the same repo would silently steal the
