@@ -156,3 +156,16 @@ def test_phases_without_tasks_are_dropped():
     doc = "## Phase 1: Setup\n\nnothing here\n\n## Phase 2: Foundational\n- [ ] T001 a\n"
 
     assert [p.key for p in parse_task_phases(doc)] == ["foundational"]
+
+
+def test_keyword_inside_a_title_does_not_classify_the_phase():
+    doc = (
+        "## Phase 1: Setup\n- [ ] T001 a\n"
+        "## Phase 4: Database Setup for Reports\n- [ ] T005 b\n"
+    )
+
+    phases = parse_task_phases(doc)
+
+    assert [p.key for p in phases] == ["setup", "phase:database-setup-for-reports"]
+    assert phases[0].refs == ("T001",)
+    assert phases[1].kind == "other"

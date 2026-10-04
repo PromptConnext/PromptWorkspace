@@ -183,6 +183,11 @@ _PRIORITY_RE = re.compile(r"\(\s*priority\s*:\s*(p\d+)\s*\)", re.IGNORECASE)
 # so two Thai-named phases get distinct keys.
 _SLUG_RE = re.compile(r"[^0-9a-z\u0e00-\u0e7f]+")
 
+# Setup/foundational/polish only count when the title *starts* with the keyword
+# ("Setup (Shared Infrastructure)"), not when a model-named phase merely mentions
+# it ("Database Setup for Reports").
+_LEADING_KIND_RE = re.compile(r"(setup|foundational|polish)\b")
+
 _UNPHASED = ("unphased", "Unphased tasks", "unphased", None, None)
 
 
@@ -212,12 +217,10 @@ def _classify_phase(heading: str) -> tuple[str, str, str, int | None, str | None
     if story:
         number = int(story.group(1))
         return f"story:{number}", title, "story", number, priority
-    if "foundational" in lowered:
-        return "foundational", title, "foundational", None, priority
-    if "setup" in lowered:
-        return "setup", title, "setup", None, priority
-    if "polish" in lowered:
-        return "polish", title, "polish", None, priority
+    leading = _LEADING_KIND_RE.match(lowered)
+    if leading:
+        kind = leading.group(1)
+        return kind, title, kind, None, priority
     slug = _SLUG_RE.sub("-", lowered).strip("-") or "untitled"
     return f"phase:{slug}", title or "Untitled phase", "other", None, priority
 
