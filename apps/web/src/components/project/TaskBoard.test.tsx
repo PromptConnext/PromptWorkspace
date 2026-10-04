@@ -48,6 +48,11 @@ vi.mock("next/navigation", async () => {
   };
 });
 
+// The board only reads the delivery plan when grouped by change.
+vi.mock("@/lib/hooks", () => ({
+  useCloudGet: () => ({ data: null, error: null, loading: false, refetch: vi.fn() }),
+}));
+
 const listMembers = vi.fn();
 const assignTask = vi.fn();
 const setTaskStatus = vi.fn();
