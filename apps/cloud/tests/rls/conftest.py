@@ -44,19 +44,14 @@ STANDING THE TARGET UP, from the repository root:
     export PROMPTWORKSPACE_RLS_SUPABASE_SERVICE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
     pytest -q -m rls
 
-The extra grant in the middle is plan 0020 M2's step, and it is needed for the
-same reason: a local stack does not expose migration-created tables to the
-Data API roles at all (`supabase/config.toml`'s `auto_expose_new_tables`,
-unset), and `migrations/0002_pw_baseline.sql, section 0006_grants.sql` names only `authenticated`.
-Migration
-0030 grants `service_role` on the six graph tables itself, but the setup here
-also writes `pw_workspaces`, `pw_workspace_members` and `pw_projects`, which
-it does not — hence the schema-wide grant:
+No extra grant is needed any more: a local stack, like a new hosted project,
+does not expose migration-created tables to the Data API roles
+(`supabase/config.toml`'s `auto_expose_new_tables`, unset), and
+`migrations/0005_pw_service_role_grants.sql` now grants `service_role` every
+pw_ table this setup writes (`pw_workspaces`, `pw_workspace_members`,
+`pw_projects`, ...). A hand grant here would hide a missing one in the schema.
 
-    psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
-      -c 'grant select, insert, update, delete on all tables in schema public to service_role'
-
-That grant is *setup*, not a subject of these cases: the probes run as
+`service_role` is *setup*, not a subject of these cases: the probes run as
 `authenticated`, whose privileges are what is under test, and `service_role`
 is only how the fixture puts legitimate rows in place and reads them back.
 
