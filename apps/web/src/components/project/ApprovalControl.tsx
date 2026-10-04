@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { requestDecision } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
@@ -30,11 +30,29 @@ const BUTTON_LABEL: Record<DecisionKind, string> = {
 /** The approval state of one stage document, and the way to ask for it
  * (plan 0029 M2). Self-contained so the Planner, the Delivery tab and the
  * Decisions tab show the same truth. */
-export function ApprovalControl({ projectId, kind }: { projectId: string; kind: DecisionKind }) {
+export function ApprovalControl({
+  projectId,
+  kind,
+  refreshKey,
+}: {
+  projectId: string;
+  kind: DecisionKind;
+  /** Anything that changes when the approved document does (e.g. its saved-at
+   *  stamp). The states are fetched once, so without it a save leaves
+   *  "Approved" showing beside a document the server now calls stale. */
+  refreshKey?: string | number | null;
+}) {
   const { authHeaders } = useAuth();
   const { data, error: loadError, refetch } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const lastKey = useRef(refreshKey);
+  useEffect(() => {
+    if (lastKey.current === refreshKey) return;
+    lastKey.current = refreshKey;
+    refetch();
+  }, [refreshKey, refetch]);
 
   async function request() {
     setBusy(true);

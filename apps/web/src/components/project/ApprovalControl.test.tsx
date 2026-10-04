@@ -86,4 +86,23 @@ describe("ApprovalControl", () => {
     expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("refetches when the refresh key changes, and not on the first render", () => {
+    data = states("approved");
+    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    expect(refetch).not.toHaveBeenCalled();
+
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    expect(refetch).not.toHaveBeenCalled();
+
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never refetches on its own when no refresh key is given", () => {
+    data = states("approved");
+    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    expect(refetch).not.toHaveBeenCalled();
+  });
 });

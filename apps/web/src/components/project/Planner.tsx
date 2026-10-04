@@ -196,6 +196,7 @@ function StageSection({
   blockedBy,
   note,
   onDocPresence,
+  onDocStamp,
   onOpenTasks,
   analysisGate,
   onOpenAnalysis,
@@ -216,6 +217,9 @@ function StageSection({
    *  Without it a non-author sees an unexplained empty editor. */
   note?: string;
   onDocPresence?: (stage: StageKind, present: boolean) => void;
+  /** Reports the document's saved-at stamp whenever it changes (load, save,
+   *  generation), so the approval chip beside the stage can refetch. */
+  onDocStamp?: (stage: StageKind, stamp: string | null) => void;
   /** Switches the page to its Tasks tab, so a document the graph rejected can
    *  be checked against the board it failed to move. */
   onOpenTasks?: () => void;
@@ -254,6 +258,11 @@ function StageSection({
   // both null until this session writes something, same as docProjection.
   const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    onDocStamp?.(stage, docUpdatedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, docUpdatedAt]);
 
   // Every previously generated or hand-edited stage document is fetched on
   // mount, so reopening the project shows the work as it was left rather than
@@ -662,6 +671,12 @@ export function Planner({
   const notePresence = useCallback((stage: StageKind, present: boolean) => {
     setDocPresent((prev) => (prev[stage] === present ? prev : { ...prev, [stage]: present }));
   }, []);
+  // When each stage's document was last written, so the approval chip beside
+  // a stage refetches its state after a save or regeneration.
+  const [docStamp, setDocStamp] = useState<Partial<Record<StageKind, string | null>>>({});
+  const noteStamp = useCallback((stage: StageKind, stamp: string | null) => {
+    setDocStamp((prev) => (prev[stage] === stamp ? prev : { ...prev, [stage]: stamp }));
+  }, []);
   // Whether an uploaded PRD has text to draft from. Undefined while the
   // document list loads, so neither the draft button nor its "upload one
   // first" hint flashes up before it is known which applies.
@@ -1028,6 +1043,7 @@ export function Planner({
                 blockedBy={stageReadOnly ? undefined : blockedBy(meta)}
                 note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
+                onDocStamp={noteStamp}
                 onOpenTasks={onOpenTasks}
                 analysisGate={stage === "plan" || stage === "tasks" ? analysisGate : undefined}
                 onOpenAnalysis={analysisRequired ? openAnalysis : undefined}
@@ -1053,6 +1069,7 @@ export function Planner({
                 <ApprovalControl
                   projectId={projectId}
                   kind={tab.key === "specify" ? "intent_approval" : "plan_approval"}
+                  refreshKey={docStamp[tab.key === "specify" ? "specify" : "tasks"]}
                 />
               )}
               {tab.key === "tasks" && onOpenTasks && (

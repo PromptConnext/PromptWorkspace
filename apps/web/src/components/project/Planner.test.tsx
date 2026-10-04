@@ -13,7 +13,12 @@ vi.mock("@/lib/auth", () => {
   return { useAuth: () => auth };
 });
 
-vi.mock("./ApprovalControl", () => ({ ApprovalControl: () => null }));
+// Renders the refresh key it was handed, so a test can see the Planner pass it.
+vi.mock("./ApprovalControl", () => ({
+  ApprovalControl: ({ kind, refreshKey }: { kind: string; refreshKey?: string | number | null }) => (
+    <span data-testid={`approval-${kind}`}>{refreshKey ?? ""}</span>
+  ),
+}));
 
 const originalFetch = global.fetch;
 
@@ -1138,5 +1143,44 @@ describe("Planner", () => {
     fireEvent.click(panel.getByRole("button", { name: /^save$/i }));
 
     expect(await screen.findByRole("button", { name: "Continue to Plan" })).toBeInTheDocument();
+  });
+
+  it("hands the approval chip a new refresh key each time the document is saved", async () => {
+    let saved = 0;
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url.toString();
+      const match = href.match(/\/stage-documents\/(\w+)/);
+      if (match) {
+        if (init?.method === "PATCH") saved += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            stage: match[1],
+            content: saved ? "# Spec" : "",
+            updated_at: saved ? `saved-${saved}` : null,
+          }),
+        });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    const editor = await screen.findByRole("textbox", { name: "Specification document" });
+    fireEvent.change(editor, { target: { value: "# Spec" } });
+    const save = () =>
+      fireEvent.click(within(screen.getByRole("tabpanel")).getByRole("button", { name: /^save$/i }));
+    save();
+    const chip = await screen.findByTestId("approval-intent_approval");
+    await waitFor(() => expect(chip).toHaveTextContent("saved-1"));
+
+    // Editing the saved document and saving again moves the key on.
+    fireEvent.click(within(screen.getByRole("tabpanel")).getByRole("button", { name: "Raw" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Specification document" }), {
+      target: { value: "# Spec edited" },
+    });
+    save();
+    await waitFor(() => expect(chip).toHaveTextContent("saved-2"));
   });
 });
