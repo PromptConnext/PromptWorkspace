@@ -3,8 +3,8 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
-  Decision,
   DecisionKind,
+  DecisionMutationOut,
   DeployConnection,
   DeploymentStatus,
   DeploymentTemplateOut,
@@ -438,7 +438,7 @@ export function requestDecision(
   kind: DecisionKind,
   authHeaders: Record<string, string>,
 ) {
-  return apiFetch<Decision>(`/projects/${projectId}/decisions`, authHeaders, {
+  return apiFetch<DecisionMutationOut>(`/projects/${projectId}/decisions`, authHeaders, {
     method: "POST",
     body: JSON.stringify({ kind }),
   });
@@ -451,7 +451,7 @@ export function resolveDecision(
   rationale: string | null,
   authHeaders: Record<string, string>,
 ) {
-  return apiFetch<Decision>(`/projects/${projectId}/decisions/${decisionId}/resolve`, authHeaders, {
+  return apiFetch<DecisionMutationOut>(`/projects/${projectId}/decisions/${decisionId}/resolve`, authHeaders, {
     method: "POST",
     body: JSON.stringify({ outcome, rationale }),
   });

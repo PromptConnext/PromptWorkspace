@@ -8,8 +8,15 @@ import { ApprovalControl } from "./ApprovalControl";
 let data: DecisionsOut | null = null;
 let loadError: string | null = null;
 const refetch = vi.fn();
+const mutate = vi.fn();
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data, error: loadError, loading: data === null && loadError === null, refetch }),
+  useCloudGet: () => ({
+    data,
+    error: loadError,
+    loading: data === null && loadError === null,
+    refetch,
+    mutate,
+  }),
 }));
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({ Authorization: "Bearer t" }) }),
@@ -33,14 +40,32 @@ const states = (plan: DecisionsOut["states"]["plan"]): DecisionsOut => ({
 describe("ApprovalControl", () => {
   it("offers a request when nothing is requested yet", async () => {
     data = states("none");
-    requestDecision.mockResolvedValue({ id: "d1" });
+    const snapshot = states("pending");
+    requestDecision.mockResolvedValue({ id: "d1", snapshot });
     render(<ApprovalControl projectId="p1" kind="plan_approval" />);
 
     expect(screen.getByText("Not requested")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
 
     expect(requestDecision).toHaveBeenCalledWith("p1", "plan_approval", { Authorization: "Bearer t" });
-    expect(refetch).toHaveBeenCalled();
+    // The response carries the listing after the request: applied, not refetched.
+    expect(mutate).toHaveBeenCalledWith(snapshot);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it("shows the state from the request's snapshot", async () => {
+    // A stand-in for the real hook's mutate: the next render sees the data.
+    mutate.mockImplementation((next: DecisionsOut) => {
+      data = next;
+    });
+    data = states("none");
+    requestDecision.mockResolvedValue({ id: "d1", snapshot: states("pending") });
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
+
+    expect(await screen.findByText("Waiting for approval")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("hides the button while pending or approved", () => {
@@ -60,6 +85,15 @@ describe("ApprovalControl", () => {
     render(<ApprovalControl projectId="p1" kind="plan_approval" />);
     expect(screen.getByText("Changed since approval")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request plan approval" })).toBeInTheDocument();
+  });
+
+  it("refetches when an older API sends no snapshot", async () => {
+    data = states("none");
+    requestDecision.mockResolvedValue({ id: "d1" });
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
+    expect(refetch).toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("shows the server's refusal", async () => {

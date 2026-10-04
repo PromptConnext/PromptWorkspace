@@ -7,14 +7,26 @@ import { DecisionsPanel } from "./DecisionsPanel";
 
 let decisions: DecisionsOut | null = null;
 const refetch = vi.fn();
-vi.mock("@/lib/hooks", () => ({
-  useCloudGet: (path: string | null) => ({
-    data: path?.endsWith("/decisions") ? decisions : [],
-    error: null,
-    loading: false,
-    refetch,
-  }),
-}));
+const mutate = vi.fn();
+vi.mock("@/lib/hooks", async () => {
+  const { useState } = await import("react");
+  return {
+    useCloudGet: (path: string | null) => {
+      // Like the real hook, a mutate re-renders the component that owns it.
+      const [, rerender] = useState(0);
+      return {
+        data: path?.endsWith("/decisions") ? decisions : [],
+        error: null,
+        loading: false,
+        refetch,
+        mutate: (next: unknown) => {
+          mutate(next);
+          rerender((n) => n + 1);
+        },
+      };
+    },
+  };
+});
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({}) }),
 }));
@@ -45,15 +57,37 @@ describe("DecisionsPanel", () => {
     expect(screen.getByText(/No decisions yet/)).toBeInTheDocument();
   });
 
-  it("approves an open decision routed to me", async () => {
+  it("approves an open decision routed to me and applies the snapshot", async () => {
+    decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
+    const snapshot: DecisionsOut = {
+      decisions: [decision({ status: "approved", can_resolve: false, resolved_by: "u2" })],
+      states: { intent: "none", plan: "approved" },
+    };
+    mutate.mockImplementation((next: DecisionsOut) => {
+      decisions = next;
+    });
+    resolveDecision.mockResolvedValue({ ...snapshot.decisions[0], snapshot });
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(resolveDecision).toHaveBeenCalledWith("p1", "d1", "approved", null, {});
+    expect(mutate).toHaveBeenCalledWith(snapshot);
+    expect(refetch).not.toHaveBeenCalled();
+    // The plan state card and the row's status both read the snapshot.
+    expect(await screen.findAllByText("Approved")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  it("refetches when an older API sends no snapshot", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({});
     render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
-    expect(resolveDecision).toHaveBeenCalledWith("p1", "d1", "approved", null, {});
     expect(refetch).toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("requires a reason to request changes", async () => {

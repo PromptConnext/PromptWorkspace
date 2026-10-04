@@ -43,7 +43,7 @@ export function ApprovalControl({
   refreshKey?: string | number | null;
 }) {
   const { authHeaders } = useAuth();
-  const { data, error: loadError, refetch } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error: loadError, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,8 +58,12 @@ export function ApprovalControl({
     setBusy(true);
     setError(null);
     try {
-      await requestDecision(projectId, kind, authHeaders());
-      refetch();
+      // The response carries the listing after the request; applying it
+      // saves a refetch (a second set of cross-region database round trips).
+      // An API older than the snapshot sends none: refetch then.
+      const { snapshot } = await requestDecision(projectId, kind, authHeaders());
+      if (snapshot) mutate(snapshot);
+      else refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {

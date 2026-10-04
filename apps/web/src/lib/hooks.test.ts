@@ -29,6 +29,48 @@ afterEach(() => {
 });
 
 describe("useCloudGet", () => {
+  it("mutate replaces the data locally without a request", async () => {
+    apiFetch.mockResolvedValueOnce({ n: 1 });
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+    await waitFor(() => expect(result.current.data).toEqual({ n: 1 }));
+
+    act(() => result.current.mutate({ n: 2 }));
+
+    expect(result.current.data).toEqual({ n: 2 });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a background response that started before mutate does not overwrite it", async () => {
+    apiFetch.mockResolvedValueOnce({ n: 1 });
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+    await waitFor(() => expect(result.current.data).toEqual({ n: 1 }));
+
+    let resolve!: (v: { n: number }) => void;
+    apiFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    act(() => result.current.revalidate());
+    act(() => result.current.mutate({ n: 3 }));
+    expect(result.current.refreshing).toBe(false);
+    await act(async () => resolve({ n: 2 }));
+
+    expect(result.current.data).toEqual({ n: 3 });
+    // And background refreshes still work afterwards.
+    apiFetch.mockResolvedValueOnce({ n: 4 });
+    act(() => result.current.revalidate());
+    await waitFor(() => expect(result.current.data).toEqual({ n: 4 }));
+  });
+
+  it("a first load that started before mutate does not overwrite it", async () => {
+    let resolve!: (v: { n: number }) => void;
+    apiFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+
+    act(() => result.current.mutate({ n: 3 }));
+    await act(async () => resolve({ n: 1 }));
+
+    expect(result.current.data).toEqual({ n: 3 });
+    expect(result.current.loading).toBe(false);
+  });
+
   it("sets loading on the first load and clears it with data", async () => {
     apiFetch.mockResolvedValue({ n: 1 });
     const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));

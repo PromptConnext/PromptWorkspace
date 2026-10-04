@@ -690,6 +690,12 @@ export interface DecisionsOut {
   states: { intent: ApprovalState; plan: ApprovalState };
 }
 
+/** A request or resolve's response: the decision, plus the project's
+ *  `GET /decisions` as it stands after the write, to apply instead of refetching. */
+export interface DecisionMutationOut extends Decision {
+  snapshot: DecisionsOut;
+}
+
 export interface ProjectRoleOut {
   hat: ProjectHat;
   user_id: string | null;

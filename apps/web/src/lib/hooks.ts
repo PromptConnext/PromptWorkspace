@@ -26,6 +26,11 @@ interface FetchState<T> {
   // Background refetch: no `loading`, no data/error clearing, and a no-op while
   // another request is already in flight.
   revalidate: () => void;
+  // Replace `data` locally with a value the caller already has (e.g. a
+  // mutation response carrying the resource as it now stands), instead of
+  // spending a refetch. A request already in flight is dropped so it cannot
+  // overwrite the newer value.
+  mutate: (next: T) => void;
 }
 
 // Generic GET hook: re-fetches when `path` changes or the caller's identity
@@ -55,6 +60,18 @@ export function useCloudGet<T>(
   const active = !!path && enabled && !!user;
 
   const refetch = useCallback(() => setNonce((n) => n + 1), []);
+
+  const mutate = useCallback((next: T) => {
+    // Supersede any request in flight (first load or background): its answer
+    // predates `next`. The first load's finally still clears `loading`.
+    generation.current += 1;
+    inFlight.current = false;
+    setRefreshing(false);
+    setData(next);
+    setError(null);
+    setRefreshError(null);
+    setLastUpdated(Date.now());
+  }, []);
 
   const revalidate = useCallback(() => {
     if (!path || !active || inFlight.current) return;
@@ -87,23 +104,26 @@ export function useCloudGet<T>(
       return;
     }
     let cancelled = false;
+    // A mutate() while this load is out bumps the generation: the answer is
+    // then older than the data it would replace.
+    const gen = generation.current;
     // Background refreshes stand down while the first load is out.
     inFlight.current = true;
     setLoading(true);
     setError(null);
     apiFetch<T>(path, authHeaders())
       .then((result) => {
-        if (cancelled) return;
+        if (cancelled || gen !== generation.current) return;
         setData(result);
         setRefreshError(null);
         setLastUpdated(Date.now());
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled && gen === generation.current) setError(err.message);
       })
       .finally(() => {
         if (cancelled) return;
-        inFlight.current = false;
+        if (gen === generation.current) inFlight.current = false;
         setLoading(false);
       });
     return () => {
@@ -146,5 +166,5 @@ export function useCloudGet<T>(
     [],
   );
 
-  return { data, error, loading, refetch, refreshing, refreshError, lastUpdated, revalidate };
+  return { data, error, loading, refetch, refreshing, refreshError, lastUpdated, revalidate, mutate };
 }

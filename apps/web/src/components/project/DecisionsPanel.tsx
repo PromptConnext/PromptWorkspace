@@ -27,7 +27,8 @@ function DecisionRow({
 }: {
   decision: Decision;
   members: WorkspaceMember[];
-  onResolved: () => void;
+  /** Receives the listing as it stands after the resolve. */
+  onResolved: (snapshot: DecisionsOut | undefined) => void;
 }) {
   const { authHeaders } = useAuth();
   const [reason, setReason] = useState("");
@@ -39,14 +40,14 @@ function DecisionRow({
     setBusy(true);
     setError(null);
     try {
-      await resolveDecision(
+      const { snapshot } = await resolveDecision(
         decision.project_id,
         decision.id,
         outcome,
         reason.trim() || null,
         authHeaders(),
       );
-      onResolved();
+      onResolved(snapshot);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not resolve");
     } finally {
@@ -110,7 +111,9 @@ function DecisionRow({
 /** Plan 0029 Decisions tab: where the project's approvals stand and every
  * decision behind them, with the resolve form for decisions routed to me. */
 export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; workspaceId: string }) {
-  const { data, error, refetch } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  // Apply the resolve's snapshot; an API older than the snapshot sends none.
+  const onResolved = (snapshot: DecisionsOut | undefined) => (snapshot ? mutate(snapshot) : refetch());
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
 
   if (error) return <p className="text-sm text-rose-700">{error}</p>;
@@ -136,7 +139,7 @@ export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; 
       ) : (
         <ul className="flex flex-col gap-3">
           {visible.map((d) => (
-            <DecisionRow key={d.id} decision={d} members={members ?? []} onResolved={refetch} />
+            <DecisionRow key={d.id} decision={d} members={members ?? []} onResolved={onResolved} />
           ))}
         </ul>
       )}
