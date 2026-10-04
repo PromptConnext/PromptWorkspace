@@ -104,6 +104,12 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
               </span>
             </Link>
             <Link
+              href={`/w/${workspaceId}/inbox`}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
+            >
+              Inbox
+            </Link>
+            <Link
               href={`/w/${workspaceId}/settings`}
               className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
             >
