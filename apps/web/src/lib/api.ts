@@ -21,6 +21,7 @@ import type {
   StageKind,
   Task,
   TaskStatus,
+  Workspace,
   WorkspaceMember,
   WorkspaceReindexResult,
 } from "./types";
@@ -86,6 +87,20 @@ export async function apiFetch<T>(
     throw new ApiError(res.status, (data as { detail?: string }).detail ?? `cloud HTTP ${res.status}`);
   }
   return data as T;
+}
+
+// PATCH /workspaces/{id} (apps/cloud/app/api/workspaces.py::update_workspace).
+// Admin-only: a member gets 403 `admin_required`. The server does not trim or
+// bound the name, so callers must (WorkspaceNameForm does).
+export function renameWorkspace(
+  workspaceId: string,
+  name: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Workspace>(`/workspaces/${workspaceId}`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
 }
 
 export function listMembers(workspaceId: string, authHeaders: Record<string, string>) {

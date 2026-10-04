@@ -1,10 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/Select";
+import { NewWorkspaceDialog } from "@/components/NewWorkspaceDialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select";
 
 export function TopBar({
   crumbs,
@@ -13,8 +22,10 @@ export function TopBar({
   crumbs?: { label: string; href?: string; loading?: boolean }[];
 }) {
   const { user, signOut } = useAuth();
-  const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace } = useWorkspace();
+  const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace, createWorkspace } =
+    useWorkspace();
   const router = useRouter();
+  const [creating, setCreating] = useState(false);
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-6">
@@ -37,6 +48,12 @@ export function TopBar({
                 router.push("/");
                 return;
               }
+              if (id === "__new__") {
+                // An action, not a workspace: open the dialog and leave the
+                // selection and route alone.
+                setCreating(true);
+                return;
+              }
               setActiveWorkspace(id);
               router.push(`/w/${id}`);
             }}
@@ -55,6 +72,8 @@ export function TopBar({
                 </SelectItem>
               ))}
               <SelectItem value="__all__">All workspaces…</SelectItem>
+              <SelectSeparator />
+              <SelectItem value="__new__">New workspace…</SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -94,6 +113,14 @@ export function TopBar({
           Sign out
         </button>
       </div>
+      <NewWorkspaceDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreate={async (name) => {
+          const ws = await createWorkspace(name);
+          router.push(`/w/${ws.id}`);
+        }}
+      />
     </header>
   );
 }
