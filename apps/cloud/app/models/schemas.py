@@ -15,9 +15,9 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 def new_id() -> str:
@@ -241,12 +241,22 @@ class DiscussionCreate(BaseModel):
 # shared (non-secret) Git configuration. Access is by membership, not project
 # ownership. Per ADR 0010 §5 the cloud stores only Git *metadata* here
 # (repo_url / provider / default_branch) — never a raw credential (Option C).
+# Request-side rule for a workspace's display name: surrounding whitespace is
+# stripped, then the name must be 1-100 characters (422 otherwise). The web
+# client enforces the same cap (WORKSPACE_NAME_MAX_LENGTH). Applied to request
+# bodies only — the stored `Workspace.name` stays a plain str so auto-provisioned
+# personal workspaces and existing rows are never re-validated on read.
+WorkspaceName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+
+
 class WorkspaceCreate(BaseModel):
-    name: str
+    name: WorkspaceName
 
 
 class WorkspaceUpdate(BaseModel):
-    name: str | None = None
+    name: WorkspaceName | None = None
     git_config: dict | None = None
     rag_index_pmo_discussions: bool | None = None
 
