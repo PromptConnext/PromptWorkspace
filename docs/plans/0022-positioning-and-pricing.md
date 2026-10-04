@@ -1,6 +1,6 @@
 # Plan 0022 — Correct the public positioning and the pricing model
 
-**Date:** 2026-09-12 · **Status:** **Answered 2026-09-13 — option B. Ready for implementation.** · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both **Accepted 2026-09-13**; pricing recorded in [0027](../decisions/0027-what-is-free.md)
+**Date:** 2026-09-12 · **Status:** **Answered 2026-09-13 — option B.** Moved: M1–M5 are corp-site work and now belong to `PromptConnext/promptconnext-corp-web` (none landed before the 2026-10-01 move) · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md) + [0020](../decisions/0020-cloud-is-the-source-of-truth.md), both **Accepted 2026-09-13**; pricing recorded in [0027](../decisions/0027-what-is-free.md)
 
 > **Decision, 2026-09-13.** Option B, the metered free tier. Scope, Spec and the task graph are free for any number of people in one workspace under a lowered token ceiling; repository provisioning, deployment templates, the preview and a raised ceiling are paid. Recorded as [ADR 0027](../decisions/0027-what-is-free.md), which §2 asked for before M1 starts. The desktop question this plan waited on is answered as **retire** ([plan 0011](./0011-desktop-decision-gate.md)), so M2 follows its Branch A column: the download page loses its job as the primary conversion surface.
 

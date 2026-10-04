@@ -1,6 +1,6 @@
 # Plan 0009 — Assign tasks to workspace members
 
-**Date:** 2026-07-22 · **Status:** Ready for implementation · **ADR:** [0018](../decisions/0018-assign-tasks-to-workspace-members.md)
+**Date:** 2026-07-22 · **Status:** Implemented (M1–M4, audited 2026-10-04) · **ADR:** [0018](../decisions/0018-assign-tasks-to-workspace-members.md)
 
 This plan implements task assignment to workspace members. It is sequenced so each milestone is independently testable and the first two milestones (M1–M2) form a complete, shippable web-only slice; M3–M4 add desktop display.
 

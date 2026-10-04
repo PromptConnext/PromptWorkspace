@@ -746,7 +746,7 @@ Each phase ships on its own, keeps every existing workflow working, and can stop
 
 | Phase | Theme | Ships | Existing behaviour kept | Exit criterion |
 |---|---|---|---|---|
-| **0. Clean ground** (≈1–2 weeks) | Fix what the new model depends on | Server-side lifecycle preconditions, drop `stage_state`, write `approved`/`approved_by` via a minimal approval action, plan 0012 leftovers decided, multi-turn assistant (plan 0008 M2) started | Everything | No client-only gates remain on the lifecycle |
+| **0. Clean ground** (≈1–2 weeks) | Fix what the new model depends on | Server-side lifecycle preconditions, drop `stage_state`, write `approved`/`approved_by` via a minimal approval action, plan 0012 leftovers decided, multi-turn assistant (plan 0008 M2) started, and the security and correctness items in §13 | Everything | No client-only gates remain on the lifecycle; §13 rows marked *Phase 0* are closed |
 | **1. Changes as a grouping layer** (M1 + M2) | New vocabulary, no new execution | Changes from phases, Delivery Plan view, Decision Inbox for intent and plan approval, project hats | Task board, assignment, extension, MCP all unchanged. The board gains "group by Change" | Teams plan and approve in Changes while still executing by hand |
 | **2. Delegate a Change** (M3) | Opt-in agent execution, autonomy L0 | "Delegate to agent" button per Change. `agent.yml` added to *existing* repos through a PR the steward merges (not a silent seed). Extension adds **Take over** | Human execution of any Change. Close-on-push unchanged | ≥ 50 % of Changes on pilot projects delegated |
 | **3. Evidence replaces manual verify** (M4 + M5) | Trust layer | `verify.yml`, Evidence Pack, Trust Score, risk tiers, gate status, branch protection (opt-in for existing repos) | Admin can still override `verified`, but it is logged as a Decision | Manual `verified` used for < 10 % of steps |
@@ -830,3 +830,26 @@ Open questions for the deciders:
 3. **First runtime.** Claude Code headless is proposed because the engine adapter and the façade knowledge already exist. Codex CLI is the alternative. Either way, one runtime for the MVP.
 4. **Business-user desktop (ADR 0028).** This plan suggests the desktop's business persona is served by Decision cards and notifications. Should ADR 0028's follow-up plan be folded into Phase 4 here?
 5. **Default autonomy for existing projects.** L0 (proposed) or no change until a steward opts in?
+
+---
+
+## 13. Carried-over open work
+
+An audit of every earlier plan against `develop` on 2026-10-04 updated their Status lines and found the items below still open. This section is now the one place to look for unfinished work from plans 0001–0028. Earlier plans point here instead of tracking it themselves. The audit also found one stranded fix: NUL-byte stripping in document extraction existed only on an unmerged `deployment` branch. It shipped in PR #13 and is not listed.
+
+| # | Item | From | Where it goes |
+|---|---|---|---|
+| 1 | Multi-turn assistant with saved threads (`pw_assistant_threads`), and the drawer that persists across tabs | Plan 0008 M2–M3 | **Phase 0.** The project concierge (§8) depends on it |
+| 2 | Decide whether to retire `PUT /sync/projects/{id}/graph` and the engine's manual push | Plan 0012 | **Phase 0** decision |
+| 3 | Admin can spoof a discussion author through graph push. Omitting `deleted_at` in a push silently restores a deleted entity | Plan 0015 | **Phase 0.** Both disappear if item 2 retires the route; otherwise fix them |
+| 4 | Supabase `list_assigned_tasks` applies the limit before the workspace filter (contract-suite finding 4, strict xfail) | Plan 0020 | **Phase 0.** `/me/tasks` feeds the extension and the MCP server |
+| 5 | `upsert_graph` merges without a transaction (finding 17, concurrency half) | Plan 0020 | **Phase 0**, or moot if item 2 retires the route |
+| 6 | Create-path retry adopts a repo on description match alone (N5). Code-index chunks are embedded without secret redaction (N6) | Plan 0027 | **Phase 0.** Both are security items; N6 matters more once agents read the index |
+| 7 | Presence WebSocket sends its JWT as `?token=` (issue #1) | Plan 0005 | **Phase 0** |
+| 8 | MCP M4: Streamable HTTP transport, register the server from the VS Code extension, device-code login, npm publish | Plan 0025 | **Phase 2.** The runner (M3 here) needs the same server to be installable in CI |
+| 9 | FastAPI + Uvicorn python runtime for the docker-compose template | Plan 0026 | **Phase 4**, when `verify.yml` templates are written per stack |
+| 10 | Compliance ADR: obligations, coverage, audit export | Plan 0023 | **Phase 5** |
+| 11 | Business-user desktop follow-up plan | ADR 0028 | Open question 4 in §12 |
+| 12 | Drop `pw_projects.owner_id`; make `workspace_id` NOT NULL | Plans 0001 / 0002 | Low priority. Any later migration |
+| 13 | Pricing rewrite, download page, product copy, contact-webhook loss, locale tests | Plan 0022 | **Not this repo.** `PromptConnext/promptconnext-corp-web` |
+
