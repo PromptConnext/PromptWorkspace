@@ -161,7 +161,7 @@ Expected: `False`
 
 ```markdown
 
-## 9. Trust test environment (plan 0029)
+## 8. Trust test environment (plan 0029)
 
 A third, short-lived stack for the agent-native delivery work in [plan 0029](plans/0029-agent-native-delivery.md). It tracks branch `feature/trust-outcome`, never shares a database with staging or production (company ADR 0003, amended 2026-10-04), and is torn down when the branch merges into `develop`.
 
@@ -173,7 +173,7 @@ A third, short-lived stack for the agent-native delivery work in [plan 0029](pla
 | Database | Supabase project `promptworkspace-trust` (Free plan, region ap-southeast-1) |
 | Extra setting | `REQUIRE_PLAN_APPROVAL=true` |
 
-### 9.1 Provisioning checklist (dashboard steps, in order)
+### 8.1 Provisioning checklist (dashboard steps, in order)
 
 1. **Supabase.** Create project `promptworkspace-trust` (same org as `promptworkspace-develop`, Singapore, Free). Save the DB password. Record `SUPABASE_URL`, the secret key, the publishable key, the JWT secret and the **Session pooler** URI.
    - Auth → URL Configuration: Site URL `https://promptworkspace-trust.truthledgers.com`; Redirect URLs `https://promptworkspace-trust.truthledgers.com/**` and `http://localhost:3000/**`.
@@ -188,7 +188,7 @@ A third, short-lived stack for the agent-native delivery work in [plan 0029](pla
 5. **DNS** (truthledgers.com, proxy off): `promptworkspace-trust` CNAME → the Vercel target; `promptworkspace-trust-api` CNAME → the Northflank target.
 6. **Smoke check:** `curl -s https://promptworkspace-trust-api.truthledgers.com/health` reports `schema_version` `0004_pw_delivery_and_decisions`, and the web origin returns 200.
 
-### 9.2 Teardown
+### 8.2 Teardown
 
 When `feature/trust-outcome` merges into `develop`: delete the Vercel branch domain and its env vars, the Northflank service, the Supabase project (after 14 days) and both DNS records. Apply migration 0004 to develop's database **before** the merge deploys.
 ```
@@ -223,7 +223,7 @@ git -C /Users/kittisak/REPO/ideva/promptconnext-projects push
 ```
 Note: commit **only** the ADR file in the umbrella repo. Never stage the `PromptWorkspace` pointer from a feature branch.
 
-- [ ] **Step 7: Hand the checklist (§9.1 steps 1–5) to the user**
+- [ ] **Step 7: Hand the checklist (§8.1 steps 1–5) to the user**
 
 The dashboard steps need the user's accounts; no CLI exists for Vercel or Northflank on this machine. Ask the user to run them, or to share a pooler URL in their own shell for step 2 (`! cd apps/cloud && python scripts/migrate.py --db-url "<url>" apply --var embed_dim=1536`). Do not paste secrets into the conversation or into files.
 
@@ -2995,7 +2995,7 @@ Directly after:
 insert:
 ```python
     # Plan 0029 delivery gates, before any external mutation. Behind a setting
-    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §9).
+    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §8).
     if request.app.state.settings.require_plan_approval:
         _require_delivery_gates(repo, project_id)
 ```
@@ -4339,7 +4339,7 @@ git push
 
 - [ ] **Step 1: Confirm the user finished the checklist**
 
-Ask the user to confirm `docs/DEPLOYMENT.md` §9.1 steps 1–5 are done, including the migration apply (`migrate.py status` lists `0004_pw_delivery_and_decisions`).
+Ask the user to confirm `docs/DEPLOYMENT.md` §8.1 steps 1–5 are done, including the migration apply (`migrate.py status` lists `0004_pw_delivery_and_decisions`).
 
 - [ ] **Step 2: Verify the API**
 

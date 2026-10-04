@@ -354,7 +354,7 @@ async def create_repository(
         raise HTTPException(status_code=409, detail="not_in_tech_review")
 
     # Plan 0029 delivery gates, before any external mutation. Behind a setting
-    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §9).
+    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §8).
     if request.app.state.settings.require_plan_approval:
         _require_delivery_gates(repo, project_id)
 

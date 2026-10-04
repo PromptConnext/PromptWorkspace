@@ -1,6 +1,6 @@
 # Plan 0029: Agent-native delivery. Agents do the work, people govern the outcome
 
-**Date:** 2026-10-04 · **Status:** Draft for review (product reframing; no code yet) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
+**Date:** 2026-10-04 · **Status:** Draft for review. **Slice 1 (M1 + M2) in progress on `feature/trust-outcome`**, test environment `promptworkspace-trust.truthledgers.com` ([implementation plan](../superpowers/plans/2026-10-04-trust-outcome-m1-m2.md)) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
 
 **Relationship to existing documents.** This builds on the product vision rather than replacing it. The vision said PromptWorkspace is "a governance and auditability product wearing a planning-tool interface" (§4). This plan takes that literally: the planning-tool interface (task board, assignment, manual `verified`) is the part designed for the old way of working. The governance core underneath (evidence graph, policy scope, seeded repo, CI-observed deploys) is what the agent era needs most. Four follow-up ADRs are proposed in §12. Until they are accepted, nothing here overrides an accepted ADR.
 
@@ -715,6 +715,8 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 | **M4** | **Verification and evidence** | Webhook ingest (`workflow_run`, `pull_request`), `pw_artifacts` | Hand-written `verify.yml` per template (build, typecheck, lint, test, `gitleaks`, `npm audit`/`pip-audit`, semgrep default rules). Test naming convention carries scenario IDs, and `evidence.json` maps them. One **Reviewer agent** run on `pull_request` (same runner, different role profile, read-only). `pw_evidence`, Evidence Pack panel, Trust Score v1 (published formula) |
 | **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. Auto-green for T0/T1, Decision for T2/T3 |
 | **M6** | **Mission Control and outcome progress** | `ProgressRollup.tsx`, `pw_deployment_tasks`, Preview tab | Outcome progress from scenario evidence on the latest `develop` build. "Needs you" strip. Live Change states. Release Candidate is a read-only report on the existing Preview tab |
+
+**Slice 1 notes (2026-10-04).** In code, a Change is `DeliveryChange` (`pw_delivery_changes`, `/projects/{id}/delivery-plan`) because `/sync/projects/{id}/changes` already names the sync head. Three M1/M2 items moved: scenario IDs `O<story>.S<n>` move to M4 (nothing consumes them before evidence exists); decision email moves to after M3 (the cloud has no general email transport yet; in-app Inbox only); separation of duties on self-approval waits for real teams (it would block one-person test projects). The create-repository approval gate ships behind `REQUIRE_PLAN_APPROVAL`, on in the trust environment only.
 
 ### 9.3 Explicitly not in the MVP
 
