@@ -26,7 +26,7 @@ const DETAIL_MESSAGES: Record<string, string> = {
   // which workspace or project already imported it.
   repo_already_imported: "This repository is already connected to a PromptWorkspace project.",
   repo_is_empty:
-    "That repository has no commits yet — PromptWorkspace can only add files on top of an existing one.",
+    "GitHub shows no commits on its default branch — PromptWorkspace can only add files on top of an existing commit. Push one (and check the default branch) and try again.",
   invalid_repo_full_name: "That doesn't look like a repository — refresh the list and try again.",
   github_repo_not_in_token_scope:
     'The workspace\'s GitHub token can\'t read that repository — a token scoped to "Only select ' +
@@ -268,9 +268,13 @@ export function NewProjectDialog({
                   {filtered.map((r) => {
                     const disabledReason = r.archived
                       ? "archived on GitHub — unarchive it first, PromptWorkspace must be able to push"
-                      : r.empty
-                        ? "no commits yet — PromptWorkspace can only add files on top of an existing commit"
-                        : null;
+                      : null;
+                    // Advisory only: GitHub's size lags after a first push, so
+                    // the server (which checks the branch head) decides.
+                    const hint = r.empty
+                      ? "GitHub reports no commits yet — if you just pushed, you can still import it"
+                      : null;
+                    const note = disabledReason ?? hint;
                     return (
                       <li key={r.full_name}>
                         <button
@@ -285,7 +289,7 @@ export function NewProjectDialog({
                           </span>
                           <span className="text-xs text-slate-500">
                             {r.default_branch}
-                            {disabledReason ? ` — ${disabledReason}` : ""}
+                            {note ? ` — ${note}` : ""}
                           </span>
                         </button>
                       </li>

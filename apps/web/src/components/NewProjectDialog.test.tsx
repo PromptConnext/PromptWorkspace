@@ -116,7 +116,7 @@ describe("NewProjectDialog", () => {
     expect(screen.queryByText("other")).not.toBeInTheDocument();
   });
 
-  it("disables archived and empty rows with a reason", async () => {
+  it("disables archived rows but keeps an empty-flagged row selectable with an advisory hint", async () => {
     mockFetch({
       [REPO_LIST_PATH]: {
         owner: "acme",
@@ -137,8 +137,33 @@ describe("NewProjectDialog", () => {
 
     expect(archivedRow).toBeDisabled();
     expect(archivedRow.textContent).toMatch(/archived on github/i);
-    expect(emptyRow).toBeDisabled();
-    expect(emptyRow.textContent).toMatch(/no commits yet/i);
+    expect(emptyRow).not.toBeDisabled();
+    expect(emptyRow.textContent).toMatch(/github reports no commits yet/i);
+    expect(emptyRow.textContent).toMatch(/you can still import it/i);
+  });
+
+  it("shows a clear message when the server refuses an empty repository", async () => {
+    mockFetch({
+      [REPO_LIST_PATH]: {
+        owner: "acme",
+        owner_type: "Organization",
+        account_login: "acme-bot",
+        repositories: [repo({ full_name: "acme/blank-slate", name: "blank-slate", empty: true })],
+        truncated: false,
+      },
+      "/projects": { status: 400, detail: "repo_is_empty" },
+    });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={vi.fn()} onCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Import a GitHub repository"));
+    fireEvent.click(await screen.findByRole("button", { name: /blank-slate/ }));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(/no commits on its default branch/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("repo_is_empty")).not.toBeInTheDocument();
   });
 
   it("names the connected owner when the repository list is empty", async () => {

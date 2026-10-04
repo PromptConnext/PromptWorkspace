@@ -121,12 +121,14 @@ _REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 
 async def _has_commits(github_client, token: str, found: dict) -> bool:
-    """Confirm a repository the listing flagged `empty` really has no commits.
-    The flag comes from GitHub's `size`, which can stay 0 for hours after a
-    first push, so refusing on it alone turns away a freshly pushed export
-    (the AI Studio / Lovable case the import exists for). GitHub answers a
-    ref read on a repository with no commits with 409 (404 for a missing
-    branch); anything else is not an answer to this question."""
+    """Whether the repository's default branch has a head commit. Run on every
+    import: the listing's `empty` flag is derived from GitHub's lazily
+    recomputed `size` and `pushed_at`, so it can miss a repository whose
+    branches were all deleted, and refusing at import beats a seed-time
+    failure. GitHub answers a ref read on a repository with no commits with
+    409; 404 means the branch is missing, which also covers a renamed or
+    deleted default branch, and is treated as empty too. Any other error is
+    not an answer to this question and becomes 502 github_unreachable."""
     try:
         await github_client.get_branch_head(token, found["full_name"], found["default_branch"])
     except GithubWriteError as exc:
@@ -184,7 +186,7 @@ async def create_project(
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
     if found is None:
         raise HTTPException(status_code=404, detail="repo_not_found")
-    if found.get("empty") and not await _has_commits(github_client, token, found):
+    if not await _has_commits(github_client, token, found):
         raise HTTPException(status_code=400, detail="repo_is_empty")
 
     # A second project importing the same repo would silently steal the

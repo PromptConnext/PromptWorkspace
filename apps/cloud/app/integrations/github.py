@@ -467,8 +467,11 @@ class GithubClient(Protocol):
     ) -> list[str]: ...
 
 
-# A repository created and pushed in one `gh repo create --push` can show a
-# few seconds between the two; an empty repository shows none.
+# GitHub can stamp an empty repository's pushed_at a moment after created_at,
+# so a push counts only when it lands more than this after creation. The
+# trade-off: a repository created and pushed within the grace stays flagged
+# `empty` while `size` lags. That is acceptable because the flag is only a
+# picker hint; the import route checks the branch head.
 _FIRST_PUSH_GRACE = timedelta(seconds=2)
 
 
@@ -496,8 +499,8 @@ def _repo_row(data: dict) -> dict:
     502 days later into a disabled row now. `size` is in KB and is eventually
     consistent — it can stay 0 for hours after the first push — so a push
     that landed after the repository was created overrides it (see
-    `_pushed_after_creation`). Still advisory: the import route confirms an
-    `empty` row against the branch head before refusing.
+    `_pushed_after_creation`). Still advisory: the import route confirms every
+    import against the branch head before refusing.
     """
     return {
         # GitHub's stable numeric id — immutable across a rename or transfer,
@@ -1357,6 +1360,10 @@ class FakeGithubClient:
         # is unwell"); set 403/404 to exercise the token-scope path.
         self.write_failure_status: int | None = 500
         self.existing_repos: dict[str, dict] = {}
+        # Repos with no commits (never pushed, or every branch deleted):
+        # get_branch_head answers 409 for these, independent of the listing's
+        # `size`/`pushed_at`, which is what lags or misleads on real GitHub.
+        self.empty_repos: set[str] = set()
         # Mints ids for fake-created repos, mirroring GitHub's own numeric
         # repository id (plan 0016). A repo seeded directly into
         # existing_repos by a test (to simulate an unrelated repository) must
@@ -1509,8 +1516,7 @@ class FakeGithubClient:
                 f"fake get_branch_head failure for {repo}",
                 status_code=self.get_tree_failure_status,
             )
-        record = self.existing_repos.get(repo)
-        if record is not None and record.get("size") == 0 and not record.get("has_commits"):
+        if repo in self.empty_repos:
             # What GitHub answers for a ref read on a repository with no commits.
             raise GithubWriteError(f"Git Repository is empty: {repo}", status_code=409)
         return self.branch_heads.get(repo, "fake-head-0")

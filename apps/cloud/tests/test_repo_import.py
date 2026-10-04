@@ -66,10 +66,11 @@ def _seed_repo(
     pushed_at: str | None = "2026-09-15T00:00:00Z",
     created_at: str | None = None,
     size: int | None = None,
-    has_commits: bool = False,
 ) -> None:
     """Populate FakeGithubClient.existing_repos with the raw shape _repo_row
-    normalizes, so list_repos and get_repo both see it."""
+    normalizes, so list_repos and get_repo both see it. `empty=True` also makes
+    the fake's branch-head read answer 409, as GitHub does for a repository
+    with no commits (including one whose every branch was deleted)."""
     client.app.state.github_client.existing_repos[full_name] = {
         "id": next(_next_test_repo_id),
         "full_name": full_name,
@@ -80,8 +81,9 @@ def _seed_repo(
         "size": size if size is not None else (0 if empty else 100),
         "pushed_at": pushed_at,
         "created_at": created_at,
-        "has_commits": has_commits,
     }
+    if empty:
+        client.app.state.github_client.empty_repos.add(full_name)
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +114,10 @@ def test_listing_filters_out_a_repo_under_a_different_owner(client: TestClient):
         ("2026-10-04T14:55:24Z", "2026-10-04T14:55:42Z", False),
         # Never pushed after creation: GitHub sets pushed_at to created_at.
         ("2026-10-04T14:55:24Z", "2026-10-04T14:55:24Z", True),
+        # Exactly the 2 s grace: still flagged empty (advisory hint only).
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:26Z", True),
+        # One second past the grace: a real push.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:27Z", False),
         # No timestamps to compare: fall back to size.
         (None, None, True),
     ],
@@ -399,7 +405,7 @@ def test_import_of_a_fresh_push_whose_size_github_has_not_recomputed(client: Tes
     ws_id = _workspace(client)
     _connect(client, ws_id, owner="acme")
     # created_at == pushed_at: the listing heuristic still says empty.
-    _seed_repo(client, "acme/storyapp", size=0, has_commits=True,
+    _seed_repo(client, "acme/storyapp", size=0,
                created_at="2026-10-04T14:55:24Z", pushed_at="2026-10-04T14:55:24Z")
 
     res = client.post(
@@ -410,11 +416,49 @@ def test_import_of_a_fresh_push_whose_size_github_has_not_recomputed(client: Tes
     assert res.status_code == 201, res.text
 
 
-def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(client: TestClient):
+def test_import_refuses_a_pushed_repo_whose_branches_were_all_deleted(client: TestClient):
+    """pushed_at > created_at defeats the listing heuristic, so the listing
+    says not-empty; the branch head is still the authority at import."""
     ws_id = _workspace(client)
     _connect(client, ws_id, owner="acme")
-    _seed_repo(client, "acme/storyapp", empty=True)
-    client.app.state.github_client.get_tree_failure_status = 500
+    _seed_repo(client, "acme/storyapp", empty=True, size=100,
+               created_at="2026-10-04T14:55:24Z", pushed_at="2026-10-04T15:55:24Z")
+
+    listing = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=ALICE)
+    assert listing.json()["repositories"][0]["empty"] is False
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "repo_is_empty"
+
+
+def test_import_refuses_when_the_default_branch_is_missing(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    client.app.state.github_client.get_tree_failure_status = 404
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "repo_is_empty"
+
+
+@pytest.mark.parametrize("status", [403, 500])
+def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(
+    client: TestClient, status: int
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    client.app.state.github_client.get_tree_failure_status = status
 
     res = client.post(
         "/projects",

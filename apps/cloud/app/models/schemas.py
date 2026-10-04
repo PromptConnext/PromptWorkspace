@@ -1094,10 +1094,11 @@ class GithubRepoOut(BaseModel):
     default_branch: str
     private: bool
     archived: bool = False
-    # Derived from GitHub's `size == 0` — the only available proxy for "has no
-    # commits". A repo in that state can't be seeded (the seed step reads the
-    # branch head first, which 404s), so the picker disables the row rather
-    # than letting the failure surface at tech-review exit.
+    # Advisory hint: GitHub's `size == 0` unless a push landed after the
+    # repository was created (`pushed_at` > `created_at` + 2 s), since `size`
+    # lags for hours after a first push. It can be wrong either way, so the
+    # picker only warns; POST /projects confirms the default branch head and
+    # refuses with `repo_is_empty` when there is no commit to seed from.
     empty: bool = False
     pushed_at: datetime | None = None
 
