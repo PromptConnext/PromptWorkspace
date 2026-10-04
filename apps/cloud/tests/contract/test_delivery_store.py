@@ -99,7 +99,11 @@ def test_task_change_ids_are_the_live_tasks_in_pull_order(repo: Repository) -> N
     ws, admin = h.workspace(repo)
     project = h.project(repo, ws, admin)
     other = h.project(repo, ws, admin)
-    change_a, change_b = new_id(), new_id()
+    setup, story = _change(project, ws, "setup", "C1", 0), _change(project, ws, "story:1", "C2", 1)
+    elsewhere = _change(other, ws, "setup", "C1", 0)
+    repo.upsert_delivery_changes(project.id, [setup, story])
+    repo.upsert_delivery_changes(other.id, [elsewhere])
+    change_a, change_b = setup.id, story.id  # pw_tasks.change_id is a foreign key
     first = Task(id=new_id(), project_id=project.id, title="first", change_id=change_a)
     second = Task(id=new_id(), project_id=project.id, title="second", change_id=change_b)
     loose = Task(id=new_id(), project_id=project.id, title="no change")
@@ -107,7 +111,7 @@ def test_task_change_ids_are_the_live_tasks_in_pull_order(repo: Repository) -> N
     for task in (first, second, loose, gone):
         h.push_tasks(repo, project.id, [task])
     h.push_tasks(repo, other.id, [Task(id=new_id(), project_id=other.id, title="x",
-                                       change_id=change_a)])
+                                       change_id=elsewhere.id)])
     h.push_tasks(repo, project.id, [gone.model_copy(update={"deleted_at": utcnow()})])
     # Touching `first` again moves it to the end of the pull order.
     h.push_tasks(repo, project.id, [first.model_copy(update={"title": "first, renamed"})])
