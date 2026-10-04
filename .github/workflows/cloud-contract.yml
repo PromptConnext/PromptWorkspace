@@ -29,7 +29,7 @@ on:
       - "apps/cloud/tests/rls/**"
       - ".github/workflows/cloud-contract.yml"
   push:
-    branches: [main, develop]
+    branches: [main, develop, feature/trust-outcome]
     paths:
       - "apps/cloud/app/db/**"
       - "apps/cloud/migrations/**"
