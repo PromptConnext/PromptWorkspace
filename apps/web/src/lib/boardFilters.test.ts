@@ -22,6 +22,7 @@ function task(overrides: Partial<Task> & { id: string }): Task {
     assignee: null,
     sprint: null,
     assigned_user_id: null,
+    change_id: null,
     updated_at: "2026-08-01T00:00:00Z",
     deleted_at: null,
     field_versions: {},

@@ -131,6 +131,7 @@ export interface Task {
   assignee: string | null;
   sprint: string | null;
   assigned_user_id: string | null;
+  change_id: string | null;
   updated_at: string | null;
   deleted_at: string | null;
   field_versions: Record<string, unknown>;
@@ -639,4 +640,65 @@ export interface WorkspaceReindexResult {
   enqueued: number;
   projects_swept: number;
   projects: { project_id: string; enqueued: number }[];
+}
+
+// --- Plan 0029 delivery (apps/cloud/app/api/delivery.py) -------------------
+
+export type ApprovalState = "none" | "pending" | "approved" | "stale" | "changes_requested";
+export type DecisionKind = "intent_approval" | "plan_approval";
+export type ProjectHat = "business_owner" | "tech_steward";
+
+export interface DeliveryChange {
+  id: string;
+  ref: string;
+  key: string;
+  title: string;
+  kind: "setup" | "foundational" | "story" | "other" | "polish" | "unphased";
+  story: number | null;
+  priority: string | null;
+  position: number;
+  wave: number;
+  depends_on: string[];
+  task_ids: string[];
+}
+
+export interface DeliveryPlan {
+  changes: DeliveryChange[];
+  plan_approval: ApprovalState;
+}
+
+export interface Decision {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  kind: DecisionKind;
+  title: string;
+  subject_stage: "specify" | "tasks";
+  subject_hash: string;
+  routed_hat: ProjectHat;
+  status: "open" | "approved" | "rejected" | "withdrawn";
+  rationale: string | null;
+  requested_by: string;
+  resolved_by: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  can_resolve: boolean;
+}
+
+export interface DecisionsOut {
+  decisions: Decision[];
+  states: { intent: ApprovalState; plan: ApprovalState };
+}
+
+export interface ProjectRoleOut {
+  hat: ProjectHat;
+  user_id: string | null;
+}
+
+export interface InboxItem {
+  decision: Decision;
+  project_id: string;
+  project_name: string;
+  workspace_id: string;
+  workspace_name: string;
 }

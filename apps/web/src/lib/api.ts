@@ -3,6 +3,8 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
+  Decision,
+  DecisionKind,
   DeployConnection,
   DeploymentStatus,
   DeploymentTemplateOut,
@@ -13,6 +15,8 @@ import type {
   PolicyTemplateOut,
   PrefillOut,
   Project,
+  ProjectHat,
+  ProjectRoleOut,
   RepoAnalysisOut,
   SeedPreview,
   StageDocumentOut,
@@ -393,4 +397,41 @@ export function reindexWorkspace(workspaceId: string, authHeaders: Record<string
     authHeaders,
     { method: "POST" },
   );
+}
+
+export function requestDecision(
+  projectId: string,
+  kind: DecisionKind,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Decision>(`/projects/${projectId}/decisions`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ kind }),
+  });
+}
+
+export function resolveDecision(
+  projectId: string,
+  decisionId: string,
+  outcome: "approved" | "rejected",
+  rationale: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Decision>(`/projects/${projectId}/decisions/${decisionId}/resolve`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ outcome, rationale }),
+  });
+}
+
+/** null clears the hat. */
+export function setProjectRole(
+  projectId: string,
+  hat: ProjectHat,
+  userId: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<ProjectRoleOut[]>(`/projects/${projectId}/roles/${hat}`, authHeaders, {
+    method: "PUT",
+    body: JSON.stringify({ user_id: userId }),
+  });
 }
