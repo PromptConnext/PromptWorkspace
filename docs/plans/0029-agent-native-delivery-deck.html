@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents do the work. People govern the outcome. (Plan 0029)</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ground: #F5F6F8; --surface: #FFFFFF; --surface-2: #EBEEF2;
+    --ink: #12151B; --ink-2: #3A4250; --muted: #6B7484;
+    --rule: #D8DCE3; --rule-soft: #E6E9EE;
+    --accent: #0E7C72; --accent-strong: #085F58; --accent-soft: #DCEFEC;
+    --warn: #9A5B10; --warn-soft: #F7ECDC;
+    --ok: #2F6B33; --ok-soft: #E3EFE2;
+    --crit: #A5322B; --crit-soft: #F7E4E1;
+    /* actor colours, shared by every diagram */
+    --human: #1D4ED8; --human-soft: #DBEAFE;
+    --ai: #6D28D9; --ai-soft: #EDE9FE;
+    --plat: #475569; --plat-soft: #EEF1F5;
+    --gate: #C2410C; --gate-soft: #FFEDD5;
+    --shadow: 0 1px 2px rgba(18,21,27,.05), 0 12px 32px -20px rgba(18,21,27,.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0A0D12; --surface: #12161D; --surface-2: #181D26;
+      --ink: #E9ECF1; --ink-2: #B7C0CC; --muted: #8791A0;
+      --rule: #262E3A; --rule-soft: #1C2330;
+      --accent: #3FD9C7; --accent-strong: #7BEFE1; --accent-soft: #103330;
+      --warn: #E0AD5C; --warn-soft: #2C2414; --ok: #8FCB86; --ok-soft: #16241A;
+      --crit: #E2857D; --crit-soft: #301D1B;
+      --human: #8AB4FF; --human-soft: #142544; --ai: #C4A8FF; --ai-soft: #251A40;
+      --plat: #A7B2C2; --plat-soft: #1B212B; --gate: #F5A36B; --gate-soft: #35200F;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 12px 32px -20px rgba(0,0,0,.85);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0A0D12; --surface: #12161D; --surface-2: #181D26;
+    --ink: #E9ECF1; --ink-2: #B7C0CC; --muted: #8791A0;
+    --rule: #262E3A; --rule-soft: #1C2330;
+    --accent: #3FD9C7; --accent-strong: #7BEFE1; --accent-soft: #103330;
+    --warn: #E0AD5C; --warn-soft: #2C2414; --ok: #8FCB86; --ok-soft: #16241A;
+    --crit: #E2857D; --crit-soft: #301D1B;
+    --human: #8AB4FF; --human-soft: #142544; --ai: #C4A8FF; --ai-soft: #251A40;
+    --plat: #A7B2C2; --plat-soft: #1B212B; --gate: #F5A36B; --gate-soft: #35200F;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 12px 32px -20px rgba(0,0,0,.85);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-snap-type: y proximity; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .display { font-family: "Fraunces", Georgia, "Times New Roman", serif; }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  section {
+    min-height: 100vh; scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(40px, 6vw, 72px) 22px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  section:last-of-type { border-bottom: none; }
+  .wrap { width: 100%; max-width: 1180px; margin: 0 auto; }
+  .wrap-narrow { width: 100%; max-width: 820px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--accent-strong);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-bottom: 14px;
+  }
+  .eyebrow .sep { color: var(--rule); }
+  h1 { font-family: "Fraunces", Georgia, serif; font-weight: 700; font-size: clamp(2.6rem, 7vw, 4.8rem); line-height: 1.0; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  h2 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: clamp(1.7rem, 3.6vw, 2.5rem); line-height: 1.12; letter-spacing: -.015em; margin: 0 0 10px; text-wrap: balance; }
+  h3 { font-size: 1rem; font-weight: 700; margin: 0 0 6px; }
+  p { margin: 0 0 12px; max-width: 70ch; }
+  .lede { color: var(--ink-2); font-size: 1.1rem; }
+  .muted { color: var(--muted); }
+  code { font-family: "IBM Plex Mono", monospace; font-size: .86em; background: var(--surface-2); padding: .1em .34em; border-radius: 3px; color: var(--ink-2); }
+  a { color: var(--accent-strong); text-underline-offset: 2px; }
+  b, strong { font-weight: 600; }
+
+  /* ---------- chrome: rail, counter, theme ---------- */
+  .rail { position: fixed; right: 16px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 9px; z-index: 20; }
+  .rail a { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); display: block; transition: background .15s, transform .15s; }
+  .rail a.on { background: var(--accent); transform: scale(1.35); }
+  .rail a:hover, .rail a:focus-visible { background: var(--accent); outline: none; }
+  .hud { position: fixed; left: 16px; bottom: 14px; z-index: 20; display: flex; gap: 10px; align-items: center; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--muted); }
+  .hud button { font: inherit; color: var(--ink-2); background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  .hud button:hover { border-color: var(--accent); color: var(--accent-strong); }
+  @media (max-width: 900px) { .rail { display: none; } }
+
+  /* ---------- cover ---------- */
+  #cover { background: radial-gradient(1200px 520px at 12% -10%, var(--accent-soft), transparent 60%), var(--ground); }
+  .cover-sub { margin-top: 22px; font-size: 1.2rem; color: var(--ink-2); max-width: 60ch; }
+  .cover-meta { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 22px; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--muted); }
+  .cover-meta b { color: var(--ink-2); }
+  .pipeline { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .pipeline span { font-size: 13px; font-weight: 600; padding: 6px 11px; border-radius: 999px; border: 1px solid; }
+  .pipeline i { font-style: normal; color: var(--muted); }
+
+  /* ---------- actor chips / legend ---------- */
+  .h { --c: var(--human); --s: var(--human-soft); }
+  .a { --c: var(--ai); --s: var(--ai-soft); }
+  .p { --c: var(--plat); --s: var(--plat-soft); }
+  .g { --c: var(--gate); --s: var(--gate-soft); }
+  .chip { color: var(--c); background: var(--s); border-color: var(--c) !important; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .legend span { display: inline-flex; gap: 7px; align-items: center; }
+  .legend i { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--c); background: var(--s); display: inline-block; }
+  .legend i.dia { transform: rotate(45deg) scale(.82); }
+
+  /* ---------- 5-column flow diagram ---------- */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 22px; margin-top: 22px; position: relative; }
+  .phase { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 10px 14px; position: relative; box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .phase:not(:last-child)::after { content: "→"; position: absolute; right: -19px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 18px; font-weight: 600; }
+  .phase-h { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; text-align: center; }
+  .phase-h b { display: block; color: var(--ink); font-family: "IBM Plex Sans"; letter-spacing: 0; text-transform: none; font-size: 14px; margin-top: 2px; }
+  .node { font-size: 12.5px; line-height: 1.35; padding: 8px 9px; border-radius: 6px; border: 1.5px solid var(--c); background: var(--s); color: var(--ink); position: relative; }
+  .node + .node { margin-top: 18px; }
+  .node + .node::before { content: "↓"; position: absolute; top: -17px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 12px; }
+  .node.g { border-style: solid; border-width: 2px; border-radius: 14px; font-weight: 600; }
+  .node.g::after { content: "◆"; position: absolute; top: -8px; right: 8px; color: var(--gate); font-size: 12px; background: var(--surface); padding: 0 2px; }
+  .node em { font-style: normal; color: var(--muted); font-size: 11.5px; display: block; margin-top: 2px; }
+  .node .tag { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--c); margin-bottom: 2px; }
+  .flow-foot { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-between; font-size: 13px; color: var(--ink-2); }
+  .flow-foot .loop { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--muted); }
+  .callout { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: 14px; color: var(--ink); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  @media (max-width: 980px) { .flow { grid-template-columns: 1fr 1fr; } .phase:not(:last-child)::after { display: none; } }
+
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td.lane { font-weight: 600; white-space: nowrap; }
+  td.hot { background: var(--warn-soft); font-weight: 600; }
+  td.new { background: var(--accent-soft); font-weight: 600; }
+  td.none { color: var(--muted); }
+  .from { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--rule); }
+  .to { font-weight: 600; }
+
+  /* ---------- toggle ---------- */
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; margin: 6px 0 16px; }
+  .seg button { font: 600 13px "IBM Plex Sans", sans-serif; padding: 7px 16px; background: var(--surface); color: var(--ink-2); border: 0; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  :root[data-theme="dark"] .seg button[aria-pressed="true"] { color: #062b27; }
+  [hidden] { display: none !important; }
+
+  /* ---------- cards ---------- */
+  .grid { display: grid; gap: 14px; margin-top: 22px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .g5 { grid-template-columns: repeat(5, 1fr); }
+  @media (max-width: 980px) { .g3, .g4, .g5 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 640px) { .g2, .g3, .g4, .g5 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; box-shadow: var(--shadow); font-size: 14px; }
+  .card p { font-size: 14px; color: var(--ink-2); margin-bottom: 6px; }
+  .card .k { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-strong); margin-bottom: 4px; }
+  .card ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); }
+  .card li { margin: 3px 0; }
+  .card.top-h { border-top: 3px solid var(--human); }
+  .card.top-a { border-top: 3px solid var(--ai); }
+  .card.top-p { border-top: 3px solid var(--plat); }
+  .card.top-g { border-top: 3px solid var(--gate); }
+  .card.top-ok { border-top: 3px solid var(--ok); }
+  .card.top-warn { border-top: 3px solid var(--warn); }
+  .card.top-crit { border-top: 3px solid var(--crit); }
+
+  /* ---------- effort bars ---------- */
+  .effort { display: grid; grid-template-columns: 90px 1fr 1fr; gap: 8px 18px; align-items: center; margin-top: 18px; font-size: 13px; }
+  .effort .hd { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .effort .ph { font-weight: 600; text-align: right; }
+  .bar { display: flex; align-items: center; gap: 10px; }
+  .bar .track { flex: 0 0 46%; height: 16px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 3px; }
+  .bar.as .fill { background: var(--muted); }
+  .bar.to .fill { background: var(--accent); }
+  .bar small { color: var(--ink-2); }
+
+  /* ---------- lifecycle strip ---------- */
+  .states { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .states span { font-family: "IBM Plex Mono", monospace; font-size: 12px; padding: 5px 9px; border-radius: 4px; border: 1px solid var(--rule); background: var(--surface); }
+  .states span.hum { border-color: var(--gate); background: var(--gate-soft); }
+  .states i { font-style: normal; color: var(--muted); font-size: 12px; }
+
+  /* ---------- tiers ---------- */
+  .tier { border-radius: 8px; padding: 14px 16px; border: 1px solid var(--rule); background: var(--surface); box-shadow: var(--shadow); }
+  .tier .t { font-family: "Fraunces", serif; font-weight: 700; font-size: 1.7rem; line-height: 1; }
+  .tier .n { font-weight: 700; margin: 4px 0 6px; }
+  .tier p { font-size: 13.5px; color: var(--ink-2); margin: 0 0 8px; }
+  .tier .gate { font-size: 13px; font-weight: 600; padding-top: 8px; border-top: 1px dashed var(--rule); }
+  .t0 { border-top: 4px solid var(--ok); } .t1 { border-top: 4px solid var(--accent); }
+  .t2 { border-top: 4px solid var(--warn); } .t3 { border-top: 4px solid var(--crit); }
+
+  /* ---------- architecture ---------- */
+  .arch { display: grid; gap: 12px; margin-top: 20px; }
+  .band { border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px 14px; background: var(--surface); box-shadow: var(--shadow); }
+  .band-h { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 10px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .band-h b { color: var(--ink); font-family: "IBM Plex Sans"; letter-spacing: 0; text-transform: none; font-size: 14px; }
+  .band .row { display: grid; gap: 10px; }
+  .band .node + .node { margin-top: 0; }
+  .band .node + .node::before { content: none; }
+  .wire { text-align: center; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--muted); }
+  .wire b { color: var(--accent-strong); font-weight: 600; }
+
+  /* ---------- timeline ---------- */
+  .tl { position: relative; margin-top: 22px; padding-left: 26px; }
+  .tl::before { content: ""; position: absolute; left: 8px; top: 4px; bottom: 4px; width: 2px; background: var(--rule); }
+  .tl-item { position: relative; margin-bottom: 16px; }
+  .tl-item::before { content: ""; position: absolute; left: -23px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+  .tl-item.hum::before { border-color: var(--gate); background: var(--gate-soft); }
+  .tl-item .when { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-strong); }
+  .tl-item p { margin: 2px 0 0; font-size: 14.5px; color: var(--ink-2); max-width: 90ch; }
+
+  /* ---------- phases (migration) ---------- */
+  .mig { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-top: 22px; }
+  @media (max-width: 980px) { .mig { grid-template-columns: 1fr 1fr; } }
+  .mig .card { padding: 12px; font-size: 13px; }
+  .mig .card p { font-size: 13px; }
+  .mig .num { font-family: "Fraunces", serif; font-weight: 700; font-size: 1.6rem; color: var(--accent); line-height: 1; }
+  .mig .keep { margin-top: 8px; font-size: 12px; color: var(--muted); border-top: 1px dashed var(--rule); padding-top: 6px; }
+
+  /* ---------- stats ---------- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; margin-top: 22px; }
+  .stat { background: var(--surface); padding: 16px 16px 14px; }
+  .stat .n { font-family: "Fraunces", serif; font-weight: 700; font-size: 1.9rem; line-height: 1; }
+  .stat .l { margin-top: 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+
+  .ask-list { margin: 18px 0 0; padding-left: 22px; }
+  .ask-list li { margin-bottom: 10px; }
+  .ask-list li p { margin: 0; }
+  footer { padding: 30px 22px 60px; text-align: center; font-size: 13px; color: var(--muted); }
+
+  @media print {
+    html { scroll-snap-type: none; }
+    section { min-height: auto; page-break-after: always; border: none; }
+    .rail, .hud { display: none; }
+    [hidden].printable { display: block !important; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="rail" aria-label="Slides"></nav>
+<div class="hud" aria-hidden="false">
+  <span id="counter">1 / 1</span>
+  <button type="button" id="themeBtn" title="Toggle theme (T)">◐ theme</button>
+  <span class="muted">← → or ↑ ↓ to move</span>
+</div>
+
+<!-- 00 COVER -->
+<section id="cover" data-title="Cover">
+  <div class="wrap">
+    <div class="eyebrow"><span>PromptWorkspace</span><span class="sep">/</span><span>Product reframing</span><span class="sep">/</span><span>Plan 0029</span></div>
+    <h1>Agents do the work.<br>People govern the outcome.</h1>
+    <p class="cover-sub">Today we run a traditional delivery workflow with AI-written documents and made it faster. This proposes PromptWorkspace redesigned around autonomous agents, where people own intent, guardrails, decisions and trust.</p>
+    <div class="pipeline" aria-label="Proposed pipeline">
+      <span class="chip h">Intent</span><i>→</i>
+      <span class="chip h">Scope</span><i>→</i>
+      <span class="chip h">Guardrails</span><i>→</i>
+      <span class="chip a">Agent planning</span><i>→</i>
+      <span class="chip a">Parallel execution</span><i>→</i>
+      <span class="chip p">Automated verification</span><i>→</i>
+      <span class="chip g">Human decisions</span><i>→</i>
+      <span class="chip g">Release</span>
+    </div>
+    <div class="cover-meta">
+      <span><b>Date</b> 2026-10-04</span>
+      <span><b>Status</b> Draft for review</span>
+      <span><b>Basis</b> <code>develop</code> @ <code>444540e</code>, ADRs 0001–0028</span>
+      <span><b>Full text</b> <code>docs/plans/0029-agent-native-delivery.md</code></span>
+    </div>
+  </div>
+</section>
+
+<!-- 01 ARGUMENT -->
+<section id="argument" data-title="The argument">
+  <div class="wrap">
+    <div class="eyebrow"><span>01</span><span class="sep">/</span><span>The argument</span></div>
+    <h2>The bottleneck moved. Our product didn't.</h2>
+    <p class="lede">AI helps us at two points today: writing the plan documents, and inside each developer's private editor. Everything between those points is still built around people: assigning, claiming, copying context, dragging cards, verifying by eye.</p>
+    <p class="lede">Once implementation is cheap and parallel, the scarce resources are the four things only people can supply:</p>
+    <div class="grid g4">
+      <div class="card top-h"><div class="k">01</div><h3>Intent</h3><p>What outcome do we want, and how will we know we got it?</p></div>
+      <div class="card top-h"><div class="k">02</div><h3>Guardrails</h3><p>What must never happen, what must always hold, and who grants exceptions?</p></div>
+      <div class="card top-g"><div class="k">03</div><h3>Decisions</h3><p>What do we do when the spec is ambiguous or the risk is real?</p></div>
+      <div class="card top-g"><div class="k">04</div><h3>Trust</h3><p>Is this change proven well enough to ship?</p></div>
+    </div>
+    <div class="callout">The product should be organised around these four things, not around tasks.</div>
+  </div>
+</section>
+
+<!-- 02 AS-IS FLOW -->
+<section id="asis" data-title="As-Is workflow">
+  <div class="wrap">
+    <div class="eyebrow"><span>02</span><span class="sep">/</span><span>As-Is</span></div>
+    <h2>Today: people manage tasks and use AI to help execute them</h2>
+    <div class="flow">
+      <div class="phase">
+        <div class="phase-h">① Define<b>Requirements</b></div>
+        <div class="node h">Business user creates project, uploads PRD, picks Policy Scope</div>
+        <div class="node h">Business user fills Specify form</div>
+        <div class="node a">Typhoon generates <code>spec.md</code></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">② Plan<b>Tech Lead</b></div>
+        <div class="node h">Tech Lead fills Project rules and Plan forms</div>
+        <div class="node a">Typhoon generates constitution, plan, <code>tasks.md</code>, parsed into T001…T0nn cards</div>
+        <div class="node p">Tech Lead creates repo (seed commit, CI, webhook)</div>
+        <div class="node h"><b>Tech Lead ASSIGNS tasks to people</b><em>Kanban, sprint</em></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">③ Execute<b>Per task, per person</b></div>
+        <div class="node h">Developer claims task in VS Code / MCP</div>
+        <div class="node h">Copies context to clipboard, pastes into own AI</div>
+        <div class="node a">Private AI session<em>invisible to the platform</em></div>
+        <div class="node h">Commits <code>T12: …</code> and pushes</div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">④ Verify<b>By hand</b></div>
+        <div class="node p">Extension marks task <code>implemented</code> on push</div>
+        <div class="node p">Webhook records commit and PR<em>no review</em></div>
+        <div class="node g">Admin drags every card to Verified<em>manual, per task</em></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">⑤ Release<b>Observe</b></div>
+        <div class="node p">Push to <code>main</code>; project CI deploys</div>
+        <div class="node p">Cloud freezes tasks-in-build; Preview tab</div>
+        <div class="node h">Business user views preview<em>Progress = tasks done ÷ total</em></div>
+      </div>
+    </div>
+    <div class="flow-foot">
+      <div class="legend">
+        <span class="h"><i></i>Person does it</span>
+        <span class="a"><i></i>AI does it</span>
+        <span class="p"><i></i>Platform / CI, automatic</span>
+        <span class="g"><i class="dia"></i>Human gate</span>
+      </div>
+      <span class="loop">↺ ⑤ → ① feedback travels by chat and meetings</span>
+    </div>
+  </div>
+</section>
+
+<!-- 03 TO-BE FLOW -->
+<section id="tobe" data-title="To-Be workflow">
+  <div class="wrap">
+    <div class="eyebrow"><span>03</span><span class="sep">/</span><span>To-Be</span></div>
+    <h2>Proposed: people set intent and guardrails, agents execute and verify, people govern</h2>
+    <div class="flow">
+      <div class="phase">
+        <div class="phase-h">① Define<b>Intent</b></div>
+        <div class="node h">Business owner describes the idea<em>chat, PRD, form</em></div>
+        <div class="node a">Intent agent drafts Outcomes, acceptance scenarios, open questions</div>
+        <div class="node g">Intent approved<em>business owner</em></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">② Plan<b>Guardrails + agent planning</b></div>
+        <div class="node h">Tech steward sets Guardrails<em>rules, policy, ADRs, risk policy, autonomy</em></div>
+        <div class="node a">Planning agent writes tech plan and Delivery Plan<em>DAG of Changes</em></div>
+        <div class="node g">Plan approved<em>tech steward</em></div>
+        <div class="node p">Repo provisioned: seed, CI, agent workflow, branch protection</div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">③ Execute<b>Parallel agents</b></div>
+        <div class="node p">Orchestrator schedules ready Changes<em>dependencies + area leases</em></div>
+        <div class="node a"><b>Builder agents, one per Change, in parallel</b><em>branch, code, tests, PR</em></div>
+        <div class="node g">Agent unsure? <code>raise_question</code><em>Change pauses, others continue</em></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">④ Verify<b>Evidence, not opinion</b></div>
+        <div class="node p">CI: build, tests, scans, acceptance-scenario tests</div>
+        <div class="node a">Reviewer / Security / Architecture agents<em>never the builder</em></div>
+        <div class="node p">Evidence Pack + Trust Score + risk tier<em>↺ fail: back to ③, bounded retry</em></div>
+        <div class="node g">Risk gate<em>auto for T0/T1 · human for T2/T3</em></div>
+      </div>
+      <div class="phase">
+        <div class="phase-h">⑤ Release<b>Trust decision</b></div>
+        <div class="node p">Merge queue; staging preview</div>
+        <div class="node a">Release agent builds Release Candidate<em>outcomes proven, known risks</em></div>
+        <div class="node g">Release decision<em>business owner + tech steward</em></div>
+        <div class="node p">Production deploy; evidence frozen; outcome progress</div>
+      </div>
+    </div>
+    <div class="flow-foot">
+      <div class="legend">
+        <span class="h"><i></i>Person does it</span>
+        <span class="a"><i></i>AI does it</span>
+        <span class="p"><i></i>Platform / CI, automatic</span>
+        <span class="g"><i class="dia"></i>Human gate</span>
+      </div>
+      <span class="loop">↺ ⑤ → ① preview feedback becomes new intent</span>
+    </div>
+  </div>
+</section>
+
+<!-- 04 LANES -->
+<section id="lanes" data-title="Who does what">
+  <div class="wrap">
+    <div class="eyebrow"><span>04</span><span class="sep">/</span><span>As-Is vs To-Be</span></div>
+    <h2>Who does what, phase by phase</h2>
+    <div class="seg" role="group" aria-label="Choose model">
+      <button type="button" data-show="lane-as" aria-pressed="true">As-Is</button>
+      <button type="button" data-show="lane-to" aria-pressed="false">To-Be</button>
+    </div>
+    <table id="lane-as" class="printable">
+      <thead><tr><th>Lane</th><th>① Define</th><th>② Plan</th><th>③ Execute</th><th>④ Verify</th><th>⑤ Release</th></tr></thead>
+      <tbody>
+        <tr><td class="lane">Business user</td><td>PRD, policy scope, Specify form</td><td class="none">none</td><td class="none">none</td><td class="none">none</td><td>Looks at preview and % tasks done</td></tr>
+        <tr><td class="lane">Tech Lead</td><td class="none">none</td><td class="hot">Rules, plan, creates repo, assigns tasks</td><td class="none">none</td><td class="hot">Drags every card to Verified</td><td>Merges to <code>main</code></td></tr>
+        <tr><td class="lane">Developer</td><td class="none">none</td><td class="none">none</td><td class="hot">Claims, copies context, drives own AI, commits, pushes</td><td>Opens PR (optional)</td><td class="none">none</td></tr>
+        <tr><td class="lane">AI</td><td>Writes <code>spec.md</code></td><td>Writes constitution, plan, tasks</td><td>Private, untracked session per developer</td><td class="none">none</td><td class="none">none</td></tr>
+        <tr><td class="lane">Platform / CI</td><td>Stores documents</td><td>Parses tasks, seeds repo</td><td class="none">none</td><td>Marks implemented on push, records artifacts</td><td>Deploys, freezes build tasks, preview</td></tr>
+      </tbody>
+    </table>
+    <table id="lane-to" class="printable" hidden>
+      <thead><tr><th>Lane</th><th>① Define</th><th>② Plan</th><th>③ Execute</th><th>④ Verify</th><th>⑤ Release</th></tr></thead>
+      <tbody>
+        <tr><td class="lane">Business owner</td><td class="new">Describes intent, answers questions, approves intent</td><td class="none">none</td><td>Answers business questions agents raise</td><td>Approves business-critical T3 Changes (if named)</td><td class="new">Checks preview against outcomes, decides release</td></tr>
+        <tr><td class="lane">Tech steward</td><td class="none">none</td><td class="new">Sets guardrails, approves plan</td><td>Answers technical questions, resolves conflicts</td><td class="new">Approves T2/T3 from evidence; spot-checks T1</td><td class="new">Co-signs release</td></tr>
+        <tr><td class="lane">Engineer</td><td class="none">none</td><td>Reviews plan (optional)</td><td>Takes over stuck Changes; pairs on hard ones</td><td>Human code review for T3</td><td class="none">none</td></tr>
+        <tr><td class="lane">Agents</td><td>Draft outcomes and questions</td><td>Draft tech plan and Delivery Plan</td><td class="hot">Build, test, commit, open PRs, ask when unsure</td><td class="hot">Review, scan, prove acceptance criteria, fix</td><td>Assemble Release Candidate, changelog</td></tr>
+        <tr><td class="lane">Platform / CI</td><td>Versions intent</td><td>Provisions repo and branch protection</td><td>Schedules, leases, dispatches, observes</td><td>CI, evidence, trust score, gate status</td><td>Merge queue, deploy, freeze evidence</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">Gone from the people lanes: assigning, claiming, copying context, dragging cards, verifying task by task. New: approving intent and plans, answering questions, judging evidence and risk, deciding release.</div>
+  </div>
+</section>
+
+<!-- 05 EFFORT SHIFT -->
+<section id="shift" data-title="Human effort shift">
+  <div class="wrap-narrow">
+    <div class="eyebrow"><span>05</span><span class="sep">/</span><span>Where people spend their time</span></div>
+    <h2>From the middle to both ends</h2>
+    <p class="lede">Human effort moves from execution to <b>what we want</b> and <b>whether we trust what we got</b>. The middle turns into exception handling, where senior judgement is worth the most.</p>
+    <div class="effort">
+      <span></span><span class="hd">As-Is</span><span class="hd">To-Be</span>
+      <span class="ph">Define</span>
+      <div class="bar as"><div class="track"><div class="fill" style="width:33%"></div></div><small>write PRD</small></div>
+      <div class="bar to"><div class="track"><div class="fill" style="width:67%"></div></div><small>state intent, approve outcomes</small></div>
+      <span class="ph">Plan</span>
+      <div class="bar as"><div class="track"><div class="fill" style="width:50%"></div></div><small>rules, assign tasks</small></div>
+      <div class="bar to"><div class="track"><div class="fill" style="width:67%"></div></div><small>guardrails, approve plan</small></div>
+      <span class="ph">Execute</span>
+      <div class="bar as"><div class="track"><div class="fill" style="width:100%"></div></div><small>implement every task</small></div>
+      <div class="bar to"><div class="track"><div class="fill" style="width:17%"></div></div><small>answer questions, exceptions</small></div>
+      <span class="ph">Verify</span>
+      <div class="bar as"><div class="track"><div class="fill" style="width:50%"></div></div><small>eyeball, drag cards</small></div>
+      <div class="bar to"><div class="track"><div class="fill" style="width:50%"></div></div><small>judge evidence on risky Changes</small></div>
+      <span class="ph">Release</span>
+      <div class="bar as"><div class="track"><div class="fill" style="width:17%"></div></div><small>merge and hope</small></div>
+      <div class="bar to"><div class="track"><div class="fill" style="width:50%"></div></div><small>accept outcomes, decide</small></div>
+    </div>
+    <p class="muted" style="margin-top:14px;font-size:13px">Illustrative relative effort, not measured data.</p>
+  </div>
+</section>
+
+<!-- 06 FIVE SHIFTS -->
+<section id="five" data-title="Five shifts">
+  <div class="wrap">
+    <div class="eyebrow"><span>06</span><span class="sep">/</span><span>The reframing</span></div>
+    <h2>Five changes carry the whole model</h2>
+    <table>
+      <thead><tr><th style="width:40%">From (today)</th><th>To (proposed)</th></tr></thead>
+      <tbody>
+        <tr><td><span class="from">Task</span> <code>T012</code>, assigned to a person, moved by hand</td><td><span class="to">Change</span> <code>C3</code>: one branch, one PR, executed by agents. Tasks survive as its steps</td></tr>
+        <tr><td><span class="from">Assignment</span> to people</td><td><span class="to">Delegation</span> to agent roles. People are attached to <b>decisions</b>, not work items</td></tr>
+        <tr><td><span class="from">Kanban board</span> as the main surface</td><td><span class="to">Mission Control + Decision Inbox</span>: outcomes, agent activity, what needs a human</td></tr>
+        <tr><td><span class="from">Manual Verified</span> dragged by an admin</td><td><span class="to">Evidence Pack + risk-tiered gate</span>, enforced as a required GitHub status check</td></tr>
+        <tr><td><span class="from">Progress</span> = tasks done ÷ total</td><td><span class="to">Outcome progress</span> = acceptance scenarios proven on a running build</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">No rewrite needed. The cloud already holds the plan, the rules and the evidence chain; the repo is already seeded with <code>AGENTS.md</code>; webhooks already observe CI. Missing: an execution plane for agents, a verification layer, a decision layer.</div>
+  </div>
+</section>
+
+<!-- 07 KEEP / EVOLVE / GO -->
+<section id="inventory" data-title="Stays, evolves, goes">
+  <div class="wrap">
+    <div class="eyebrow"><span>07</span><span class="sep">/</span><span>Concept inventory</span></div>
+    <h2>What stays, what evolves, what goes</h2>
+    <div class="grid g3">
+      <div class="card top-ok">
+        <div class="k">Stays (gets teeth)</div>
+        <ul>
+          <li>Constitution / project rules, now tagged <b>prompt · check · gate</b></li>
+          <li>Policy Scope, now drives risk tiers and approvers</li>
+          <li><code>tasks.md</code> and <code>T</code> refs, as steps inside a Change</li>
+          <li>Repo provisioning, plus agent and verify workflows</li>
+          <li>Webhook evidence chain, deploy templates, Preview</li>
+          <li>Brownfield import and codebase baseline</li>
+        </ul>
+      </div>
+      <div class="card top-warn">
+        <div class="k">Evolves</div>
+        <ul>
+          <li>Planner → <b>Intent</b> + <b>Delivery Plan</b>, with real approvals</li>
+          <li>Discussion → <b>Decision threads</b></li>
+          <li>RAG assistant → multi-turn <b>project concierge</b></li>
+          <li>VS Code → <b>My Decisions</b>, Take over, Pair</li>
+          <li>MCP server → the <b>agent contract</b></li>
+          <li>Legacy engine agent adapters → salvaged into the runner</li>
+        </ul>
+      </div>
+      <div class="card top-crit">
+        <div class="k">Demoted or removed</div>
+        <ul>
+          <li>Task assignment off the main path</li>
+          <li>Kanban becomes a "Steps" view</li>
+          <li>Sprints only as a Jira/ClickUp mirror</li>
+          <li>Manual Verified replaced by the gate (override logged)</li>
+          <li>Clipboard context hand-off</li>
+          <li>Dead 3S <code>stage_state</code> column</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 08 CONCEPTS -->
+<section id="concepts" data-title="Core concepts">
+  <div class="wrap">
+    <div class="eyebrow"><span>08</span><span class="sep">/</span><span>Product model</span></div>
+    <h2>Eight concepts the product is built on</h2>
+    <div class="grid g4">
+      <div class="card top-h"><div class="k">Intent</div><p>Versioned "what and why", owned by the business owner.</p></div>
+      <div class="card top-h"><div class="k">Outcome</div><p>User-facing result <code>O2</code> with plain-language acceptance scenarios <code>O2.S1…</code></p></div>
+      <div class="card top-h"><div class="k">Guardrail</div><p>Rule with a level (prompt / check / gate), a scope and an owner.</p></div>
+      <div class="card top-a"><div class="k">Change</div><p>One PR-sized slice of one outcome: steps, areas, risk tier, budget, state.</p></div>
+      <div class="card top-a"><div class="k">Agent role</div><p>Instructions, tools, allowed paths, runtime, budget. Versioned in the repo.</p></div>
+      <div class="card top-p"><div class="k">Evidence Pack</div><p>CI, scenario proof, review findings, guardrail results, diff profile, run trace.</p></div>
+      <div class="card top-g"><div class="k">Decision</div><p>Typed request for human judgement: options, recommendation, evidence, who, why.</p></div>
+      <div class="card top-g"><div class="k">Release Candidate</div><p>Merged Changes on a build, readiness report, release decision.</p></div>
+    </div>
+    <h3 style="margin-top:26px">Change lifecycle <span class="muted" style="font-weight:400">(state comes from events, never from dragging)</span></h3>
+    <div class="states">
+      <span>Proposed</span><i>→</i><span>Ready</span><i>→</i><span>Running</span><i>⇄</i><span class="hum">Awaiting decision</span><i>→</i><span>Verifying</span><i>→</i><span class="hum">Awaiting approval</span><i>→</i><span>Approved</span><i>→</i><span>Merged</span><i>→</i><span>Released</span>
+    </div>
+    <div class="states" style="margin-top:6px">
+      <i>side paths:</i><span>Verifying → Running (retry)</span><span class="hum">Escalated</span><span class="hum">Human-owned (engineer takes over)</span><span>Dropped (re-plan)</span>
+    </div>
+  </div>
+</section>
+
+<!-- 09 RISK TIERS -->
+<section id="risk" data-title="Risk-based gates">
+  <div class="wrap">
+    <div class="eyebrow"><span>09</span><span class="sep">/</span><span>Governance</span></div>
+    <h2>Human approval by risk, not by task</h2>
+    <div class="grid g4">
+      <div class="tier t0"><div class="t">T0</div><div class="n">Routine</div><p>Docs, tests only, copy, styling, no new dependency</p><div class="gate">Auto-merge when evidence complete</div></div>
+      <div class="tier t1"><div class="t">T1</div><div class="n">Standard</div><p>Feature code inside approved outcomes and areas, Trust ≥ 80</p><div class="gate">Auto-merge; steward reviews in batch at release</div></div>
+      <div class="tier t2"><div class="t">T2</div><div class="n">Elevated</div><p>New dependency, schema migration, public API change, Trust &lt; 80</p><div class="gate">Steward approves this Change from its evidence</div></div>
+      <div class="tier t3"><div class="t">T3</div><div class="n">Critical</div><p>Auth, payments, personal data (PDPA/GDPR), infra, secrets</p><div class="gate">Steward + named second approver + human code review</div></div>
+    </div>
+    <div class="grid g3" style="margin-top:18px">
+      <div class="card"><div class="k">Always human</div><p>Production release, whatever the tiers.</p></div>
+      <div class="card"><div class="k">Enforced in GitHub</div><p>Required <code>promptworkspace/gate</code> status + branch protection. Holds even if someone bypasses our UI.</p></div>
+      <div class="card"><div class="k">Trust Score</div><p>Deterministic formula from the Evidence Pack. The agent's opinion of its own work is <b>not</b> an input.</p></div>
+    </div>
+    <h3 style="margin-top:22px">Autonomy level per project</h3>
+    <table>
+      <thead><tr><th>Level</th><th>Behaviour</th><th>For</th></tr></thead>
+      <tbody>
+        <tr><td><b>L0 Assisted</b></td><td>Agents draft PRs; every Change needs steward approval; humans may still execute</td><td>First project, migration phase</td></tr>
+        <tr><td><b>L1 Supervised</b> <span class="muted">(default)</span></td><td>Risk policy as written; T0/T1 auto-merge</td><td>Most teams</td></tr>
+        <tr><td><b>L2 Autonomous</b></td><td>Wider T1 band, agents may propose sub-Changes; release still human</td><td>Mature projects with a strong <code>verify.yml</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 10 HARD PARTS -->
+<section id="hard" data-title="Hard parts">
+  <div class="wrap">
+    <div class="eyebrow"><span>10</span><span class="sep">/</span><span>How the platform handles the hard parts</span></div>
+    <h2>Conflicts, uncertainty, memory, rules</h2>
+    <div class="grid g2">
+      <div class="card">
+        <div class="k">Conflicting changes: four layers, cheapest first</div>
+        <ul>
+          <li><b>Avoid:</b> plan predicts touched areas; running Changes hold <b>area leases</b></li>
+          <li><b>Detect:</b> builders rebase before PR and every retry</li>
+          <li><b>Catch:</b> merge queue runs full CI on the combined result</li>
+          <li><b>Escalate:</b> a <i>Conflict</i> decision with both diffs and options</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="k">When an agent is uncertain</div>
+        <ul>
+          <li>Ambiguous spec, guardrail would break, unplanned dependency, repeated failures, budget exceeded</li>
+          <li><code>raise_question(options, recommendation, blocking)</code> becomes a Decision routed to the business owner or steward</li>
+          <li>Only that Change pauses; non-blocking questions continue on the recommended option and flag the assumption in the PR</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="k">Shared memory: two layers</div>
+        <ul>
+          <li><b>Authoritative:</b> outcomes, constitution, ADRs, decisions log, baseline. People own it; agents may draft</li>
+          <li><b>Journal:</b> per-run notes, searchable, never injected as rules</li>
+          <li>Promotion journal → rule only via an <i>ADR proposal</i> decision. Agents can't write their own rules</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="k">Rules with teeth</div>
+        <table style="box-shadow:none;margin-top:6px">
+          <tbody>
+            <tr><td><b>Prompt</b></td><td>Injected into every brief</td></tr>
+            <tr><td><b>Check</b></td><td>Lint/test/scanner in <code>verify.yml</code></td></tr>
+            <tr><td><b>Gate</b></td><td>Raises tier or blocks merge (e.g. agents may not edit <code>.github/workflows/**</code>, ADR 0024)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 ARCHITECTURE -->
+<section id="arch" data-title="Architecture">
+  <div class="wrap">
+    <div class="eyebrow"><span>11</span><span class="sep">/</span><span>Architecture</span></div>
+    <h2>Cloud is the control plane. Agents run in the customer's CI.</h2>
+    <div class="arch">
+      <div class="band">
+        <div class="band-h"><b>Surfaces (people)</b><span>web · VS Code · notifications</span></div>
+        <div class="row g3 grid" style="margin:0">
+          <div class="node h"><span class="tag">apps/web</span><br>Mission Control · Intent · Guardrails · Delivery Plan · Changes · Decision Inbox · Release · Audit</div>
+          <div class="node h"><span class="tag">apps/vscode</span><br>My Decisions · Take over a Change · Pair with agent</div>
+          <div class="node h"><span class="tag">Notifications</span><br>Email / LINE / Slack, deep-link to one decision card</div>
+        </div>
+      </div>
+      <div class="wire">↕ approvals, answers, intent</div>
+      <div class="band">
+        <div class="band-h"><b>apps/cloud: control plane</b><span>no customer code · no coding-model keys</span></div>
+        <div class="row grid g4" style="margin:0">
+          <div class="node p">Intent &amp; Outcomes<em>versioned</em></div>
+          <div class="node p">Guardrail registry<em>rules, policy, ADRs, path rules, risk policy</em></div>
+          <div class="node p">Orchestrator<em>Change DAG, leases, dispatch, retries, budgets</em></div>
+          <div class="node g">Decision service<em>approvals, questions, escalations, SLAs</em></div>
+          <div class="node p">Evidence service<em>Evidence Pack, Trust Score, gate status</em></div>
+          <div class="node p">Project memory + RAG<em>authoritative vs journal</em></div>
+          <div class="node a">Intent / Planning agents<em>managed Typhoon or BYO</em></div>
+          <div class="node p">Audit trail<em>intent → decision → build</em></div>
+        </div>
+      </div>
+      <div class="wire"><b>workflow_dispatch ↓</b> &nbsp;·&nbsp; <b>↑ webhooks</b> &nbsp;·&nbsp; <b>↕ MCP</b>: get_change · raise_question · report_progress · record_evidence &nbsp;·&nbsp; <b>↓ promptworkspace/gate</b> status</div>
+      <div class="band">
+        <div class="band-h"><b>Customer GitHub: execution plane</b><span>customer's repo · customer's Actions · customer's model key</span></div>
+        <div class="row grid g4" style="margin:0">
+          <div class="node a"><span class="tag">agent.yml</span><br>Role agents: Claude Code / Codex / Gemini CLI + <code>apps/mcp</code></div>
+          <div class="node p"><span class="tag">repo</span><br>Branches <code>pw/C*</code>, PRs, branch protection</div>
+          <div class="node p"><span class="tag">verify.yml</span><br>Build, tests, scenario tests, scans</div>
+          <div class="node p"><span class="tag">deploy.yml</span><br>Existing deployment templates</div>
+        </div>
+      </div>
+    </div>
+    <div class="callout">Extends ADR 0021 ("the project's own CI deploys; the cloud observes") from deployment to implementation. Code and keys never leave the customer's GitHub: the strongest version of the Thai PDPA / regulated-buyer story.</div>
+  </div>
+</section>
+
+<!-- 12 SCREENS -->
+<section id="screens" data-title="Screens">
+  <div class="wrap">
+    <div class="eyebrow"><span>12</span><span class="sep">/</span><span>Screens</span></div>
+    <h2>Ten screens, most of them evolved from today's tabs</h2>
+    <div class="grid g5">
+      <div class="card top-h"><div class="k">01 · from Progress</div><h3>Mission Control</h3><p>Outcome progress, "needs you" strip, live agents, release readiness, cost</p></div>
+      <div class="card top-h"><div class="k">02 · from Foundation + Specify</div><h3>Intent</h3><p>Chat or PRD to outcomes and scenarios; approve intent</p></div>
+      <div class="card top-h"><div class="k">03 · from Project rules + Policy</div><h3>Guardrails</h3><p>Rules with levels, risk policy, path rules, ADRs, autonomy</p></div>
+      <div class="card top-h"><div class="k">04 · from Plan + Tasks + Graph</div><h3>Delivery Plan</h3><p>Change DAG by outcome and predicted tier; approve plan</p></div>
+      <div class="card top-a"><div class="k">05 · from Tasks (Kanban)</div><h3>Changes</h3><p>By lifecycle state; no drag-to-change-status</p></div>
+      <div class="card top-a"><div class="k">06 · from Task drawer</div><h3>Change detail</h3><p>Brief, steps, agent trace, Evidence Pack, Trust breakdown, Take over</p></div>
+      <div class="card top-g"><div class="k">07 · from Discussion</div><h3>Decision Inbox</h3><p>Typed cards: options, recommendation, evidence, cost of waiting</p></div>
+      <div class="card top-g"><div class="k">08 · from Preview</div><h3>Release</h3><p>Scenarios proven, preview, feedback → intent, Release / Not yet</p></div>
+      <div class="card top-p"><div class="k">09 · new</div><h3>Agents</h3><p>Role profiles, runtimes, run history, spend against budget</p></div>
+      <div class="card top-p"><div class="k">10 · from Graph</div><h3>Audit trail</h3><p>Intent → outcome → Change → run → evidence → decision → build; export</p></div>
+    </div>
+    <p class="muted" style="margin-top:14px">Plus a project concierge (evolved RAG assistant) as a side panel everywhere. It drafts and explains, and never writes authoritative state directly.</p>
+  </div>
+</section>
+
+<!-- 13 RESPONSIBILITIES -->
+<section id="raci" data-title="Humans vs agents">
+  <div class="wrap">
+    <div class="eyebrow"><span>13</span><span class="sep">/</span><span>Responsibilities</span></div>
+    <h2>People own the why, the limits and the yes. Agents own the how and the proof.</h2>
+    <div class="grid g5" style="margin-bottom:18px">
+      <div class="card top-h"><h3>Business owner</h3><p>Intent, outcome acceptance, business questions, release (co-sign)</p></div>
+      <div class="card top-h"><h3>Tech steward</h3><p>Guardrails, plan, T2/T3 approvals, conflicts, ADRs, release (co-sign)</p></div>
+      <div class="card top-h"><h3>Engineer</h3><p>Takes over Changes, T3 code review, improves agent roles and checks</p></div>
+      <div class="card top-g"><h3>Named approver</h3><p>DPO, security, compliance: T3 inside their policy scope</p></div>
+      <div class="card top-a"><h3>Agents</h3><p>Draft, plan, build, test, review, prove, ask. Never approve their own output</p></div>
+    </div>
+    <table>
+      <thead><tr><th>Activity</th><th>Business owner</th><th>Tech steward</th><th>Engineer</th><th>Agents</th><th>Platform</th></tr></thead>
+      <tbody>
+        <tr><td>Intent, outcomes, scenarios</td><td class="new">Decides</td><td>Consulted</td><td class="none">none</td><td>Drafts</td><td class="none">none</td></tr>
+        <tr><td>Guardrails, risk policy, autonomy</td><td>Informed</td><td class="new">Decides</td><td>Consulted</td><td class="none">none</td><td class="none">none</td></tr>
+        <tr><td>Delivery Plan</td><td>Informed</td><td class="new">Decides</td><td>Consulted</td><td>Drafts</td><td class="none">none</td></tr>
+        <tr><td>Implementation and tests</td><td class="none">none</td><td>Informed</td><td>Exceptions</td><td class="hot">Does</td><td class="none">none</td></tr>
+        <tr><td>Verification and reviews</td><td class="none">none</td><td>Informed</td><td class="none">none</td><td class="hot">Agent reviews</td><td class="hot">CI, evidence</td></tr>
+        <tr><td>T0/T1 approval</td><td class="none">none</td><td>Batch review</td><td class="none">none</td><td class="none">none</td><td class="hot">Auto</td></tr>
+        <tr><td>T2/T3 approval</td><td>T3 if named</td><td class="new">Decides</td><td>T3 code review</td><td class="none">none</td><td class="none">none</td></tr>
+        <tr><td>Production release</td><td class="new">Co-decides</td><td class="new">Co-decides</td><td>Informed</td><td>RC report</td><td>Deploys</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 14 METRICS -->
+<section id="metrics" data-title="Measuring outcomes">
+  <div class="wrap">
+    <div class="eyebrow"><span>14</span><span class="sep">/</span><span>Measurement</span></div>
+    <h2>Measure outcomes, not completed tasks</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">% proven</div><div class="l">Outcome progress: scenarios proven on the latest build</div></div>
+      <div class="stat"><div class="n">Released</div><div class="l">Outcomes with every in-scope scenario proven in production</div></div>
+      <div class="stat"><div class="n">Lead time</div><div class="l">Intent approved → in production</div></div>
+      <div class="stat"><div class="n">Decision latency</div><div class="l">Time decisions wait on people. Usually the real bottleneck</div></div>
+    </div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><div class="n">Autonomy rate</div><div class="l">Changes merged without human edits</div></div>
+      <div class="stat"><div class="n">First-pass yield</div><div class="l">Changes verified without escalation</div></div>
+      <div class="stat"><div class="n">Escaped defects</div><div class="l">Production issues traced to a released Change</div></div>
+      <div class="stat"><div class="n">Cost / outcome</div><div class="l">Agent tokens + CI minutes per released outcome</div></div>
+    </div>
+    <p class="muted" style="margin-top:14px">Replaces velocity, burndown and "tasks done ÷ total".</p>
+  </div>
+</section>
+
+<!-- 15 MVP -->
+<section id="mvp" data-title="MVP">
+  <div class="wrap">
+    <div class="eyebrow"><span>15</span><span class="sep">/</span><span>MVP</span></div>
+    <h2>One delegated Change, end to end, on today's platform</h2>
+    <div class="grid g3">
+      <div class="card"><div class="k">M1 · Changes from tasks.md</div><p>The tasks template already has dependency-ordered phases (Setup → Foundational → one per user story → Polish). One Change per phase, <b>no extra LLM call</b>. Delivery Plan view + <i>Plan approved</i>.</p></div>
+      <div class="card"><div class="k">M2 · Decisions</div><p><code>pw_decisions</code>, Decision Inbox, project hats, email. Lifecycle routes gain the server-side checks that are client-only today.</p></div>
+      <div class="card"><div class="k">M3 · Runner</div><p>Hand-written <code>agent.yml</code> seeded at provisioning. Claude Code headless with the customer's key. MCP <code>get_change</code> / <code>raise_question</code> / <code>report_progress</code>. Bounded retries.</p></div>
+      <div class="card"><div class="k">M4 · Verification + evidence</div><p><code>verify.yml</code> per template, scenario-tagged tests, one read-only Reviewer agent, Evidence Pack, Trust Score v1.</p></div>
+      <div class="card"><div class="k">M5 · Risk gate</div><p>Risk policy v1 (path globs, deps, migrations, policy scope). <code>promptworkspace/gate</code> status. Branch protection seeded.</p></div>
+      <div class="card"><div class="k">M6 · Mission Control</div><p>Outcome progress from scenario evidence, "needs you" strip, Release Candidate report on the Preview tab.</p></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card top-ok"><div class="k">Done when (greenfield Next.js project)</div>
+        <ul>
+          <li>3+ user stories become Changes automatically</li>
+          <li>2+ Changes run in parallel in Actions and open PRs with no human code</li>
+          <li>Every PR has an Evidence Pack with per-scenario proof</li>
+          <li>T0/T1 merges with zero clicks; T2 is blocked by branch protection until approved</li>
+          <li>An agent question reaches the right person and the answer resumes the run</li>
+        </ul>
+      </div>
+      <div class="card top-warn"><div class="k">Not in the MVP</div>
+        <ul>
+          <li>Separate Security / Architecture / Docs agents (scanners + Reviewer checklist first)</li>
+          <li>Automatic semantic conflict resolution (serialise and escalate)</li>
+          <li>More than one runtime; per-PR previews; L2 autonomy</li>
+          <li>Staging/production split: MVP uses today's single <code>preview</code> environment from <code>main</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 16 MIGRATION -->
+<section id="migration" data-title="Migration path">
+  <div class="wrap">
+    <div class="eyebrow"><span>16</span><span class="sep">/</span><span>Migration</span></div>
+    <h2>Six phases, no rewrite, every phase ships alone</h2>
+    <div class="mig">
+      <div class="card"><div class="num">0</div><h3>Clean ground</h3><p>Server-side lifecycle checks, drop <code>stage_state</code>, real approvals, multi-turn assistant</p><div class="keep">Keeps: everything</div></div>
+      <div class="card"><div class="num">1</div><h3>Changes as grouping</h3><p>Changes from phases, Delivery Plan, Decision Inbox for intent and plan</p><div class="keep">Keeps: board, assignment, extension, MCP</div></div>
+      <div class="card"><div class="num">2</div><h3>Delegate a Change</h3><p>Opt-in "Delegate to agent", L0. <code>agent.yml</code> added to existing repos via a PR</p><div class="keep">Keeps: human execution, close-on-push</div></div>
+      <div class="card"><div class="num">3</div><h3>Evidence replaces Verified</h3><p><code>verify.yml</code>, Evidence Pack, Trust Score, tiers, gate, branch protection</p><div class="keep">Keeps: admin override, logged as a Decision</div></div>
+      <div class="card"><div class="num">4</div><h3>Agent-first default</h3><p>New projects at L1, Mission Control home, Kanban → Steps, more roles, Release Candidates, second environment</p><div class="keep">Keeps: L0 and human-executed Changes</div></div>
+      <div class="card"><div class="num">5</div><h3>Govern at scale</h3><p>Audit export, org-level guardrail templates, more runtimes, PR previews, L2</p><div class="keep">Exit: a regulated customer passes an audit with the export</div></div>
+    </div>
+    <div class="callout warn"><b>Compatibility rules for the whole path:</b> <code>T</code> refs, the task-ref grammar and close-on-push stay. Task statuses <code>todo | in_progress | implemented | verified</code> stay; Change state is a new column. API routes are additive, MCP only gains tools. Existing repos are upgraded only through a PR the steward merges.</div>
+  </div>
+</section>
+
+<!-- 17 SCENARIO -->
+<section id="scenario" data-title="Scenario: clinic booking">
+  <div class="wrap">
+    <div class="eyebrow"><span>17</span><span class="sep">/</span><span>Example</span></div>
+    <h2>Clinic booking app under Thai PDPA, idea to production in four days</h2>
+    <p class="lede">Khun Ploy (clinic ops manager, business owner) · Arun (tech steward) · Mint (engineer, part-time) · Autonomy L1 · <code>next-vercel</code></p>
+    <div class="tl">
+      <div class="tl-item hum"><div class="when">Day 1 AM · Intent</div><p>Ploy: <i>"Patients book online, get an SMS reminder, staff see today's schedule."</i> Intent agent drafts O1 Book, O2 Remind, O3 Schedule, and asks two questions. The consent question flags PDPA, so scenario O2.S4 "no SMS without opt-in" is added. <b>Ploy approves the intent.</b></p></div>
+      <div class="tl-item hum"><div class="when">Day 1 PM · Guardrails + plan</div><p>Arun keeps the default constitution and pins patient data to <code>lib/patients/**</code>; PDPA makes those changes T3. Planning agent proposes six Changes, with C2 (auth) and C4 (reminders) predicted T3. <b>Arun approves the plan</b>; the repo is provisioned.</p></div>
+      <div class="tl-item"><div class="when">Day 2 · Execution</div><p>C1 merges automatically (T0). C2's agent asks <i>"encrypt phone numbers at rest?"</i>, Arun answers and files an ADR from the agent's draft. C2 is T3: Arun reviews line by line, Ploy approves the data summary. C3, C4, C5 then run in parallel.</p></div>
+      <div class="tl-item"><div class="when">Day 3 · Verification catches a real bug</div><p>Security review flags a log line writing patient phone numbers. The builder fixes it on retry 1. C3 and C5 are T1 with Trust 91 and 86: auto-merged. C4 (T3) is approved by Arun and Ploy.</p></div>
+      <div class="tl-item hum"><div class="when">Day 4 · Release</div><p>Mission Control: O1 4/4 · O2 4/4 · O3 2/3 proven. Ploy tries the preview; <i>"staff need to cancel bookings"</i> becomes new intent O4. <b>Arun and Ploy release without O3.S3</b>; the gap is recorded in the decision.</p></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">2</div><div class="l">Approvals (intent, plan)</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">Questions answered</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">T3 sign-offs</div></div>
+      <div class="stat"><div class="n">1</div><div class="l">Release decision</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">Tasks created, assigned, dragged or verified by a person</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 18 MORE SCENARIOS -->
+<section id="scenarios2" data-title="Two more scenarios">
+  <div class="wrap">
+    <div class="eyebrow"><span>18</span><span class="sep">/</span><span>More examples</span></div>
+    <h2>A small brownfield feature, and a conflict between agents</h2>
+    <div class="grid g2">
+      <div class="card top-ok">
+        <div class="k">Brownfield: CSV export on an imported Django repo</div>
+        <ul>
+          <li>Business owner asks for shipment history export. Intent agent drafts 1 outcome, 3 scenarios incl. "only my own shipments"</li>
+          <li>Planner reads the baseline, finds <code>exports/</code>, plans <b>one</b> Change (C14, T1). One-click plan approval</li>
+          <li>Reviewer agent spots a missing tenant filter; the scenario test fails; builder fixes on retry 1</li>
+          <li>Trust 92, T1: merges with no human action. Owner gets "O7 proven on staging; try it"</li>
+        </ul>
+        <p style="margin-top:10px"><b>Human time: ~5 minutes.</b> <span class="muted">Traditional: ticket, grooming, assignment, a developer day, review round-trip, manual QA.</span></p>
+      </div>
+      <div class="card top-warn">
+        <div class="k">Conflict: annual plans (C21) vs proration (C22)</div>
+        <ul>
+          <li><b>Avoid:</b> both touch <code>billing/**</code>; the lease runs C21 first, C22 waits</li>
+          <li><b>Detect:</b> C22 rebases on merged C21 and passes its own tests</li>
+          <li><b>Catch:</b> merge queue runs the full suite; a C21 annual-plan test fails</li>
+          <li><b>Decide:</b> two retries fail and the scenarios truly conflict. <i>Conflict</i> decision goes to the business owner: prorate by day or by month? Picks "by day"; intent v3; both outcomes stay proven</li>
+        </ul>
+        <p style="margin-top:10px"><b>A one-minute business decision</b>, not a code-review surprise a week later.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 19 DECISIONS -->
+<section id="ask" data-title="Decisions needed">
+  <div class="wrap">
+    <div class="eyebrow"><span>19</span><span class="sep">/</span><span>What we need from the team</span></div>
+    <h2>Four ADRs and five open questions</h2>
+    <div class="grid g4">
+      <div class="card top-a"><div class="k">ADR 0029</div><h3>The Change is the unit of delivery</h3><p>One PR-sized outcome slice; tasks become steps; assignment and Kanban leave the main path.</p></div>
+      <div class="card top-p"><div class="k">ADR 0030</div><h3>Agents execute in the customer's CI</h3><p>Cloud orchestrates and observes; never runs code or holds coding-model keys.</p></div>
+      <div class="card top-g"><div class="k">ADR 0031</div><h3>Risk-tiered, evidence-based gates</h3><p>Approval by tier via a required status check; release always human.</p></div>
+      <div class="card top-h"><div class="k">ADR 0032</div><h3>Decisions are first-class</h3><p>Every judgement typed, routed, recorded; only a Decision promotes agent drafts to rules.</p></div>
+    </div>
+    <ol class="ask-list">
+      <li><p><b>Naming.</b> "Change" (maps 1:1 to a PR) or Delivery / Slice / Mission?</p></li>
+      <li><p><b>GitHub App vs PAT.</b> The runner needs Actions, statuses and administration permissions, which strengthens the case for the App ADR 0017 deferred. Decide before M3.</p></li>
+      <li><p><b>First runtime.</b> Claude Code headless (adapter knowledge exists) or Codex CLI. One for the MVP.</p></li>
+      <li><p><b>Business-user desktop (ADR 0028).</b> Fold into Phase 4 here, served by Decision cards and notifications?</p></li>
+      <li><p><b>Default autonomy for existing projects.</b> L0, or no change until a steward opts in?</p></li>
+    </ol>
+  </div>
+</section>
+
+<footer>
+  Recap of <code class="mono">docs/plans/0029-agent-native-delivery.md</code> (2026-10-04). As-Is facts sourced from <code class="mono">develop</code> @ <code class="mono">444540e</code>; every To-Be element is a proposal pending ADRs 0029–0032.
+</footer>
+
+<script>
+(function () {
+  var sections = Array.prototype.slice.call(document.querySelectorAll("section"));
+  var rail = document.querySelector(".rail");
+  var counter = document.getElementById("counter");
+  var dots = sections.map(function (s, i) {
+    var a = document.createElement("a");
+    a.href = "#" + s.id;
+    a.title = (i) + " · " + (s.dataset.title || s.id);
+    a.setAttribute("aria-label", a.title);
+    rail.appendChild(a);
+    return a;
+  });
+
+  function current() {
+    var mid = window.innerHeight / 3, idx = 0;
+    sections.forEach(function (s, i) { if (s.getBoundingClientRect().top <= mid) idx = i; });
+    return idx;
+  }
+  function update() {
+    var i = current();
+    dots.forEach(function (d, j) { d.classList.toggle("on", j === i); });
+    counter.textContent = (i + 1) + " / " + sections.length;
+  }
+  function go(delta) {
+    var i = Math.max(0, Math.min(sections.length - 1, current() + delta));
+    sections[i].scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  window.addEventListener("scroll", update, { passive: true });
+  window.addEventListener("resize", update);
+  update();
+
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var t = e.target && e.target.tagName;
+    if (t === "INPUT" || t === "TEXTAREA") return;
+    if (["ArrowRight", "ArrowDown", "PageDown", " "].indexOf(e.key) !== -1) { e.preventDefault(); go(e.shiftKey && e.key === " " ? -1 : 1); }
+    else if (["ArrowLeft", "ArrowUp", "PageUp"].indexOf(e.key) !== -1) { e.preventDefault(); go(-1); }
+    else if (e.key === "Home") { e.preventDefault(); sections[0].scrollIntoView({ behavior: "smooth" }); }
+    else if (e.key === "End") { e.preventDefault(); sections[sections.length - 1].scrollIntoView({ behavior: "smooth" }); }
+    else if (e.key === "t" || e.key === "T") { toggleTheme(); }
+  });
+
+  function toggleTheme() {
+    var root = document.documentElement;
+    var dark = root.dataset.theme
+      ? root.dataset.theme === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+  }
+  document.getElementById("themeBtn").addEventListener("click", toggleTheme);
+
+  document.querySelectorAll(".seg").forEach(function (seg) {
+    var buttons = seg.querySelectorAll("button");
+    buttons.forEach(function (b) {
+      b.addEventListener("click", function () {
+        buttons.forEach(function (o) {
+          var on = o === b;
+          o.setAttribute("aria-pressed", on ? "true" : "false");
+          document.getElementById(o.dataset.show).hidden = !on;
+        });
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
