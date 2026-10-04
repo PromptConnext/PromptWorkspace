@@ -203,10 +203,20 @@ def _check_graph_write_permissions(
 
 
 def require_project(repo: Repository, project_id: str, user: User) -> Project:
+    return require_project_role(repo, project_id, user)[0]
+
+
+def require_project_role(
+    repo: Repository, project_id: str, user: User
+) -> tuple[Project, Role]:
+    """`require_project`, also returning the caller's workspace role it has
+    already read — for a route that needs the role too, so it doesn't spend
+    another database round trip asking again."""
     project = repo.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project_not_found")
-    if repo.get_membership(project.workspace_id, user.id) is None:
+    role = repo.get_membership(project.workspace_id, user.id)
+    if role is None:
         raise HTTPException(status_code=403, detail="not_a_member")
     tag_workspace(project.workspace_id)
-    return project
+    return project, role

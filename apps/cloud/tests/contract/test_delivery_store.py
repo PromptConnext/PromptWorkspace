@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from app.db.repository import Repository
-from app.models.schemas import Decision, DeliveryChange, utcnow
+from app.models.schemas import Decision, DeliveryChange, Task, new_id, utcnow
 
 from . import _helpers as h
 
@@ -90,3 +90,29 @@ def test_project_roles_set_replace_and_clear(repo: Repository) -> None:
 
     repo.set_project_role(project.id, ws.id, "business_owner", None, admin)
     assert [r.hat for r in repo.list_project_roles(project.id)] == ["tech_steward"]
+
+
+def test_task_change_ids_are_the_live_tasks_in_pull_order(repo: Repository) -> None:
+    """GET /delivery-plan groups task ids by change from this one narrow read
+    instead of a full graph pull (several requests on Supabase). Same rows as
+    a bootstrap pull (live tasks only) and the same order, `(updated_at, id)`."""
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    other = h.project(repo, ws, admin)
+    change_a, change_b = new_id(), new_id()
+    first = Task(id=new_id(), project_id=project.id, title="first", change_id=change_a)
+    second = Task(id=new_id(), project_id=project.id, title="second", change_id=change_b)
+    loose = Task(id=new_id(), project_id=project.id, title="no change")
+    gone = Task(id=new_id(), project_id=project.id, title="gone", change_id=change_a)
+    for task in (first, second, loose, gone):
+        h.push_tasks(repo, project.id, [task])
+    h.push_tasks(repo, other.id, [Task(id=new_id(), project_id=other.id, title="x",
+                                       change_id=change_a)])
+    h.push_tasks(repo, project.id, [gone.model_copy(update={"deleted_at": utcnow()})])
+    # Touching `first` again moves it to the end of the pull order.
+    h.push_tasks(repo, project.id, [first.model_copy(update={"title": "first, renamed"})])
+
+    rows = repo.list_task_change_ids(project.id)
+
+    assert rows == [(second.id, change_b), (loose.id, None), (first.id, change_a)]
+    assert [t.id for t in repo.get_graph(project.id).tasks] == [row[0] for row in rows]

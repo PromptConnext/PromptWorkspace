@@ -994,6 +994,19 @@ class SupabaseRepository(Repository):
                 counts[etype] = res.count
         return max_cursor, counts
 
+    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+        res = (
+            self._table(_TABLE["tasks"])
+            .select("id,change_id")
+            .eq("project_id", project_id)
+            .is_("deleted_at", "null")
+            .not_.is_("updated_at", "null")
+            .order("updated_at")
+            .order("id")
+            .execute()
+        )
+        return [(row["id"], row.get("change_id")) for row in res.data or []]
+
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         res = (
             self._table(_TABLE["tasks"])

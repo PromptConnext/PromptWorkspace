@@ -466,6 +466,14 @@ class Repository(abc.ABC):
         materialising rows — the cheap "is there anything to pull" probe (M4)."""
 
     @abc.abstractmethod
+    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+        """(task id, change_id) for the project's live tasks, in the order a
+        bootstrap `get_graph` lists them, `(updated_at, id)`. One narrow read
+        for callers that need only the task-to-change grouping (plan 0029's
+        delivery plan) rather than a full pull, which is a request per entity
+        type on Supabase."""
+
+    @abc.abstractmethod
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
 
     @abc.abstractmethod
@@ -1385,6 +1393,15 @@ class InMemoryRepository(Repository):
             if changed:
                 counts[etype] = changed
         return max_cursor, counts
+
+    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+        tasks = [
+            t
+            for t in self._graph.get(project_id, {}).get("tasks", {}).values()
+            if t.deleted_at is None and t.updated_at is not None
+        ]
+        tasks.sort(key=lambda t: (t.updated_at, t.id))
+        return [(t.id, t.change_id) for t in tasks]
 
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         store = self._graph.get(project_id)

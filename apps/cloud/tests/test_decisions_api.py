@@ -326,3 +326,76 @@ def test_a_failing_mirror_write_never_fails_the_stage_save(client, project, monk
 
     assert res.status_code == 200, res.text
     assert res.json()["projection"] == "current"
+
+
+# --- The mutation's snapshot: the listing as it stands after the write, so the
+# web app applies it instead of refetching GET /decisions (a second set of
+# cross-region round trips).
+
+
+def _listing(client, pid, headers):
+    res = client.get(f"/projects/{pid}/decisions", headers=headers)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_request_returns_the_listing_after_it(client, project):
+    body = _request(client, project, "intent_approval").json()
+
+    assert body["snapshot"] == _listing(client, project, BOB)
+    assert body["snapshot"]["states"] == {"intent": "pending", "plan": "none"}
+    assert [d["id"] for d in body["snapshot"]["decisions"]] == [body["id"]]
+    assert body["status"] == "open" and body["can_resolve"] is False  # still top level
+
+
+def test_a_request_after_an_edit_shows_the_withdrawal_in_its_snapshot(client, project):
+    first = _request(client, project, "intent_approval").json()
+    _save_specify(client, project, "# Spec\n\nBook and cancel a slot.")
+
+    second = _request(client, project, "intent_approval").json()
+
+    assert second["snapshot"] == _listing(client, project, BOB)
+    statuses = {d["id"]: d["status"] for d in second["snapshot"]["decisions"]}
+    assert statuses == {second["id"]: "open", first["id"]: "withdrawn"}
+
+
+def test_a_repeated_request_returns_the_unchanged_listing(client, project):
+    _request(client, project, "intent_approval")
+
+    again = _request(client, project, "intent_approval", headers=ALICE).json()
+
+    assert again["snapshot"] == _listing(client, project, ALICE)
+    assert again["snapshot"]["decisions"][0]["can_resolve"] is True
+
+
+def test_re_requesting_an_approved_plan_returns_the_listing(client, project):
+    _save_tasks(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _resolve(client, project, did)
+
+    again = _request(client, project, "plan_approval").json()
+
+    assert again["snapshot"] == _listing(client, project, BOB)
+    assert again["snapshot"]["states"]["plan"] == "approved"
+
+
+def test_an_approval_returns_the_listing_after_it(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+
+    body = _resolve(client, project, did).json()
+
+    assert body["status"] == "approved" and body["resolved_by"] == "alice"
+    assert body["snapshot"] == _listing(client, project, ALICE)
+    assert body["snapshot"]["states"] == {"intent": "approved", "plan": "none"}
+    assert body["snapshot"]["decisions"][0]["can_resolve"] is False
+
+
+def test_a_change_request_returns_the_listing_after_it(client, project):
+    _save_tasks(client, project)
+    _request(client, project, "intent_approval")
+    did = _request(client, project, "plan_approval").json()["id"]
+
+    body = _resolve(client, project, did, outcome="rejected", rationale="Split C2.").json()
+
+    assert body["snapshot"] == _listing(client, project, ALICE)
+    assert body["snapshot"]["states"] == {"intent": "pending", "plan": "changes_requested"}

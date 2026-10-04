@@ -29,26 +29,65 @@ def current_hash(repo: Repository, project_id: str, stage: str) -> str | None:
     return content_hash(doc.content)
 
 
-def decisions_state(repo: Repository, project_id: str) -> dict[str, ApprovalState]:
-    return _states(repo, project_id, repo.list_decisions(project_id))
+def stage_hashes(
+    repo: Repository, project_id: str, known: dict[str, str | None] | None = None
+) -> dict[str, str | None]:
+    """The current hash of every approval subject stage, keyed by stage.
+    `known` carries hashes the caller already read in this request, so each
+    stage document is fetched once (each read is a database round trip)."""
+    hashes = dict(known or {})
+    for stage in STAGE_OF.values():
+        if stage not in hashes:
+            hashes[stage] = current_hash(repo, project_id, stage)
+    return hashes
 
 
-def _states(
-    repo: Repository, project_id: str, decisions: list[Decision]
+def states_of(
+    decisions: list[Decision], hashes: dict[str, str | None]
 ) -> dict[str, ApprovalState]:
-    intent_hash = current_hash(repo, project_id, STAGE_OF["intent_approval"])
-    plan_hash = current_hash(repo, project_id, STAGE_OF["plan_approval"])
+    """The approval states from decisions and stage hashes already in hand."""
+    intent, plan = "intent_approval", "plan_approval"
     return {
-        "intent": approval_state(decisions, "intent_approval", intent_hash),
-        "plan": approval_state(decisions, "plan_approval", plan_hash),
+        "intent": approval_state(decisions, intent, hashes[STAGE_OF[intent]]),
+        "plan": approval_state(decisions, plan, hashes[STAGE_OF[plan]]),
     }
 
 
-def sync_approval_mirrors(repo: Repository, project_id: str) -> None:
+def decisions_state(
+    repo: Repository,
+    project_id: str,
+    decisions: list[Decision] | None = None,
+    hashes: dict[str, str | None] | None = None,
+) -> dict[str, ApprovalState]:
+    """Pass `decisions` (and any `hashes`) a caller already fetched to skip
+    reading them again."""
+    if decisions is None:
+        decisions = repo.list_decisions(project_id)
+    return states_of(decisions, stage_hashes(repo, project_id, hashes))
+
+
+def plan_state(repo: Repository, project_id: str) -> ApprovalState:
+    """The plan approval alone: reads only the `tasks` document, not both."""
+    stage = STAGE_OF["plan_approval"]
+    return approval_state(
+        repo.list_decisions(project_id), "plan_approval", current_hash(repo, project_id, stage)
+    )
+
+
+def sync_approval_mirrors(
+    repo: Repository,
+    project_id: str,
+    *,
+    decisions: list[Decision] | None = None,
+    hashes: dict[str, str | None] | None = None,
+) -> None:
     """Write the current approval states onto the latest Requirement (intent)
-    and SpecDocument (plan). Writes only a value that differs."""
-    decisions = repo.list_decisions(project_id)
-    states = _states(repo, project_id, decisions)
+    and SpecDocument (plan). Writes only a value that differs. A caller that
+    already holds the project's decisions (as they stand after its write) and
+    stage hashes passes them in instead of having them read again."""
+    if decisions is None:
+        decisions = repo.list_decisions(project_id)
+    states = states_of(decisions, stage_hashes(repo, project_id, hashes))
 
     requirement = repo.get_latest_requirement(project_id)
     if requirement is not None:
