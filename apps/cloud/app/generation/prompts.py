@@ -90,6 +90,12 @@ def driver_prompt(
             "acceptance scenarios and requirements for that task's user story. Each criterion "
             "states a verifiable behaviour or artifact; never restate the task title."
         )
+        lines.append(
+            "Keep the template's phase headings exactly as `## Phase <number>: <name>`, one per "
+            "phase, with every task line under its phase. User-story phases are named "
+            "`User Story <n> - <title> (Priority: P<n>)`. Do not add other `##` headings "
+            "between phases."
+        )
     if existing_codebase:
         lines.append(UNTRUSTED_SECURITY_RULE)
     if existing_codebase and kind in ("plan", "tasks"):

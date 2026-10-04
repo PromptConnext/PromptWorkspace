@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
+from dataclasses import dataclass
 
 _FILE_BLOCK_RE = re.compile(r"```file:([^\n]+)\n(.*?)```", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -167,3 +169,93 @@ def parse_task_lines(doc: str) -> list[dict[str, object]]:
         if ac and ac.group(1) and criteria is not None:
             criteria.append(ac.group(1))
     return tasks
+
+
+# A `## Phase N: <name>` heading from the tasks template. The separator after the
+# number varies by model (colon, hyphen, en or em dash), and the template's own
+# last phase is literally "Phase N".
+_PHASE_HEADING_RE = re.compile(r"^##\s+Phase\s+(?:\d+|N)\b\s*[:.\-–—]?\s*(.*?)\s*$", re.IGNORECASE)
+# Any other level-2 heading ends the current phase ("## Dependencies & ...").
+_H2_RE = re.compile(r"^##\s+\S")
+_STORY_RE = re.compile(r"user\s+story\s+(\d+)", re.IGNORECASE)
+_PRIORITY_RE = re.compile(r"\(\s*priority\s*:\s*(p\d+)\s*\)", re.IGNORECASE)
+# Keeps Latin digits/letters and the Thai block (U+0E00-U+0E7F, marks included),
+# so two Thai-named phases get distinct keys.
+_SLUG_RE = re.compile(r"[^0-9a-z\u0e00-\u0e7f]+")
+
+_UNPHASED = ("unphased", "Unphased tasks", "unphased", None, None)
+
+
+@dataclass(frozen=True)
+class TaskPhase:
+    """One `## Phase N:` section of a tasks.md and the task refs beneath it."""
+
+    key: str
+    title: str
+    kind: str
+    story: int | None
+    priority: str | None
+    refs: tuple[str, ...]
+
+
+def _classify_phase(heading: str) -> tuple[str, str, str, int | None, str | None]:
+    """(key, title, kind, story, priority) for a phase heading's text."""
+    priority_match = _PRIORITY_RE.search(heading)
+    priority = priority_match.group(1).upper() if priority_match else None
+    title = _PRIORITY_RE.sub("", heading)
+    # Drop symbol characters (the template's "🎯 MVP" emoji) but keep letters in
+    # any script: Thai titles are the norm, not the exception.
+    title = "".join(ch for ch in title if unicodedata.category(ch) != "So")
+    title = re.sub(r"\bMVP\b", "", title).strip(" -–—")
+    lowered = title.lower()
+    story = _STORY_RE.search(title)
+    if story:
+        number = int(story.group(1))
+        return f"story:{number}", title, "story", number, priority
+    if "foundational" in lowered:
+        return "foundational", title, "foundational", None, priority
+    if "setup" in lowered:
+        return "setup", title, "setup", None, priority
+    if "polish" in lowered:
+        return "polish", title, "polish", None, priority
+    slug = _SLUG_RE.sub("-", lowered).strip("-") or "untitled"
+    return f"phase:{slug}", title or "Untitled phase", "other", None, priority
+
+
+def parse_task_phases(doc: str) -> list[TaskPhase]:
+    """Group a tasks.md's checklist lines by the `## Phase N:` heading above
+    them. Tasks before any heading, or under a non-phase `##` heading, fall
+    into one "unphased" phase. Phases with no tasks are dropped; a heading
+    whose key repeats merges into the first phase with that key."""
+    order: list[str] = []
+    meta: dict[str, tuple[str, str, str, int | None, str | None]] = {}
+    refs: dict[str, list[str]] = {}
+    current = _UNPHASED
+    for line in doc.split("\n"):
+        heading = _PHASE_HEADING_RE.match(line)
+        if heading:
+            current = _classify_phase(heading.group(1))
+            continue
+        if _H2_RE.match(line):
+            current = _UNPHASED
+            continue
+        task = _TASK_LINE_RE.match(line)
+        if not task:
+            continue
+        key = current[0]
+        if key not in meta:
+            meta[key] = current
+            refs[key] = []
+            order.append(key)
+        refs[key].append(task.group(1))
+    return [
+        TaskPhase(
+            key=key,
+            title=meta[key][1],
+            kind=meta[key][2],
+            story=meta[key][3],
+            priority=meta[key][4],
+            refs=tuple(refs[key]),
+        )
+        for key in order
+    ]
