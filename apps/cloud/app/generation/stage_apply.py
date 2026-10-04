@@ -34,11 +34,13 @@ applied.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from app.db.merge import PLANNER_SEED_FIELDS
 from app.db.repository import Repository
+from app.delivery.changes import reconcile_delivery_changes
 from app.generation.parsing import parse_task_lines
 from app.integrations.task_refs import task_ref_from_feature_tag
 from app.models.schemas import (
@@ -254,7 +256,9 @@ def _project(
     parsed = parse_task_lines(content)
     if not parsed:
         return "failed", [], None, None, NO_CHECKLIST_ERROR
-    written, live_count, retired_count = _apply_tasks(repo, project, parsed)
+    # Changes first: tasks carry the id of the change they belong to.
+    change_of = reconcile_delivery_changes(repo, project, content)
+    written, live_count, retired_count = _apply_tasks(repo, project, parsed, change_of)
     return "current", written, live_count, retired_count, None
 
 
@@ -301,7 +305,10 @@ def _apply_plan(
 
 
 def _apply_tasks(
-    repo: Repository, project: Project, parsed: list[dict[str, object]]
+    repo: Repository,
+    project: Project,
+    parsed: list[dict[str, object]],
+    change_of: Mapping[str, str] | None = None,
 ) -> tuple[list[str], int, int]:
     """Reconcile the checklist against the board: update, insert, retire.
 
@@ -358,6 +365,7 @@ def _apply_tasks(
             ],
             "feature_tag": tag,
             "spec_id": spec_id,
+            "change_id": (change_of or {}).get(ref),
         }
         existing = live.get(ref)
         if existing is not None:

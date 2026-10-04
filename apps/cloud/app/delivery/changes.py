@@ -14,9 +14,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.generation.parsing import TaskPhase
+from app.db.repository import DeliveryStoreUnavailable, Repository
+from app.generation.parsing import TaskPhase, parse_task_phases
 from app.integrations.task_refs import task_ref_from_feature_tag
-from app.models.schemas import DeliveryChange, utcnow
+from app.models.schemas import DeliveryChange, Project, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -110,3 +111,21 @@ def wave_of(changes: list[DeliveryChange]) -> dict[str, int]:
     live = [c for c in changes if c.deleted_at is None]
     ranks = sorted({RANK[c.kind] for c in live})
     return {c.key: ranks.index(RANK[c.kind]) for c in live}
+
+
+def reconcile_delivery_changes(repo: Repository, project: Project, content: str) -> dict[str, str]:
+    """Write the changes a tasks.md describes and return task ref -> change id.
+    An unavailable store (migration 0004 not applied) must not cost the user
+    their tasks: it logs and returns {} so tasks are written with no change."""
+    phases = parse_task_phases(content)
+    existing = repo.list_delivery_changes(project.id, include_deleted=True)
+    plan = plan_changes(project.id, project.workspace_id, phases, existing)
+    try:
+        repo.upsert_delivery_changes(project.id, plan.changes)
+    except DeliveryStoreUnavailable:
+        logger.warning(
+            "delivery store unavailable; tasks saved without changes project=%s", project.id
+        )
+        return {}
+    id_of_key = {c.key: c.id for c in plan.changes if c.deleted_at is None}
+    return {ref: id_of_key[key] for ref, key in plan.change_key_of_ref.items()}
