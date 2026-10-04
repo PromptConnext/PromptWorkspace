@@ -7,6 +7,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
+import { DeliveryPlan } from "@/components/project/DeliveryPlan";
 import { Planner } from "@/components/project/Planner";
 import { PreviewPanel } from "@/components/project/PreviewPanel";
 import { TaskBoard } from "@/components/project/TaskBoard";
@@ -23,10 +24,12 @@ import type { ProjectGraph } from "@/lib/types";
 // between projects.
 const TABS = [
   "Planner",
+  "Delivery",
   "Graph",
   "Tasks",
   "Progress",
   "Discussion",
+  "Decisions",
   "Preview",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -275,6 +278,9 @@ function ProjectWorkspace({
                   onChange={refetch}
                   onOpenTasks={() => setTab("Tasks")}
                 />
+              )}
+              {tab === "Delivery" && (
+                <DeliveryPlan graph={graph} projectId={projectId} />
               )}
               {tab === "Graph" && <GraphBrowser graph={graph} />}
               {tab === "Tasks" && (

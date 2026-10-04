@@ -32,6 +32,9 @@ vi.mock("@/components/project/GraphBrowser", () => ({
 vi.mock("@/components/project/Planner", () => ({
   Planner: () => <div>planner-view</div>,
 }));
+vi.mock("@/components/project/DeliveryPlan", () => ({
+  DeliveryPlan: () => <div>delivery-view</div>,
+}));
 vi.mock("@/components/project/PreviewPanel", () => ({
   PreviewPanel: () => null,
 }));
@@ -115,7 +118,7 @@ describe("project page tab URL sync", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "Planner" }), {
       key: "ArrowRight",
     });
-    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=graph", {
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=delivery", {
       scroll: false,
     });
     fireEvent.keyDown(screen.getByRole("tab", { name: "Planner" }), {
