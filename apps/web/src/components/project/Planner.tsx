@@ -28,6 +28,7 @@ import {
 } from "./stage-forms";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { stripStreamFence } from "@/lib/planner-sse";
+import { ApprovalControl } from "./ApprovalControl";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
@@ -1048,6 +1049,12 @@ export function Planner({
               it is worked, so on Tasks the board comes first. */}
           {tab.stages.length > 0 && tabDone(tab.key) && TABS[index + 1] && (
             <div className="flex flex-wrap items-center gap-2">
+              {(tab.key === "specify" || tab.key === "tasks") && (
+                <ApprovalControl
+                  projectId={projectId}
+                  kind={tab.key === "specify" ? "intent_approval" : "plan_approval"}
+                />
+              )}
               {tab.key === "tasks" && onOpenTasks && (
                 <button type="button" onClick={onOpenTasks} className={PRIMARY_BUTTON}>
                   Open the task board

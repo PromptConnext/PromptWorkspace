@@ -32,6 +32,9 @@ vi.mock("@/components/project/GraphBrowser", () => ({
 vi.mock("@/components/project/Planner", () => ({
   Planner: () => <div>planner-view</div>,
 }));
+vi.mock("@/components/project/DecisionsPanel", () => ({
+  DecisionsPanel: () => <div>decisions-view</div>,
+}));
 vi.mock("@/components/project/DeliveryPlan", () => ({
   DeliveryPlan: () => <div>delivery-view</div>,
 }));

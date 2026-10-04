@@ -13,6 +13,8 @@ vi.mock("@/lib/auth", () => {
   return { useAuth: () => auth };
 });
 
+vi.mock("./ApprovalControl", () => ({ ApprovalControl: () => null }));
+
 const originalFetch = global.fetch;
 
 // The signed-in user is a workspace admin — the "Tech Lead" role, which is

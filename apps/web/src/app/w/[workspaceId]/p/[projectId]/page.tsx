@@ -7,6 +7,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
+import { DecisionsPanel } from "@/components/project/DecisionsPanel";
 import { DeliveryPlan } from "@/components/project/DeliveryPlan";
 import { Planner } from "@/components/project/Planner";
 import { PreviewPanel } from "@/components/project/PreviewPanel";
@@ -306,6 +307,7 @@ function ProjectWorkspace({
               {tab === "Preview" && (
                 <PreviewPanel projectId={projectId} workspaceId={workspaceId} />
               )}
+              {tab === "Decisions" && <DecisionsPanel projectId={projectId} workspaceId={workspaceId} />}
             </>
           )}
         </div>
