@@ -79,7 +79,12 @@ export class StatusWriter {
       return { kind: "written" };
     } catch (err) {
       // 401 is the session, not a verdict on the write: queue it like any
-      // other transient failure instead of reporting it as refused.
+      // other transient failure instead of reporting it as refused — unless
+      // the failed refresh just signed us out, which is the not-signed-in
+      // path below (nothing may be queued under a session that is gone).
+      const sessionLost =
+        err instanceof CloudNotLoggedInError ||
+        (err instanceof CloudHttpError && err.status === 401 && !this.client.signedIn());
       if (
         err instanceof CloudHttpError &&
         err.status >= 400 &&
@@ -89,8 +94,10 @@ export class StatusWriter {
         this.log.warn(`status write refused (${err.status}): ${err.message}`);
         return { kind: "refused", message: explain(err) };
       }
-      if (err instanceof CloudNotLoggedInError || err instanceof CloudNotConfiguredError) {
-        throw err;
+      if (sessionLost || err instanceof CloudNotConfiguredError) {
+        throw sessionLost && !(err instanceof CloudNotLoggedInError)
+          ? new CloudNotLoggedInError()
+          : err;
       }
       await this.queue.enqueue({
         projectId: req.projectId,

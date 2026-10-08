@@ -33,7 +33,7 @@ import type { StatusWriter } from "../tasks/statusWriter.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { CommitRef, GitBridge, RepoRef } from "./gitBridge.ts";
-import { aheadOf, partitionByPublication } from "./publication.ts";
+import { aheadOf, partitionWithHeld } from "./publication.ts";
 import {
   collidingRefs,
   refsForCommit,
@@ -64,6 +64,9 @@ interface PendingCommit {
   sha: string;
   subject: string;
   refs: string[];
+  /** Published, but its close was not written (no session, or the task list
+   *  had not loaded). Retried on the next scan; never shown as unpushed. */
+  held?: boolean;
 }
 
 interface RepoState {
@@ -160,7 +163,21 @@ export class GitWatcher {
     );
   }
 
-  private async scan(repo: RepoRef): Promise<void> {
+  /** One scan at a time per repository. Several triggers can overlap now (the
+   *  debounce, startup, sign-in, the task list loading), and two scans over
+   *  the same stale `state` would race to write it. */
+  private readonly scanning = new Map<string, Promise<void>>();
+
+  private scan(repo: RepoRef): Promise<void> {
+    const key = repo.root.toString();
+    const run = (this.scanning.get(key) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.scanNow(repo));
+    this.scanning.set(key, run);
+    return run;
+  }
+
+  private async scanNow(repo: RepoRef): Promise<void> {
     if (!this.enabled()) return;
     await this.loadState();
 
@@ -195,7 +212,7 @@ export class GitWatcher {
     // Not while commits are held: a held commit is published but its close has
     // not been written yet (no session, or the tasks had not loaded), and
     // nothing in git will change to prompt another look at it.
-    if (headUnchanged && aheadUnchanged && !(state.pending ?? []).length) return;
+    if (headUnchanged && aheadUnchanged && !(state.pending ?? []).some((p) => p.held)) return;
 
     let commits: CommitRef[] = [];
     let fresh: CommitRef[] = [];
@@ -244,7 +261,7 @@ export class GitWatcher {
       return;
     }
 
-    const { published, unpublished, dropped } = partitionByPublication(
+    const { published, unpublished, dropped } = partitionWithHeld(
       pending,
       commits,
       ahead,
@@ -271,7 +288,8 @@ export class GitWatcher {
       pending: kept,
     };
     await this.cache.write(CACHE_FILES.gitState, this.state);
-    this.republishPending(projectId, kept);
+    // The tree's "commit not pushed" marker is for unpublished commits only.
+    this.republishPending(projectId, kept.filter((p) => !p.held));
   }
 
   /** The branch's own task ref, or null when it must not be used: a detached
@@ -306,11 +324,14 @@ export class GitWatcher {
     projectId: string,
     entries: PendingCommit[],
   ): Promise<PendingCommit[]> {
-    const tasks = this.store.forProject(projectId);
-    if (tasks.length === 0) {
+    // `refreshedAt` is 0 until this session has fetched the list; a cached
+    // list from the last session may be stale (a task assigned since), so its
+    // being non-empty proves nothing.
+    if (this.store.refreshedAt === 0) {
       this.log.info(`task list not loaded yet; holding ${entries.length} published commit(s)`);
-      return entries;
+      return entries.map((e) => ({ ...e, held: true }));
     }
+    const tasks = this.store.forProject(projectId);
     const held = new Map<string, PendingCommit>();
 
     // Numeric normalisation makes T012 and T12 the same ref. If a project
@@ -366,7 +387,7 @@ export class GitWatcher {
           this.log.warn(
             `${ref} from ${commit.sha.slice(0, 8)} not closed: not signed in; will retry after sign-in`,
           );
-          held.set(commit.sha, commit);
+          held.set(commit.sha, { ...commit, held: true });
         }
         // Otherwise the cloud refused it (the writer has logged why); retrying
         // an answer that will not change would only repeat it.

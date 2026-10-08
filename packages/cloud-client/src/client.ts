@@ -60,6 +60,13 @@ export class CloudClient {
     this.deps = deps;
   }
 
+  /** Whether a session is stored right now. A request can fail 401 and clear
+   *  it on the way; callers use this to tell "the session is gone" from "the
+   *  server said no". */
+  signedIn(): boolean {
+    return this.deps.session.read() !== null;
+  }
+
   mode(): "stub" | "supabase" {
     const { supabaseUrl, supabaseAnonKey } = this.deps.config();
     return supabaseUrl && supabaseAnonKey ? "supabase" : "stub";
