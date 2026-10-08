@@ -13,6 +13,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { DocumentUpload } from "./DocumentUpload";
+import { GenerationWarnings } from "./GenerationWarnings";
 import { DocumentPreview } from "./DocumentPreview";
 import { DeploymentTemplatePanel } from "./DeploymentTemplatePanel";
 import { PolicyScopePanel } from "./PolicyScopePanel";
@@ -459,6 +460,7 @@ function StageSection({
               </button>
             </div>
           )}
+          {status === "done" && <GenerationWarnings warnings={result?.warnings} />}
           {status === "done" && result && (
             <p className="mt-2 text-xs text-slate-500">
               {result.task_count !== undefined

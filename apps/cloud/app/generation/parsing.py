@@ -186,7 +186,7 @@ _SLUG_RE = re.compile(r"[^0-9a-z\u0e00-\u0e7f]+")
 # Setup/foundational/polish only count when the title *starts* with the keyword
 # ("Setup (Shared Infrastructure)"), not when a model-named phase merely mentions
 # it ("Database Setup for Reports").
-_LEADING_KIND_RE = re.compile(r"(setup|foundational|polish)\b")
+_LEADING_KIND_RE = re.compile(r"(setup|foundational|polish|baseline gaps?)\b")
 
 _UNPHASED = ("unphased", "Unphased tasks", "unphased", None, None)
 
@@ -220,6 +220,11 @@ def _classify_phase(heading: str) -> tuple[str, str, str, int | None, str | None
     leading = _LEADING_KIND_RE.match(lowered)
     if leading:
         kind = leading.group(1)
+        # The brownfield tasks template's "Baseline gaps" phase closes a gap a
+        # user story cannot work without: it blocks the stories, which is what
+        # `foundational` means, and needs no kind (or migration) of its own.
+        if kind.startswith("baseline"):
+            kind = "foundational"
         return kind, title, kind, None, priority
     slug = _SLUG_RE.sub("-", lowered).strip("-") or "untitled"
     return f"phase:{slug}", title or "Untitled phase", "other", None, priority

@@ -169,3 +169,17 @@ def test_keyword_inside_a_title_does_not_classify_the_phase():
     assert [p.key for p in phases] == ["setup", "phase:database-setup-for-reports"]
     assert phases[0].refs == ("T001",)
     assert phases[1].kind == "other"
+
+
+def test_a_baseline_gaps_phase_is_foundational_so_it_blocks_the_stories():
+    # The brownfield tasks template's optional first phase. It closes a gap a
+    # story cannot work without, which is what `foundational` means; a kind of
+    # its own would need a schema change.
+    doc = (
+        "## Phase 1: Baseline gaps (needed by the stories)\n"
+        "- [ ] T001 Add the missing piece in `src/x.ts` (new)\n"
+        "## Phase 2: User Story 1 - Book (Priority: P1)\n"
+        "- [ ] T002 Change `src/y.ts`\n"
+    )
+    phases = parse_task_phases(doc)
+    assert [(p.kind, p.refs) for p in phases] == [("foundational", ("T001",)), ("story", ("T002",))]

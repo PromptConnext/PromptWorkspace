@@ -357,6 +357,13 @@ export interface DocumentOut {
  *  reserved for a stage that grows an explicit apply step. */
 export type ProjectionState = "current" | "pending" | "failed" | "not_applicable";
 
+/** `tasks` for an imported repository named files that are not in it and not
+ *  marked `(new)` (apps/cloud/app/generation/path_check.py). */
+export interface GenerationWarning {
+  code: "unmarked_new_paths";
+  items: { ref: string; path: string }[];
+}
+
 export interface GenerateDoneEvent {
   stage: StageKind;
   title: string;
@@ -369,6 +376,9 @@ export interface GenerateDoneEvent {
   retired_count?: number;
   // The model stopped at its output limit — the document is real but cut off.
   truncated?: boolean;
+  // Notices on a generation that succeeded (an imported project's `tasks` only
+  // today). Absent when there is nothing to say.
+  warnings?: GenerationWarning[];
   // Whether the raw markdown was written to the stage-document side store,
   // i.e. whether it will still be there on the next visit to the project.
   saved?: boolean;

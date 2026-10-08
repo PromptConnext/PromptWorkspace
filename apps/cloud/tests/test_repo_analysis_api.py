@@ -634,3 +634,102 @@ def test_current_state_survives_the_tasks_cap(client: TestClient):
     _, user_content = client.app.state.generation_provider.calls[-1]
     assert "- Story listing API — src/server.js" in user_content
     assert "- Pagination — src/server.js:3 TODO" in user_content
+
+
+def _ready_for_tasks(client: TestClient, pid: str) -> None:
+    """specify and plan exist, so the tasks stage will run."""
+    assert _generate(client, pid, "specify").status_code == 200
+    assert _generate(client, pid, "plan").status_code == 200
+
+
+def test_plan_and_tasks_get_the_repository_file_list_and_the_other_stages_do_not(
+    client: TestClient,
+):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    for stage in ("constitution", "specify", "plan", "tasks"):
+        assert _generate(client, pid, stage).status_code == 200
+        _, user_content = provider.calls[-1]
+        listed = "file list:" in user_content
+        assert listed == (stage in ("plan", "tasks")), stage
+        if listed:
+            # Real files only: the secret-shaped ones were filtered out before
+            # the snapshot, so they can never reach the prompt.
+            assert "src/server.js" in user_content
+            assert "keys/deploy.pem" not in user_content
+            assert ".env" not in user_content.split("file list:")[1].split("\n[")[0]
+
+
+def test_tasks_on_an_imported_project_use_the_brownfield_template(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    assert _generate(client, pid, "tasks").status_code == 200
+    system_prompt, _ = provider.calls[-1]
+    assert "Create project structure per implementation plan" not in system_prompt
+    assert "Baseline gaps" in system_prompt
+
+
+def test_tasks_on_a_scratch_project_keep_the_greenfield_template(client: TestClient):
+    _, pid = _scratch_project(client)
+    _ready_for_tasks(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    assert _generate(client, pid, "tasks").status_code == 200
+    system_prompt, _ = provider.calls[-1]
+    assert "Create project structure per implementation plan" in system_prompt
+    assert "Baseline gaps" not in system_prompt
+
+
+class InventedPathsProvider(FakeGenerationProvider):
+    """A tasks stage that names a real file, an invented one and a new one."""
+
+    async def stream(self, system_prompt, user_content, *args, **kwargs):
+        if "task-breakdown" not in system_prompt:
+            async for delta in super().stream(system_prompt, user_content, *args, **kwargs):
+                yield delta
+            return
+        doc = (
+            "# Tasks\n\n"
+            "## Phase 1: User Story 1 - Stories (Priority: P1)\n"
+            "- [ ] T001 Change `src/server.js`\n"
+            "- [ ] T002 Add pagination in `src/lib/paginate.js`\n"
+            "- [ ] T003 Add `src/lib/cursor.js` (new)\n"
+        )
+        yield doc
+        if kwargs.get("on_finish"):
+            kwargs["on_finish"]("stop")
+
+
+def test_tasks_naming_unmarked_missing_files_come_back_with_a_warning(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    client.app.state.generation_provider = InventedPathsProvider()
+
+    res = _generate(client, pid, "tasks")
+    done = [payload for event, payload in _sse(res.text) if "stage" in payload][-1]
+
+    assert done["task_count"] == 3
+    assert done["warnings"] == [
+        {
+            "code": "unmarked_new_paths",
+            "items": [{"ref": "T002", "path": "src/lib/paginate.js"}],
+        }
+    ]
+    # Reported, never rewritten: the saved document is what the model wrote.
+    saved = client.app.state.repository.get_stage_document(pid, "tasks")
+    assert "`src/lib/paginate.js`" in saved.content
+
+
+def test_a_scratch_project_gets_no_path_warnings(client: TestClient):
+    _, pid = _scratch_project(client)
+    _ready_for_tasks(client, pid)
+    client.app.state.generation_provider = InventedPathsProvider()
+    res = _generate(client, pid, "tasks")
+    done = [payload for event, payload in _sse(res.text) if "stage" in payload][-1]
+    assert "warnings" not in done
