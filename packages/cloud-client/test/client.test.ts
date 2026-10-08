@@ -284,6 +284,39 @@ test("a definitively rejected refresh signs out; the session does not linger", a
   );
 });
 
+test("a refresh rejected because another window already rotated the token does not sign out", async () => {
+  // Every editor window shares one SecretStorage and refreshes at once after a
+  // sign-in. The loser is told refresh_token_not_found; the winner has already
+  // stored its new pair. Signing out here deleted the winner's session too.
+  let session!: SessionStore;
+  await withServer(
+    async (req, res) => {
+      if (req.url?.startsWith("/auth/v1/token")) {
+        await session.store({ mode: "supabase", userId: "u1" }, "access-2", "r2");
+        res.statusCode = 400;
+        res.end(JSON.stringify({ code: 400, error_code: "refresh_token_not_found" }));
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if (req.headers.authorization === "Bearer access-2") {
+        res.end("[]");
+        return;
+      }
+      res.statusCode = 401;
+      res.end(JSON.stringify({ detail: "invalid_token" }));
+    },
+    async (base) => {
+      const made = makeClient(base, base);
+      session = made.session;
+      await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+
+      assert.deepEqual(await made.client.listAssignedTasks(), []);
+      assert.equal(session.read()?.userId, "u1", "the winner's session must survive");
+      assert.equal(await session.refreshToken(), "r2");
+    },
+  );
+});
+
 test("a 5xx from the auth server does NOT sign the user out", async () => {
   await withServer(
     (req, res) => {

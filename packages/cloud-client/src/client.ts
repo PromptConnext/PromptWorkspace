@@ -46,6 +46,9 @@ export class CloudClient {
   // sign a perfectly valid session out. Everything funnels through this one
   // in-flight promise. (Carried over verbatim in intent from the engine; it is
   // the least obvious and most load-bearing thing in the original file.)
+  // It only coalesces inside one process. Every editor window runs its own
+  // client over the same SecretStorage, so a rejection must also be checked
+  // against what another window has since stored: see `adoptRotatedSession`.
   private inFlightRefresh: Promise<string | null> | null = null;
 
   constructor(deps: CloudClientDeps) {
@@ -134,6 +137,14 @@ export class CloudClient {
       return next.token;
     } catch (err) {
       if (err instanceof CloudRefreshInvalidError) {
+        // Rejected, but not necessarily gone: another window may have won the
+        // rotation and stored the new pair. Only a rejection of the token that
+        // is still the stored one is definitive.
+        const rotated = await this.adoptRotatedSession(refreshToken);
+        if (rotated !== undefined) {
+          this.deps.log.info("refresh lost the rotation to another window; using its session");
+          return rotated;
+        }
         // Definitively rejected: the session is gone, so say so. Any other
         // failure is treated as "offline" and must NOT sign the user out.
         this.deps.log.warn(`refresh rejected, signing out: ${err.message}`);
@@ -143,6 +154,32 @@ export class CloudClient {
       }
       return null;
     }
+  }
+
+  /**
+   * Every editor window runs this extension over one shared SecretStorage, and
+   * a new session lands in all of them at once, so they all refresh with the
+   * same refresh token in the same moment. Supabase rotates it: one window
+   * wins and stores the new pair, the others are told `refresh_token_not_found`
+   * and, treating that as definitive, used to delete the shared session — the
+   * winner's included. (Seen on 2026-10-04, 10-06 and 10-07: two windows
+   * rejecting 6 ms apart, minutes after each sign-in.)
+   *
+   * So a rejection is checked against the store first. If the stored refresh
+   * token is no longer the one that was rejected, someone else rotated it and
+   * their access token is already stored (the writer stores it first); return
+   * that. A short second look covers the winner not having stored yet.
+   * `undefined` means nothing changed: the rejection is real.
+   */
+  private async adoptRotatedSession(rejected: string): Promise<string | null | undefined> {
+    for (let look = 0; look < 2; look++) {
+      const current = await this.deps.session.refreshToken();
+      if (current && current !== rejected) {
+        return (await this.deps.session.accessToken()) ?? null;
+      }
+      if (look === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    return undefined;
   }
 
   async supabaseRefresh(
