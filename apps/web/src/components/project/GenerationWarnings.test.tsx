@@ -47,4 +47,23 @@ describe("GenerationWarnings", () => {
       "1 task names a file that isn't in the repository",
     );
   });
+
+  it("counts tasks, not paths", () => {
+    render(
+      <GenerationWarnings
+        warnings={[
+          {
+            code: "unmarked_new_paths",
+            items: [
+              { ref: "T002", path: "a/b.ts" },
+              { ref: "T002", path: "a/c.ts" },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "1 task names a file that isn't in the repository",
+    );
+  });
 });

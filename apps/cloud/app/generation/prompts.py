@@ -63,10 +63,11 @@ EXISTING_CODEBASE_TASK_RULES = [
     "authentication, logging, error handling, environment configuration or a database layer "
     "that [codebase_baseline] lists as implemented. Add such a task only when the baseline "
     "lists it as missing AND a user story needs it, in the 'Baseline gaps' phase, naming the gap.",
-    "Name only real files. Every file path in a task must appear in the file list of "
-    "[repo_snapshot], or be followed by `(new)` when the task creates it. Never invent a path "
-    "for behaviour that already exists: find the file that holds it in the list and name that "
-    "one. If the list is marked partial and a path is not shown, say `(new)` only when sure.",
+    "Name only real files. Write every file path in backticks. Each must appear in the file "
+    "list of [repo_snapshot], or be followed by `(new)` right after the closing backtick when "
+    "the task creates it, as in `src/lib/x.ts` (new). Never invent a path for behaviour that "
+    "already exists: find the file that holds it in the list and name that one. If the list is "
+    "marked partial and a path is not shown, say (new) only when sure.",
     "Never create `.env`, `.env.local`, key or credential files. Configuration the task adds "
     "goes in `.env.example` with placeholder values.",
     "Stay inside the specification. Do not add tasks for anything in its out-of-scope list or "

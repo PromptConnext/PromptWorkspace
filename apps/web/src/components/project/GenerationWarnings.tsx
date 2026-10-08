@@ -8,12 +8,13 @@ export function GenerationWarnings({ warnings }: { warnings?: GenerationWarning[
   const unmarked = warnings?.find((w) => w.code === "unmarked_new_paths");
   if (!unmarked || unmarked.items.length === 0) return null;
   const { items } = unmarked;
+  const tasks = new Set(items.map((item) => item.ref)).size;
   return (
     <div role="status" className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-900">
       <p className="font-medium">
-        {items.length === 1
+        {tasks === 1
           ? "1 task names a file that isn't in the repository"
-          : `${items.length} tasks name files that aren't in the repository`}
+          : `${tasks} tasks name files that aren't in the repository`}
       </p>
       <p className="mt-1">
         Point each at the file that already holds the behaviour, or add <code>(new)</code> after

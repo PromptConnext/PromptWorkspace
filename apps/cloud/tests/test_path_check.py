@@ -68,3 +68,50 @@ def test_only_task_lines_are_read():
 
 def test_a_partial_file_list_proves_nothing():
     assert check("- [ ] T001 Edit `src/lib/metaTags.ts`", complete=False) == []
+
+
+def test_existing_dotfiles_and_dot_directories_are_not_mangled():
+    # `str.lstrip("./")` strips characters, not a prefix: `.github/ci.yml`
+    # became `github/ci.yml` and every existing dotfile was flagged.
+    files = [*FILES, ".github/workflows/ci.yml", ".eslintrc.json"]
+    doc = "- [ ] T001 Edit `.github/workflows/ci.yml` and `./.eslintrc.json`"
+    assert check(doc, files=files) == []
+
+
+def test_env_templates_and_files_the_snapshot_withholds_are_not_judged():
+    # The snapshot drops `.env.*` (including `.env.example`, which the prompt
+    # tells the model to use), binaries and vendored directories, so their
+    # absence from the file list proves nothing.
+    doc = (
+        "- [ ] T001 Add keys to `.env.example`\n"
+        "- [ ] T002 Swap `public/logo.png` and read `node_modules/x/index.js`\n"
+        "- [ ] T003 Never commit `.env.local`"
+    )
+    assert check(doc) == []
+
+
+def test_routes_mime_types_scoped_packages_and_absolute_paths_are_not_files():
+    doc = (
+        "- [ ] T001 Serve `/api/leads` as `application/json` via `@google/genai`, "
+        "see `/Users/me/x.ts`, call `Date.now` and read `process.env`"
+    )
+    assert check(doc) == []
+
+
+def test_line_and_anchor_suffixes_are_ignored():
+    doc = "- [ ] T001 Fix `src/App.tsx:42`, `src/App.tsx:42:7` and `src/lib/store.tsx#L10-L20`"
+    assert check(doc) == []
+
+
+def test_a_file_one_task_creates_may_be_edited_by_a_later_one():
+    doc = (
+        "- [ ] T004 Add `src/lib/migration.ts` (new)\n"
+        "- [ ] T006 Call it from `src/lib/migration.ts` on load"
+    )
+    assert check(doc) == []
+
+
+def test_the_new_marker_forms_models_actually_write():
+    for marker in ("(new)", "(new file)", "(NEW)", ", new", " - new"):
+        doc = f"- [ ] T001 Add `src/lib/x.ts` {marker}".replace("  ", " ")
+        assert check(doc) == [], marker

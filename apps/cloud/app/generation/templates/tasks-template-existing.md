@@ -17,7 +17,7 @@ description: "Task list template for a change to an existing codebase"
 
 - **[P]**: Can run in parallel (different files, no dependencies)
 - **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
-- Name the exact file each task touches, taken from the file list in [repo_snapshot]. A file that does not exist yet is written `path/to/file.ext (new)`.
+- Name the exact file each task touches, in backticks, taken from the file list in [repo_snapshot]. A file that does not exist yet has `(new)` right after its closing backtick: `path/to/file.ext` (new).
 
 <!--
   ============================================================================
@@ -38,11 +38,11 @@ description: "Task list template for a change to an existing codebase"
   ============================================================================
 -->
 
-## Phase 1: Baseline gaps (ONLY if the baseline lists something a user story needs as missing)
+## Phase 1: Baseline gaps
 
-**Purpose**: Close a specific gap named in [codebase_baseline] that a user story below cannot work without. Omit this whole phase when there is no such gap, and start numbering at the first user story.
+**Purpose**: Close a specific gap named in [codebase_baseline] that a user story below cannot work without. Include this phase ONLY when there is such a gap; otherwise omit it entirely, and number the first user story Phase 1. Keep the heading exactly `Baseline gaps`.
 
-- [ ] T001 [Gap] Add [the missing piece named in the baseline] in path/to/file.ext (new)
+- [ ] T001 [Gap] Add [the missing piece named in the baseline] in `path/to/file.ext` (new)
 
 ---
 
@@ -54,12 +54,12 @@ description: "Task list template for a change to an existing codebase"
 
 ### Tests for User Story 1 (OPTIONAL - only if the specification or constitution asks for them)
 
-- [ ] T002 [P] [US1] Test for [behaviour] in [the existing test location named in the baseline, or tests/path/test_file.ext (new)]
+- [ ] T002 [P] [US1] Test for [behaviour] in [the existing test location named in the baseline, or `tests/path/test_file.ext` (new)]
 
 ### Implementation for User Story 1
 
-- [ ] T003 [US1] Change [existing behaviour] in path/to/existing-file.ext
-- [ ] T004 [P] [US1] Add [new unit] in path/to/new-file.ext (new)
+- [ ] T003 [US1] Change [existing behaviour] in `path/to/existing-file.ext`
+- [ ] T004 [P] [US1] Add [new unit] in `path/to/new-file.ext` (new)
 
 **Checkpoint**: User Story 1 works on its own
 
@@ -73,7 +73,7 @@ description: "Task list template for a change to an existing codebase"
 
 ### Implementation for User Story 2
 
-- [ ] T005 [US2] Change [existing behaviour] in path/to/existing-file.ext
+- [ ] T005 [US2] Change [existing behaviour] in `path/to/existing-file.ext`
 
 **Checkpoint**: User Stories 1 AND 2 both work independently
 
