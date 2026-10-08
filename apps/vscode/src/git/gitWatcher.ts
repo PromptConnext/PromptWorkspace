@@ -99,6 +99,7 @@ export class GitWatcher {
   private readonly scanLimit: () => number;
   private readonly closeOn: () => CloseTasksOn;
   private readonly defaultBranchFor: (projectId: string) => string | null;
+  private readonly isSignedIn: () => boolean;
 
   constructor(
     git: GitBridge,
@@ -111,6 +112,7 @@ export class GitWatcher {
     scanLimit: () => number,
     closeOn: () => CloseTasksOn,
     defaultBranchFor: (projectId: string) => string | null,
+    isSignedIn: () => boolean,
   ) {
     this.git = git;
     this.store = store;
@@ -122,6 +124,7 @@ export class GitWatcher {
     this.scanLimit = scanLimit;
     this.closeOn = closeOn;
     this.defaultBranchFor = defaultBranchFor;
+    this.isSignedIn = isSignedIn;
   }
 
   start(): void {
@@ -189,7 +192,10 @@ export class GitWatcher {
     const aheadUnchanged = (state.lastAhead ?? null) === aheadKey;
     // Both, not either: a push moves `ahead` and leaves HEAD alone, and an
     // amend moves HEAD and leaves `ahead` alone.
-    if (headUnchanged && aheadUnchanged) return;
+    // Not while commits are held: a held commit is published but its close has
+    // not been written yet (no session, or the tasks had not loaded), and
+    // nothing in git will change to prompt another look at it.
+    if (headUnchanged && aheadUnchanged && !(state.pending ?? []).length) return;
 
     let commits: CommitRef[] = [];
     let fresh: CommitRef[] = [];
@@ -251,9 +257,10 @@ export class GitWatcher {
         `${gone.refs.join(", ")} dropped: ${gone.sha.slice(0, 8)} is no longer in the history`,
       );
     }
-    if (published.length > 0) await this.closePublished(projectId, published);
+    const held = published.length > 0 ? await this.closePublished(projectId, published) : [];
 
-    const kept = unpublished.slice(-PENDING_CAP);
+    // Held commits stay pending (oldest first) so the next scan retries them.
+    const kept = [...held, ...unpublished].slice(-PENDING_CAP);
     this.state[key] = {
       lastScannedHeadSha: repo.headSha,
       lastAhead: aheadKey,
@@ -290,12 +297,21 @@ export class GitWatcher {
     this.pendingEmitter.fire();
   }
 
+  /** Close the tasks these published commits name. Returns the commits to try
+   *  again: all of them while the task list has not loaded yet, and any whose
+   *  write was not accepted because there is no session. Forgetting them
+   *  instead would lose the close permanently, since the scan only runs again
+   *  when git changes. */
   private async closePublished(
     projectId: string,
     entries: PendingCommit[],
-  ): Promise<void> {
+  ): Promise<PendingCommit[]> {
     const tasks = this.store.forProject(projectId);
-    if (tasks.length === 0) return;
+    if (tasks.length === 0) {
+      this.log.info(`task list not loaded yet; holding ${entries.length} published commit(s)`);
+      return entries;
+    }
+    const held = new Map<string, PendingCommit>();
 
     // Numeric normalisation makes T012 and T12 the same ref. If a project
     // genuinely contains both as distinct tasks, neither can be auto-closed —
@@ -329,7 +345,7 @@ export class GitWatcher {
           continue;
         }
 
-        await this.writer.setStatus({
+        const written = await this.writer.setStatus({
           projectId,
           taskId: entry.task.id,
           // A published commit is evidence of implementation, not of
@@ -344,9 +360,19 @@ export class GitWatcher {
           },
           silent: true,
         });
-        this.log.info(`closed ${ref} from ${commit.sha.slice(0, 8)}`);
+        if (written) {
+          this.log.info(`closed ${ref} from ${commit.sha.slice(0, 8)}`);
+        } else if (!this.isSignedIn()) {
+          this.log.warn(
+            `${ref} from ${commit.sha.slice(0, 8)} not closed: not signed in; will retry after sign-in`,
+          );
+          held.set(commit.sha, commit);
+        }
+        // Otherwise the cloud refused it (the writer has logged why); retrying
+        // an answer that will not change would only repeat it.
       }
     }
+    return [...held.values()];
   }
 
   private currentUserId(): string | undefined {

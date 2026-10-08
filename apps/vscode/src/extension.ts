@@ -236,7 +236,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void setSignedInContext(current !== null);
       showTitle();
       if (current) {
-        void store.refresh().then(() => writer.flush());
+        // Then look at git again: commits held while signed out can close now.
+        void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
         void roster.refresh();
       } else {
         void store.clear();
@@ -503,6 +504,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => readConfig().commitScanLimit,
     () => readConfig().closeTasksOn,
     defaultBranchFor,
+    () => session.read() !== null,
   );
   context.subscriptions.push(watcher, watcher.onDidChangePending(() => tree.refresh()));
   watcher.start();
@@ -511,6 +513,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await store.refresh();
     await roster.refresh();
     await writer.flush();
+    // The scan `watcher.start()` ran above found an empty task list: look
+    // again now that it is loaded (commits it held are retried here).
+    await watcher.scanAll();
     refreshStatusBar();
   }
 

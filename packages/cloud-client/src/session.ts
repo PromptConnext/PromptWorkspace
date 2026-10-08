@@ -95,6 +95,17 @@ export class SessionStore {
     this.emit(null);
   }
 
+  /** Sign out only if the stored refresh token is still `rejected`, read
+   *  immediately before deleting. Every editor window shares these secrets, so
+   *  an unconditional `clear()` after a rejection can delete the session a
+   *  concurrent window has just stored. Returns whether it cleared. */
+  async clearIfRefreshToken(rejected: string): Promise<boolean> {
+    const current = await this.secrets.get(REFRESH_SECRET);
+    if (current !== undefined && current !== rejected) return false;
+    await this.clear();
+    return true;
+  }
+
   onDidChange(listener: (s: CloudSession | null) => void): { dispose(): void } {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };

@@ -317,6 +317,126 @@ test("a refresh rejected because another window already rotated the token does n
   );
 });
 
+test("a winner that stores a moment after the rejection is still adopted", async () => {
+  let session!: SessionStore;
+  await withServer(
+    (req, res) => {
+      if (req.url?.startsWith("/auth/v1/token")) {
+        // The other window's store lands ~250 ms after our rejection.
+        setTimeout(() => {
+          void session.store({ mode: "supabase", userId: "u1" }, "access-2", "r2");
+        }, 250);
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error_code: "refresh_token_not_found" }));
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if (req.headers.authorization === "Bearer access-2") {
+        res.end("[]");
+        return;
+      }
+      res.statusCode = 401;
+      res.end(JSON.stringify({ detail: "invalid_token" }));
+    },
+    async (base) => {
+      const made = makeClient(base, base);
+      session = made.session;
+      await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+      assert.deepEqual(await made.client.listAssignedTasks(), []);
+      assert.equal(session.read()?.userId, "u1");
+    },
+  );
+});
+
+test("a rotated refresh token with no usable access token yet is not a sign-out", async () => {
+  let session!: SessionStore;
+  await withServer(
+    async (req, res) => {
+      if (req.url?.startsWith("/auth/v1/token")) {
+        // Refresh token rotated, access token still the stale one.
+        await session.store({ mode: "supabase", userId: "u1" }, undefined, "r2");
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error_code: "refresh_token_not_found" }));
+        return;
+      }
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ detail: "invalid_token" }));
+    },
+    async (base) => {
+      const made = makeClient(base, base);
+      session = made.session;
+      await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+      await assert.rejects(() => made.client.listAssignedTasks());
+      assert.equal(session.read()?.userId, "u1", "must not sign the other window out");
+      assert.equal(await session.refreshToken(), "r2");
+    },
+  );
+});
+
+test("a 429 from the auth server does NOT sign the user out", async () => {
+  await withServer(
+    (req, res) => {
+      if (req.url?.startsWith("/auth/v1/token")) {
+        res.statusCode = 429;
+        res.end(JSON.stringify({ error_code: "over_request_rate_limit" }));
+        return;
+      }
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ detail: "invalid_token" }));
+    },
+    async (base) => {
+      const { client, session } = makeClient(base, base);
+      await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+      await assert.rejects(() => client.listAssignedTasks());
+      assert.equal(session.read()?.userId, "u1", "rate limiting is transient");
+      assert.equal(await session.refreshToken(), "r0");
+    },
+  );
+});
+
+test("a 401 for a token another window has already replaced skips the refresh", async () => {
+  let refreshes = 0;
+  let session!: SessionStore;
+  await withServer(
+    async (req, res) => {
+      if (req.url?.startsWith("/auth/v1/token")) {
+        refreshes += 1;
+        res.statusCode = 400;
+        res.end("{}");
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if (req.headers.authorization === "Bearer access-2") {
+        res.end("[]");
+        return;
+      }
+      // The first request carried the old token; meanwhile another window
+      // stored a fresh pair.
+      await session.store({ mode: "supabase", userId: "u1" }, "access-2", "r2");
+      res.statusCode = 401;
+      res.end(JSON.stringify({ detail: "invalid_token" }));
+    },
+    async (base) => {
+      const made = makeClient(base, base);
+      session = made.session;
+      await session.store({ mode: "supabase", userId: "u1" }, "access-1", "r1");
+      assert.deepEqual(await made.client.listAssignedTasks(), []);
+      assert.equal(refreshes, 0, "the stored token was already newer");
+    },
+  );
+});
+
+test("clearIfRefreshToken leaves a session another window has since rotated", async () => {
+  const { session } = makeClient("http://unused");
+  await session.store({ mode: "supabase", userId: "u1" }, "a1", "r1");
+  assert.equal(await session.clearIfRefreshToken("r0"), false);
+  assert.equal(session.read()?.userId, "u1");
+  assert.equal(await session.clearIfRefreshToken("r1"), true);
+  assert.equal(session.read(), null);
+});
+
 test("a 5xx from the auth server does NOT sign the user out", async () => {
   await withServer(
     (req, res) => {

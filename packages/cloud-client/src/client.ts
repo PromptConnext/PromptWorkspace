@@ -39,6 +39,11 @@ export interface AssignedTaskQuery {
   limit?: number;
 }
 
+/** How long to look for another window's rotated session after a rejected
+ *  refresh: three looks, 200 ms apart. */
+const ROTATION_LOOKS = 3;
+const ROTATION_LOOK_MS = 200;
+
 export class CloudClient {
   private readonly deps: CloudClientDeps;
   // Supabase ROTATES the refresh token on every use, so two concurrent
@@ -48,7 +53,7 @@ export class CloudClient {
   // the least obvious and most load-bearing thing in the original file.)
   // It only coalesces inside one process. Every editor window runs its own
   // client over the same SecretStorage, so a rejection must also be checked
-  // against what another window has since stored: see `adoptRotatedSession`.
+  // against what another window has since stored: see `awaitRotatedSession`.
   private inFlightRefresh: Promise<string | null> | null = null;
 
   constructor(deps: CloudClientDeps) {
@@ -68,9 +73,10 @@ export class CloudClient {
     const session = this.deps.session.read();
     if (!session) throw new CloudNotLoggedInError();
 
-    let res = await this.request(apiUrl, path, init, await this.authHeaders(session));
+    const headers = await this.authHeaders(session);
+    let res = await this.request(apiUrl, path, init, headers);
     if (res.status === 401 && session.mode === "supabase") {
-      const token = await this.refreshSession();
+      const token = await this.refreshSession(headers.authorization?.replace(/^Bearer /, ""));
       if (token) {
         res = await this.request(apiUrl, path, init, {
           authorization: `Bearer ${token}`,
@@ -118,15 +124,21 @@ export class CloudClient {
 
   // ------------------------------------------------------------------- auth
 
-  private refreshSession(): Promise<string | null> {
+  private refreshSession(rejectedAccess?: string): Promise<string | null> {
     if (this.inFlightRefresh) return this.inFlightRefresh;
-    this.inFlightRefresh = this.doRefresh().finally(() => {
+    this.inFlightRefresh = this.doRefresh(rejectedAccess).finally(() => {
       this.inFlightRefresh = null;
     });
     return this.inFlightRefresh;
   }
 
-  private async doRefresh(): Promise<string | null> {
+  private async doRefresh(rejectedAccess?: string): Promise<string | null> {
+    // Another window may have refreshed since this request was built: if the
+    // stored access token is not the one that just got a 401, use it and leave
+    // the refresh token alone. This removes most of the cross-window race.
+    const stored = await this.deps.session.accessToken();
+    if (rejectedAccess && stored && stored !== rejectedAccess) return stored;
+
     const refreshToken = await this.deps.session.refreshToken();
     if (!refreshToken) return null;
     const session = this.deps.session.read();
@@ -140,15 +152,17 @@ export class CloudClient {
         // Rejected, but not necessarily gone: another window may have won the
         // rotation and stored the new pair. Only a rejection of the token that
         // is still the stored one is definitive.
-        const rotated = await this.adoptRotatedSession(refreshToken);
-        if (rotated !== undefined) {
+        const rotation = await this.awaitRotatedSession(refreshToken, rejectedAccess);
+        if (rotation.rotated) {
           this.deps.log.info("refresh lost the rotation to another window; using its session");
-          return rotated;
+          return rotation.accessToken;
         }
         // Definitively rejected: the session is gone, so say so. Any other
         // failure is treated as "offline" and must NOT sign the user out.
         this.deps.log.warn(`refresh rejected, signing out: ${err.message}`);
-        await this.deps.session.clear();
+        // Compare-and-clear: sign out only if the stored token is still the
+        // rejected one, read immediately before deleting.
+        await this.deps.session.clearIfRefreshToken(refreshToken);
       } else {
         this.deps.log.info(`refresh failed (offline?): ${String(err)}`);
       }
@@ -166,20 +180,32 @@ export class CloudClient {
    * rejecting 6 ms apart, minutes after each sign-in.)
    *
    * So a rejection is checked against the store first. If the stored refresh
-   * token is no longer the one that was rejected, someone else rotated it and
-   * their access token is already stored (the writer stores it first); return
-   * that. A short second look covers the winner not having stored yet.
-   * `undefined` means nothing changed: the rejection is real.
+   * token is no longer the one that was rejected, someone else rotated it. The
+   * writer stores the access token before the refresh token, but storage is
+   * shared across processes and only eventually consistent, so the new access
+   * token is looked for for a moment rather than trusted to be there.
+   * `rotated: false` means the token never changed: the rejection is real.
    */
-  private async adoptRotatedSession(rejected: string): Promise<string | null | undefined> {
-    for (let look = 0; look < 2; look++) {
+  private async awaitRotatedSession(
+    rejected: string,
+    staleAccess?: string,
+  ): Promise<{ rotated: true; accessToken: string | null } | { rotated: false }> {
+    let rotated = false;
+    for (let look = 0; look < ROTATION_LOOKS; look++) {
       const current = await this.deps.session.refreshToken();
       if (current && current !== rejected) {
-        return (await this.deps.session.accessToken()) ?? null;
+        rotated = true;
+        const access = await this.deps.session.accessToken();
+        if (access && access !== staleAccess) return { rotated: true, accessToken: access };
       }
-      if (look === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+      if (look < ROTATION_LOOKS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, ROTATION_LOOK_MS));
+      }
     }
-    return undefined;
+    // Rotated by someone else but no usable access token yet: not a sign-out,
+    // and not a token either. The caller's retry is skipped; the next call
+    // starts from the stored (rotated) pair.
+    return rotated ? { rotated: true, accessToken: null } : { rotated: false };
   }
 
   async supabaseRefresh(
@@ -197,9 +223,10 @@ export class CloudClient {
     );
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      // 4xx from the auth server means this refresh token will never work
-      // again; 5xx or a network throw might.
-      if (res.status >= 400 && res.status < 500) {
+      // 400/401/403 from the auth server mean this refresh token will never
+      // work again; 408/429 (N windows refreshing at once is exactly when
+      // Supabase rate-limits), 5xx or a network throw might.
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
         throw new CloudRefreshInvalidError(text || `supabase HTTP ${res.status}`);
       }
       throw new Error(text || `supabase HTTP ${res.status}`);

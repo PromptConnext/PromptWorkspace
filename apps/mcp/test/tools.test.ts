@@ -636,6 +636,25 @@ test("an unreachable cloud queues the write instead of failing it", async () => 
   );
 });
 
+test("a 401 is the session, not a refusal: the write is queued, not dropped", async () => {
+  // A 401 that survives the client's refresh means the session is gone for
+  // now. Reporting it as "refused" discarded a close that a re-login would
+  // have let through.
+  await withTools(
+    async ({ call, queued }) => {
+      const result = await call("close_task", {
+        task_id: "task-1",
+        status: "implemented",
+        commit_sha: "deadbeef",
+      });
+      assert.equal(result.isError, undefined);
+      assert.match(bodyOf(result), /queued rather than lost/);
+      assert.equal(queued().length, 1);
+    },
+    { statusReply: () => ({ code: 401, detail: "invalid_token" }) },
+  );
+});
+
 test("a second close for the same task supersedes the queued one", async () => {
   await withTools(
     async ({ call, queued }) => {

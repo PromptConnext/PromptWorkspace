@@ -78,7 +78,14 @@ export class StatusWriter {
       });
       return { kind: "written" };
     } catch (err) {
-      if (err instanceof CloudHttpError && err.status >= 400 && err.status < 500) {
+      // 401 is the session, not a verdict on the write: queue it like any
+      // other transient failure instead of reporting it as refused.
+      if (
+        err instanceof CloudHttpError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 401
+      ) {
         this.log.warn(`status write refused (${err.status}): ${err.message}`);
         return { kind: "refused", message: explain(err) };
       }

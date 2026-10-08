@@ -55,7 +55,14 @@ export class StatusWriter {
       await this.store.refresh();
       return true;
     } catch (err) {
-      if (err instanceof CloudHttpError && err.status >= 400 && err.status < 500) {
+      // 401 is the session, not a verdict on the write: it is queued like any
+      // other transient failure instead of being discarded as refused.
+      if (
+        err instanceof CloudHttpError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 401
+      ) {
         if (previous) this.store.applyLocalStatus(req.taskId, previous);
         const message = this.explain(err);
         this.log.warn(`status write refused (${err.status}): ${err.message}`);
