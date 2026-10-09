@@ -10,6 +10,12 @@
 import * as vscode from "vscode";
 import type { API, GitExtension, Repository } from "./git";
 import type { LoggerLike } from "@promptworkspace/cloud-client";
+import { KeyedDebounce, REMOTE_REF_GLOBS } from "./remoteRefs.ts";
+
+/** How long a burst of remote-ref writes is allowed to settle before one
+ *  `status()`. Short: the whole point is to beat the Git extension's own
+ *  refresh, and gitWatcher.ts debounces its scan again after the event. */
+const REMOTE_REF_SETTLE_MS = 1_000;
 
 export interface RemoteRef {
   name: string;
@@ -117,6 +123,7 @@ class VscodeGitBridge implements GitBridge {
   // made `extension.ts` invoke `applyPendingClone()` twice concurrently with
   // the same pending record (see projectLink.ts's reentrancy guard).
   private readonly watched = new Set<string>();
+  private readonly statusRefresh = new KeyedDebounce(REMOTE_REF_SETTLE_MS);
 
   constructor(logger: LoggerLike) {
     this.logger = logger;
@@ -239,6 +246,7 @@ class VscodeGitBridge implements GitBridge {
     this.stateListeners.clear();
     this.openListeners.clear();
     this.watched.clear();
+    this.statusRefresh.dispose();
   }
 
   private watch(repo: Repository): void {
@@ -260,6 +268,35 @@ class VscodeGitBridge implements GitBridge {
         for (const listener of this.stateListeners) listener(changed);
       }),
     );
+    this.watchRemoteRefs(repo, key);
+  }
+
+  /** Finding #44: a push or fetch made in a terminal rewrites these files;
+   *  asking for a fresh status recomputes `ahead`, and the resulting state
+   *  event reaches gitWatcher.ts like any other. Best-effort: a watcher the
+   *  host refuses costs us only the speed-up. */
+  private watchRemoteRefs(repo: Repository, key: string): void {
+    const refresh = () =>
+      this.statusRefresh.trigger(key, () => {
+        repo.status().catch((err: unknown) => {
+          this.logger.info(`status refresh after a remote-ref change failed: ${String(err)}`);
+        });
+      });
+    for (const glob of REMOTE_REF_GLOBS) {
+      try {
+        const watcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(repo.rootUri, glob),
+        );
+        this.disposables.push(
+          watcher,
+          watcher.onDidCreate(refresh),
+          watcher.onDidChange(refresh),
+          watcher.onDidDelete(refresh),
+        );
+      } catch (err) {
+        this.logger.info(`cannot watch ${glob} in ${repo.rootUri.fsPath}: ${String(err)}`);
+      }
+    }
   }
 }
 
