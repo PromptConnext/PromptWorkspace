@@ -22,23 +22,32 @@ from app.delivery.decisions import (
 from app.models.schemas import Decision, GraphUpsertRequest, RequirementStatus, SpecStatus
 
 
+def document_hash(content: str | None) -> str | None:
+    """The hash an approval binds for a stage document's text; None for a
+    missing or blank document, which there is nothing to approve in."""
+    if content is None or not content.strip():
+        return None
+    return content_hash(content)
+
+
 def current_hash(repo: Repository, project_id: str, stage: str) -> str | None:
     doc = repo.get_stage_document(project_id, stage)
-    if doc is None or not doc.content.strip():
-        return None
-    return content_hash(doc.content)
+    return document_hash(doc.content if doc else None)
 
 
 def stage_hashes(
     repo: Repository, project_id: str, known: dict[str, str | None] | None = None
 ) -> dict[str, str | None]:
     """The current hash of every approval subject stage, keyed by stage.
-    `known` carries hashes the caller already read in this request, so each
-    stage document is fetched once (each read is a database round trip)."""
+    `known` carries hashes the caller already read in this request; the rest
+    come from one repository read (each read is a database round trip)."""
     hashes = dict(known or {})
-    for stage in STAGE_OF.values():
-        if stage not in hashes:
-            hashes[stage] = current_hash(repo, project_id, stage)
+    missing = [stage for stage in STAGE_OF.values() if stage not in hashes]
+    if missing:
+        docs = repo.list_stage_documents(project_id, missing)
+        for stage in missing:
+            doc = docs.get(stage)
+            hashes[stage] = document_hash(doc.content if doc else None)
     return hashes
 
 
@@ -66,12 +75,16 @@ def decisions_state(
     return states_of(decisions, stage_hashes(repo, project_id, hashes))
 
 
-def plan_state(repo: Repository, project_id: str) -> ApprovalState:
-    """The plan approval alone: reads only the `tasks` document, not both."""
-    stage = STAGE_OF["plan_approval"]
-    return approval_state(
-        repo.list_decisions(project_id), "plan_approval", current_hash(repo, project_id, stage)
+def plan_state(
+    repo: Repository, project_id: str, tasks_content: str | None = None
+) -> ApprovalState:
+    """The plan approval alone: reads only the `tasks` document, not both, and
+    not even that when the caller passes the text it already read."""
+    tasks_hash = (
+        document_hash(tasks_content) if tasks_content is not None
+        else current_hash(repo, project_id, STAGE_OF["plan_approval"])
     )
+    return approval_state(repo.list_decisions(project_id), "plan_approval", tasks_hash)
 
 
 def sync_approval_mirrors(

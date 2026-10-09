@@ -3,11 +3,13 @@
 Every repository method is one PostgREST request on the Supabase adapter
 (`get_graph` is several), and the API and the database do not share a region,
 so each call costs a cross-region round trip (~170-200 ms). These bounds pin
-the counts after the dedupe in plan 0029's latency fix; raising one should be
-a deliberate choice, not an accident of a refactor. The two decision writes
-each read both stage documents after their write (one read more than the
-minimum), so the snapshot and the approval mirror reflect an edit that lands
-while the request runs.
+the counts after the dedupe in plan 0029's latency fix and the trust-test
+wave 2 (both stage documents in one read; the caller's role taken from the
+member list the routing context reads anyway); raising one should be a
+deliberate choice, not an accident of a refactor. The two decision writes
+each read the stage documents again after their write (one read more than
+the minimum), so the snapshot and the approval mirror reflect an edit that
+lands while the request runs.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from contextlib import contextmanager
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.sync import _require_delivery_gates
+from app.delivery.approvals import stage_hashes
 from app.main import create_app
 from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument
 
@@ -68,6 +72,11 @@ def counting(client: TestClient) -> Iterator[CountingRepository]:
         client.app.state.repository = inner
 
 
+def membership_reads(calls: list[str]) -> int:
+    """Reads that answer "is the caller a member, and in what role"."""
+    return calls.count("get_membership") + calls.count("list_members")
+
+
 @pytest.fixture
 def client() -> TestClient:
     with TestClient(create_app()) as c:
@@ -101,8 +110,8 @@ def test_requesting_a_decision(client, project):
                           headers=BOB)
     assert res.status_code == 200, res.text
     print("POST /decisions:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 9, repo.calls
-    assert repo.calls.count("get_membership") == 1, repo.calls
+    assert len(repo.calls) <= 7, repo.calls
+    assert membership_reads(repo.calls) == 1, repo.calls
 
 
 def test_approving_a_decision(client, project):
@@ -113,8 +122,8 @@ def test_approving_a_decision(client, project):
                           json={"outcome": "approved"}, headers=ALICE)
     assert res.status_code == 200, res.text
     print("POST /decisions/{id}/resolve:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 12, repo.calls
-    assert repo.calls.count("get_membership") == 1, repo.calls
+    assert len(repo.calls) <= 10, repo.calls
+    assert membership_reads(repo.calls) == 1, repo.calls
     assert repo.calls.count("list_decisions") + repo.calls.count("get_decision") == 1
 
 
@@ -125,8 +134,8 @@ def test_listing_decisions(client, project):
         res = client.get(f"/projects/{project}/decisions", headers=BOB)
     assert res.status_code == 200, res.text
     print("GET /decisions:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 7, repo.calls
-    assert repo.calls.count("get_membership") == 1, repo.calls
+    assert len(repo.calls) <= 5, repo.calls
+    assert membership_reads(repo.calls) == 1, repo.calls
     assert repo.calls.count("list_decisions") == 1, repo.calls
 
 
@@ -153,5 +162,29 @@ def test_listing_my_inbox_reads_no_stage_documents(client, project):
     print("GET /me/decisions:", len(repo.calls), repo.calls)
     assert repo.calls.count("get_stage_document") == 0, repo.calls
     assert repo.calls.count("list_decisions") == 1, repo.calls
-    assert len(repo.calls) <= 8, repo.calls
+    assert len(repo.calls) <= 5, repo.calls
 
+
+
+def test_stage_hashes_makes_one_repository_call(client, project):
+    with counting(client) as repo:
+        hashes = stage_hashes(repo, project)
+    assert repo.calls == ["list_stage_documents"]
+    assert set(hashes) == {"specify", "tasks"}
+    assert hashes["specify"] is not None and hashes["tasks"] is not None
+
+
+def test_the_create_repository_gate_reads_the_stage_documents_once(client, project):
+    inner = client.app.state.repository
+    pid = project
+    ws = inner.get_project(pid).workspace_id
+    inner.upsert_stage_document(pid, ws, "constitution", "# Rules", "alice")
+    did = client.post(f"/projects/{pid}/decisions", json={"kind": "plan_approval"},
+                      headers=BOB).json()["id"]
+    res = client.post(f"/projects/{pid}/decisions/{did}/resolve",
+                      json={"outcome": "approved"}, headers=ALICE)
+    assert res.status_code == 200, res.text
+    with counting(client) as repo:
+        _require_delivery_gates(repo, pid)  # passes: constitution, tasks, approved plan
+    print("create-repository gates:", len(repo.calls), repo.calls)
+    assert repo.calls == ["list_stage_documents", "list_decisions"], repo.calls

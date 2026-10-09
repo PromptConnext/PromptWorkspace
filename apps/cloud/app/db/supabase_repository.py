@@ -22,6 +22,7 @@ writes take the service-role client.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from app.db.merge import _as_dt, merge_entity
@@ -1558,6 +1559,21 @@ class SupabaseRepository(Repository):
         )
         rows = res.data or []
         return StageDocument(**rows[0]) if rows else None
+
+    def list_stage_documents(
+        self, project_id: str, stages: Sequence[str]
+    ) -> dict[str, StageDocument]:
+        if not stages:
+            return {}
+        res = (
+            self._table(_STAGE_DOCUMENTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .in_("stage", list(stages))
+            .execute()
+        )
+        docs = (StageDocument(**row) for row in (res.data or []))
+        return {doc.stage: doc for doc in docs}
 
     def upsert_stage_document(
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str

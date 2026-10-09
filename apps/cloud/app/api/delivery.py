@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from app.api._guards import require_admin, require_project, require_project_role
+from app.api._guards import require_admin, require_project, require_project_members
 from app.db.repository import DeliveryStoreUnavailable, Repository
 from app.delivery.approvals import (
     current_hash,
@@ -38,7 +38,7 @@ from app.delivery.decisions import (
     latest_decision,
 )
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import Decision, Role, utcnow
+from app.models.schemas import Decision, Project, Role, WorkspaceMember, utcnow
 
 logger = logging.getLogger("promptworkspace.delivery")
 
@@ -242,14 +242,13 @@ def decision_out(
     )
 
 
-def _routing_context(repo: Repository, project, user: User, role: Role | None = None):
-    """Who may resolve what. Pass the caller's `role` when a guard already
-    read it (`require_project_role`); it is fetched only when omitted."""
+def _routing_context(
+    repo: Repository, project: Project, role: Role, members: list[WorkspaceMember]
+):
+    """Who may resolve what, from the caller's `role` and the workspace
+    `members` that `require_project_members` already read."""
     roles = repo.list_project_roles(project.id)
-    member_ids = {m.user_id for m in repo.list_members(project.workspace_id)}
-    if role is None:
-        role = repo.get_membership(project.workspace_id, user.id)
-    return roles, member_ids, role == Role.admin
+    return roles, {m.user_id for m in members}, role == Role.admin
 
 
 def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
@@ -294,8 +293,8 @@ def list_project_decisions(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionsOut:
-    project, role = require_project_role(repo, project_id, user)
-    roles, member_ids, is_admin = _routing_context(repo, project, user, role)
+    project, role, members = require_project_members(repo, project_id, user)
+    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
     decisions = repo.list_decisions(project_id)
     hashes = stage_hashes(repo, project_id)
     keep = content_carriers(decisions)
@@ -316,7 +315,7 @@ def request_decision(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
-    project, role = require_project_role(repo, project_id, user)
+    project, role, members = require_project_members(repo, project_id, user)
     stage = STAGE_OF[body.kind]
     # One read gives the hash and the text it covers, so the stored snapshot
     # is exactly the document the hash binds.
@@ -326,7 +325,7 @@ def request_decision(
     current = content_hash(document.content)
     if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
-    roles, member_ids, is_admin = _routing_context(repo, project, user, role)
+    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin)
 
@@ -373,7 +372,7 @@ def resolve_decision(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
-    project, role = require_project_role(repo, project_id, user)
+    project, role, members = require_project_members(repo, project_id, user)
     # The whole list, not `get_decision`: the same one request, and the
     # approval states, the mirror and the snapshot all need it afterwards.
     decisions = repo.list_decisions(project_id)
@@ -382,7 +381,7 @@ def resolve_decision(
         raise HTTPException(status_code=404, detail="decision_not_found")
     if decision.status != "open":
         raise HTTPException(status_code=409, detail="decision_not_open")
-    roles, member_ids, is_admin = _routing_context(repo, project, user, role)
+    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
     if not can_resolve(decision, user.id, roles, member_ids, is_admin):
         raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
     current = current_hash(repo, project_id, decision.subject_stage)

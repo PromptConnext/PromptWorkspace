@@ -33,7 +33,14 @@ from fastapi import HTTPException
 
 from app.db.repository import Repository
 from app.dependencies import User
-from app.models.schemas import GraphUpsertRequest, Project, Role, TaskStatus, Workspace
+from app.models.schemas import (
+    GraphUpsertRequest,
+    Project,
+    Role,
+    TaskStatus,
+    Workspace,
+    WorkspaceMember,
+)
 from app.observability import tag_workspace
 
 # Every authorised request passes through one of the three guards below, which
@@ -220,3 +227,25 @@ def require_project_role(
         raise HTTPException(status_code=403, detail="not_a_member")
     tag_workspace(project.workspace_id)
     return project, role
+
+
+def role_in(members: list[WorkspaceMember], user_id: str) -> Role | None:
+    """The user's role in a workspace, from its member list already in hand."""
+    return next((m.role for m in members if m.user_id == user_id), None)
+
+
+def require_project_members(
+    repo: Repository, project_id: str, user: User
+) -> tuple[Project, Role, list[WorkspaceMember]]:
+    """`require_project_role` for a route that needs the workspace's member
+    list as well: the caller's role is read from that list, so the membership
+    check and the list are one database round trip, not two."""
+    project = repo.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    members = repo.list_members(project.workspace_id)
+    role = role_in(members, user.id)
+    if role is None:
+        raise HTTPException(status_code=403, detail="not_a_member")
+    tag_workspace(project.workspace_id)
+    return project, role, members

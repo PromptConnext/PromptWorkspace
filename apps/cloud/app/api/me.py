@@ -13,6 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from app.api._guards import role_in
 from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
 from app.delivery.decisions import can_resolve
@@ -67,7 +68,11 @@ def list_my_decisions(
             decisions = [d for d in repo.list_decisions(project.id) if d.status == "open"]
             if not decisions:
                 continue
-            roles, member_ids, is_admin = _routing_context(repo, project, user)
+            members = repo.list_members(project.workspace_id)
+            role = role_in(members, user.id)
+            if role is None:
+                continue  # left the workspace while this request ran
+            roles, member_ids, is_admin = _routing_context(repo, project, role, members)
             for decision in decisions:
                 if can_resolve(decision, user.id, roles, member_ids, is_admin):
                     items.append(

@@ -36,7 +36,7 @@ from app.api._guards import (
     require_workspace,
 )
 from app.db.repository import CrossProjectWrite, Repository
-from app.delivery.approvals import decisions_state
+from app.delivery.approvals import plan_state
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.plan_profile import StackProfile
 from app.deployments.preview_url import (
@@ -768,10 +768,8 @@ def _enqueue_initial_code_index(
 
 
 def _seed_stage_docs(repo: Repository, project_id: str) -> dict[str, str | None]:
-    return {
-        stage: (doc.content if doc else None)
-        for stage, doc in ((s, repo.get_stage_document(project_id, s)) for s in _SEED_STAGES)
-    }
+    docs = repo.list_stage_documents(project_id, _SEED_STAGES)
+    return {stage: (docs[stage].content if stage in docs else None) for stage in _SEED_STAGES}
 
 
 def _require_delivery_gates(repo: Repository, project_id: str) -> None:
@@ -780,7 +778,7 @@ def _require_delivery_gates(repo: Repository, project_id: str) -> None:
         raise HTTPException(status_code=409, detail="constitution_required")
     if not (docs["tasks"] or "").strip():
         raise HTTPException(status_code=409, detail="tasks_required")
-    if decisions_state(repo, project_id)["plan"] != "approved":
+    if plan_state(repo, project_id, docs["tasks"]) != "approved":
         raise HTTPException(status_code=409, detail="plan_approval_required")
 
 

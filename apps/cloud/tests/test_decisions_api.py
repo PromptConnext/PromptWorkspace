@@ -335,6 +335,12 @@ def _after_save_decision(monkeypatch, repo, then):
     monkeypatch.setattr(repo, "save_decision", save_then)
 
 
+def _break_stage_reads(monkeypatch, repo, boom):
+    """Every way of reading a stage document fails from now on."""
+    monkeypatch.setattr(repo, "get_stage_document", boom)
+    monkeypatch.setattr(repo, "list_stage_documents", boom)
+
+
 def test_a_failing_stage_read_after_an_approval_still_returns_it_without_a_snapshot(
     client, project, monkeypatch
 ):
@@ -345,7 +351,7 @@ def test_a_failing_stage_read_after_an_approval_still_returns_it_without_a_snaps
         raise RuntimeError("database unreachable")
 
     _after_save_decision(
-        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+        monkeypatch, repo, lambda: _break_stage_reads(monkeypatch, repo, boom)
     )
     res = _resolve(client, project, did)
 
@@ -364,7 +370,7 @@ def test_a_failing_stage_read_after_a_request_still_returns_it_without_a_snapsho
         raise RuntimeError("database unreachable")
 
     _after_save_decision(
-        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+        monkeypatch, repo, lambda: _break_stage_reads(monkeypatch, repo, boom)
     )
     res = _request(client, project, "intent_approval")
 
