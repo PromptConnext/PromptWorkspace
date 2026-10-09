@@ -691,13 +691,13 @@ async def _occurrences_segment(
         return ""
     # The search stops at its own budget or at a rate limit and keeps what it
     # counted; the user sees nothing of it, so the log is the only record.
-    if occurrences.stopped or occurrences.searched < occurrences.searchable:
+    if occurrences.stopped or occurrences.searched < occurrences.selected:
         logger.warning(
             "repo occurrences partial for project=%s reason=%s searched=%d/%d found=%d",
             project.id,
             occurrences.stopped or "error",
             occurrences.searched,
-            occurrences.searchable,
+            occurrences.selected,
             len(occurrences.found),
         )
     if not occurrences.found:

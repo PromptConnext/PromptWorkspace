@@ -895,7 +895,9 @@ def test_tasks_with_a_rate_limited_search_keep_the_partial_counts_and_log_why(
 
     async def limited_fetch(token, repo, path, sha):
         if path == "package.json":
-            raise GithubWriteError("rate limited", status_code=429)
+            raise GithubWriteError(
+                "fetch_file_content failed: 429 Too Many Requests", status_code=429
+            )
         return await real_fetch(token, repo, path, sha)
 
     github.fetch_file_content = limited_fetch
@@ -910,3 +912,25 @@ def test_tasks_with_a_rate_limited_search_keep_the_partial_counts_and_log_why(
     assert "searched 2 of 3 files" in segment
     warning = next(r.getMessage() for r in caplog.records if "occurrences" in r.getMessage())
     assert "rate_limit" in warning and "2/3" in warning
+
+
+def test_a_search_capped_at_the_file_limit_is_not_logged_as_a_failure(
+    client: TestClient, monkeypatch, caplog
+):
+    """searchable is every indexable file, but at most OCCURRENCE_MAX_FILES are
+    fetched: reading all of those is a complete run, so no warning."""
+    import app.imports.snapshot as snapshot_module
+
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_MAX_FILES", 2)
+
+    with caplog.at_level("WARNING", logger="promptworkspace.generation"):
+        res = _generate(client, pid, "tasks")
+
+    assert res.status_code == 200, res.text
+    _, user_content = client.app.state.generation_provider.calls[-1]
+    assert "searched 2 of 3 files" in user_content.split("[repo_occurrences]", 1)[1]
+    assert not [r for r in caplog.records if "occurrences" in r.getMessage()]

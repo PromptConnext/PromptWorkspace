@@ -711,7 +711,10 @@ class _ScriptedRepo(FakeGithubClient):
             await asyncio.sleep(60)
         if path in self.fail:
             self.fetched_files.append((repo, path, sha))
-            raise GithubWriteError(f"fake {self.fail[path]}", status_code=self.fail[path])
+            status, body = self.fail[path]
+            raise GithubWriteError(
+                f"fetch_file_content failed for {repo}/{path}: {status} {body}", status_code=status
+            )
         return await super().fetch_file_content(token, repo, path, sha)
 
 
@@ -750,11 +753,21 @@ def test_a_deadline_keeps_the_counts_already_made(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("status", [403, 429])
-def test_a_rate_limit_stops_further_fetches_and_keeps_earlier_counts(monkeypatch, status):
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (429, '{"message": "Too Many Requests"}'),
+        (403, '{"message": "API rate limit exceeded for user ID 1."}'),
+        (403, '{"message": "You have exceeded a secondary rate limit. Please wait."}'),
+        (403, '{"message": "Resource not accessible by personal access token"}'),
+    ],
+)
+def test_a_rate_limit_stops_further_fetches_and_keeps_earlier_counts(
+    monkeypatch, status, body
+):
     monkeypatch.setattr(snapshot_module, "OCCURRENCE_FETCH_CONCURRENCY", 1)
     files = {f"src/m{i}.ts": "ACME" for i in range(10)}
-    fake = _scripted(files, fail={"src/m2.ts": status})
+    fake = _scripted(files, fail={"src/m2.ts": (status, body)})
 
     occurrences = asyncio.run(
         repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
@@ -774,7 +787,7 @@ def test_a_rate_limit_stops_further_fetches_and_keeps_earlier_counts(monkeypatch
 
 def test_another_failed_file_does_not_stop_the_search():
     files = {f"src/m{i}.ts": "ACME" for i in range(4)}
-    fake = _scripted(files, fail={"src/m1.ts": 404})
+    fake = _scripted(files, fail={"src/m1.ts": (404, "Not Found")})
 
     occurrences = asyncio.run(
         repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
@@ -792,3 +805,54 @@ def test_a_complete_search_reports_no_stop():
     )
     assert occurrences.stopped is None
     assert (occurrences.searched, occurrences.searchable) == (2, 2)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"message": "This API returns blobs up to 1 MB in size.", '
+        '"errors": [{"code": "too_large"}]}',
+        '{"message": "Access to this path is blocked."}',
+    ],
+)
+def test_a_403_for_one_file_is_skipped_and_the_search_carries_on(monkeypatch, body):
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_FETCH_CONCURRENCY", 1)
+    files = {f"src/m{i}.ts": "ACME" for i in range(6)}
+    fake = _scripted(files, fail={"src/m2.ts": (403, body)})
+
+    occurrences = asyncio.run(
+        repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+
+    assert occurrences.stopped is None
+    assert len(fake.fetched_files) == 6
+    assert (occurrences.searched, occurrences.searchable) == (5, 6)
+    assert [path for path, _n in occurrences.found[0][1]] == [
+        f"src/m{i}.ts" for i in (0, 1, 3, 4, 5)
+    ]
+
+
+def test_no_searchable_file_returns_an_empty_result():
+    """Only lockfiles: nothing passes the code-index filter, so nothing is
+    fetched and nothing raises."""
+    fake = _scripted({})
+    occurrences = asyncio.run(
+        repo_occurrences(
+            fake, "tok", REPO, "abc123", ["package-lock.json", "x.lock"], ["ACME"]
+        )
+    )
+    assert fake.fetched_files == []
+    assert occurrences.found == []
+    assert (occurrences.searched, occurrences.searchable, occurrences.selected) == (0, 0, 0)
+    assert occurrences.stopped is None
+
+
+def test_a_capped_search_reports_what_it_selected(monkeypatch):
+    """Past OCCURRENCE_MAX_FILES the rest are not fetched: `selected` is what
+    was meant to be read, so a full read of it is not a failure."""
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_MAX_FILES", 2)
+    files = {f"src/m{i}.ts": "ACME" for i in range(3)}
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+    assert (occurrences.searched, occurrences.selected, occurrences.searchable) == (2, 2, 3)

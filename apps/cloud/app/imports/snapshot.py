@@ -643,9 +643,19 @@ OCCURRENCE_FETCH_CONCURRENCY = 8
 # watching nothing (and, in a deploy, time against the server's drain). Past
 # this the files counted so far are used.
 OCCURRENCE_BUDGET_SECONDS = 8.0
-# GitHub answers these when the token is rate limited or out of scope: the
-# next fetch would fail the same way, so none is made.
-_RATE_LIMIT_STATUSES = (403, 429)
+
+
+def _ends_the_search(exc: GithubWriteError) -> bool:
+    """Whether a failed fetch means the next one would fail the same way: a 429,
+    or a 403 whose body says the token is rate limited (GitHub's primary and
+    secondary limits both do) or is out of scope. Any other 403 (an oversize
+    file, a blocked path) is about that one file and the search carries on."""
+    if exc.status_code == 429:
+        return True
+    if exc.status_code == 403:
+        message = str(exc).lower()
+        return "rate limit" in message or "resource not accessible" in message
+    return False
 
 # "double", “curly”, `backticked` or 'single' quoted, 3-64 characters on one
 # line. A single quote must stand outside a word, so an apostrophe in "the
@@ -677,13 +687,16 @@ def quoted_strings(text: str, limit: int = OCCURRENCE_CANDIDATES) -> list[str]:
 @dataclass(frozen=True)
 class RepoOccurrences:
     """`found` is (string, [(path, count), ...]) per string with a hit, files
-    by count then path; `searched` of `searchable` files were read. `stopped`
-    is why the search ended early — "timeout" or "rate_limit" — or None."""
+    by count then path; `searched` of `searchable` files were read, `selected`
+    being the share of `searchable` that was meant to be (OCCURRENCE_MAX_FILES
+    at most). `stopped` is why the search ended early — "timeout" or
+    "rate_limit" — or None."""
 
     found: list[tuple[str, list[tuple[str, int]]]]
     searched: int
     searchable: int
     stopped: str | None = None
+    selected: int = 0
 
 
 def _counts_in(content: str, needles: list[str]) -> dict[str, int]:
@@ -728,13 +741,15 @@ async def repo_occurrences(
                 content = await github_client.fetch_file_content(token, repo, path, sha)
             except GithubWriteError as exc:
                 counted[path] = None
-                if exc.status_code in _RATE_LIMIT_STATUSES:
+                if _ends_the_search(exc):
                     stopped = "rate_limit"
                 return
             counted[path] = _counts_in(content, needles)
 
     searchable = indexable_code_paths(paths, len(paths))
     selected = searchable[:OCCURRENCE_MAX_FILES]
+    if not selected:
+        return RepoOccurrences(found=[], searched=0, searchable=0)
     tasks = [asyncio.create_task(count(p)) for p in selected]
     budget = OCCURRENCE_BUDGET_SECONDS if budget_seconds is None else budget_seconds
     try:
@@ -764,6 +779,7 @@ async def repo_occurrences(
         searched=sum(1 for c in counted.values() if c is not None),
         searchable=len(searchable),
         stopped=stopped,
+        selected=len(selected),
     )
 
 
