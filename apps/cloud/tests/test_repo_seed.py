@@ -387,3 +387,43 @@ def test_candidate_paths_cover_every_target_fit_can_choose():
     for existing in (frozenset(), frozenset({"AGENTS.md", ".specify/memory/constitution.md"})):
         plan = fit_to_existing_repo(seed, deploy, existing)
         assert {f.path for f in plan.files} <= candidates
+
+
+# A generated tasks.md as the model writes it from the Spec Kit tasks template:
+# its header names a /specs/ folder the repository never has and calls tests
+# optional, contradicting a test-first constitution (finding #31).
+_GENERATED_TASKS = (
+    "# Tasks: Rebrand to Marketing Studio\n\n"
+    "**Input**: Design documents from `/specs/001-rebrand-marketing-studio/`\n\n"
+    "**Prerequisites**: plan.md (required), spec.md (required for user stories)\n\n"
+    "**Tests**: Tests are OPTIONAL - only include them if the specification asks for them.\n\n"
+    "**Organization**: Tasks are grouped by user story.\n\n"
+    "## Phase 1: User Story 1 - Rebrand (Priority: P1)\n\n"
+    "- [ ] T001 [US1] Replace ASSET GROW in `src/App.tsx` per specs/001-rebrand/spec.md\n"
+    "- [ ] T002 [US1] Follow the export rules in `/specs/001/plan.md`\n"
+)
+
+
+def test_the_seeded_tasks_md_has_no_spec_kit_header_boilerplate():
+    files = build_seed_files(_project(), {"tasks": _GENERATED_TASKS})
+    tasks_md = next(f.content for f in files if f.path == "docs/tasks.md")
+
+    assert "**Input**" not in tasks_md
+    assert "**Prerequisites**" not in tasks_md
+    assert "OPTIONAL" not in tasks_md
+    assert "specs/" not in tasks_md
+    # The references point at the seeded documents beside tasks.md, which sit
+    # together in docs/ (or docs/promptworkspace/ in an imported repository).
+    assert "per scope.md" in tasks_md
+    assert "`architecture.md`" in tasks_md
+    # Everything that is not boilerplate survives untouched.
+    assert tasks_md.startswith("# Tasks: Rebrand to Marketing Studio\n\n**Organization**")
+    assert "- [ ] T001 [US1] Replace ASSET GROW in `src/App.tsx`" in tasks_md
+    assert "## Phase 1: User Story 1 - Rebrand (Priority: P1)" in tasks_md
+
+
+def test_a_tests_line_that_is_not_boilerplate_is_kept():
+    tasks = "# Tasks\n\n**Tests**: Every task in src/lib adds a unit test.\n\n- [ ] T001 Do it\n"
+    files = build_seed_files(_project(), {"tasks": tasks})
+    tasks_md = next(f.content for f in files if f.path == "docs/tasks.md")
+    assert "**Tests**: Every task in src/lib adds a unit test." in tasks_md
