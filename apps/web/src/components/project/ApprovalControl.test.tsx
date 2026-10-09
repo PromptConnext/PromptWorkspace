@@ -10,8 +10,9 @@ let loadError: string | null = null;
 const refetch = vi.fn();
 const retry = vi.fn();
 const mutate = vi.fn();
-vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({
+// The control reads the shared delivery overview's decisions slice.
+vi.mock("./DeliveryOverview", () => ({
+  useDecisionsData: () => ({
     data,
     error: loadError,
     loading: data === null && loadError === null,

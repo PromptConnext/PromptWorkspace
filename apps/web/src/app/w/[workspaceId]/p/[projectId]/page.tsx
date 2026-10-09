@@ -8,6 +8,7 @@ import { TopBar } from "@/components/TopBar";
 import { PresenceBar } from "@/components/PresenceBar";
 import { GraphBrowser } from "@/components/project/GraphBrowser";
 import { DecisionsPanel } from "@/components/project/DecisionsPanel";
+import { DeliveryOverviewProvider } from "@/components/project/DeliveryOverview";
 import { DeliveryPlan } from "@/components/project/DeliveryPlan";
 import { Planner } from "@/components/project/Planner";
 import { PreviewPanel } from "@/components/project/PreviewPanel";
@@ -34,6 +35,12 @@ const TABS = [
   "Preview",
 ] as const;
 type Tab = (typeof TABS)[number];
+
+// Tabs that load their own data and open without waiting for the project
+// graph: chaining their requests behind the graph's made the Delivery tab take
+// the sum of both (trust test, finding #26). Delivery fills in task titles from
+// the graph when it arrives.
+const OPENS_WITHOUT_GRAPH: ReadonlySet<Tab> = new Set(["Delivery", "Decisions", "Preview"]);
 
 // The tab lives in `?tab=<slug>` so a refresh keeps it and the view is linkable.
 const slugOf = (t: Tab) => t.toLowerCase();
@@ -269,47 +276,52 @@ function ProjectWorkspace({
           aria-labelledby={`tab-${slugOf(tab)}`}
         >
           {/* Only the first load blocks; background refreshes keep the content up. */}
-          {loading && !graph && <TabSkeleton tab={tab} />}
-          {graph && (
-            <>
-              {tab === "Planner" && (
-                <Planner
-                  project={graph.project}
-                  projectId={projectId}
-                  onChange={refetch}
-                  onOpenTasks={() => setTab("Tasks")}
-                />
-              )}
-              {tab === "Delivery" && (
-                <DeliveryPlan graph={graph} projectId={projectId} />
-              )}
-              {tab === "Graph" && <GraphBrowser graph={graph} />}
-              {tab === "Tasks" && (
-                <TaskBoard
-                  graph={graph}
-                  workspaceId={workspaceId}
-                  projectId={projectId}
-                  onChange={refetch}
-                  onOpenPlanner={() => setTab("Planner")}
-                />
-              )}
-              {tab === "Progress" && (
-                <ProgressRollup graph={graph} projectId={projectId} />
-              )}
-              {tab === "Discussion" && (
-                <DiscussionThread
-                  graph={graph}
-                  workspaceId={workspaceId}
-                  projectId={projectId}
-                  onPosted={refetch}
-                />
-              )}
-              {tab === "Preview" && (
-                <PreviewPanel projectId={projectId} workspaceId={workspaceId} />
-              )}
-              {tab === "Decisions" && <DecisionsPanel projectId={projectId} workspaceId={workspaceId} />}
-            </>
-          )}
+          {loading && !graph && !OPENS_WITHOUT_GRAPH.has(tab) && <TabSkeleton tab={tab} />}
+          {/* One shared delivery-overview request per tab visit for the plan, the
+              approval controls and the decisions list (keyed by tab so each visit
+              loads fresh, as each surface's own request used to). */}
+          <DeliveryOverviewProvider key={tab} projectId={projectId}>
+            {tab === "Delivery" && <DeliveryPlan graph={graph} projectId={projectId} />}
+            {tab === "Decisions" && (
+              <DecisionsPanel projectId={projectId} workspaceId={workspaceId} />
+            )}
+            {tab === "Preview" && (
+              <PreviewPanel projectId={projectId} workspaceId={workspaceId} />
+            )}
+            {graph && (
+              <>
+                {tab === "Planner" && (
+                  <Planner
+                    project={graph.project}
+                    projectId={projectId}
+                    onChange={refetch}
+                    onOpenTasks={() => setTab("Tasks")}
+                  />
+                )}
+                {tab === "Graph" && <GraphBrowser graph={graph} />}
+                {tab === "Tasks" && (
+                  <TaskBoard
+                    graph={graph}
+                    workspaceId={workspaceId}
+                    projectId={projectId}
+                    onChange={refetch}
+                    onOpenPlanner={() => setTab("Planner")}
+                  />
+                )}
+                {tab === "Progress" && (
+                  <ProgressRollup graph={graph} projectId={projectId} />
+                )}
+                {tab === "Discussion" && (
+                  <DiscussionThread
+                    graph={graph}
+                    workspaceId={workspaceId}
+                    projectId={projectId}
+                    onPosted={refetch}
+                  />
+                )}
+              </>
+            )}
+          </DeliveryOverviewProvider>
         </div>
       </main>
     </>

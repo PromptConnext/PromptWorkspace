@@ -135,7 +135,7 @@ Measured on the trust stack, Marketing Studio project, hard reload of `?tab=deli
 | `GET /projects/{id}/delivery-plan` | 6260 | 1828 | after the graph finished |
 | `GET /projects/{id}/decisions` | 8093 | 2795 | after the delivery plan finished |
 
-About 11 s until the approval control left "Loading…": the three project calls ran one after the other. Single calls from the same browser: `/health` 0.64 s, `delivery-plan` 1.6 s, `decisions` 2.8 s. The chain was the web app's doing (the Delivery tab waited for the graph before mounting, and the approval control mounted only once the plan had loaded).
+About 11 s until the approval control left "Loading…": the three project calls ran one after the other. Single calls from the same browser: `/health` 0.64 s, `delivery-plan` 1.6 s, `decisions` 2.8 s. The chain was the web app's doing (the Delivery tab waited for the graph before mounting, and the approval control mounted only once the plan had loaded). Since then the Delivery and Decisions tabs open without waiting for the graph and read one `GET /projects/{id}/delivery-overview` (plan, decisions, approval states and hats together), in parallel with the graph.
 
 After the region move, run the snippet on the same three tabs and add the numbers here beside these, so the two are comparable.
 

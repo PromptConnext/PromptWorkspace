@@ -210,6 +210,17 @@ describe("first load", () => {
     expect(screen.queryByText("In Progress")).not.toBeInTheDocument();
   });
 
+  it("opens Delivery and Decisions without waiting for the graph", () => {
+    // Waiting chained the tab's own requests behind the graph's (finding #26).
+    renderLoading("delivery");
+    expect(screen.getByText("delivery-view")).toBeInTheDocument();
+    expect(screen.queryByText("Loading project…")).not.toBeInTheDocument();
+    cleanup();
+    renderLoading("decisions");
+    expect(screen.getByText("decisions-view")).toBeInTheDocument();
+    expect(screen.queryByText("Loading project…")).not.toBeInTheDocument();
+  });
+
   it("holds the breadcrumb's place with a skeleton until the name arrives", () => {
     renderLoading("tasks");
     expect(screen.getByRole("navigation", { name: "crumbs" })).toHaveTextContent(

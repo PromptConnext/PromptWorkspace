@@ -62,19 +62,6 @@ def states_of(
     }
 
 
-def decisions_state(
-    repo: Repository,
-    project_id: str,
-    decisions: list[Decision] | None = None,
-    hashes: dict[str, str | None] | None = None,
-) -> dict[str, ApprovalState]:
-    """Pass `decisions` (and any `hashes`) a caller already fetched to skip
-    reading them again."""
-    if decisions is None:
-        decisions = repo.list_decisions(project_id)
-    return states_of(decisions, stage_hashes(repo, project_id, hashes))
-
-
 def plan_state(
     repo: Repository, project_id: str, tasks_content: str | None = None
 ) -> ApprovalState:

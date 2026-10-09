@@ -21,7 +21,6 @@ from app.api._guards import require_admin, require_project, require_project_memb
 from app.db.repository import DeliveryStoreUnavailable, Repository
 from app.delivery.approvals import (
     current_hash,
-    decisions_state,
     plan_state,
     stage_hashes,
     states_of,
@@ -38,7 +37,14 @@ from app.delivery.decisions import (
     latest_decision,
 )
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import Decision, Project, Role, WorkspaceMember, utcnow
+from app.models.schemas import (
+    Decision,
+    Project,
+    ProjectRole,
+    Role,
+    WorkspaceMember,
+    utcnow,
+)
 
 logger = logging.getLogger("promptworkspace.delivery")
 
@@ -77,13 +83,8 @@ class ProjectRoleUpdate(BaseModel):
     user_id: str | None
 
 
-@router.get("/projects/{project_id}/delivery-plan", response_model=DeliveryPlanOut)
-def get_delivery_plan(
-    project_id: str,
-    user: User = Depends(get_current_user),
-    repo: Repository = Depends(get_repository),
-) -> DeliveryPlanOut:
-    require_project(repo, project_id, user)
+def _plan_out(repo: Repository, project_id: str, plan_approval: ApprovalState) -> DeliveryPlanOut:
+    """The project's Changes in their waves, with the tasks each one carries."""
     changes = repo.list_delivery_changes(project_id)
     waves = wave_of(changes)
     ref_of_key = {c.key: c.ref for c in changes}
@@ -108,12 +109,23 @@ def get_delivery_plan(
             )
             for c in changes
         ],
-        plan_approval=plan_state(repo, project_id),
+        plan_approval=plan_approval,
     )
 
 
-def _roles_out(repo: Repository, project_id: str) -> list[ProjectRoleOut]:
-    holders = {r.hat: r.user_id for r in repo.list_project_roles(project_id)}
+@router.get("/projects/{project_id}/delivery-plan", response_model=DeliveryPlanOut)
+def get_delivery_plan(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeliveryPlanOut:
+    require_project(repo, project_id, user)
+    return _plan_out(repo, project_id, plan_state(repo, project_id))
+
+
+def _roles_out(roles: list[ProjectRole]) -> list[ProjectRoleOut]:
+    """Every hat, held or not, from the project's roles as read."""
+    holders = {r.hat: r.user_id for r in roles}
     return [ProjectRoleOut(hat=hat, user_id=holders.get(hat)) for hat in HATS]
 
 
@@ -124,7 +136,7 @@ def get_project_roles(
     repo: Repository = Depends(get_repository),
 ) -> list[ProjectRoleOut]:
     require_project(repo, project_id, user)
-    return _roles_out(repo, project_id)
+    return _roles_out(repo.list_project_roles(project_id))
 
 
 @router.put("/projects/{project_id}/roles/{hat}", response_model=list[ProjectRoleOut])
@@ -143,7 +155,7 @@ def put_project_role(
         repo.set_project_role(project_id, project.workspace_id, hat, body.user_id, user.id)
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
-    return _roles_out(repo, project_id)
+    return _roles_out(repo.list_project_roles(project_id))
 
 
 DecisionKindIn = Literal["intent_approval", "plan_approval"]
@@ -268,6 +280,20 @@ def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | No
         return None
 
 
+def _listing(
+    decisions: list[Decision],
+    hashes: dict[str, str | None],
+    out: Callable[..., DecisionOut],
+) -> DecisionsOut:
+    """`GET /decisions` from the project's decisions (newest first) and the
+    stage hashes as they are now."""
+    keep = content_carriers(decisions)
+    return DecisionsOut(
+        decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
+        states=states_of(decisions, hashes),
+    )
+
+
 def _mutation_out(
     decision: Decision,
     decisions: list[Decision],
@@ -277,14 +303,22 @@ def _mutation_out(
     """`decision` with the listing after the write: `decisions` are the
     project's decisions as they now stand (newest first), `hashes` the stage
     hashes read after it (no snapshot without them)."""
-    snapshot = None
-    if hashes is not None:
-        keep = content_carriers(decisions)
-        snapshot = DecisionsOut(
-            decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
-            states=states_of(decisions, hashes),
-        )
+    snapshot = _listing(decisions, hashes, out) if hashes is not None else None
     return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
+
+
+def _read_listing(
+    repo: Repository, project_id: str, user: User
+) -> tuple[DecisionsOut, list[ProjectRole]]:
+    """The project's decision listing as `user` sees it, and the project roles
+    read on the way. One membership check, and one read each of the roles, the
+    decisions and the stage documents."""
+    project, role, members = require_project_members(repo, project_id, user)
+    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
+    out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
+                  is_admin=is_admin)
+    listing = _listing(repo.list_decisions(project_id), stage_hashes(repo, project_id), out)
+    return listing, roles
 
 
 @router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
@@ -293,18 +327,32 @@ def list_project_decisions(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionsOut:
-    project, role, members = require_project_members(repo, project_id, user)
-    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
-    decisions = repo.list_decisions(project_id)
-    hashes = stage_hashes(repo, project_id)
-    keep = content_carriers(decisions)
-    return DecisionsOut(
-        decisions=[
-            decision_out(d, user_id=user.id, roles=roles, member_ids=member_ids,
-                         is_admin=is_admin, hashes=hashes, with_content=d.id in keep)
-            for d in decisions
-        ],
-        states=decisions_state(repo, project_id, decisions, hashes),
+    return _read_listing(repo, project_id, user)[0]
+
+
+class DeliveryOverviewOut(BaseModel):
+    """What the Delivery and Decisions tabs show, in one request: the
+    delivery plan, the decision listing with the approval states, and the
+    project's hats. Each part equals its own route's answer."""
+
+    plan: DeliveryPlanOut
+    decisions: list[DecisionOut]
+    states: dict[str, ApprovalState]
+    roles: list[ProjectRoleOut]
+
+
+@router.get("/projects/{project_id}/delivery-overview", response_model=DeliveryOverviewOut)
+def get_delivery_overview(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeliveryOverviewOut:
+    listing, roles = _read_listing(repo, project_id, user)
+    return DeliveryOverviewOut(
+        plan=_plan_out(repo, project_id, listing.states["plan"]),
+        decisions=listing.decisions,
+        states=listing.states,
+        roles=_roles_out(roles),
     )
 
 

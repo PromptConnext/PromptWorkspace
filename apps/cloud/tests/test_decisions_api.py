@@ -579,3 +579,36 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
     # The omitted copy still exists; only the listing leaves it out.
     assert repo.get_decision(project, "old-approved").subject_content == "content of old-approved"
 
+
+
+def test_overview_answers_the_same_data_as_the_three_routes(client, project):
+    _save_tasks(client, project)
+    intent = _request(client, project, "intent_approval").json()["id"]
+    assert _resolve(client, project, intent).status_code == 200
+    assert _request(client, project, "plan_approval").status_code == 200
+    res = client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+
+    for who in (ALICE, BOB):  # can_resolve differs per caller
+        overview = client.get(f"/projects/{project}/delivery-overview", headers=who)
+        assert overview.status_code == 200, overview.text
+        body = overview.json()
+        plan = client.get(f"/projects/{project}/delivery-plan", headers=who).json()
+        listing = client.get(f"/projects/{project}/decisions", headers=who).json()
+        roles = client.get(f"/projects/{project}/roles", headers=who).json()
+
+        assert set(body) == {"plan", "decisions", "states", "roles"}
+        assert body["plan"] == plan
+        assert body["decisions"] == listing["decisions"]
+        assert body["states"] == listing["states"]
+        assert body["roles"] == roles
+    assert body["states"] == {"intent": "approved", "plan": "pending"}
+    assert len(body["plan"]["changes"]) == 2
+
+
+def test_overview_is_for_members_only(client, project):
+    res = client.get(f"/projects/{project}/delivery-overview", headers={"X-User-Id": "eve"})
+    assert res.status_code == 403
+    res = client.get("/projects/nope/delivery-overview", headers=ALICE)
+    assert res.status_code == 404

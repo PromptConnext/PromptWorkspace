@@ -720,6 +720,14 @@ export interface ProjectRoleOut {
   user_id: string | null;
 }
 
+/** `GET /projects/{id}/delivery-overview`: what the Delivery and Decisions
+ *  tabs show, in one request. `decisions` and `states` are `GET /decisions`,
+ *  `plan` is `GET /delivery-plan`, `roles` is `GET /roles`. */
+export interface DeliveryOverview extends DecisionsOut {
+  plan: DeliveryPlan;
+  roles: ProjectRoleOut[];
+}
+
 export interface InboxItem {
   /** An open decision without the document text and `is_current`, which the
    *  inbox never reads and its API leaves out. */

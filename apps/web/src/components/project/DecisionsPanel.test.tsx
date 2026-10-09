@@ -12,16 +12,21 @@ let decisionsLoading = false;
 const retry = vi.fn();
 const refetch = vi.fn();
 const mutate = vi.fn();
-vi.mock("@/lib/hooks", async () => {
+// The panel's decisions come from the shared delivery overview; only the
+// workspace members are its own request.
+vi.mock("@/lib/hooks", () => ({
+  useCloudGet: () => ({ data: members, error: null, loading: false }),
+}));
+vi.mock("./DeliveryOverview", async () => {
   const { useState } = await import("react");
   return {
-    useCloudGet: (path: string | null) => {
-      // Like the real hook, a mutate re-renders the component that owns it.
+    useDecisionsData: () => {
+      // Like the real provider, a mutate re-renders the components reading it.
       const [, rerender] = useState(0);
       return {
-        data: path?.endsWith("/decisions") ? decisions : members,
-        error: path?.endsWith("/decisions") ? decisionsError : null,
-        loading: path?.endsWith("/decisions") ? decisionsLoading : false,
+        data: decisions,
+        error: decisionsError,
+        loading: decisionsLoading,
         refetch,
         retry,
         mutate: (next: unknown) => {

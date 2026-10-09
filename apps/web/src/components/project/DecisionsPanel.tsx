@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { Decision, DecisionsOut, WorkspaceMember } from "@/lib/types";
 import { APPROVAL_LABEL } from "./ApprovalControl";
+import { useDecisionsData } from "./DeliveryOverview";
 import { DecisionSubject } from "./DecisionSubject";
 import { memberFullName } from "./MemberChip";
 import { RetryButton } from "./RetryButton";
@@ -144,7 +145,7 @@ function DecisionRow({
 /** Plan 0029 Decisions tab: where the project's approvals stand and every
  * decision behind them, with the resolve form for decisions routed to me. */
 export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; workspaceId: string }) {
-  const { data, error, retry, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error, retry, refetch, mutate } = useDecisionsData();
   // Apply the resolve's snapshot; refetch when it carries none.
   const onResolved = (snapshot: DecisionsOut | null | undefined) =>
     snapshot ? mutate(snapshot) : refetch();

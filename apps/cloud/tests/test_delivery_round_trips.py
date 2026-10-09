@@ -149,6 +149,24 @@ def test_reading_the_delivery_plan(client, project):
     assert "get_graph" not in repo.calls  # several requests on Supabase, not one
 
 
+def test_reading_the_delivery_overview(client, project):
+    client.post(f"/projects/{project}/decisions", json={"kind": "intent_approval"},
+                headers=BOB)
+    with counting(client) as repo:
+        res = client.get(f"/projects/{project}/delivery-overview", headers=BOB)
+    assert res.status_code == 200, res.text
+    print("GET /delivery-overview:", len(repo.calls), repo.calls)
+    # The plan, the decisions and the roles together, for no more than the
+    # decisions alone plus the plan's two reads: one membership check, one
+    # read of the decisions, one of the stage documents, one of the roles.
+    assert len(repo.calls) <= 7, repo.calls
+    assert membership_reads(repo.calls) == 1, repo.calls
+    assert repo.calls.count("list_decisions") == 1, repo.calls
+    assert repo.calls.count("list_project_roles") == 1, repo.calls
+    assert repo.calls.count("list_stage_documents") == 1, repo.calls
+    assert "get_stage_document" not in repo.calls and "get_graph" not in repo.calls
+
+
 def test_listing_my_inbox_reads_no_stage_documents(client, project):
     client.post(f"/projects/{project}/decisions", json={"kind": "intent_approval"},
                 headers=BOB)

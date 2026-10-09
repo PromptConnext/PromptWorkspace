@@ -1,8 +1,8 @@
 "use client";
 
-import { useCloudGet } from "@/lib/hooks";
-import type { DeliveryChange, DeliveryPlan as Plan, ProjectGraph } from "@/lib/types";
+import type { DeliveryChange, ProjectGraph } from "@/lib/types";
 import { ApprovalControl } from "./ApprovalControl";
+import { useDeliveryPlanData } from "./DeliveryOverview";
 import { RetryButton } from "./RetryButton";
 
 const KIND_LABEL: Record<DeliveryChange["kind"], string> = {
@@ -40,10 +40,18 @@ function byTaskNumber<T extends { feature_tag?: string | null }>(tasks: T[]): T[
 }
 
 /** Plan 0029's Delivery Plan: Changes in dependency waves. Changes in one
- * wave can run in parallel; each wave waits for the one before it. */
-export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projectId: string }) {
-  const { data: plan, error, retry } = useCloudGet<Plan>(`/projects/${projectId}/delivery-plan`);
-  const taskById = new Map(graph.tasks.map((t) => [t.id, t]));
+ * wave can run in parallel; each wave waits for the one before it. The plan
+ * does not wait for the project `graph`: it shows as soon as it loads, and the
+ * graph fills in each Change's task titles when it arrives. */
+export function DeliveryPlan({
+  graph,
+  projectId,
+}: {
+  graph: ProjectGraph | null;
+  projectId: string;
+}) {
+  const { data: plan, error, retry } = useDeliveryPlanData();
+  const taskById = new Map((graph?.tasks ?? []).map((t) => [t.id, t]));
 
   if (error) {
     return (
@@ -53,13 +61,17 @@ export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projec
       </div>
     );
   }
-  if (!plan) return <p className="text-sm text-slate-500">Loading delivery plan…</p>;
+  // An empty plan reads differently with and without tasks, so it waits for
+  // the graph too.
+  if (!plan || (plan.changes.length === 0 && !graph)) {
+    return <p className="text-sm text-slate-500">Loading delivery plan…</p>;
+  }
   if (plan.changes.length === 0) {
     // Tasks saved before Changes existed (plan 0029) have none to show until
     // the tasks document is applied again.
     return (
       <p className="text-sm text-slate-500">
-        {graph.tasks.length > 0
+        {graph && graph.tasks.length > 0
           ? "Save the tasks document again in the Planner to group these tasks into Changes."
           : "No delivery plan yet. Generate tasks in the Planner; each phase becomes a Change."}
       </p>
@@ -98,6 +110,12 @@ export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projec
                 <p className="mt-1 text-sm font-medium text-slate-900">{change.title}</p>
                 {change.depends_on.length > 0 && (
                   <p className="mt-1 text-xs text-slate-500">After {change.depends_on.join(", ")}</p>
+                )}
+                {!graph && change.task_ids.length > 0 && (
+                  <p className="mt-2 text-xs text-slate-400">
+                    {change.task_ids.length} {change.task_ids.length === 1 ? "task" : "tasks"} ·
+                    loading titles…
+                  </p>
                 )}
                 <ul className="mt-2 flex flex-col gap-1">
                   {byTaskNumber(
