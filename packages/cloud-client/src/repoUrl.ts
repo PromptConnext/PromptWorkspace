@@ -124,11 +124,24 @@ function splitKey(key: string): { host: string; path: string } {
     : { host: key.slice(0, slash), path: key.slice(slash + 1) };
 }
 
+/** Whether a URL-form remote names a port (`ssh://host:2222/…`). The SSH
+ *  shorthand `user@host:path` cannot carry one. */
+function hasExplicitPort(raw: string): boolean {
+  const value = raw.trim();
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return false;
+  try {
+    return new URL(value).port !== "";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `exact` when the two name one repository on one host (what `sameRepo`
  * answers). `alias` only when the hosts differ solely by a `-<suffix>` on the
- * same base host AND the owner/repo path is identical. Anything else, and
- * anything unparseable, is `none`.
+ * same base host AND the owner/repo path is identical AND neither side names a
+ * port — a port picks a server, and an alias is too weak a claim to say it is
+ * the same one. Anything else, and anything unparseable, is `none`.
  */
 export function remotesMatch(remote: string, repoUrl: string): RemoteMatch {
   const left = normalizeRepoUrl(remote);
@@ -138,6 +151,7 @@ export function remotesMatch(remote: string, repoUrl: string): RemoteMatch {
   const a = splitKey(left);
   const b = splitKey(right);
   if (!a.path || a.path !== b.path) return "none";
+  if (hasExplicitPort(remote) || hasExplicitPort(repoUrl)) return "none";
   return aliasBaseHost(a.host) === aliasBaseHost(b.host) ? "alias" : "none";
 }
 

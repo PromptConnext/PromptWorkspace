@@ -113,6 +113,13 @@ test("a different path never matches", () => {
     "git@my-github.com:org/repo.git",
     // An alias with no base host to compare against.
     "git@work:org/repo.git",
+    // Hostile suffixes: a real host that merely starts with the base host,
+    // and a different base host carrying a suffix.
+    "git@github.com-evil.com:org/repo",
+    "git@notgithub.com-x:org/repo",
+    // An alias with an explicit port names a server, not just an account:
+    // the alias claim is too weak to carry it.
+    "ssh://git@github.com-work:2222/org/repo",
   ]) {
     assert.equal(remotesMatch(remote, "https://github.com/org/repo"), "none", remote);
   }
