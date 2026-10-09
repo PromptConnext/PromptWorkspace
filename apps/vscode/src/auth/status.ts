@@ -33,7 +33,7 @@ export interface RosterSignal {
 export interface FolderLink {
   name: string;
   linked: boolean;
-  /** Answered "Not a project folder": counts as linked for the unlinked rule. */
+  /** Answered "Not a project folder": left out of the unlinked rule. */
   declined: boolean;
   /** Its remotes match a roster project, so `ProjectLink.offerLinks` is
    *  already asking about it; a second notification would be noise. */
@@ -89,10 +89,12 @@ export function connectionState(
   // Unlinked only when nothing in this window is linked: in a multi-root
   // window the other folder may be unrelated, and only a window where no
   // repository can close a task is silently broken.
-  // A folder the user called "Not a project folder" is settled: it counts as
-  // linked, or an unrelated repository would carry the warning forever.
-  const unlinked = links.filter((f) => !f.linked && !f.declined);
-  if (roster.linkable > 0 && links.length > 0 && unlinked.length === links.length) {
+  // A folder the user called "Not a project folder" is settled: it is left
+  // out entirely, so it neither carries the warning forever nor hides another
+  // folder that really is unlinked.
+  const considered = links.filter((f) => !f.declined);
+  const unlinked = considered.filter((f) => !f.linked);
+  if (roster.linkable > 0 && considered.length > 0 && unlinked.length === considered.length) {
     const names = unlinked.map((f) => `"${f.name}"`).join(", ");
     return {
       state: "unlinked",
@@ -158,6 +160,8 @@ export async function refreshFailureIsAuth(
   if (!(err instanceof CloudHttpError) || err.status !== 401) return false;
   return isAuthFailure(err, {
     signedIn: client.signedIn(),
-    hasRefreshToken: await client.hasRefreshToken().catch(() => false),
+    // A secret that cannot be read (a locked keyring) is not a missing one:
+    // treat it as present, i.e. offline, rather than announce a sign-out.
+    hasRefreshToken: await client.hasRefreshToken().catch(() => true),
   });
 }

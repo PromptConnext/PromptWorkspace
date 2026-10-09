@@ -13,6 +13,7 @@ import {
   cachedLabel,
   connectionState,
   isAuthFailure,
+  refreshFailureIsAuth,
   withBanner,
   type FolderLink,
 } from "../../src/auth/status.ts";
@@ -80,6 +81,19 @@ test("a linked folder is ok", () => {
   assert.equal(connectionState(SIGNED_IN, ROSTER, [linked, { ...unlinked, name: "x" }]).state, "ok");
 });
 
+test("a declined folder does not hide another folder that is unlinked", () => {
+  const dotfiles: FolderLink = { ...unlinked, name: "dotfiles", declined: true };
+  const newrepo: FolderLink = { ...unlinked, name: "newrepo" };
+  const state = connectionState(SIGNED_IN, ROSTER, [dotfiles, newrepo]);
+  assert.equal(state.state, "unlinked");
+  assert.match(state.message, /"newrepo"/);
+  assert.doesNotMatch(state.message, /dotfiles/);
+  assert.equal(state.notify, true);
+  // Declined plus linked, and declined alone, stay quiet.
+  assert.equal(connectionState(SIGNED_IN, ROSTER, [dotfiles, linked]).state, "ok");
+  assert.equal(connectionState(SIGNED_IN, ROSTER, [dotfiles]).state, "ok");
+});
+
 test("unlinked needs something to link to and a repository to link", () => {
   assert.equal(connectionState(SIGNED_IN, { cached: true, linkable: 0 }, [unlinked]).state, "ok");
   assert.equal(connectionState(SIGNED_IN, ROSTER, []).state, "ok");
@@ -127,4 +141,17 @@ test("only a refusal of the session counts as an auth failure", () => {
   assert.equal(isAuthFailure(new CloudHttpError(403, "forbidden"), gone), false);
   assert.equal(isAuthFailure(new CloudHttpError(503, "down"), gone), false);
   assert.equal(isAuthFailure(new Error("fetch failed"), gone), false);
+});
+
+test("a refresh token that cannot be read (locked keyring) is offline, not signed out", async () => {
+  const err = new CloudHttpError(401, "invalid_token");
+  const locked = {
+    signedIn: () => true,
+    hasRefreshToken: async () => {
+      throw new Error("keyring locked");
+    },
+  };
+  assert.equal(await refreshFailureIsAuth(err, locked), false);
+  const gone = { signedIn: () => true, hasRefreshToken: async () => false };
+  assert.equal(await refreshFailureIsAuth(err, gone), true);
 });
