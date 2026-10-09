@@ -93,6 +93,54 @@ describe("NewProjectDialog", () => {
     expect(body.import_repo_full_name).toBeUndefined();
   });
 
+  it("Create shows a pending state until navigation", async () => {
+    // The parent navigates on onCreated; until the project page replaces this
+    // one, the dialog stays and says so, instead of closing onto the old list.
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockFetch({ "/projects": { id: "p1", name: "My App" } });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "My App" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Opening My App…");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closing while a created project opens leaves a fresh dialog next time", async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockFetch({ "/projects": { id: "p1", name: "My App" } });
+    const { rerender } = render(
+      <NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />,
+    );
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "My App" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(<NewProjectDialog open={false} workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+    rerender(<NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "Second" },
+    });
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
   it("lists repositories and filters by name", async () => {
     mockFetch({
       [REPO_LIST_PATH]: {

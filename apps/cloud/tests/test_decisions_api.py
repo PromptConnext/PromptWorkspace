@@ -335,6 +335,12 @@ def _after_save_decision(monkeypatch, repo, then):
     monkeypatch.setattr(repo, "save_decision", save_then)
 
 
+def _break_stage_reads(monkeypatch, repo, boom):
+    """Every way of reading a stage document fails from now on."""
+    monkeypatch.setattr(repo, "get_stage_document", boom)
+    monkeypatch.setattr(repo, "list_stage_documents", boom)
+
+
 def test_a_failing_stage_read_after_an_approval_still_returns_it_without_a_snapshot(
     client, project, monkeypatch
 ):
@@ -345,7 +351,7 @@ def test_a_failing_stage_read_after_an_approval_still_returns_it_without_a_snaps
         raise RuntimeError("database unreachable")
 
     _after_save_decision(
-        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+        monkeypatch, repo, lambda: _break_stage_reads(monkeypatch, repo, boom)
     )
     res = _resolve(client, project, did)
 
@@ -364,7 +370,7 @@ def test_a_failing_stage_read_after_a_request_still_returns_it_without_a_snapsho
         raise RuntimeError("database unreachable")
 
     _after_save_decision(
-        monkeypatch, repo, lambda: monkeypatch.setattr(repo, "get_stage_document", boom)
+        monkeypatch, repo, lambda: _break_stage_reads(monkeypatch, repo, boom)
     )
     res = _request(client, project, "intent_approval")
 
@@ -573,3 +579,129 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
     # The omitted copy still exists; only the listing leaves it out.
     assert repo.get_decision(project, "old-approved").subject_content == "content of old-approved"
 
+
+
+def test_overview_answers_the_same_data_as_the_three_routes(client, project):
+    _save_tasks(client, project)
+    intent = _request(client, project, "intent_approval").json()["id"]
+    assert _resolve(client, project, intent).status_code == 200
+    assert _request(client, project, "plan_approval").status_code == 200
+    res = client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+
+    for who in (ALICE, BOB):  # can_resolve differs per caller
+        overview = client.get(f"/projects/{project}/delivery-overview", headers=who)
+        assert overview.status_code == 200, overview.text
+        body = overview.json()
+        plan = client.get(f"/projects/{project}/delivery-plan", headers=who).json()
+        listing = client.get(f"/projects/{project}/decisions", headers=who).json()
+        roles = client.get(f"/projects/{project}/roles", headers=who).json()
+
+        assert set(body) == {"plan", "decisions", "states", "roles"}
+        assert body["plan"] == plan
+        assert body["decisions"] == listing["decisions"]
+        assert body["states"] == listing["states"]
+        assert body["roles"] == roles
+    assert body["states"] == {"intent": "approved", "plan": "pending"}
+    assert len(body["plan"]["changes"]) == 2
+
+
+def test_overview_is_for_members_only(client, project):
+    res = client.get(f"/projects/{project}/delivery-overview", headers={"X-User-Id": "eve"})
+    assert res.status_code == 403
+    res = client.get("/projects/nope/delivery-overview", headers=ALICE)
+    assert res.status_code == 404
+
+
+def _outsider(client, project, kind: str) -> dict[str, str]:
+    """A caller who is not a member of the project's workspace: never was
+    (`stranger`), belongs to another workspace (`other_workspace`), or was a
+    member holding a hat with an open decision routed to them and was then
+    removed (`removed`)."""
+    if kind == "stranger":
+        return {"X-User-Id": "eve"}
+    if kind == "other_workspace":
+        carol = {"X-User-Id": "carol"}
+        res = client.post("/workspaces", json={"name": "Carol's"}, headers=carol)
+        assert res.status_code == 201, res.text
+        return carol
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert _request(client, project, "intent_approval", headers=BOB).status_code == 200
+    me = client.get("/me/decisions", headers=BOB).json()
+    assert [item["project_id"] for item in me] == [project]  # routed to bob while a member
+    repo.remove_member(repo.get_project(project).workspace_id, "bob")
+    return BOB
+
+
+PROJECT_ROUTES = [
+    ("GET", "/projects/{pid}/decisions", None),
+    ("POST", "/projects/{pid}/decisions", {"kind": "intent_approval"}),
+    ("POST", "/projects/{pid}/decisions/{did}/resolve", {"outcome": "approved"}),
+    ("GET", "/projects/{pid}/delivery-overview", None),
+]
+
+
+@pytest.mark.parametrize("kind", ["stranger", "other_workspace", "removed"])
+@pytest.mark.parametrize(("method", "path", "body"), PROJECT_ROUTES)
+def test_the_decision_routes_refuse_a_non_member(client, project, kind, method, path, body):
+    # An open decision to resolve, made by the admin.
+    did = _request(client, project, "intent_approval", headers=ALICE).json()["id"]
+    who = _outsider(client, project, kind)
+    url = path.format(pid=project, did=did)
+    res = client.request(method, url, json=body, headers=who)
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "not_a_member"
+
+
+@pytest.mark.parametrize("kind", ["stranger", "other_workspace", "removed"])
+def test_the_inbox_shows_a_non_member_nothing(client, project, kind):
+    _request(client, project, "intent_approval", headers=ALICE)
+    who = _outsider(client, project, kind)
+    res = client.get("/me/decisions", headers=who)
+    assert res.status_code == 200, res.text
+    assert res.json() == []
+
+
+def _member_list_without(monkeypatch, repo, user_id: str) -> None:
+    """`list_members` leaves `user_id` out, as a PostgREST page capped at
+    max_rows can for a workspace larger than the cap."""
+    full = repo.list_members
+    monkeypatch.setattr(
+        repo, "list_members", lambda ws: [m for m in full(ws) if m.user_id != user_id]
+    )
+
+
+def test_a_member_missing_from_a_truncated_member_list_is_still_let_in(
+    client, project, monkeypatch
+):
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    _request(client, project, "intent_approval", headers=ALICE)
+    _member_list_without(monkeypatch, repo, "bob")
+
+    assert client.get(f"/projects/{project}/decisions", headers=BOB).status_code == 200
+    assert client.get(f"/projects/{project}/delivery-overview", headers=BOB).status_code == 200
+    # The hat holder confirmed this way still sees, and may resolve, the
+    # decision routed to them: the caller counts as a member of the routing.
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert [d["can_resolve"] for d in listing["decisions"]] == [True]
+    inbox = client.get("/me/decisions", headers=BOB).json()
+    assert [item["project_id"] for item in inbox] == [project]
+    did = listing["decisions"][0]["id"]
+    assert _resolve(client, project, did, headers=BOB).status_code == 200
+
+
+def test_a_caller_neither_read_finds_is_refused(client, project, monkeypatch):
+    repo = client.app.state.repository
+    _member_list_without(monkeypatch, repo, "bob")
+    monkeypatch.setattr(repo, "get_membership", lambda ws, user_id: None)
+
+    res = client.get(f"/projects/{project}/decisions", headers=BOB)
+    assert res.status_code == 403
+    assert res.json()["detail"] == "not_a_member"

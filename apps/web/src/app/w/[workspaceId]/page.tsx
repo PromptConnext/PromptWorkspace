@@ -187,10 +187,10 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         open={creating}
         workspaceId={workspaceId}
         onClose={() => setCreating(false)}
-        onCreated={(project) => {
-          setCreating(false);
-          router.push(`/w/${workspaceId}/p/${project.id}`);
-        }}
+        // The dialog stays open, showing "Creating…", until the project page
+        // replaces this one: closing it first showed the empty project list
+        // for the seconds the navigation takes (trust test, finding #4).
+        onCreated={(project) => router.push(`/w/${workspaceId}/p/${project.id}`)}
       />
     </>
   );

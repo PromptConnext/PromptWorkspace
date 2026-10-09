@@ -153,7 +153,8 @@ describe("Planner", () => {
   it("renders an uploaded markdown PRD as formatted text when previewed", async () => {
     mockDocument(MARKDOWN_DOC, "# Payments PRD\n\nSupport Thai QR payments.", "text/markdown");
 
-    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    // With a PRD, Foundation is done and the Planner would open on Specify.
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} step="foundation" />);
     (await screen.findByRole("button", { name: /^preview prd\.(md|pdf)$/i })).click();
 
     expect(
@@ -170,7 +171,8 @@ describe("Planner", () => {
       "application/pdf",
     );
 
-    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    // With a PRD, Foundation is done and the Planner would open on Specify.
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} step="foundation" />);
     (await screen.findByRole("button", { name: /^preview prd\.(md|pdf)$/i })).click();
 
     const frame = await screen.findByTitle("Preview of prd.pdf");
@@ -207,6 +209,147 @@ describe("Planner", () => {
     expect(posted.some((href) => href.includes("submit-for-review"))).toBe(true);
     expect(posted.some((href) => href.includes("start-tech-review"))).toBe(true);
     expect(screen.queryByRole("button", { name: /send to tech lead/i })).not.toBeInTheDocument();
+  });
+
+  // A Tech Lead's project still in `planning`, Foundation and Specify done:
+  // the first step not done is Plan.
+  const SPEC_DONE = { policy_scope: { selected: ["gdpr"], custom_text: "" } } as Partial<Project>;
+  const lifecycleCalls = () =>
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .filter((href) => href.includes("/lifecycle/") || href.includes("tech-review"));
+
+  it("opening on Plan by itself does not hand the project to tech review", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /2 · Plan/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    // Give a handoff, if one were coming, the chance to start.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The Tech Lead choosing the step still hands it over, as before.
+    openTab(/2 · Plan/);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(lifecycleCalls().some((href) => href.includes("submit-for-review"))).toBe(true);
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("working in an auto-opened Repository step hands it over, once", async () => {
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /4 · Repository/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]); // loading alone hands nothing over
+
+    fireEvent.click(screen.getByRole("tabpanel"));
+    fireEvent.click(screen.getByRole("tabpanel")); // a second click: still once
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(lifecycleCalls().filter((href) => href.includes("submit-for-review"))).toHaveLength(1);
+    expect(lifecycleCalls().filter((href) => href.includes("start-tech-review"))).toHaveLength(1);
+
+    // The page reloads the project; the Create repository panel is there
+    // without re-clicking the tab that was already open.
+    rerender(
+      <Planner
+        project={makeProject({ ...SPEC_DONE, lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={onChange}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Create repository" })).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("working in an auto-opened Plan step hands it over", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /2 · Plan/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(lifecycleCalls()).toEqual([]);
+
+    fireEvent.keyDown(screen.getByRole("tabpanel"), { key: "a" });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("a member's clicks in an auto-opened step never hand it over", async () => {
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /4 · Repository/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("tabpanel"));
+    fireEvent.click(screen.getByRole("tab", { name: /2 · Plan/ }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("a step=plan URL is the Tech Lead choosing Plan, and hands it over", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(
+      <Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} step="plan" />,
+    );
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("does not move a user who starts editing before the progress has loaded", async () => {
+    // The stage documents answer only when released, after the edit.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const docs: Record<string, string> = { specify: "# Spec" };
+    global.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const href = url.toString();
+      const match = href.match(/\/stage-documents\/(\w+)/);
+      if (match) {
+        await held;
+        const content = docs[match[1]] ?? "";
+        return {
+          ok: true,
+          json: async () => ({
+            stage: match[1], content, updated_at: content ? "2026-08-01T00:00:00Z" : null,
+          }),
+        };
+      }
+      return route(href);
+    }) as unknown as typeof fetch;
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Custom policy text"), {
+      target: { value: "No data leaves the EU." },
+    });
+    release();
+
+    expect(await screen.findByRole("tab", { name: "1 · Specify completed" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /0 · Foundation/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("withholds the tab strip until it knows what the viewer may author", async () => {
@@ -738,10 +881,8 @@ describe("Planner", () => {
     expect(onOpenTasks).toHaveBeenCalled();
   });
 
-  it("says the board didn't move when a save reports a failed projection", async () => {
-    // Plan 0018 M4: "Last saved" on its own implied the graph agreed with the
-    // document. A save the cloud could not project has to say so.
-    const onOpenTasks = vi.fn();
+  // A tasks-document save whose PATCH reports `projection`.
+  function mockTasksSave(projection: string) {
     global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
       const href = url.toString();
       const match = href.match(/\/stage-documents\/(\w+)/);
@@ -754,22 +895,15 @@ describe("Planner", () => {
             stage: match[1],
             content,
             updated_at: "2026-08-01T00:00:00Z",
-            ...(init?.method === "PATCH" ? { projection: "failed" } : {}),
+            ...(init?.method === "PATCH" ? { projection } : {}),
           }),
         });
       }
       return Promise.resolve(route(href));
     }) as unknown as typeof fetch;
+  }
 
-    render(
-      <Planner
-        project={makeProject()}
-        projectId="p1"
-        onChange={vi.fn()}
-        onOpenTasks={onOpenTasks}
-      />,
-    );
-
+  async function saveTasksDocument() {
     await screen.findByRole("tab", { name: /tasks/i });
     openTab(/tasks/i);
     const tasks = within(
@@ -780,10 +914,42 @@ describe("Planner", () => {
     const editor = screen.getByRole("textbox", { name: "Tasks document" });
     fireEvent.change(editor, { target: { value: "# Tasks\n\nNo checklist here." } });
     fireEvent.click(tasks.getByRole("button", { name: /^save$/i }));
+    return tasks;
+  }
+
+  it("says the board didn't move when a save reports a failed projection", async () => {
+    // Plan 0018 M4: "Last saved" on its own implied the graph agreed with the
+    // document. A save the cloud could not project has to say so.
+    const onOpenTasks = vi.fn();
+    const onChange = vi.fn();
+    mockTasksSave("failed");
+    render(
+      <Planner
+        project={makeProject()}
+        projectId="p1"
+        onChange={onChange}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+
+    const tasks = await saveTasksDocument();
 
     expect(await screen.findByText(/the task board didn't update/i)).toBeInTheDocument();
     fireEvent.click(tasks.getByRole("button", { name: /open the task board/i }));
     expect(onOpenTasks).toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled(); // nothing on the board changed
+  });
+
+  it("a save that moves the task board has the page reload the project graph", async () => {
+    // Finding #27: the board kept the pre-edit task titles until the next
+    // 30-second poll, because nothing told the page the graph had changed.
+    const onChange = vi.fn();
+    mockTasksSave("current");
+    render(<Planner project={makeProject()} projectId="p1" onChange={onChange} />);
+
+    await saveTasksDocument();
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
   });
 
   it("drafts the specify form from the PRD and leaves answers already written alone", async () => {
@@ -1042,6 +1208,57 @@ describe("Planner", () => {
       "data-status",
       "current",
     );
+  });
+
+  it("Planner opens on the first incomplete step when steps 0-3 are complete", async () => {
+    mockStageDocuments({
+      constitution: "# Rules", specify: "# Spec", plan: "# Plan", tasks: "# Tasks",
+    });
+    render(
+      <Planner
+        project={makeProject({ policy_scope: { selected: ["gdpr"], custom_text: "" } })}
+        projectId="p1"
+        onChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /4 · Repository/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    expect(screen.getByRole("tab", { name: "3 · Tasks completed" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+  });
+
+  it("opens the step named in the URL, and reports each step the user opens", async () => {
+    mockStageDocuments({
+      constitution: "# Rules", specify: "# Spec", plan: "# Plan", tasks: "# Tasks",
+    });
+    const onStepChange = vi.fn();
+    render(
+      <Planner
+        project={makeProject({ policy_scope: { selected: ["gdpr"], custom_text: "" } })}
+        projectId="p1"
+        onChange={vi.fn()}
+        step="specify"
+        onStepChange={onStepChange}
+      />,
+    );
+
+    // Still on Specify once every step's progress is known.
+    expect(await screen.findByRole("tab", { name: "3 · Tasks completed" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "1 · Specify completed" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(onStepChange).not.toHaveBeenCalled();
+
+    openTab(/tasks/i);
+    expect(onStepChange).toHaveBeenCalledWith("tasks");
   });
 
   it("marks Foundation done for a saved policy scope or an uploaded PRD", async () => {

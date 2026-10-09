@@ -9,7 +9,7 @@ from postgrest.exceptions import APIError
 
 from app.db.repository import DeliveryStoreUnavailable
 from app.db.supabase_repository import _SERVICE_ONLY_TABLES, SupabaseRepository
-from app.models.schemas import Decision, DeliveryChange
+from app.models.schemas import Decision, DeliveryChange, StageDocument
 
 
 class _Result:
@@ -31,6 +31,10 @@ class _Query:
     def is_(self, *_a, **_k):
         return self
 
+    def in_(self, column, values):
+        self._client.in_filters.append((self._table, column, list(values)))
+        return self
+
     def order(self, *_a, **_k):
         return self
 
@@ -46,6 +50,7 @@ class _Query:
         return self
 
     def execute(self):
+        self._client.executes += 1
         if self._client.error is not None:
             raise APIError(self._client.error)
         return _Result(self._client.rows)
@@ -57,6 +62,8 @@ class _Client:
         self.rows = rows or []
         self.upserts: list[tuple[str, object]] = []
         self.deletes: list[str] = []
+        self.in_filters: list[tuple[str, str, list]] = []
+        self.executes = 0
 
     def table(self, name: str):
         return _Query(self, name)
@@ -183,3 +190,26 @@ def test_a_failure_unrelated_to_the_content_column_still_raises_on_save():
     with pytest.raises(APIError):
         repo.save_decision(DECISION.model_copy(update={"subject_content": "x"}))
 
+
+
+def test_several_stage_documents_are_one_request():
+    rows = [
+        StageDocument(project_id="p", workspace_id="w", stage=stage, content=f"# {stage}",
+                      created_by="u").model_dump(mode="json")
+        for stage in ("specify", "tasks")
+    ]
+    client = _Client(rows=rows)
+
+    docs = _repo(client).list_stage_documents("p", ["specify", "tasks"])
+
+    assert client.executes == 1
+    assert client.in_filters == [("pw_stage_documents", "stage", ["specify", "tasks"])]
+    assert {stage: doc.content for stage, doc in docs.items()} == {
+        "specify": "# specify", "tasks": "# tasks",
+    }
+
+
+def test_no_stages_asked_for_is_no_request():
+    client = _Client()
+    assert _repo(client).list_stage_documents("p", []) == {}
+    assert client.executes == 0

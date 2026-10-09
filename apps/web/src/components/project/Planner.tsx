@@ -198,6 +198,7 @@ function StageSection({
   note,
   onDocPresence,
   onDocStamp,
+  onGraphChange,
   onOpenTasks,
   analysisGate,
   onOpenAnalysis,
@@ -221,6 +222,10 @@ function StageSection({
   /** Reports the document's saved-at stamp whenever it changes (load, save,
    *  generation), so the approval chip beside the stage can refetch. */
   onDocStamp?: (stage: StageKind, stamp: string | null) => void;
+  /** Called when a save or generation updated the graph from the document
+   *  (`projection: "current"`), so the page reloads the board, the Delivery
+   *  tab and the rest instead of showing the old tasks until its next poll. */
+  onGraphChange?: () => void;
   /** Switches the page to its Tasks tab, so a document the graph rejected can
    *  be checked against the board it failed to move. */
   onOpenTasks?: () => void;
@@ -301,6 +306,7 @@ function StageSection({
       setDocProjection(result.projection ?? null);
       setDocRetiredCount(result.retired_count ?? null);
       onDocPresence?.(stage, result.content.trim().length > 0);
+      if (result.projection === "current") onGraphChange?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, result, stage]);
@@ -338,6 +344,7 @@ function StageSection({
       setDocProjectionError(doc.error ?? null);
       setDocRetiredCount(doc.retired_count ?? null);
       onDocPresence?.(stage, doc.content.trim().length > 0);
+      if (doc.projection === "current") onGraphChange?.();
     } catch (err) {
       setDocError((err as Error).message);
     } finally {
@@ -643,6 +650,8 @@ export function Planner({
   projectId,
   onChange,
   onOpenTasks,
+  step,
+  onStepChange,
 }: {
   project: Project;
   projectId: string;
@@ -650,9 +659,43 @@ export function Planner({
   /** Switches the page to its Tasks tab — the board the generated tasks land
    *  on. Optional so the Planner still renders standalone in tests. */
   onOpenTasks?: () => void;
+  /** The step to open on, from the page URL (`?step=`). Without one the
+   *  Planner opens on the first step not yet done, once that is known. */
+  step?: string | null;
+  /** Told each step the user opens, so the page can keep it in the URL. */
+  onStepChange?: (key: string) => void;
 }) {
   const { authHeaders, user } = useAuth();
-  const [active, setActive] = useState<string>("foundation");
+  const urlStep = TABS.some((t) => t.key === step) ? (step as string) : null;
+  const [active, setActiveTab] = useState<string>(urlStep ?? "foundation");
+  // The step the user chose: from the URL, a tab click, a "Continue" button.
+  // Never the step the Planner opened by itself, so opening on Plan does not
+  // count as the Tech Lead entering it (the tech-review handoff below).
+  const [chosenStep, setChosenStep] = useState<string | null>(urlStep);
+  // Set once the open step must not move by itself any more: the user chose
+  // one or touched the Planner, or it was already picked from the progress.
+  const settled = useRef(urlStep !== null);
+  const settle = useCallback(() => {
+    settled.current = true;
+  }, []);
+  // A click, key or edit inside a step's panel is the user working in that
+  // step: it counts as choosing it when nothing was chosen yet, as when the
+  // Planner opened there by itself. Only then can the handoff below fire for
+  // a step the Planner opened on (a Tech Lead acting in Plan or Repository);
+  // loading, hovering or focusing alone never chooses.
+  const workIn = useCallback((key: string) => {
+    settled.current = true;
+    setChosenStep((prev) => prev ?? key);
+  }, []);
+  const setActive = useCallback(
+    (key: string) => {
+      settled.current = true;
+      setActiveTab(key);
+      setChosenStep(key);
+      onStepChange?.(key);
+    },
+    [onStepChange],
+  );
 
   // "Tech Lead" is the workspace admin role — there is no separate role in the
   // schema (app/models/schemas.py's Role is admin | member), and the cloud
@@ -687,14 +730,17 @@ export function Planner({
   // The "Continue to …" buttons: switch the tab and bring the strip — and
   // keyboard focus — to it, since the button pressed lived on the panel that
   // just hid.
-  const goTo = useCallback((key: string) => {
-    setActive(key);
-    requestAnimationFrame(() => {
-      const tab = document.getElementById(`planner-tab-${key}`);
-      tab?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-      tab?.focus();
-    });
-  }, []);
+  const goTo = useCallback(
+    (key: string) => {
+      setActive(key);
+      requestAnimationFrame(() => {
+        const tab = document.getElementById(`planner-tab-${key}`);
+        tab?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        tab?.focus();
+      });
+    },
+    [setActive],
+  );
 
   // Only the finished project is frozen. Earlier states stay editable: the
   // explicit "Send to Tech Lead" handoff is gone, so there is no moment at
@@ -710,8 +756,12 @@ export function Planner({
   // the event the lifecycle used to model with a button the business user had
   // to remember to press; both transitions are fire-and-forget because the
   // cloud rejects an out-of-order one and nothing here depends on the result.
+  // Only a step the user chose counts: the Planner opening on Plan by itself
+  // (the first step not done) must not move the project into tech review,
+  // but the Tech Lead then working in that step does (`workIn`).
   useEffect(() => {
-    if ((active !== "plan" && active !== "repository") || !isTechLead || advanced.current) return;
+    const entered = chosenStep === "plan" || chosenStep === "repository";
+    if (!entered || !isTechLead || advanced.current) return;
     if (lifecycle !== "planning" && lifecycle !== "pending_tech_review") return;
     advanced.current = true;
     (async () => {
@@ -724,7 +774,7 @@ export function Planner({
       onChange();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, isTechLead, lifecycle, projectId]);
+  }, [chosenStep, isTechLead, lifecycle, projectId]);
 
   // Plan 0027. Read only for a project that could need it — one that names a
   // repository before `repo_created`, i.e. an imported one — and owned here
@@ -763,7 +813,7 @@ export function Planner({
     requestAnimationFrame(() => {
       document.getElementById(CODEBASE_ANALYSIS_ANCHOR)?.scrollIntoView?.({ behavior: "smooth" });
     });
-  }, []);
+  }, [setActive]);
 
   // Undefined means "not loaded yet" — only an explicit false locks, so an
   // in-flight fetch doesn't flash a lock message on a project that has one.
@@ -798,6 +848,23 @@ export function Planner({
         return false;
     }
   }
+
+  // Open on the first step not yet done (finding #28: a project whose steps
+  // 0-3 were complete still opened on Foundation), once every step's progress
+  // has loaded. Not when the URL named a step, the user picked one, or the
+  // user already started working in the step on screen (see `settle`).
+  const progressKnown =
+    docPresent.specify !== undefined &&
+    docPresent.plan !== undefined &&
+    docPresent.tasks !== undefined &&
+    (hasPolicyScope(project) || hasPrd !== undefined);
+  useEffect(() => {
+    if (settled.current || !progressKnown) return;
+    settled.current = true;
+    setActiveTab(TABS.find((t) => !tabDone(t.key))?.key ?? TABS[TABS.length - 1].key);
+    // tabDone reads this render's progress, which `progressKnown` gates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressKnown]);
 
   // The draft button is one prefill call (app/api/generation.py::prefill); it
   // is named after what that call will actually read. Specify reads uploads
@@ -859,7 +926,14 @@ export function Planner({
     ) : undefined;
 
   return (
-    <div className="space-y-4">
+    // Any click, key or edit inside the Planner settles the open step, so
+    // progress that loads late never moves someone mid-edit.
+    <div
+      className="space-y-4"
+      onClickCapture={settle}
+      onKeyDownCapture={settle}
+      onChangeCapture={settle}
+    >
       {lifecycle === "repo_created" && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
           <p className="font-medium">Repository created</p>
@@ -996,6 +1070,9 @@ export function Planner({
           aria-labelledby={`planner-tab-${tab.key}`}
           hidden={active !== tab.key}
           className="space-y-4"
+          onClickCapture={() => workIn(tab.key)}
+          onKeyDownCapture={() => workIn(tab.key)}
+          onChangeCapture={() => workIn(tab.key)}
         >
           {tab.key === "foundation" && (
             <>
@@ -1046,6 +1123,7 @@ export function Planner({
                 note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
                 onDocStamp={noteStamp}
+                onGraphChange={onChange}
                 onOpenTasks={onOpenTasks}
                 analysisGate={stage === "plan" || stage === "tasks" ? analysisGate : undefined}
                 onOpenAnalysis={analysisRequired ? openAnalysis : undefined}

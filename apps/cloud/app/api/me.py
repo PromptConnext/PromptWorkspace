@@ -13,11 +13,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from app.api._guards import member_role
 from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
 from app.delivery.decisions import can_resolve
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import AssignedTask, TaskStatus
+from app.models.schemas import AssignedTask, Role, TaskStatus, WorkspaceMember
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -63,11 +64,19 @@ def list_my_decisions(
     for workspace in repo.list_workspaces(user.id):
         if workspace_id is not None and workspace.id != workspace_id:
             continue
+        # Read once per workspace, and only for one with an open decision.
+        members: list[WorkspaceMember] | None = None
+        role: Role | None = None
         for project in repo.list_projects_by_workspace(workspace.id):
             decisions = [d for d in repo.list_decisions(project.id) if d.status == "open"]
             if not decisions:
                 continue
-            roles, member_ids, is_admin = _routing_context(repo, project, user)
+            if members is None:
+                members = repo.list_members(workspace.id)
+                role = member_role(repo, workspace.id, members, user.id)
+            if role is None:
+                break  # left the workspace while this request ran
+            roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
             for decision in decisions:
                 if can_resolve(decision, user.id, roles, member_ids, is_admin):
                     items.append(

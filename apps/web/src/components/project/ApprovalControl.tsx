@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { requestDecision } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { useCloudGet } from "@/lib/hooks";
-import type { ApprovalState, DecisionKind, DecisionsOut } from "@/lib/types";
+import type { ApprovalState, DecisionKind } from "@/lib/types";
+import { useDecisionsData } from "./DeliveryOverview";
 import { RetryButton } from "./RetryButton";
 
 export const APPROVAL_LABEL: Record<ApprovalState, string> = {
@@ -29,8 +29,8 @@ const BUTTON_LABEL: Record<DecisionKind, string> = {
 };
 
 /** The approval state of one stage document, and the way to ask for it
- * (plan 0029 M2). Self-contained so the Planner, the Delivery tab and the
- * Decisions tab show the same truth. */
+ * (plan 0029 M2). Reads the project's shared delivery overview, so the
+ * Planner, the Delivery tab and the Decisions tab show the same truth. */
 export function ApprovalControl({
   projectId,
   kind,
@@ -44,7 +44,7 @@ export function ApprovalControl({
   refreshKey?: string | number | null;
 }) {
   const { authHeaders } = useAuth();
-  const { data, error: loadError, refetch, retry, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error: loadError, refetch, retry, mutate } = useDecisionsData();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

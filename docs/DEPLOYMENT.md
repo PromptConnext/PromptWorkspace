@@ -79,7 +79,26 @@ psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations ord
 
 ### 2.3 Create the Northflank service
 
-Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
+Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, rolling deployment with a termination grace period of at least 35 s (see [Deploys that don't cut requests](#deploys-that-dont-cut-requests) below). Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
+
+#### Deploys that don't cut requests
+
+A deploy used to stop the old instance mid-request: on the trust stack a running "Generate rules" stream died with "Failed to fetch" and the form autosave failed (trust test finding #13). Three settings together let a deploy finish the requests in flight instead:
+
+1. **The container passes SIGTERM to uvicorn.** The image runs `exec uvicorn … --timeout-graceful-shutdown 30` (`apps/cloud/Dockerfile`). On SIGTERM uvicorn stops accepting connections, lets the requests in flight finish (generation streams included) for up to 30 s, closes WebSockets with code 1012 (the presence client reconnects), runs the app's shutdown, and exits. `exec` guarantees uvicorn is PID 1: whether `sh -c` replaces itself with a lone command is up to the shell, and a shell left as PID 1 ignores SIGTERM, so the instance would die at the platform's hard kill. Before this, uvicorn also had no shutdown bound and waited on open streams until that kill. `apps/cloud/tests/test_container_shutdown.py` runs the image's command locally, sends SIGTERM during a stream, and expects the stream to finish and nothing to be left listening.
+2. **Rolling deployment with a readiness probe.** Northflank starts the new instance, waits until its readiness probe passes, moves traffic to it, and only then stops the old one. Readiness: HTTP `GET /health` on port 8080, initial delay 5 s, every 5 s, 3 failures. Liveness: the same path, but more forgiving (initial delay 30 s, every 15 s, 4 failures), so a slow request never gets the instance restarted. Choose rolling over stop-before-start/recreate; recreate stops the old instance before the new one is ready, which is the outage. A rolling deploy briefly overlaps two instances, which the `instance_id` alarm in §2.5 notices once per deploy; that is expected.
+3. **Termination grace period of at least 35 s** (45 s recommended): the time the platform waits after SIGTERM before it kills the instance. It must exceed uvicorn's 30 s, or the instance is killed mid-drain.
+
+Where these settings live in the Northflank UI (deployment strategy, health checks, grace period) is **not verified**. Check the service's health-check and deployment settings, and if Northflank does not expose the grace period, find out its fixed default before relying on it.
+
+What this does not cover: a generation that runs longer than 30 s after the deploy starts is still cut (raise `--timeout-graceful-shutdown` and the grace period together if generations routinely run longer); the in-process embed queue and presence rooms still empty on a restart (§2.5); and requests that reach the old instance between its SIGTERM and the load balancer dropping it can still be refused. If the check below shows that last case, the next step is a drain delay: keep serving with `/health` failing for ~10 s after SIGTERM before uvicorn stops.
+
+**Check it live** (once per environment, after changing the settings):
+
+1. In one terminal, watch the API across the deploy: `while true; do curl -s -o /dev/null -w "%{http_code} " $API/health; sleep 0.2; done`, plus `curl -s $API/health | jq .capacity.instance_id` before and after.
+2. Start a rollout that has an image ready: Northflank's redeploy/restart of the current build is easiest to time. A push works too, but then wait for the build to finish and start step 3 when the new instance is starting.
+3. While the rollout runs, in the web app open a project's Planner and start a generation (Generate rules or Generate specification), and type in a stage form so the autosave fires.
+4. Pass: the generation streams to the end and its document saves; the form shows no "Couldn't save"; the `curl` loop prints only `200` (a `000` or `502` at the switch means connections were refused: see the drain delay above); `instance_id` changed, which proves the rollout happened during the test. The old instance's log ends with uvicorn's "Waiting for connections to close" / "Finished server process", not an abrupt stop.
 
 #### Region
 
@@ -95,6 +114,49 @@ Northflank cannot move a running service between regions, so a move is a rebuild
 6. Delete the old service once the new one has served traffic cleanly, then restore the TTL.
 
 Webhook URLs registered with GitHub (`PUBLIC_API_URL`) and the web app's `NEXT_PUBLIC_CLOUD_*` variables do not change, because the domain does not.
+
+##### Measuring page load before and after
+
+The move is done when `GET /projects/{id}/decisions` answers in under 0.8 s from the browser. Measure the Delivery, Decisions and Tasks tabs of one project the same way before and after: open the tab, hard-reload it (Cmd+Shift+R), wait for it to settle, and paste this into the DevTools console. It prints every request the page made, when it started and how long it took, and the request it waited for, if it started only after another one finished (a chain).
+
+```js
+(() => {
+  const rows = performance
+    .getEntriesByType("resource")
+    .filter((e) => e.initiatorType === "fetch")
+    .map((e) => {
+      const url = new URL(e.name);
+      return {
+        request: `${url.host}${url.pathname}`,
+        start: Math.round(e.startTime),
+        duration: Math.round(e.duration),
+        end: Math.round(e.responseEnd),
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+  for (const r of rows) {
+    // Started within 50 ms of another request's end: it most likely waited for it.
+    const before = rows.filter((o) => o !== r && o.end <= r.start && r.start - o.end < 50);
+    r.after = before.map((o) => o.request.split("/").slice(-1)[0]).join(", ") || "-";
+  }
+  console.table(rows);
+  console.log("page load (last response), ms:", Math.max(...rows.map((r) => r.end)));
+})();
+```
+
+Measured on the trust stack, Marketing Studio project, hard reload of `?tab=delivery` (2026-10-09, API in `europe-west4`, Supabase in `ap-southeast-1`), ms from navigation start:
+
+| request | start | duration | ran |
+|---|---|---|---|
+| (JS and sign-in before the first API call) | 0 | ~2800 | |
+| `GET /sync/projects/{id}/graph` | 2791 | 3466 | in parallel with `/workspaces` |
+| `GET /workspaces` | 2792 | 1177 | in parallel with the graph |
+| `GET /projects/{id}/delivery-plan` | 6260 | 1828 | after the graph finished |
+| `GET /projects/{id}/decisions` | 8093 | 2795 | after the delivery plan finished |
+
+About 11 s until the approval control left "Loading…": the three project calls ran one after the other. Single calls from the same browser: `/health` 0.64 s, `delivery-plan` 1.6 s, `decisions` 2.8 s. The chain was the web app's doing (the Delivery tab waited for the graph before mounting, and the approval control mounted only once the plan had loaded). Since then the Delivery and Decisions tabs open without waiting for the graph and read one `GET /projects/{id}/delivery-overview` (plan, decisions, approval states and hats together), in parallel with the graph.
+
+After the region move, run the snippet on the same three tabs and add the numbers here beside these, so the two are comparable.
 
 ### 2.4 Environment variables (Northflank → service → Runtime variables)
 

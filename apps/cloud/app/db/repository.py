@@ -13,6 +13,7 @@ from __future__ import annotations
 import abc
 import copy
 import threading
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from app.db.merge import incoming_dump as _incoming_dump
@@ -736,6 +737,14 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None: ...
+
+    @abc.abstractmethod
+    def list_stage_documents(
+        self, project_id: str, stages: Sequence[str]
+    ) -> dict[str, StageDocument]:
+        """The project's documents for `stages`, keyed by stage, in one read; a
+        stage with no document is left out. One request where a
+        `get_stage_document` per stage would be one each."""
 
     @abc.abstractmethod
     def upsert_stage_document(
@@ -1801,6 +1810,12 @@ class InMemoryRepository(Repository):
     def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None:
         doc = self._stage_documents.get(project_id, {}).get(stage)
         return copy.deepcopy(doc) if doc else None
+
+    def list_stage_documents(
+        self, project_id: str, stages: Sequence[str]
+    ) -> dict[str, StageDocument]:
+        store = self._stage_documents.get(project_id, {})
+        return {stage: copy.deepcopy(store[stage]) for stage in stages if stage in store}
 
     def upsert_stage_document(
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str

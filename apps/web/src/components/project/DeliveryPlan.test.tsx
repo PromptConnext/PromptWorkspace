@@ -9,8 +9,8 @@ let plan: Plan | null = null;
 let loading = false;
 let loadError: string | null = null;
 const retry = vi.fn();
-vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data: plan, error: loadError, loading, refetch: vi.fn(), retry }),
+vi.mock("./DeliveryOverview", () => ({
+  useDeliveryPlanData: () => ({ data: plan, error: loadError, loading, refetch: vi.fn(), retry }),
 }));
 vi.mock("./ApprovalControl", () => ({
   ApprovalControl: () => <div>approval-control</div>,
@@ -86,6 +86,32 @@ describe("DeliveryPlan", () => {
     render(<DeliveryPlan graph={g} projectId="p1" />);
     const titles = screen.getAllByRole("listitem").map((li) => li.textContent);
     expect(titles).toEqual(["T002Two", "T010Ten", "T011Eleven", "No ref one", "No ref two"]);
+  });
+
+  it("shows the plan before the graph arrives, and the task titles once it does", () => {
+    plan = { plan_approval: "none", changes: [change({ id: "c1", ref: "C1", task_ids: ["t1"] })] };
+    const { rerender } = render(<DeliveryPlan graph={null} projectId="p1" />);
+
+    expect(screen.getByText("C1")).toBeInTheDocument();
+    expect(screen.getByText("approval-control")).toBeInTheDocument();
+    expect(screen.getByText(/1 task · loading titles/)).toBeInTheDocument();
+
+    rerender(<DeliveryPlan graph={graph} projectId="p1" />);
+    expect(screen.getByText("Create the project")).toBeInTheDocument();
+    expect(screen.queryByText(/loading titles/)).not.toBeInTheDocument();
+  });
+
+  it("an empty plan waits for the graph before saying what to do", () => {
+    plan = { changes: [], plan_approval: "none" };
+    render(<DeliveryPlan graph={null} projectId="p1" />);
+    expect(screen.getByText("Loading delivery plan…")).toBeInTheDocument();
+  });
+
+  it("an empty plan stops waiting when the graph failed to load", () => {
+    plan = { changes: [], plan_approval: "none" };
+    render(<DeliveryPlan graph={null} graphError="Failed to fetch" projectId="p1" />);
+    expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
+    expect(screen.getByText(/Generate tasks in the Planner/)).toBeInTheDocument();
   });
 
   it("explains what to do when there is no plan yet", () => {
