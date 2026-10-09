@@ -11,8 +11,11 @@ const MARK: Record<DiffLine["kind"], string> = { same: " ", add: "+", del: "-" }
 
 /** What a decision asks the approver to sign: the document as it was when
  * requested, as a diff against the newest earlier approved version when there
- * is one. The text comes from repositories and users, so every line is a text
- * node in a `<pre>`-style block, never parsed as markdown or HTML. */
+ * is one. Only an open decision is diffed; a resolved one offers its document
+ * as approved (the listing sends the text for the newest approved decision
+ * only, so an older card has none and shows nothing). The text comes from
+ * repositories and users, so every line is a text node in a `<pre>`-style
+ * block, never parsed as markdown or HTML. */
 export function DecisionSubject({
   decision,
   previous,
@@ -23,21 +26,27 @@ export function DecisionSubject({
 }) {
   const content = decision.subject_content;
   const before = previous?.subject_content ?? null;
+  const isOpen = decision.status === "open";
   const diff = useMemo(
-    () => (content !== null && before !== null ? lineDiff(before, content) : null),
-    [content, before],
+    () => (isOpen && content !== null && before !== null ? lineDiff(before, content) : null),
+    [isOpen, content, before],
   );
 
   if (content === null) {
-    return (
+    // An open request with no copy predates snapshots. A resolved one was
+    // merely left out of the listing: claiming it has no copy would be false.
+    return isOpen ? (
       <p className="mt-2 text-xs text-slate-500">No saved copy of the document for this request</p>
-    );
+    ) : null;
   }
 
   const unchanged = diff !== null && diff.every((l) => l.kind === "same");
   const lines: DiffLine[] = diff ?? content.split("\n").map((text) => ({ kind: "same", text }));
-  const caption =
-    diff === null
+  const caption = !isOpen
+    ? decision.status === "approved"
+      ? "Document as approved"
+      : "Document as requested"
+    : diff === null
       ? previous === null
         ? "Full document (nothing was approved before)"
         : "Full document (the last approval has no saved copy to compare)"
@@ -46,7 +55,7 @@ export function DecisionSubject({
         : "Changes since the last approval";
 
   return (
-    <details open={decision.status === "open"} className="mt-2 rounded border border-slate-200">
+    <details open={isOpen} className="mt-2 rounded border border-slate-200">
       <summary className="cursor-pointer px-2 py-1 text-xs font-medium text-slate-600">
         {caption}
       </summary>

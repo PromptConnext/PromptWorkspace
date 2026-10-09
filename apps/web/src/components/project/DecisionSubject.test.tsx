@@ -64,4 +64,33 @@ describe("DecisionSubject", () => {
     expect(screen.getByText("Book a slot.")).toBeInTheDocument();
     expect(screen.queryByText(/since the last approval/i)).not.toBeInTheDocument();
   });
+
+  it("shows nothing for an older resolved decision whose copy the listing omitted", () => {
+    const old = decision({ status: "approved", can_resolve: false, subject_content: null });
+    const { container } = render(<DecisionSubject decision={old} previous={null} />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText(/No saved copy/)).not.toBeInTheDocument();
+  });
+
+  it("shows the latest approved document collapsed, without a diff", () => {
+    const earlier = decision({ id: "d0", status: "approved", subject_content: "# Spec\n\nOld rule." });
+    const latest = decision({ status: "approved", can_resolve: false });
+    const { container } = render(<DecisionSubject decision={latest} previous={earlier} />);
+
+    expect(screen.getByText("Document as approved")).toBeInTheDocument();
+    expect(container.querySelector("details")).not.toHaveAttribute("open");
+    expect(container.querySelector("[data-diff='del']")).toBeNull();
+    expect(screen.queryByText("Old rule.")).not.toBeInTheDocument();
+  });
+
+  it("does not diff a resolved decision at all", () => {
+    // A 3000-line pair that would hit the diff guard: a resolved card never computes it.
+    const big = (tag: string) =>
+      Array.from({ length: 3000 }, (_, i) => `${tag} ${i}`).join("\n");
+    const earlier = decision({ id: "d0", status: "approved", subject_content: big("a") });
+    const latest = decision({ status: "approved", can_resolve: false, subject_content: big("b") });
+    render(<DecisionSubject decision={latest} previous={earlier} />);
+    expect(document.querySelector("[data-diff='del']")).toBeNull();
+  });
 });

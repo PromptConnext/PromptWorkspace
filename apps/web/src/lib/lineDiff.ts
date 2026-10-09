@@ -1,3 +1,8 @@
+/** Past this many table cells (changed lines before x after) the LCS table is
+ * skipped: it is 4 bytes a cell and quadratic time, and a document that
+ * different is better shown as removed-then-added anyway. */
+export const MAX_DIFF_CELLS = 4_000_000;
+
 export type DiffLine = { kind: "same" | "add" | "del"; text: string };
 
 /** A line-based diff of two documents by longest common subsequence. Common
@@ -22,6 +27,12 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 
   const n = endA - start;
   const m = endB - start;
+  if (n * m > MAX_DIFF_CELLS) {
+    for (let i = start; i < endA; i++) out.push({ kind: "del", text: a[i] });
+    for (let j = start; j < endB; j++) out.push({ kind: "add", text: b[j] });
+    for (let k = endA; k < a.length; k++) out.push({ kind: "same", text: a[k] });
+    return out;
+  }
   // lcs[i][j]: length of the LCS of a[start+i..endA) and b[start+j..endB).
   const width = m + 1;
   const lcs = new Uint32Array((n + 1) * width);

@@ -149,7 +149,10 @@ def put_project_role(
 DecisionKindIn = Literal["intent_approval", "plan_approval"]
 
 
-class DecisionOut(BaseModel):
+class DecisionBase(BaseModel):
+    """A decision's fields without the two that are costly: the document text
+    (`DecisionOut.subject_content`) and the staleness check (`is_current`)."""
+
     id: str
     project_id: str
     workspace_id: str
@@ -157,7 +160,6 @@ class DecisionOut(BaseModel):
     title: str
     subject_stage: str
     subject_hash: str
-    subject_content: str | None
     routed_hat: str
     status: str
     rationale: str | None
@@ -166,6 +168,13 @@ class DecisionOut(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     can_resolve: bool
+
+
+class DecisionOut(DecisionBase):
+    # The document text at request time; null for a decision made before
+    # migration 0006 and for older decisions a listing leaves out
+    # (`content_carriers`).
+    subject_content: str | None
     # True while `subject_hash` is the hash of the stage document as it is now;
     # false once the document was edited after this decision was made.
     is_current: bool
@@ -196,6 +205,21 @@ class DecisionResolve(BaseModel):
     rationale: str | None = None
 
 
+def content_carriers(decisions: list[Decision]) -> set[str]:
+    """The ids of the decisions a listing sends `subject_content` for: the open
+    ones (the approver reads and diffs them) and the newest approved decision of
+    each kind (the diff base for the next request). Every older decision would
+    cost its whole document, up to ~12 KB each, on every tab load."""
+    keep = {d.id for d in decisions if d.status == "open"}
+    newest: dict[str, Decision] = {}
+    for d in decisions:
+        if d.status == "approved" and (
+            d.kind not in newest or d.created_at > newest[d.kind].created_at
+        ):
+            newest[d.kind] = d
+    return keep | {d.id for d in newest.values()}
+
+
 def decision_out(
     decision: Decision,
     *,
@@ -204,12 +228,15 @@ def decision_out(
     member_ids: set[str],
     is_admin: bool,
     hashes: dict[str, str | None] | None = None,
+    with_content: bool = True,
 ) -> DecisionOut:
     """`hashes` are the stage hashes as they are now. Without them (the read
     after a write failed) a decision reads as current: the request and resolve
-    routes only write against a document whose hash they just matched."""
+    routes only write against a document whose hash they just matched.
+    `with_content=False` leaves `subject_content` out (see `content_carriers`)."""
     return DecisionOut(
-        **decision.model_dump(),
+        **decision.model_dump(exclude={"subject_content"}),
+        subject_content=decision.subject_content if with_content else None,
         can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
         is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
     )
@@ -253,8 +280,9 @@ def _mutation_out(
     hashes read after it (no snapshot without them)."""
     snapshot = None
     if hashes is not None:
+        keep = content_carriers(decisions)
         snapshot = DecisionsOut(
-            decisions=[out(d, hashes=hashes) for d in decisions],
+            decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
             states=states_of(decisions, hashes),
         )
     return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
@@ -270,10 +298,11 @@ def list_project_decisions(
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
     decisions = repo.list_decisions(project_id)
     hashes = stage_hashes(repo, project_id)
+    keep = content_carriers(decisions)
     return DecisionsOut(
         decisions=[
             decision_out(d, user_id=user.id, roles=roles, member_ids=member_ids,
-                         is_admin=is_admin, hashes=hashes)
+                         is_admin=is_admin, hashes=hashes, with_content=d.id in keep)
             for d in decisions
         ],
         states=decisions_state(repo, project_id, decisions, hashes),

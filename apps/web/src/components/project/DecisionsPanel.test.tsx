@@ -169,8 +169,8 @@ describe("DecisionsPanel", () => {
     expect(screen.getByText("Build it twice.")).toBeInTheDocument();
     const diff = screen.getByText("Changes since the last approval").closest("details") as HTMLElement;
     expect(within(diff).getByText("Build it.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
-    // The earlier approval is the first approval of its kind: full text.
-    expect(screen.getByText(/nothing was approved before/)).toBeInTheDocument();
+    // The earlier approval is resolved: its document is offered, not diffed.
+    expect(screen.getByText("Document as approved")).toBeInTheDocument();
   });
 
   it("a resolved decision shows the resolver's name and time", () => {

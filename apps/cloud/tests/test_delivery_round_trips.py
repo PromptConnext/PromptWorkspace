@@ -138,3 +138,20 @@ def test_reading_the_delivery_plan(client, project):
     print("GET /delivery-plan:", len(repo.calls), repo.calls)
     assert len(repo.calls) <= 6, repo.calls
     assert "get_graph" not in repo.calls  # several requests on Supabase, not one
+
+
+def test_listing_my_inbox_reads_no_stage_documents(client, project):
+    client.post(f"/projects/{project}/decisions", json={"kind": "intent_approval"},
+                headers=BOB)
+    with counting(client) as repo:
+        res = client.get("/me/decisions", headers=ALICE)
+    assert res.status_code == 200, res.text
+    (item,) = res.json()
+    # The inbox lists open decisions only: it neither needs the stage hashes
+    # (is_current) nor ships the document text (subject_content).
+    assert "is_current" not in item["decision"] and "subject_content" not in item["decision"]
+    print("GET /me/decisions:", len(repo.calls), repo.calls)
+    assert repo.calls.count("get_stage_document") == 0, repo.calls
+    assert repo.calls.count("list_decisions") == 1, repo.calls
+    assert len(repo.calls) <= 8, repo.calls
+
