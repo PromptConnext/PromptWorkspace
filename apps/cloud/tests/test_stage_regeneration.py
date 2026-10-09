@@ -468,3 +468,28 @@ def test_an_open_task_without_evidence_keeps_its_row_when_retitled(client: TestC
     after = _t3(client, pid)
     assert after.id == before.id
     assert after.title.startswith("Replace the ASSET GROW brand")
+
+
+def test_a_hand_edit_that_retitles_a_closed_task_also_retires_it(client: TestClient):
+    """Review ruling on 4.1: the rule is about the board, not who wrote the
+    document, so a manual save that turns closed T003 into different work is
+    the same hazard as a regeneration that does."""
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    closed, artifact = _close_t003(client, pid, status=TaskStatus.implemented)
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/tasks", json={"content": REMEANT_TASKS}, headers=ALICE
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["projection"] == "current"
+    repo = client.app.state.repository
+    old = repo._graph[pid]["tasks"][closed.id]
+    assert old.deleted_at is not None
+    assert old.status == TaskStatus.implemented
+    assert repo._graph[pid]["artifacts"][artifact.id].task_id == closed.id
+    fresh = _t3(client, pid)
+    assert fresh.id != closed.id
+    assert fresh.status == TaskStatus.todo

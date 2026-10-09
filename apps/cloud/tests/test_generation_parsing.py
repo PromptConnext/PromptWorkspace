@@ -196,6 +196,25 @@ def test_feature_placeholder_untouched_inside_code_fence():
         ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "เพิ่มหน้าตั้งค่าโปรไฟล์ของผู้ใช้", True),
         ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "แก้ไขการส่งออกรายงานยอดขาย", False),
         ("[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx", "[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx ทั้งหมด", True),
+        # adding the files the work touches is not different work (review of 4.1)
+        (
+            "Replace ASSET GROW branding",
+            "Replace ASSET GROW branding in `src/App.tsx`, `src/lib/exporters.ts` and "
+            "`index.html`",
+            True,
+        ),
+        ("Create user model", "Create the User model in src/models/user.ts", True),
+        # ...and different work naming the same files is still different work
+        (
+            "Add the payment intent endpoint in `src/api/payments.ts`",
+            "Reconcile settlements nightly in `src/api/payments.ts`",
+            False,
+        ),
+        # other scripts are compared too, not reduced to nothing
+        ("Добавить экспорт отчётов", "Добавить экспорт всех отчётов", True),
+        ("Добавить экспорт отчётов", "Исправить вход пользователя", False),
+        ("添加用户导出功能", "添加用户数据导出功能", True),
+        ("添加用户导出功能", "修复登录页面错误", False),
         # empty titles are only the same as each other
         ("", "", True),
         ("", "Persist the payment record", False),

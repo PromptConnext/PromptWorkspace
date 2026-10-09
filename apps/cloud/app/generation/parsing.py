@@ -269,32 +269,40 @@ def parse_task_phases(doc: str) -> list[TaskPhase]:
     ]
 
 
-# Latin/digit words, and runs of Thai (U+0E00-U+0E7F, marks included).
-_TITLE_WORD_RE = re.compile(r"[0-9a-z]+|[\u0e00-\u0e7f]+")
-_THAI_RUN_RE = re.compile(r"[\u0e00-\u0e7f]+")
+# Latin/digit words; every other run of letters (Thai, with its combining
+# marks, or any other script) is compared by character bigrams.
+_TITLE_WORD_RE = re.compile(r"[0-9a-z]+|[\u0e00-\u0e7f]+|[^\W\d_]+")
+_LATIN_WORD_RE = re.compile(r"[0-9a-z]+")
+# A file path in a title: anything with a `/`, or a `name.ext`, backticked or
+# not. Removed before comparing, because a regenerated task that only names
+# the files it touches is the same work, and each path would otherwise add
+# three or four tokens that swamp a short title.
+_TITLE_PATH_RE = re.compile(r"`[^`]*[/.][^`]*`|\S*/\S*|\b[\w-]+\.[a-z][a-z0-9]{0,5}\b")
 # Below this, a regenerated title describes different work (task 4.1, #57).
 TITLE_MATCH_THRESHOLD = 0.6
 
 
 def _title_tokens(title: str) -> set[str]:
-    """Normalized tokens of a task title: lowercase Latin/digit words, and
-    character bigrams of each Thai run — Thai writes words without spaces,
-    so a whitespace split would make every Thai title one opaque token."""
-    text = unicodedata.normalize("NFC", title).lower()
+    """Normalized tokens of a task title, file paths left out: lowercase
+    Latin/digit words, and character bigrams of every other letter run —
+    Thai and CJK write words without spaces, so a whitespace split would make
+    a whole title one opaque token."""
+    text = _TITLE_PATH_RE.sub(" ", unicodedata.normalize("NFC", title).lower())
     tokens: set[str] = set()
     for word in _TITLE_WORD_RE.findall(text):
-        if _THAI_RUN_RE.fullmatch(word) and len(word) > 1:
-            tokens.update(word[i : i + 2] for i in range(len(word) - 1))
-        else:
+        if _LATIN_WORD_RE.fullmatch(word) or len(word) == 1:
             tokens.add(word)
+        else:
+            tokens.update(word[i : i + 2] for i in range(len(word) - 1))
     return tokens
 
 
 def titles_match(old: str, new: str) -> bool:
     """Whether two titles for the same task ref still describe the same work:
     the Dice similarity of their normalized tokens is at least
-    TITLE_MATCH_THRESHOLD. Case, spacing and punctuation never matter; light
-    rewording ("record" -> "ledger") matches; different work does not."""
+    TITLE_MATCH_THRESHOLD. Case, spacing, punctuation and the file paths a
+    title names never matter; light rewording ("record" -> "ledger")
+    matches; different work does not."""
     a, b = _title_tokens(old), _title_tokens(new)
     if not a or not b:
         return a == b
