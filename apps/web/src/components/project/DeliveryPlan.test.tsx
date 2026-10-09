@@ -107,6 +107,13 @@ describe("DeliveryPlan", () => {
     expect(screen.getByText("Loading delivery plan…")).toBeInTheDocument();
   });
 
+  it("an empty plan stops waiting when the graph failed to load", () => {
+    plan = { changes: [], plan_approval: "none" };
+    render(<DeliveryPlan graph={null} graphError="Failed to fetch" projectId="p1" />);
+    expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
+    expect(screen.getByText(/Generate tasks in the Planner/)).toBeInTheDocument();
+  });
+
   it("explains what to do when there is no plan yet", () => {
     plan = { changes: [], plan_approval: "none" };
     render(<DeliveryPlan graph={{ tasks: [] } as unknown as ProjectGraph} projectId="p1" />);

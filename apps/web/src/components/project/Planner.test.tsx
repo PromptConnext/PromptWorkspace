@@ -211,6 +211,80 @@ describe("Planner", () => {
     expect(screen.queryByRole("button", { name: /send to tech lead/i })).not.toBeInTheDocument();
   });
 
+  // A Tech Lead's project still in `planning`, Foundation and Specify done:
+  // the first step not done is Plan.
+  const SPEC_DONE = { policy_scope: { selected: ["gdpr"], custom_text: "" } } as Partial<Project>;
+  const lifecycleCalls = () =>
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .filter((href) => href.includes("/lifecycle/") || href.includes("tech-review"));
+
+  it("opening on Plan by itself does not hand the project to tech review", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /2 · Plan/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    // Give a handoff, if one were coming, the chance to start.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The Tech Lead choosing the step still hands it over, as before.
+    openTab(/2 · Plan/);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(lifecycleCalls().some((href) => href.includes("submit-for-review"))).toBe(true);
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("a step=plan URL is the Tech Lead choosing Plan, and hands it over", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(
+      <Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} step="plan" />,
+    );
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("does not move a user who starts editing before the progress has loaded", async () => {
+    // The stage documents answer only when released, after the edit.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const docs: Record<string, string> = { specify: "# Spec" };
+    global.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const href = url.toString();
+      const match = href.match(/\/stage-documents\/(\w+)/);
+      if (match) {
+        await held;
+        const content = docs[match[1]] ?? "";
+        return {
+          ok: true,
+          json: async () => ({
+            stage: match[1], content, updated_at: content ? "2026-08-01T00:00:00Z" : null,
+          }),
+        };
+      }
+      return route(href);
+    }) as unknown as typeof fetch;
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Custom policy text"), {
+      target: { value: "No data leaves the EU." },
+    });
+    release();
+
+    expect(await screen.findByRole("tab", { name: "1 · Specify completed" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /0 · Foundation/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("withholds the tab strip until it knows what the viewer may author", async () => {
     // Membership never resolves here — the point is what renders meanwhile.
     global.fetch = vi.fn((url: RequestInfo | URL) => {

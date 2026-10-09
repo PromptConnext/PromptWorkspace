@@ -668,14 +668,21 @@ export function Planner({
   const { authHeaders, user } = useAuth();
   const urlStep = TABS.some((t) => t.key === step) ? (step as string) : null;
   const [active, setActiveTab] = useState<string>(urlStep ?? "foundation");
-  // Set once the open step is the user's choice (the URL's, a click, a
-  // "Continue" button) or was picked from the progress: from then on progress
-  // that loads late never moves them.
+  // The step the user chose: from the URL, a tab click, a "Continue" button.
+  // Never the step the Planner opened by itself, so opening on Plan does not
+  // count as the Tech Lead entering it (the tech-review handoff below).
+  const [chosenStep, setChosenStep] = useState<string | null>(urlStep);
+  // Set once the open step must not move by itself any more: the user chose
+  // one or touched the Planner, or it was already picked from the progress.
   const settled = useRef(urlStep !== null);
+  const settle = useCallback(() => {
+    settled.current = true;
+  }, []);
   const setActive = useCallback(
     (key: string) => {
       settled.current = true;
       setActiveTab(key);
+      setChosenStep(key);
       onStepChange?.(key);
     },
     [onStepChange],
@@ -740,8 +747,11 @@ export function Planner({
   // the event the lifecycle used to model with a button the business user had
   // to remember to press; both transitions are fire-and-forget because the
   // cloud rejects an out-of-order one and nothing here depends on the result.
+  // Only a step the user chose counts: the Planner opening on Plan by itself
+  // (the first step not done) must not move the project into tech review.
   useEffect(() => {
-    if ((active !== "plan" && active !== "repository") || !isTechLead || advanced.current) return;
+    const entered = chosenStep === "plan" || chosenStep === "repository";
+    if (!entered || !isTechLead || advanced.current) return;
     if (lifecycle !== "planning" && lifecycle !== "pending_tech_review") return;
     advanced.current = true;
     (async () => {
@@ -754,7 +764,7 @@ export function Planner({
       onChange();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, isTechLead, lifecycle, projectId]);
+  }, [chosenStep, isTechLead, lifecycle, projectId]);
 
   // Plan 0027. Read only for a project that could need it — one that names a
   // repository before `repo_created`, i.e. an imported one — and owned here
@@ -831,7 +841,8 @@ export function Planner({
 
   // Open on the first step not yet done (finding #28: a project whose steps
   // 0-3 were complete still opened on Foundation), once every step's progress
-  // has loaded. Not when the URL named a step or the user already picked one.
+  // has loaded. Not when the URL named a step, the user picked one, or the
+  // user already started working in the step on screen (see `settle`).
   const progressKnown =
     docPresent.specify !== undefined &&
     docPresent.plan !== undefined &&
@@ -905,7 +916,14 @@ export function Planner({
     ) : undefined;
 
   return (
-    <div className="space-y-4">
+    // Any click, key or edit inside the Planner settles the open step, so
+    // progress that loads late never moves someone mid-edit.
+    <div
+      className="space-y-4"
+      onClickCapture={settle}
+      onKeyDownCapture={settle}
+      onChangeCapture={settle}
+    >
       {lifecycle === "repo_created" && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
           <p className="font-medium">Repository created</p>

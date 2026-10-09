@@ -45,9 +45,13 @@ function byTaskNumber<T extends { feature_tag?: string | null }>(tasks: T[]): T[
  * graph fills in each Change's task titles when it arrives. */
 export function DeliveryPlan({
   graph,
+  graphError = null,
   projectId,
 }: {
   graph: ProjectGraph | null;
+  /** The page's graph load failed: the graph is not coming, so stop waiting
+   *  for it (the page shows the error itself). */
+  graphError?: string | null;
   projectId: string;
 }) {
   const { data: plan, error, retry } = useDeliveryPlanData();
@@ -62,8 +66,8 @@ export function DeliveryPlan({
     );
   }
   // An empty plan reads differently with and without tasks, so it waits for
-  // the graph too.
-  if (!plan || (plan.changes.length === 0 && !graph)) {
+  // the graph too, unless the graph failed to load.
+  if (!plan || (plan.changes.length === 0 && !graph && !graphError)) {
     return <p className="text-sm text-slate-500">Loading delivery plan…</p>;
   }
   if (plan.changes.length === 0) {
@@ -111,7 +115,7 @@ export function DeliveryPlan({
                 {change.depends_on.length > 0 && (
                   <p className="mt-1 text-xs text-slate-500">After {change.depends_on.join(", ")}</p>
                 )}
-                {!graph && change.task_ids.length > 0 && (
+                {!graph && !graphError && change.task_ids.length > 0 && (
                   <p className="mt-2 text-xs text-slate-400">
                     {change.task_ids.length} {change.task_ids.length === 1 ? "task" : "tasks"} ·
                     loading titles…

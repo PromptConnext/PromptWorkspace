@@ -64,7 +64,7 @@ const decision = (o: Partial<Decision>): Decision => ({
 describe("DecisionsPanel", () => {
   it("shows both approval states", () => {
     decisions = { decisions: [], states: { intent: "approved", plan: "pending" } };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
     expect(screen.getByText("Intent")).toBeInTheDocument();
     expect(screen.getByText("Approved")).toBeInTheDocument();
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("DecisionsPanel", () => {
       decisions = next;
     });
     resolveDecision.mockResolvedValue({ ...snapshot.decisions[0], snapshot });
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
@@ -96,7 +96,7 @@ describe("DecisionsPanel", () => {
   it("refetches when an older API sends no snapshot", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({});
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
@@ -107,7 +107,7 @@ describe("DecisionsPanel", () => {
   it("refetches when the API sends a null snapshot", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({ snapshot: null });
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
@@ -118,7 +118,7 @@ describe("DecisionsPanel", () => {
   it("requires a reason to request changes", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({});
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     const request = screen.getByRole("button", { name: "Request changes" });
     expect(request).toBeDisabled();
@@ -133,7 +133,7 @@ describe("DecisionsPanel", () => {
       decisions: [decision({ can_resolve: false })],
       states: { intent: "none", plan: "pending" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.getByText(/Waiting on the tech steward/)).toBeInTheDocument();
   });
@@ -143,14 +143,14 @@ describe("DecisionsPanel", () => {
       decisions: [decision({ status: "rejected", rationale: "Split story 2.", can_resolve: false })],
       states: { intent: "none", plan: "changes_requested" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
     expect(screen.getByText("Split story 2.")).toBeInTheDocument();
   });
 
   it("sends a reason typed before approving", async () => {
     decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
     resolveDecision.mockResolvedValue({});
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     await userEvent.type(screen.getByLabelText("Reason"), "  Looks right.  ");
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -168,7 +168,7 @@ describe("DecisionsPanel", () => {
       ],
       states: { intent: "none", plan: "pending" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     expect(screen.getByText("Changes since the last approval")).toBeInTheDocument();
     expect(screen.getByText("Build it twice.")).toBeInTheDocument();
@@ -188,7 +188,7 @@ describe("DecisionsPanel", () => {
       })],
       states: { intent: "none", plan: "approved" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     const line = screen.getByText(/Approved by sam@x\.com/);
     expect(line).toHaveTextContent(new Date("2026-10-04T09:30:00Z").toLocaleString());
@@ -202,7 +202,7 @@ describe("DecisionsPanel", () => {
       })],
       states: { intent: "none", plan: "changes_requested" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     expect(screen.getByText(/Changes requested by a former member/)).toBeInTheDocument();
   });
@@ -217,7 +217,7 @@ describe("DecisionsPanel", () => {
       ],
       states: { intent: "none", plan: "approved" },
     };
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     expect(screen.getByText("Superseded by edit")).toBeInTheDocument();
     // The state card and the current approval still read plain "Approved".
@@ -227,7 +227,7 @@ describe("DecisionsPanel", () => {
   it("the Decisions tab shows a loading line, not a blank page", () => {
     decisions = null;
     decisionsLoading = true;
-    const { container } = render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    const { container } = render(<DecisionsPanel workspaceId="w1" />);
     expect(screen.getByText("Loading decisions…")).toBeInTheDocument();
     expect(container).not.toBeEmptyDOMElement();
   });
@@ -235,7 +235,7 @@ describe("DecisionsPanel", () => {
   it("an error state shows Retry and clicking it refetches", async () => {
     decisions = null;
     decisionsError = "Failed to fetch";
-    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    render(<DecisionsPanel workspaceId="w1" />);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Failed to fetch");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));

@@ -310,9 +310,11 @@ function ProjectWorkspace({
               approval controls and the decisions list (keyed by tab so each visit
               loads fresh, as each surface's own request used to). */}
           <DeliveryOverviewProvider key={tab} projectId={projectId}>
-            {tab === "Delivery" && <DeliveryPlan graph={graph} projectId={projectId} />}
+            {tab === "Delivery" && (
+              <DeliveryPlan graph={graph} graphError={error} projectId={projectId} />
+            )}
             {tab === "Decisions" && (
-              <DecisionsPanel projectId={projectId} workspaceId={workspaceId} />
+              <DecisionsPanel workspaceId={workspaceId} />
             )}
             {tab === "Preview" && (
               <PreviewPanel projectId={projectId} workspaceId={workspaceId} />

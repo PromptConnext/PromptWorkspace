@@ -71,6 +71,7 @@ export function NewProjectDialog({
     setFilter("");
     setError(null);
     setOpening(null);
+    setBusy(false);
   }
 
   function close() {

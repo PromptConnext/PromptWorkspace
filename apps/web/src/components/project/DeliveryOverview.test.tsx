@@ -80,7 +80,7 @@ describe("DeliveryOverviewProvider", () => {
   it("the Decisions tab reads the same one request", async () => {
     render(
       <DeliveryOverviewProvider projectId="p1">
-        <DecisionsPanel projectId="p1" workspaceId="w1" />
+        <DecisionsPanel workspaceId="w1" />
       </DeliveryOverviewProvider>,
     );
 
@@ -116,7 +116,7 @@ describe("DeliveryOverviewProvider", () => {
     render(
       <DeliveryOverviewProvider projectId="p1">
         <DeliveryPlan graph={graph} projectId="p1" />
-        <DecisionsPanel projectId="p1" workspaceId="w1" />
+        <DecisionsPanel workspaceId="w1" />
       </DeliveryOverviewProvider>,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Request plan approval" }));
