@@ -427,3 +427,34 @@ def test_a_tests_line_that_is_not_boilerplate_is_kept():
     files = build_seed_files(_project(), {"tasks": tasks})
     tasks_md = next(f.content for f in files if f.path == "docs/tasks.md")
     assert "**Tests**: Every task in src/lib adds a unit test." in tasks_md
+
+
+def test_only_the_header_is_stripped_and_code_and_other_specs_paths_are_untouched():
+    """Review of 03a2c4d: the boilerplate is the template's bold header before
+    the first `##` heading. A phase paragraph that happens to start "Input:",
+    a fenced command, and a /specs/ path the seed does not write all stay."""
+    fence = (
+        "```bash\n"
+        "Input: sample\n"
+        "mkdir -p specs/001-x/contracts\n"
+        "cat specs/001-x/spec.md\n"
+        "```\n"
+    )
+    tasks = (
+        "# Tasks: Import\n\n"
+        "**Input**: Design documents from `/specs/001-x/`\n\n"
+        "**Organization**: By story.\n\n"
+        "## Phase 1: User Story 1 - Import (Priority: P1)\n\n"
+        "Input: a CSV with columns name,email\n\n"
+        "**Tests**: Tests are OPTIONAL here, says the story.\n\n"
+        + fence
+        + "\n- [ ] T001 [US1] Parse rows per specs/001-x/data-model.md and specs/001-x/plan.md\n"
+    )
+    files = build_seed_files(_project(), {"tasks": tasks})
+    tasks_md = next(f.content for f in files if f.path == "docs/tasks.md")
+
+    assert "**Input**" not in tasks_md
+    assert "Input: a CSV with columns name,email" in tasks_md
+    assert "**Tests**: Tests are OPTIONAL here, says the story." in tasks_md
+    assert fence in tasks_md
+    assert "per specs/001-x/data-model.md and architecture.md" in tasks_md
