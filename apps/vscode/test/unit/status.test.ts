@@ -100,9 +100,20 @@ test("cached lists say when they were last updated, and that the user is signed 
 });
 
 test("only a refusal of the session counts as an auth failure", () => {
-  assert.equal(isAuthFailure(new CloudNotLoggedInError()), true);
-  assert.equal(isAuthFailure(new CloudHttpError(401, "invalid_token")), true);
-  assert.equal(isAuthFailure(new CloudHttpError(403, "forbidden")), false);
-  assert.equal(isAuthFailure(new CloudHttpError(503, "down")), false);
-  assert.equal(isAuthFailure(new Error("fetch failed")), false);
+  const stored = { signedIn: true, hasRefreshToken: true };
+  const gone = { signedIn: false, hasRefreshToken: false };
+  assert.equal(isAuthFailure(new CloudNotLoggedInError(), stored), true);
+  // A 401 while the session and its refresh token are still stored is the
+  // refresh path giving up for now (auth server down, a rotation with no
+  // usable token yet): offline, not signed out.
+  assert.equal(isAuthFailure(new CloudHttpError(401, "invalid_token"), stored), false);
+  assert.equal(isAuthFailure(new CloudHttpError(401, "invalid_token"), gone), true);
+  assert.equal(
+    isAuthFailure(new CloudHttpError(401, "invalid_token"), { signedIn: true, hasRefreshToken: false }),
+    true,
+    "metadata without a refresh token cannot recover",
+  );
+  assert.equal(isAuthFailure(new CloudHttpError(403, "forbidden"), gone), false);
+  assert.equal(isAuthFailure(new CloudHttpError(503, "down"), gone), false);
+  assert.equal(isAuthFailure(new Error("fetch failed"), gone), false);
 });

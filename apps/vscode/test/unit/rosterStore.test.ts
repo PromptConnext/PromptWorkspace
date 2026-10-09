@@ -32,8 +32,12 @@ const silentLog = { info() {}, warn() {}, error() {} };
 function fakeClient(over: Partial<{
   listWorkspaces: () => Promise<unknown>;
   listWorkspaceProjects: (id: string) => Promise<unknown>;
+  signedIn: () => boolean;
+  hasRefreshToken: () => Promise<boolean>;
 }> = {}) {
   return {
+    signedIn: over.signedIn ?? (() => true),
+    hasRefreshToken: over.hasRefreshToken ?? (async () => true),
     listWorkspaces: over.listWorkspaces ?? (async () => [{ id: "w1", name: "Acme" }]),
     listWorkspaceProjects:
       over.listWorkspaceProjects ??
@@ -197,4 +201,45 @@ test("a refused session is recorded as an auth failure; offline is not (#42)", a
   fail = null;
   await roster.refresh();
   assert.equal(roster.lastRefreshAuthFailed, false);
+});
+
+test("a 401 while the session is still stored is not an auth failure", async () => {
+  const { CloudHttpError } = await import("@promptworkspace/cloud-client");
+  const { store } = memoryStore();
+  const roster = new RosterStore(
+    fakeClient({
+      listWorkspaces: async () => {
+        throw new CloudHttpError(401, "invalid_token");
+      },
+      signedIn: () => true,
+      hasRefreshToken: async () => true,
+    }),
+    new JsonCache(store),
+    silentLog,
+  );
+  await roster.refresh();
+  assert.ok(roster.lastRefreshError);
+  assert.equal(roster.lastRefreshAuthFailed, false, "the refresh path gave up for now: offline");
+});
+
+test("a 401 after the session or its refresh token is gone is an auth failure", async () => {
+  const { CloudHttpError } = await import("@promptworkspace/cloud-client");
+  for (const client of [
+    { signedIn: () => false, hasRefreshToken: async () => false },
+    { signedIn: () => true, hasRefreshToken: async () => false },
+  ]) {
+    const { store } = memoryStore();
+    const roster = new RosterStore(
+      fakeClient({
+        listWorkspaces: async () => {
+          throw new CloudHttpError(401, "invalid_token");
+        },
+        ...client,
+      }),
+      new JsonCache(store),
+      silentLog,
+    );
+    await roster.refresh();
+    assert.equal(roster.lastRefreshAuthFailed, true);
+  }
 });

@@ -96,6 +96,14 @@ export class CloudClient {
     return this.deps.session.read() !== null;
   }
 
+  /** Whether a refresh token is stored. With `signedIn()` this tells a 401
+   *  from a session that is really gone (no way back but signing in) from one
+   *  the refresh path only gave up on for now (auth server down, another
+   *  window's rotation not visible yet), which callers must treat as offline. */
+  async hasRefreshToken(): Promise<boolean> {
+    return Boolean(await this.deps.session.refreshToken());
+  }
+
   mode(): "stub" | "supabase" {
     const { supabaseUrl, supabaseAnonKey } = this.deps.config();
     return supabaseUrl && supabaseAnonKey ? "supabase" : "stub";

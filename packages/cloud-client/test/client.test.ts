@@ -835,3 +835,12 @@ test("a file-backed lease round-trips, and anything unreadable is no lease", asy
   assert.equal(await session.readRefreshLease(), undefined);
   await session.writeRefreshLease({ owner: "w1", until: 5 });
 });
+
+test("hasRefreshToken reads whether the session can still be refreshed", async () => {
+  const { client, session } = makeClient("http://unused", "http://unused");
+  assert.equal(await client.hasRefreshToken(), false);
+  await session.store({ mode: "supabase", userId: "u1" }, "a1", "r1");
+  assert.equal(await client.hasRefreshToken(), true);
+  await session.clearIfRefreshToken("r1");
+  assert.equal(await client.hasRefreshToken(), false);
+});

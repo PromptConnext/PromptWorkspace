@@ -11,7 +11,7 @@ import type { CloudClient } from "@promptworkspace/cloud-client";
 import type { AssignedTask, TaskStatus } from "@promptworkspace/cloud-client";
 import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { OutputLogger } from "../util/log.ts";
-import { isAuthFailure } from "../auth/status.ts";
+import { refreshFailureIsAuth } from "../auth/status.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;
 
@@ -148,8 +148,10 @@ export class TaskStore {
       // already rendered and the queue holds anything unsent. Recorded rather
       // than thrown so background refreshes stay quiet and the explicit command
       // can still report it.
+      const auth = await refreshFailureIsAuth(err, this.client);
+      if (gen !== this.generation) return;
       this.lastError = err instanceof Error ? err.message : String(err);
-      this.lastErrorWasAuth = isAuthFailure(err);
+      this.lastErrorWasAuth = auth;
       this.log.info(`task refresh failed, keeping cache: ${String(err)}`);
       this.emitter.fire();
     }

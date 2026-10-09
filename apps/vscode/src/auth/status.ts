@@ -17,8 +17,8 @@ export interface SessionSignal {
   /** A session is stored (globalState metadata). Another window can clear it
    *  without this window hearing an event, so a stored session is not proof. */
   stored: boolean;
-  /** The last task or roster refresh was refused as unauthenticated: no
-   *  session, or a 401 after the refresh path gave up. */
+  /** The last task or roster refresh failed because the session is gone
+   *  (see `isAuthFailure`), not merely because the refresh gave up for now. */
   authFailed: boolean;
 }
 
@@ -122,9 +122,35 @@ export function cachedLabel(refreshedAt: number, formatTime: (ms: number) => str
     : "cached (signed out)";
 }
 
-/** A refresh failure that means "the cloud does not accept this session",
- *  as opposed to offline (network, 5xx) or a permission answer (403). */
-export function isAuthFailure(err: unknown): boolean {
+/** What is stored right now, read after a refresh failed. */
+export interface StoredSession {
+  signedIn: boolean;
+  hasRefreshToken: boolean;
+}
+
+/**
+ * A refresh failure that means "this session is gone": no session at all, or
+ * a 401 once the session or its refresh token has been removed (refused by
+ * the auth server, or cleared by another window). Any other 401 is the refresh
+ * path giving up for now — the auth server offline, a rotation whose new token
+ * is not visible yet — and is offline, like a network error, 5xx or 403.
+ */
+export function isAuthFailure(err: unknown, stored: StoredSession): boolean {
   if (err instanceof CloudNotLoggedInError) return true;
-  return err instanceof CloudHttpError && err.status === 401;
+  if (!(err instanceof CloudHttpError) || err.status !== 401) return false;
+  return !stored.signedIn || !stored.hasRefreshToken;
+}
+
+/** `isAuthFailure`, reading what is stored from the client. Used by both
+ *  stores' refresh `catch`. */
+export async function refreshFailureIsAuth(
+  err: unknown,
+  client: { signedIn(): boolean; hasRefreshToken(): Promise<boolean> },
+): Promise<boolean> {
+  if (err instanceof CloudNotLoggedInError) return true;
+  if (!(err instanceof CloudHttpError) || err.status !== 401) return false;
+  return isAuthFailure(err, {
+    signedIn: client.signedIn(),
+    hasRefreshToken: await client.hasRefreshToken().catch(() => false),
+  });
 }

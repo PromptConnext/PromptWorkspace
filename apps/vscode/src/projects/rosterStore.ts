@@ -12,7 +12,7 @@
 import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
 import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { RosterEntry } from "./roster.ts";
-import { isAuthFailure } from "../auth/status.ts";
+import { refreshFailureIsAuth } from "../auth/status.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;
 
@@ -124,8 +124,10 @@ export class RosterStore {
     } catch (err) {
       // If clear() was called, drop the error silently too.
       if (gen !== this.generation) return;
+      const auth = await refreshFailureIsAuth(err, this.client);
+      if (gen !== this.generation) return;
       this.lastError = err instanceof Error ? err.message : String(err);
-      this.lastErrorWasAuth = isAuthFailure(err);
+      this.lastErrorWasAuth = auth;
       this.log.info(`roster refresh failed, keeping cache: ${String(err)}`);
       this.emit();
     }
