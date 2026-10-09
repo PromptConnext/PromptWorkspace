@@ -58,6 +58,9 @@ export function NewProjectDialog({
   const [consent, setConsent] = useState(false);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  // The created project's name while the parent navigates to it: the dialog
+  // stays, busy, until the project page replaces this one (finding #4).
+  const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
@@ -67,6 +70,7 @@ export function NewProjectDialog({
     setConsent(false);
     setFilter("");
     setError(null);
+    setOpening(null);
   }
 
   function close() {
@@ -96,39 +100,42 @@ export function NewProjectDialog({
 
   if (!open) return null;
 
+  // Still busy after success: the navigation onCreated starts takes seconds,
+  // and the dialog stays until it lands.
+  function opened(project: Project) {
+    setOpening(project.name);
+    onCreated(project);
+  }
+
   async function createScratch() {
-    if (!name.trim()) return;
+    if (busy || !name.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const project = await createProject({ name: name.trim(), workspace_id: workspaceId }, authHeaders());
-      reset();
-      onCreated(project);
+      opened(await createProject({ name: name.trim(), workspace_id: workspaceId }, authHeaders()));
     } catch (err) {
       setError((err as Error).message);
-    } finally {
       setBusy(false);
     }
   }
 
   async function createImport() {
-    if (!selected || !consent) return;
+    if (busy || !selected || !consent) return;
     setBusy(true);
     setError(null);
     try {
-      const project = await createProject(
-        {
-          name: name.trim() || selected.name,
-          workspace_id: workspaceId,
-          import_repo_full_name: selected.full_name,
-        },
-        authHeaders(),
+      opened(
+        await createProject(
+          {
+            name: name.trim() || selected.name,
+            workspace_id: workspaceId,
+            import_repo_full_name: selected.full_name,
+          },
+          authHeaders(),
+        ),
       );
-      reset();
-      onCreated(project);
     } catch (err) {
       setError(describeError((err as Error).message));
-    } finally {
       setBusy(false);
     }
   }
@@ -397,6 +404,10 @@ export function NewProjectDialog({
             </div>
           </div>
         )}
+        {/* Mounted up front so the line is announced when it appears. */}
+        <p role="status" className="mt-3 text-xs text-slate-500 empty:hidden">
+          {opening !== null ? `Opening ${opening}…` : ""}
+        </p>
       </div>
     </div>
   );
