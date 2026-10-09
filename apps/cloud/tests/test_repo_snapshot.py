@@ -19,6 +19,7 @@ from app.imports.snapshot import (
     EXCERPT_FILE_CHARS,
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
+    MAX_SKIPPED,
     OUTLINE_MAX_FILES,
     build_snapshot,
     detect_stack,
@@ -508,3 +509,51 @@ def test_a_snapshot_stored_before_outlines_still_validates():
     snapshot = RepoSnapshot.model_validate(old)
     assert snapshot.source_outlines == []
     assert snapshot.test_summary == ""
+
+
+# --- which files the analysis skipped (task 4.5, finding #6) -----------------
+
+
+def test_52_of_53_files_read_lists_the_skipped_file_and_why():
+    sources = [f"src/m{i:02d}.ts" for i in range(52)]
+    fake = _fake_repo({}, extra_paths=[*sources, "certs/server.pem"])
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert snapshot.file_count == 52
+    assert snapshot.skipped_count == 1
+    assert [(s.path, s.reason) for s in snapshot.skipped] == [("certs/server.pem", "secret")]
+    # Naming a skipped secret-shaped file is not reading it.
+    assert "certs/server.pem" not in {path for _repo, path, _sha in fake.fetched_files}
+
+
+def test_skipped_files_say_why_and_a_vendored_directory_is_one_entry():
+    fake = _fake_repo(
+        {},
+        extra_paths=[
+            "src/index.ts",
+            "public/logo.png",
+            ".env",
+            "node_modules/react/index.js",
+            "node_modules/react/package.json",
+            "web/dist/app.js",
+        ],
+    )
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert snapshot.file_count == 1
+    assert snapshot.skipped_count == 5
+    assert [(s.path, s.reason) for s in snapshot.skipped] == [
+        (".env", "secret"),
+        ("node_modules/", "vendored"),
+        ("public/logo.png", "binary"),
+        ("web/dist/", "vendored"),
+    ]
+
+
+def test_the_skipped_list_is_capped_but_the_count_is_not():
+    images = [f"img/{i:04d}.png" for i in range(MAX_SKIPPED + 25)]
+    fake = _fake_repo({}, extra_paths=["src/index.ts", *images])
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert len(snapshot.skipped) == MAX_SKIPPED
+    assert snapshot.skipped_count == MAX_SKIPPED + 25

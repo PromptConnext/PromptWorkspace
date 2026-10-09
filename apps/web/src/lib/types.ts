@@ -450,6 +450,13 @@ export interface RepoExcerpt {
   truncated: boolean;
 }
 
+// A path the analysis left out: a vendored or build directory (one entry,
+// ending in "/"), a binary file, or a secret-shaped file it never fetched.
+export interface RepoSkippedFile {
+  path: string;
+  reason: "vendored" | "binary" | "secret";
+}
+
 export interface RepoSnapshot {
   commit_sha: string;
   default_branch: string;
@@ -461,6 +468,10 @@ export interface RepoSnapshot {
   stack: RepoStack;
   excerpts: RepoExcerpt[];
   paths: string[];
+  // What the filter left out, capped; skipped_count counts every file. Absent
+  // from an API older than the trust-test fixes.
+  skipped?: RepoSkippedFile[];
+  skipped_count?: number;
 }
 
 export type RepoAnalysisStatus = "none" | "snapshot_ready" | "baseline_ready" | "failed";

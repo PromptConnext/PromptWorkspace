@@ -6,7 +6,7 @@ import { patchRepoAnalysis } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { useRepoAnalysis } from "./useRepoAnalysis";
-import type { RepoAnalysisOut } from "@/lib/types";
+import type { RepoAnalysisOut, RepoSkippedFile } from "@/lib/types";
 
 // The element the Plan and Tasks tabs' "Analyze the repository first" notice
 // scrolls to after switching to the Foundation tab.
@@ -47,6 +47,12 @@ const STATUS_TEXT: Record<RepoAnalysisOut["status"], string> = {
   snapshot_ready: "The repository has been read; the codebase baseline isn't written yet.",
   baseline_ready: "Analyzed — the plan and tasks are written against this baseline.",
   failed: "The last analysis didn't finish. The repository read was kept; analyze again.",
+};
+
+const SKIP_REASON_TEXT: Record<RepoSkippedFile["reason"], string> = {
+  vendored: "vendored or build directory",
+  binary: "binary file",
+  secret: "credential-shaped file, never read",
 };
 
 function Chip({ children }: { children: string }) {
@@ -101,6 +107,8 @@ export function CodebaseAnalysisPanel({
   }
 
   const snapshot = analysis.snapshot;
+  const skipped = snapshot?.skipped ?? [];
+  const skippedCount = snapshot?.skipped_count ?? 0;
   const analyzing = status === "analyzing";
   const hasAnalysis = analysis.status !== "none";
 
@@ -132,9 +140,25 @@ export function CodebaseAnalysisPanel({
         <div className="mt-3 space-y-2 rounded bg-slate-50 p-3 text-xs text-slate-600">
           <p>
             Commit <code>{snapshot.commit_sha.slice(0, 7)}</code> on{" "}
-            <strong>{snapshot.default_branch}</strong> · {snapshot.file_count} file
-            {snapshot.file_count === 1 ? "" : "s"} read
+            <strong>{snapshot.default_branch}</strong> · {snapshot.file_count}
+            {skippedCount > 0 && ` of ${snapshot.file_count + skippedCount}`} file
+            {snapshot.file_count + skippedCount === 1 ? "" : "s"} read
           </p>
+          {skippedCount > 0 && (
+            <details>
+              <summary className="cursor-pointer text-slate-700">
+                {skippedCount} file{skippedCount === 1 ? "" : "s"} skipped
+              </summary>
+              <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto">
+                {skipped.map((entry) => (
+                  <li key={entry.path}>
+                    <code>{entry.path}</code>{" "}
+                    <span className="text-slate-500">— {SKIP_REASON_TEXT[entry.reason]}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {snapshot.tree_truncated && (
             <p className="text-amber-700">
               GitHub listed only part of this repository — it is too large to list in one request —

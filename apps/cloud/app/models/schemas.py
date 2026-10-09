@@ -1364,6 +1364,15 @@ class RepoExcerpt(BaseModel):
     truncated: bool = False
 
 
+class RepoSkippedFile(BaseModel):
+    """A path the snapshot left out (app/imports/snapshot.py::skipped_files):
+    a vendored or build directory (one entry, path ending in `/`), a binary
+    file, or a secret-shaped file whose content is never fetched."""
+
+    path: str
+    reason: Literal["vendored", "binary", "secret"]
+
+
 class RepoSnapshot(BaseModel):
     """Deterministic read of one commit of the repository
     (app/imports/snapshot.py). Secret-shaped files (`.env*`, keys,
@@ -1392,6 +1401,11 @@ class RepoSnapshot(BaseModel):
     # "N test files: tests/ 12, src/ 3" or "no test files found". Empty on a
     # snapshot stored before plan 0028.
     test_summary: str = ""
+    # What the filter left out and why, capped; `skipped_count` is every file
+    # skipped, so `file_count` of `file_count + skipped_count` were read. Empty
+    # on a snapshot stored before the trust-test fixes (finding #6).
+    skipped: list[RepoSkippedFile] = Field(default_factory=list)
+    skipped_count: int = 0
 
 
 class RepoAnalysis(BaseModel):

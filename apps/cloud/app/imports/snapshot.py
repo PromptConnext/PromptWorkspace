@@ -34,7 +34,7 @@ import re
 from collections import Counter
 
 from app.integrations.github import GithubWriteError
-from app.models.schemas import RepoExcerpt, RepoSnapshot, RepoStack
+from app.models.schemas import RepoExcerpt, RepoSkippedFile, RepoSnapshot, RepoStack
 
 # Any path with one of these as a directory segment is vendored, generated or
 # tool state — never the code a plan should be written against.
@@ -231,6 +231,8 @@ _EXCERPT_GLOBS = (
 )
 
 MAX_PATHS = 2_000
+# Entries in a snapshot's `skipped` list; `skipped_count` stays exact.
+MAX_SKIPPED = 50
 MAX_SUMMARY_DIRS = 200
 EXCERPT_FILE_CHARS = 8_000
 EXCERPT_TOTAL_CHARS = 30_000
@@ -316,6 +318,36 @@ def is_excluded_path(path: str) -> bool:
 
 def filter_paths(paths: list[str]) -> list[str]:
     return sorted(p for p in paths if p and not is_excluded_path(p))
+
+
+def skipped_files(
+    paths: list[str], limit: int = MAX_SKIPPED
+) -> tuple[list[RepoSkippedFile], int]:
+    """What the filter above left out of the analysis and why (finding #6),
+    as (entries sorted by path and capped at `limit`, total files skipped).
+
+    A vendored or build directory is one entry (`node_modules/`), not one per
+    file inside it. Naming a secret-shaped file here is not reading it: the
+    name is already in the repository's own listing, and its content is never
+    fetched."""
+    entries: dict[str, str] = {}
+    count = 0
+    for path in paths:
+        if not path or not is_excluded_path(path):
+            continue
+        count += 1
+        parts = path.split("/")
+        vendored = next(
+            (i for i, part in enumerate(parts[:-1]) if part in _EXCLUDED_DIRS), None
+        )
+        if vendored is not None:
+            entries["/".join(parts[: vendored + 1]) + "/"] = "vendored"
+        elif is_secret_path(path):
+            entries[path] = "secret"
+        else:
+            entries[path] = "binary"
+    listed = [RepoSkippedFile(path=p, reason=entries[p]) for p in sorted(entries)[:limit]]
+    return listed, count
 
 
 def summarize_tree(paths: list[str], max_dirs: int = MAX_SUMMARY_DIRS) -> str:
@@ -504,6 +536,7 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
     head_sha = await github_client.get_branch_head(token, repo, branch)
     raw_paths, truncated = await github_client.get_tree(token, repo, head_sha)
     paths = filter_paths(raw_paths)
+    skipped, skipped_count = skipped_files(raw_paths)
 
     excerpts: list[RepoExcerpt] = []
     remaining = EXCERPT_TOTAL_CHARS
@@ -535,6 +568,8 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
         paths=paths[:MAX_PATHS],
         source_outlines=source_outlines,
         test_summary=summarize_tests(paths),
+        skipped=skipped,
+        skipped_count=skipped_count,
     )
 
 
