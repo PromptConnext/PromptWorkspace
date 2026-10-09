@@ -6,8 +6,16 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { SignInFlow } from "./auth/signIn.ts";
+import {
+  CONNECTED,
+  cachedLabel,
+  connectionState,
+  type Connection,
+  type ConnectionKind,
+  type FolderLink,
+} from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
-import { SessionStore } from "@promptworkspace/cloud-client";
+import { SessionStore, fileLeaseStorage } from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
@@ -27,7 +35,7 @@ import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
-import { copyTaskContext } from "./tasks/copyContext.ts";
+import { buildTaskContext } from "./tasks/copyContext.ts";
 import { StatusQueue, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
@@ -39,7 +47,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const log = new OutputLogger();
   context.subscriptions.push(log);
 
-  const session = new SessionStore(context.secrets, context.globalState);
+  // The refresh lease (#50a) gets a file of its own rather than a globalState
+  // key: globalState is one blob per extension, and a lease written from a
+  // window with a stale copy would revert another window's session key.
+  const session = new SessionStore(
+    context.secrets,
+    context.globalState,
+    fileLeaseStorage(createFileStore(context.globalStorageUri)),
+  );
   const client = new CloudClient({
     session,
     config: () => {
@@ -85,8 +100,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // a holder rather than the other way round. Before it exists, nothing is
   // pending — which is true, not a placeholder.
   let watcher: GitWatcher | undefined;
-  const tree = new TaskTreeProvider(store, activeProject, (projectId) =>
-    watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING,
+  // Signed out / unlinked (findings #37, #42), recomputed by renderConnection
+  // below; the trees read it for their banner row.
+  let connection: Connection = CONNECTED;
+  const tree = new TaskTreeProvider(
+    store,
+    activeProject,
+    (projectId) => (watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING),
+    () => connection,
   );
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
@@ -95,15 +116,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: tree,
   });
   const roster = new RosterStore(client, cache, log);
-  const rosterTree = new RosterTreeProvider(roster, store, git, context.globalState);
+  const rosterTree = new RosterTreeProvider(
+    roster,
+    store,
+    git,
+    context.globalState,
+    () => connection,
+  );
   const projectsView = vscode.window.createTreeView("promptworkspace.projects", {
     treeDataProvider: rosterTree,
   });
+  const connectionItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 6);
   context.subscriptions.push(
     treeView,
     projectsView,
     rosterTree,
     statusBar,
+    connectionItem,
     store,
     tree,
     contextView,
@@ -153,13 +182,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // failure this prevents. Who is signed in moves to the Projects view in a
   // later task; sign-out stays reachable from the view title menu regardless.
   const showTitle = () => {
-    const current = session.read();
-    if (!current) {
+    const active = activeProject();
+    const project = active ? projectNameFor(active.projectId) : undefined;
+    if (connection.state === "signed_out") {
+      // A cached list shown while signed out must say so (#42): it used to
+      // read "updated 11:24 PM" for hours while every refresh failed.
+      treeView.description =
+        store.all().length > 0
+          ? [project, cachedLabel(store.refreshedAt, formatTime)].filter(Boolean).join(" · ")
+          : undefined;
+      return;
+    }
+    if (!session.read()) {
       treeView.description = undefined;
       return;
     }
-    const active = activeProject();
-    const project = active ? projectNameFor(active.projectId) : undefined;
     if (store.lastRefreshError) {
       treeView.description = project ? `${project} · offline` : "offline";
       return;
@@ -173,6 +210,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // carries the project instead. Both also have to say when they last reached
   // the cloud, or a refresh that legitimately changes nothing looks broken.
   const describeRoster = () => {
+    if (connection.state === "signed_out") {
+      return roster.all().length > 0 ? cachedLabel(roster.refreshedAt, formatTime) : undefined;
+    }
     const current = session.read();
     if (!current) return undefined;
     const who = current.email ?? current.userId;
@@ -185,6 +225,79 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Candidates come from the roster, not the task list: a project with no
   // work assigned to this developer still needs to be linkable.
   const candidates = () => linkCandidatesFrom(rosterTree.rows());
+
+  // One answer to "is this window connected?" for the status bar, both trees'
+  // banner rows, the view descriptions, the signed-in context key and one
+  // notification per window per state. Called from every event that can
+  // change it; cheap (a roster rebuild and a config read per folder).
+  const notified = new Set<ConnectionKind>();
+  // Set by the Sign Out command: a sign-out the user asked for is not news.
+  let signingOut = false;
+  let signedInContext: boolean | undefined;
+  const folderLinks = (linkable: ReturnType<typeof candidates>): FolderLink[] =>
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => git.repositoryFor(folder.uri) !== undefined)
+      .map((folder) => ({
+        name: folder.name,
+        linked: projectIdFor(folder.uri) !== undefined,
+        declined: link.isNotProjectFolder(folder.uri),
+        hasMatch: link.candidatesFor(folder.uri, linkable).length > 0,
+      }));
+  // "Not a project folder": every repository folder the warning was about.
+  const declineUnlinkedFolders = async () => {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (!git.repositoryFor(folder.uri) || projectIdFor(folder.uri)) continue;
+      if (link.isNotProjectFolder(folder.uri)) continue;
+      await link.markNotProjectFolder(folder.uri);
+    }
+    renderConnection();
+  };
+  const renderConnection = () => {
+    const linkable = candidates();
+    const next = connectionState(
+      {
+        stored: session.read() !== null,
+        authFailed: store.lastRefreshAuthFailed || roster.lastRefreshAuthFailed,
+      },
+      { cached: store.all().length > 0 || roster.all().length > 0, linkable: linkable.length },
+      folderLinks(linkable),
+    );
+    const changed = next.state !== connection.state || next.message !== connection.message;
+    connection = next;
+    // Back to normal: a later, second loss in this window is news again.
+    if (next.state === "ok") notified.clear();
+    const signedIn = next.state !== "signed_out";
+    if (signedIn !== signedInContext) {
+      signedInContext = signedIn;
+      void setSignedInContext(signedIn);
+    }
+    if (next.statusText) {
+      connectionItem.text = next.statusText;
+      connectionItem.tooltip = next.message;
+      connectionItem.command = next.action?.command;
+      connectionItem.show();
+    } else {
+      connectionItem.hide();
+    }
+    if (changed) {
+      tree.refresh();
+      rosterTree.refresh();
+    }
+    showTitle();
+    projectsView.description = describeRoster();
+    const action = next.action;
+    // Never during an explicit Sign Out: secrets, session and both stores all
+    // fire while it runs, and the user already knows.
+    if (!signingOut && next.notify && action && !notified.has(next.state)) {
+      notified.add(next.state);
+      const buttons: string[] = [action.title];
+      if (next.dismiss) buttons.push(next.dismiss.title);
+      void vscode.window.showWarningMessage(next.message, ...buttons).then((choice) => {
+        if (choice === action.title) void vscode.commands.executeCommand(action.command);
+        else if (next.dismiss && choice === next.dismiss.title) void declineUnlinkedFolders();
+      });
+    }
+  };
 
   // Shared by every event that can change the answer to "which project is
   // the active one": switching the focused editor, editing
@@ -205,7 +318,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const active = activeProject();
     await setActiveProjectContext(active);
     tree.refresh();
-    showTitle();
+    renderConnection();
     await contextView.render();
   };
 
@@ -213,14 +326,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store.onDidChange(() => {
       tree.refresh();
       rosterTree.refresh();
-      showTitle();
+      renderConnection();
     }),
     roster.onDidChange(() => {
       rosterTree.refresh();
-      projectsView.description = describeRoster();
+      renderConnection();
       void link.offerLinks(candidates());
     }),
     git.onDidChangeRepositoryState(() => rosterTree.refresh()),
+    // Another window signing in or out changes the shared secrets without an
+    // event on this window's SessionStore; this is the only signal we get.
+    context.secrets.onDidChange(() => renderConnection()),
     // A freshly cloned window can activate before vscode.git has finished
     // discovering the repository `git.clone` just created (getAPI(1) returns
     // ahead of discovery — see gitBridge.ts). The activation-time call to
@@ -229,19 +345,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Memento read so the common case — no clone in flight — costs nothing
     // more than that.
     git.onDidOpenRepository(() => {
+      // A repository appearing can make this window "unlinked".
+      renderConnection();
       if (!readPendingClone(context.globalState)) return;
       void link.applyPendingClone(candidates());
     }),
     session.onDidChange((current) => {
-      void setSignedInContext(current !== null);
-      showTitle();
+      // A session this window lost without being asked (a refused refresh)
+      // is worth a notification; one the user just signed out of is not —
+      // `signingOut` stays set until the stores have finished clearing, since
+      // their change events render again.
+      renderConnection();
       if (current) {
+        signingOut = false;
         // Then look at git again: commits held while signed out can close now.
         void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
         void roster.refresh();
       } else {
-        void store.clear();
-        void roster.clear();
+        void Promise.all([store.clear(), roster.clear()]).finally(() => {
+          signingOut = false;
+        });
         void clearCloneState(context.globalState);
         void queue.clear().then(refreshStatusBar);
         // Otherwise a folder user A declined to link stays declined for user
@@ -313,6 +436,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         if (choice !== "Sign out anyway") return;
       }
+      signingOut = true;
       await session.clear();
     }),
     // Explicit refresh, unlike the background triggers, owes the user an
@@ -331,7 +455,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await contextView.render(true);
         },
       );
-      showTitle();
+      renderConnection();
       const failure = store.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
@@ -345,12 +469,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await writer.flush();
       refreshStatusBar();
     }),
+    // The row click (finding #36): the three things a developer clicking a
+    // task most likely wants, with Start first unless the task is closed.
+    vscode.commands.registerCommand(
+      "promptworkspace.taskActions",
+      async (node?: TreeNode) => {
+        const entry = taskFromNode(node);
+        if (!entry) return;
+        const actions = [
+          {
+            label: "$(play) Start Task",
+            detail: "Assign it to you, mark it in progress and switch to its branch.",
+            command: "promptworkspace.startTask",
+          },
+          {
+            label: "$(clippy) Copy Task Context",
+            detail: "Title, criteria, spec and coding rules, for an AI agent.",
+            command: "promptworkspace.copyTaskContext",
+          },
+          {
+            label: "$(link-external) Open in the Web App",
+            command: "promptworkspace.openTaskInWeb",
+          },
+        ];
+        if (isClosed(entry.task.status)) actions.push(actions.shift()!);
+        const picked = await vscode.window.showQuickPick(actions, { title: entry.task.title });
+        if (picked) await vscode.commands.executeCommand(picked.command, node);
+      },
+    ),
     vscode.commands.registerCommand(
       "promptworkspace.copyTaskContext",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
-        await copyTaskContext(entry, client, docs, log);
+        await vscode.env.clipboard.writeText(await buildTaskContext(entry, client, docs, log));
+        void vscode.window.showInformationMessage(
+          `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
+        );
       },
     ),
     vscode.commands.registerCommand(
@@ -441,7 +596,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: { viewId: "promptworkspace.projects" } },
         () => roster.refresh(),
       );
-      projectsView.description = describeRoster();
+      renderConnection();
       const failure = roster.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
@@ -480,18 +635,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ------------------------------------------------------------- start-up
 
-  await setSignedInContext(session.read() !== null);
   await setActiveProjectContext(activeProject());
-  showTitle();
   refreshStatusBar();
   await store.loadFromCache();
   await roster.loadFromCache();
+  renderConnection();
   // Off the cache, not the refresh: this is what makes a freshly cloned
   // window link itself before it has ever reached the network. The fast
   // path — repository discovery already finished by the time we get here.
   // The `onDidOpenRepository` subscription above covers the slow path.
   await link.applyPendingClone(candidates());
-  projectsView.description = describeRoster();
 
   watcher = new GitWatcher(
     git,
@@ -560,5 +713,7 @@ function createFileStore(root: vscode.Uri): FileStoreLike {
 }
 
 const EMPTY_PENDING: ReadonlySet<string> = new Set();
+
+const formatTime = (ms: number) => new Date(ms).toLocaleTimeString();
 
 export { ALL_CACHE_FILES };

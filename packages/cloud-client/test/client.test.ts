@@ -11,7 +11,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { CloudClient } from "../src/client.ts";
 import { CloudHttpError, CloudNotLoggedInError } from "../src/errors.ts";
-import { SessionStore, type SecretsLike, type StorageLike } from "../src/session.ts";
+import {
+  SessionStore,
+  fileLeaseStorage,
+  type LeaseStorageLike,
+  type RefreshLease,
+  type SecretsLike,
+  type StorageLike,
+} from "../src/session.ts";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -496,4 +503,344 @@ test("a workspace id is escaped into the projects path", async () => {
       assert.deepEqual(calls, ["/workspaces/a%20b%2Fc/projects"]);
     },
   );
+});
+
+// ------------------------------------------------------------ refresh lease
+//
+// Finding #50a: every editor window refreshes the shared session at the same
+// moment, so N windows make N refresh calls per expiry and all but one lose
+// the rotation. A lease lets one window refresh while the others re-read the
+// secrets for the pair it stores. The lease is best-effort (shared editor
+// storage has no compare-and-set), so every way it can go wrong must still end
+// in one valid session — never a sign-out, never a 401.
+
+type LeaseCell = { lease?: RefreshLease };
+
+/** A lease store every window sees at once (one shared cell). */
+function sharedLeases(): LeaseStorageLike {
+  const cell: LeaseCell = {};
+  return {
+    async read() {
+      return cell.lease;
+    },
+    async write(lease) {
+      cell.lease = lease;
+    },
+  };
+}
+
+/** Two "windows": separate clients and SessionStores over one shared secret
+ *  store, one shared state store and one shared lease store. */
+function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}) {
+  const secrets = memorySecrets();
+  const state = memoryState();
+  const leases = sharedLeases();
+  const make = () => {
+    const session = new SessionStore(secrets, state, leases);
+    const client = new CloudClient({
+      session,
+      config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
+      fetch: (input, init) => fetch(input, init),
+      log: silentLog,
+      now: opts.now,
+      sleep: opts.sleep,
+    });
+    return { client, session };
+  };
+  return { a: make(), b: make(), state, leases };
+}
+
+/** A Supabase stand-in that really rotates: each refresh token works once. */
+function rotatingCloud() {
+  let refreshes = 0;
+  let current = "r0";
+  let issued = 0;
+  const handler: Handler = (req, res) => {
+    if (req.url?.startsWith("/auth/v1/token")) {
+      refreshes += 1;
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const presented = (JSON.parse(body) as { refresh_token: string }).refresh_token;
+        // Answer after a moment, as a real auth server does, so a second
+        // window has time to collide with the first.
+        setTimeout(() => {
+          if (presented !== current) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error_code: "refresh_token_not_found" }));
+            return;
+          }
+          issued += 1;
+          current = `r${issued}`;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ access_token: `access-${issued}`, refresh_token: current }));
+        }, 30);
+      });
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (req.headers.authorization === `Bearer access-${issued}` && issued > 0) {
+      res.end("[]");
+      return;
+    }
+    res.statusCode = 401;
+    res.end(JSON.stringify({ detail: "invalid_token" }));
+  };
+  return { handler, refreshes: () => refreshes, current: () => current };
+}
+
+test("two clients over one store make one refresh call", async () => {
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, b } = twoWindows(base);
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+
+    const [fromA, fromB] = await Promise.all([
+      a.client.listAssignedTasks(),
+      b.client.listAssignedTasks(),
+    ]);
+    assert.deepEqual(fromA, []);
+    assert.deepEqual(fromB, []);
+    assert.equal(cloud.refreshes(), 1, "one window refreshed; the other adopted its pair");
+    assert.equal(a.session.read()?.userId, "u1");
+    assert.equal(await b.session.refreshToken(), "r1");
+  });
+});
+
+test("an expired lease is taken over", async () => {
+  // A window that crashed mid-refresh leaves its lease behind. It must expire,
+  // or one dead window stops every other window from ever refreshing.
+  let t = 1_000_000;
+  const now = () => t;
+  const sleep = async (ms: number) => {
+    t += ms;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, leases } = twoWindows(base, { now, sleep });
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+
+    // Already expired: taken at once.
+    await leases.write({ owner: "dead-window", until: t - 1 });
+    assert.deepEqual(await a.client.listAssignedTasks(), []);
+    assert.equal(cloud.refreshes(), 1);
+    assert.equal(await leases.read(), undefined, "released after the refresh");
+
+    // Live when we arrive, held by a window that never finishes: waited out
+    // on the injected clock, then taken over.
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale-again");
+    await leases.write({ owner: "dead-window", until: t + 5_000 });
+    const before = t;
+    assert.deepEqual(await a.client.listAssignedTasks(), []);
+    assert.equal(cloud.refreshes(), 2);
+    assert.ok(t - before >= 5_000, "it waited for the lease to expire, not less");
+  });
+});
+
+test("a lease that can never be won falls through to a refresh, not a sign-out", async () => {
+  // Another window keeps renewing the lease and never stores a pair. Waiting
+  // forever is wrong and so is giving up with a 401: refresh anyway and let
+  // the rotation check decide.
+  let t = 1_000_000;
+  const now = () => t;
+  const sleep = async (ms: number) => {
+    t += ms;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const leases: LeaseStorageLike = {
+      async read() {
+        return { owner: "greedy-window", until: t + 60_000 };
+      },
+      async write() {
+        /* the greedy window's lease always wins */
+      },
+    };
+    const session = new SessionStore(memorySecrets(), memoryState(), leases);
+    const client = new CloudClient({
+      session,
+      config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
+      fetch: (input, init) => fetch(input, init),
+      log: silentLog,
+      now,
+      sleep,
+    });
+    await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+    assert.deepEqual(await client.listAssignedTasks(), []);
+    assert.equal(cloud.refreshes(), 1);
+    assert.equal(session.read()?.userId, "u1");
+  });
+});
+
+// The worst case of editor storage, modelled on VS Code's globalState: each
+// window holds its own copy of one JSON blob, a write changes the local copy
+// at once and reaches the other windows only after a delay — as the WHOLE
+// object, replacing theirs, last arrival wins. Secrets are per key and shared.
+// The lease store below behaves the same way, so the lease can be won by both
+// windows (delivery slower than the read-back) or lost by both (both writes
+// cross in flight). Time is scaled: a client's 200 ms sleep waits 20 ms.
+
+function replicatedBlobs(deliveryMs: number) {
+  const copies = new Map<string, Record<string, unknown>>();
+  const window = (id: string) => {
+    copies.set(id, {});
+    return {
+      get<T>(key: string): T | undefined {
+        return copies.get(id)![key] as T | undefined;
+      },
+      async set(key: string, value: unknown) {
+        const mine = { ...copies.get(id)! };
+        if (value === undefined) delete mine[key];
+        else mine[key] = value;
+        copies.set(id, mine);
+        const snapshot = structuredClone(mine);
+        setTimeout(() => {
+          for (const other of copies.keys()) {
+            if (other !== id) copies.set(other, structuredClone(snapshot));
+          }
+        }, deliveryMs);
+      },
+    };
+  };
+  const seed = (key: string, value: unknown) => {
+    for (const [id, blob] of copies) copies.set(id, { ...blob, [key]: value });
+  };
+  return { window, seed };
+}
+
+function replicatedWindows(base: string, deliveryMs: number) {
+  let t = 1_000_000;
+  const now = () => t;
+  const sleep = async (ms: number) => {
+    t += ms;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(1, ms / 10)));
+  };
+  const secrets = memorySecrets();
+  const stateBlobs = replicatedBlobs(deliveryMs);
+  const leaseBlobs = replicatedBlobs(deliveryMs);
+  const make = (id: string) => {
+    const stateCopy = stateBlobs.window(id);
+    const leaseCopy = leaseBlobs.window(id);
+    const state: StorageLike = { get: (key) => stateCopy.get(key), update: (key, value) => stateCopy.set(key, value) };
+    const leases: LeaseStorageLike = {
+      read: async () => leaseCopy.get<RefreshLease>("lease"),
+      write: (lease) => leaseCopy.set("lease", lease),
+    };
+    const lost: string[] = [];
+    const session = new SessionStore(secrets, state, leases);
+    const client = new CloudClient({
+      session,
+      config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
+      fetch: (input, init) => fetch(input, init),
+      log: {
+        info: (m: string) => lost.push(m),
+        warn: (m: string) => lost.push(m),
+        error: (m: string) => lost.push(m),
+      },
+      now,
+      sleep,
+    });
+    return { client, session, logs: lost, stateCopy };
+  };
+  const a = make("a");
+  const b = make("b");
+  return { a, b, secrets, stateBlobs };
+}
+
+async function bothWindowsRefresh(deliveryMs: number) {
+  const cloud = rotatingCloud();
+  let result!: { logsA: string[]; logsB: string[]; refreshes: number };
+  await withServer(cloud.handler, async (base) => {
+    const { a, b, secrets, stateBlobs } = replicatedWindows(base, deliveryMs);
+    stateBlobs.seed("promptworkspace.cloud.session", { mode: "supabase", userId: "u1" });
+    await secrets.store("promptworkspace.cloud.access", "stale");
+    await secrets.store("promptworkspace.cloud.refresh", "r0");
+
+    const [fromA, fromB] = await Promise.all([
+      a.client.listAssignedTasks(),
+      b.client.listAssignedTasks(),
+    ]);
+    // Never a 401, never a sign-out: both windows end on the one valid pair.
+    assert.deepEqual(fromA, []);
+    assert.deepEqual(fromB, []);
+    assert.equal(a.session.read()?.userId, "u1");
+    assert.equal(b.session.read()?.userId, "u1");
+    assert.equal(await secrets.get("promptworkspace.cloud.refresh"), cloud.current());
+    for (const line of [...a.logs, ...b.logs]) assert.doesNotMatch(line, /signing out/);
+    result = { logsA: a.logs, logsB: b.logs, refreshes: cloud.refreshes() };
+  });
+  return result;
+}
+
+test("both windows winning the lease still ends in one valid session", async () => {
+  // Delivery slower than the read-back: each window reads its own lease back.
+  const { logsA, logsB, refreshes } = await bothWindowsRefresh(500);
+  assert.equal(refreshes, 2, "both refreshed: the lease could not tell them apart");
+  const lostRotation = [...logsA, ...logsB].filter((l) => /lost the rotation/.test(l));
+  assert.equal(lostRotation.length, 1, "the loser adopted the winner's pair");
+});
+
+test("both windows losing the lease still ends in one valid session", async () => {
+  // Delivery faster than the read-back but slower than the gap between the two
+  // writes: each window's write is overwritten by the other's in flight.
+  const { logsA, logsB } = await bothWindowsRefresh(15);
+  assert.ok(logsA.some((l) => /lost the refresh lease/.test(l)), logsA.join("\n"));
+  assert.ok(logsB.some((l) => /lost the refresh lease/.test(l)), logsB.join("\n"));
+});
+
+test("a lease write cannot revert another window's state", async () => {
+  // Window A signs in a new account while window B, holding a stale copy of
+  // the state blob, takes the refresh lease. If the lease lived in the state
+  // blob, B's write would deliver B's stale copy to A and undo the sign-in.
+  const { a, b, stateBlobs } = replicatedWindows("http://unused", 20);
+  stateBlobs.seed("promptworkspace.cloud.session", { mode: "supabase", userId: "old" });
+  await a.session.store({ mode: "supabase", userId: "new" }, "a1", "r1");
+  await b.session.writeRefreshLease({ owner: "b", until: Date.now() + 10_000 });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(a.session.read()?.userId, "new");
+  assert.equal(b.session.read()?.userId, "new");
+});
+
+test("a file-backed lease round-trips, and anything unreadable is no lease", async () => {
+  const files = new Map<string, string>();
+  const store = {
+    async read(name: string) {
+      return files.get(name);
+    },
+    async write(name: string, contents: string) {
+      files.set(name, contents);
+    },
+  };
+  const leases = fileLeaseStorage(store);
+  assert.equal(await leases.read(), undefined);
+  await leases.write({ owner: "w1", until: 5 });
+  assert.deepEqual(await leases.read(), { owner: "w1", until: 5 });
+  await leases.write(undefined);
+  assert.equal(await leases.read(), undefined);
+  files.set("refresh-lease.json", "{not json");
+  assert.equal(await leases.read(), undefined);
+
+  // A store that throws costs the lease, never the session.
+  const broken: LeaseStorageLike = {
+    read: async () => {
+      throw new Error("EBUSY");
+    },
+    write: async () => {
+      throw new Error("EBUSY");
+    },
+  };
+  const session = new SessionStore(memorySecrets(), memoryState(), broken);
+  assert.equal(await session.readRefreshLease(), undefined);
+  await session.writeRefreshLease({ owner: "w1", until: 5 });
+});
+
+test("hasRefreshToken reads whether the session can still be refreshed", async () => {
+  const { client, session } = makeClient("http://unused", "http://unused");
+  assert.equal(await client.hasRefreshToken(), false);
+  await session.store({ mode: "supabase", userId: "u1" }, "a1", "r1");
+  assert.equal(await client.hasRefreshToken(), true);
+  await session.clearIfRefreshToken("r1");
+  assert.equal(await client.hasRefreshToken(), false);
 });

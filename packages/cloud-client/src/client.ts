@@ -31,6 +31,10 @@ export interface CloudClientDeps {
   config: () => CloudConfig;
   fetch: FetchLike;
   log: LoggerLike;
+  /** Epoch ms; the refresh lease's clock. Injected for tests. */
+  now?: () => number;
+  /** Every wait in the refresh path. Injected for tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface AssignedTaskQuery {
@@ -44,6 +48,21 @@ export interface AssignedTaskQuery {
 const ROTATION_LOOKS = 3;
 const ROTATION_LOOK_MS = 200;
 
+/** How long a refresh lease lasts. Long enough for one refresh call; short
+ *  enough that a window which crashed holding it delays the others once. */
+const LEASE_MS = 10_000;
+/** Write, wait this long, read back: the last writer in that window holds the
+ *  lease. Shared storage has no compare-and-set, so this is the arbitration.
+ *  apps/vscode's lease file is visible to every window on rename; the margin
+ *  is for stores that propagate slower (the tests model a delayed, whole-blob
+ *  one). Costs this much once per refresh, i.e. once an hour. Getting it wrong
+ *  in either direction (both win, both lose) is survivable — see doRefresh. */
+const LEASE_SETTLE_MS = 300;
+/** How often a window waiting on another's refresh re-reads the secrets. */
+const LEASE_POLL_MS = 200;
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class CloudClient {
   private readonly deps: CloudClientDeps;
   // Supabase ROTATES the refresh token on every use, so two concurrent
@@ -55,9 +74,19 @@ export class CloudClient {
   // client over the same SecretStorage, so a rejection must also be checked
   // against what another window has since stored: see `awaitRotatedSession`.
   private inFlightRefresh: Promise<string | null> | null = null;
+  // And across windows, a lease in a store every window reads (finding
+  // #50a): N windows used to make N refresh calls per expiry, all but one
+  // losing the rotation. One holds the lease and refreshes; the others re-read
+  // the secrets for the pair it stores. Best-effort by construction — when it
+  // fails, two windows refresh, which `awaitRotatedSession` already survives.
+  private readonly leaseOwner = globalThis.crypto.randomUUID();
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(deps: CloudClientDeps) {
     this.deps = deps;
+    this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? realSleep;
   }
 
   /** Whether a session is stored right now. A request can fail 401 and clear
@@ -65,6 +94,14 @@ export class CloudClient {
    *  server said no". */
   signedIn(): boolean {
     return this.deps.session.read() !== null;
+  }
+
+  /** Whether a refresh token is stored. With `signedIn()` this tells a 401
+   *  from a session that is really gone (no way back but signing in) from one
+   *  the refresh path only gave up on for now (auth server down, another
+   *  window's rotation not visible yet), which callers must treat as offline. */
+  async hasRefreshToken(): Promise<boolean> {
+    return Boolean(await this.deps.session.refreshToken());
   }
 
   mode(): "stub" | "supabase" {
@@ -146,6 +183,86 @@ export class CloudClient {
     const stored = await this.deps.session.accessToken();
     if (rejectedAccess && stored && stored !== rejectedAccess) return stored;
 
+    if (!(await this.deps.session.refreshToken())) return null;
+    if (!this.deps.session.read()) return null;
+
+    // One window refreshes at a time. If another holds the lease, wait for
+    // the pair it stores (`adopt`). Otherwise refresh: holding the lease, or —
+    // when it could not be won in time — without it, because a lease is only
+    // a way to cut duplicate refreshes and must never turn into a 401 of its
+    // own; `awaitRotatedSession` settles a collision. `failed` is the token
+    // this window last had: anything else stored later is newer.
+    const failed = rejectedAccess ?? stored;
+    const turn = await this.awaitRefreshTurn(failed);
+    if (turn.kind === "adopt") return turn.accessToken;
+    if (turn.kind === "signed_out") return null;
+    try {
+      return await this.refreshHoldingLease(failed);
+    } finally {
+      if ((await this.deps.session.readRefreshLease())?.owner === this.leaseOwner) {
+        await this.deps.session.writeRefreshLease(undefined);
+      }
+    }
+  }
+
+  /**
+   * Take the refresh lease, or wait for whoever holds it.
+   *
+   * While another window holds a live lease this re-reads the secrets every
+   * LEASE_POLL_MS: a stored access token that is not the one that just failed
+   * is that window's result, adopted without a refresh call of our own. A
+   * lease that is released, or that outlives its `until` (its holder crashed),
+   * is taken. The whole wait is bounded: past it the caller refreshes without
+   * the lease (`no_lease`) rather than failing the request.
+   */
+  private async awaitRefreshTurn(
+    failedAccess: string | undefined,
+  ): Promise<
+    | { kind: "lease" }
+    | { kind: "no_lease" }
+    | { kind: "adopt"; accessToken: string }
+    | { kind: "signed_out" }
+  > {
+    const deadline = this.now() + 2 * LEASE_MS;
+    for (;;) {
+      const lease = await this.deps.session.readRefreshLease();
+      const free = !lease || lease.owner === this.leaseOwner || lease.until <= this.now();
+      if (free && (await this.takeRefreshLease())) return { kind: "lease" };
+
+      const access = await this.deps.session.accessToken();
+      if (access && access !== failedAccess) {
+        this.deps.log.info("another window refreshed the session; using its token");
+        return { kind: "adopt", accessToken: access };
+      }
+      // Signed out (by another window, or by us) while waiting.
+      if (!(await this.deps.session.refreshToken()) || !this.deps.session.read()) {
+        return { kind: "signed_out" };
+      }
+      if (this.now() >= deadline) {
+        this.deps.log.info("could not win the refresh lease in time; refreshing without it");
+        return { kind: "no_lease" };
+      }
+      await this.sleep(LEASE_POLL_MS);
+    }
+  }
+
+  private async takeRefreshLease(): Promise<boolean> {
+    await this.deps.session.writeRefreshLease({
+      owner: this.leaseOwner,
+      until: this.now() + LEASE_MS,
+    });
+    await this.sleep(LEASE_SETTLE_MS);
+    const won = (await this.deps.session.readRefreshLease())?.owner === this.leaseOwner;
+    if (!won) this.deps.log.info("lost the refresh lease to another window; waiting for its refresh");
+    return won;
+  }
+
+  private async refreshHoldingLease(failedAccess: string | undefined): Promise<string | null> {
+    // Re-read under the lease: the previous holder may have just stored a
+    // fresh pair, and spending its refresh token again would lose the
+    // rotation we waited to avoid.
+    const stored = await this.deps.session.accessToken();
+    if (stored && stored !== failedAccess) return stored;
     const refreshToken = await this.deps.session.refreshToken();
     if (!refreshToken) return null;
     const session = this.deps.session.read();
@@ -159,7 +276,7 @@ export class CloudClient {
         // Rejected, but not necessarily gone: another window may have won the
         // rotation and stored the new pair. Only a rejection of the token that
         // is still the stored one is definitive.
-        const rotation = await this.awaitRotatedSession(refreshToken, rejectedAccess);
+        const rotation = await this.awaitRotatedSession(refreshToken, failedAccess);
         if (rotation.rotated) {
           this.deps.log.info("refresh lost the rotation to another window; using its session");
           return rotation.accessToken;
@@ -205,9 +322,7 @@ export class CloudClient {
         const access = await this.deps.session.accessToken();
         if (access && access !== staleAccess) return { rotated: true, accessToken: access };
       }
-      if (look < ROTATION_LOOKS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, ROTATION_LOOK_MS));
-      }
+      if (look < ROTATION_LOOKS - 1) await this.sleep(ROTATION_LOOK_MS);
     }
     // Rotated by someone else but no usable access token yet: not a sign-out,
     // and not a token either. The caller's retry is skipped; the next call

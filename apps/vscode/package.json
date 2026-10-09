@@ -125,6 +125,11 @@
         "category": "PromptWorkspace"
       },
       {
+        "command": "promptworkspace.taskActions",
+        "title": "Task Actions…",
+        "category": "PromptWorkspace"
+      },
+      {
         "command": "promptworkspace.copyTaskContext",
         "title": "Copy Task Context",
         "category": "PromptWorkspace",
@@ -297,6 +302,10 @@
         },
         {
           "command": "promptworkspace.copyTaskContext",
+          "when": "false"
+        },
+        {
+          "command": "promptworkspace.taskActions",
           "when": "false"
         },
         {

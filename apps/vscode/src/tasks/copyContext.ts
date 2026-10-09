@@ -4,13 +4,18 @@
 // actually use most. It has to work when everything else is degraded: no spec
 // pulled, no repo linked, offline. Every lookup below is therefore optional and
 // failure-tolerant by construction.
+//
+// No `vscode` import, so the text is unit-tested; the clipboard write and the
+// toast live with the command in extension.ts.
 
-import * as vscode from "vscode";
-import type { CloudClient } from "@promptworkspace/cloud-client";
+import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
 import type { AssignedTask } from "@promptworkspace/cloud-client";
-import { TASK_STATUS_LABELS } from "@promptworkspace/cloud-client";
+import {
+  TASK_STATUS_LABELS,
+  branchNameForTask,
+  taskRefFromFeatureTag,
+} from "@promptworkspace/cloud-client";
 import type { RepoDocs } from "../context/repoDocs.ts";
-import type { OutputLogger } from "../util/log.ts";
 
 const SPEC_EXCERPT_CHARS = 4000;
 
@@ -18,15 +23,25 @@ export async function buildTaskContext(
   entry: AssignedTask,
   client: CloudClient,
   docs: RepoDocs,
-  log: OutputLogger,
+  log: LoggerLike,
 ): Promise<string> {
   const { task } = entry;
-  const lines: string[] = [
-    `# Task ${task.feature_tag ?? task.id}: ${task.title}`,
-    "",
+  const ref = taskRefFromFeatureTag(task.feature_tag);
+  const lines: string[] = [`# Task ${task.feature_tag ?? task.id}: ${task.title}`, ""];
+  if (ref) {
+    // Finding #38: an agent given this text committed `T014:` on another
+    // task's branch. Name the branch Start Task uses and the subject prefix
+    // the close-on-push watcher reads, before anything else.
+    lines.push(
+      `Work on branch \`${branchNameForTask(ref, task.title)}\`; ` +
+        `start commit subjects with \`${ref}:\`.`,
+      "",
+    );
+  }
+  lines.push(
     `- Project: ${entry.project_name} (${entry.workspace_name})`,
     `- Status: ${TASK_STATUS_LABELS[task.status]}`,
-  ];
+  );
   if (entry.repo_url) lines.push(`- Repository: ${entry.repo_url}`);
   lines.push("");
 
@@ -50,7 +65,7 @@ export async function buildTaskContext(
     "## What to do",
     "",
     `Implement this task in the current workspace. When it is done, commit with ` +
-      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
+      `\`${ref ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
       `closes the task automatically.`,
     "",
   );
@@ -60,7 +75,7 @@ export async function buildTaskContext(
 async function specExcerpt(
   entry: AssignedTask,
   client: CloudClient,
-  log: OutputLogger,
+  log: LoggerLike,
 ): Promise<string | null> {
   if (!entry.task.spec_id) return null;
   try {
@@ -75,17 +90,4 @@ async function specExcerpt(
     log.info(`spec excerpt unavailable: ${String(err)}`);
     return null;
   }
-}
-
-export async function copyTaskContext(
-  entry: AssignedTask,
-  client: CloudClient,
-  docs: RepoDocs,
-  log: OutputLogger,
-): Promise<void> {
-  const text = await buildTaskContext(entry, client, docs, log);
-  await vscode.env.clipboard.writeText(text);
-  void vscode.window.showInformationMessage(
-    `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
-  );
 }

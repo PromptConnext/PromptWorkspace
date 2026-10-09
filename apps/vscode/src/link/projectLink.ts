@@ -21,10 +21,20 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import { isCloneableRepoUrl, sameRepo, type StorageLike } from "@promptworkspace/cloud-client";
+import {
+  isCloneableRepoUrl,
+  projectsMatchingRemotes,
+  type StorageLike,
+} from "@promptworkspace/cloud-client";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
-import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
+import {
+  markNotProjectFolder,
+  readNotProjectFolders,
+  readPendingClone,
+  rememberClone,
+  writePendingClone,
+} from "../projects/knownClones.ts";
 import type { OutputLogger } from "../util/log.ts";
 
 export interface ProjectCandidate {
@@ -64,15 +74,26 @@ export class ProjectLink {
     return projectIdFor(folder?.uri ?? root);
   }
 
-  /** Candidates whose repo_url matches this folder's remotes. */
+  /** The user answered "Not a project folder" for this folder (persisted,
+   *  shared across windows, cleared on sign-out with the clone state). */
+  isNotProjectFolder(folder: vscode.Uri): boolean {
+    return readNotProjectFolders(this.state).includes(folder.toString());
+  }
+
+  async markNotProjectFolder(folder: vscode.Uri): Promise<void> {
+    await markNotProjectFolder(this.state, folder.toString());
+    this.log.info(`${folder.fsPath} marked as not a project folder`);
+  }
+
+  /** Candidates whose repo_url matches this folder's remotes. An SSH host
+   *  alias (`git@github.com-work:org/repo`) matches only when it fits exactly
+   *  one project — see `projectsMatchingRemotes`. */
   candidatesFor(folder: vscode.Uri, candidates: ProjectCandidate[]): ProjectCandidate[] {
     const remotes = this.remotesFor(folder);
     if (remotes.length === 0) return [];
-    return candidates.filter(
-      (candidate) =>
-        candidate.repoUrl != null &&
-        isCloneableRepoUrl(candidate.repoUrl) &&
-        remotes.some((remote) => sameRepo(remote, candidate.repoUrl)),
+    return projectsMatchingRemotes(
+      remotes,
+      candidates.filter((c) => c.repoUrl != null && isCloneableRepoUrl(c.repoUrl)),
     );
   }
 
@@ -94,6 +115,7 @@ export class ProjectLink {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const key = folder.uri.toString();
       if (projectIdFor(folder.uri) || this.promptedFolders.has(key)) continue;
+      if (this.isNotProjectFolder(folder.uri)) continue;
       const matches = this.candidatesFor(folder.uri, candidates);
       if (matches.length === 0) continue;
       this.promptedFolders.add(key);

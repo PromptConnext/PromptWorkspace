@@ -344,6 +344,17 @@ test("get_task assembles criteria, spec excerpt and repository", async () => {
   });
 });
 
+test("get_task names the task branch and the commit prefix (#38)", async () => {
+  await withTools(async ({ call }) => {
+    const body = ((await call("get_task", { task_id: "task-1" })).content[0] as { text: string }).text;
+    assert.match(
+      body,
+      /Work on branch `T12-add-a-retry-to-the-uploader`; start commit subjects with `T12:`\./,
+    );
+    assert.match(body, /commit with `T12: <what you did>`/);
+  });
+});
+
 test("get_task asks for every status, so an implemented task is still readable", async () => {
   await withTools(async ({ call, seen }) => {
     await call("get_task", { task_id: "task-1" });
@@ -437,6 +448,39 @@ test("a constitution absent from the clone falls back to the cloud, and says so"
     assert.match(body, /shown from the cloud's constitution stage document/);
     assert.match(body, /Prefer small diffs\./);
   });
+});
+
+test("a clone whose remote is an SSH host alias resolves its project", async () => {
+  // `Host github.com-work` in ~/.ssh/config: `git remote -v` shows the alias,
+  // never the real host (finding #35).
+  const root = makeClone({ "AGENTS.md": "Always write a test." }, "git@github.com-work:acme/uploader.git");
+  await withTools(async ({ call }) => {
+    const result = await call("get_project_rules", { workspace_root: root });
+    assert.equal(result.isError, undefined);
+    assert.match((result.content[0] as { text: string }).text, /- Project id: proj-1/);
+  });
+});
+
+test("an SSH host alias that fits two projects is refused, never guessed", async () => {
+  const root = makeClone({ "AGENTS.md": "x" }, "git@github.com-work:acme/uploader.git");
+  await withTools(
+    async ({ call }) => {
+      const result = await call("get_project_rules", { workspace_root: root });
+      assert.equal(result.isError, true);
+      assert.doesNotMatch((result.content[0] as { text: string }).text, /- Project id:/);
+    },
+    {
+      extraProjects: [
+        {
+          id: "proj-2",
+          name: "Uploader fork",
+          workspace_id: "ws-1",
+          repo_url: `${REPO_URL}.git`,
+          lifecycle_status: "repo_created",
+        },
+      ],
+    },
+  );
 });
 
 test("a folder whose remote matches no project is a tool error naming the remote", async () => {

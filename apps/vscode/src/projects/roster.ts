@@ -9,6 +9,7 @@
 
 import {
   isCloneableRepoUrl,
+  projectsMatchingRemotes,
   sameRepo,
   type CloudProject,
   type LifecycleStatus,
@@ -69,20 +70,37 @@ export function safeRepoUrl(url: string | null | undefined): string | null {
   return url.trim();
 }
 
+/** projectId -> the open repository that is its clone. Decided across the
+ *  whole roster at once, not project by project, because an SSH host alias
+ *  (`github.com-work`) only counts when it fits exactly one project — the rule
+ *  `projectsMatchingRemotes` owns, shared with linking and with apps/mcp. */
+function openClonePaths(input: RosterInput): Map<string, string> {
+  const candidates: { projectId: string; repoUrl: string | null }[] = [];
+  for (const entry of input.entries) {
+    for (const project of entry.projects) {
+      candidates.push({ projectId: project.id, repoUrl: safeRepoUrl(project.repo_url) });
+    }
+  }
+  const paths = new Map<string, string>();
+  for (const repo of input.openRepos) {
+    for (const match of projectsMatchingRemotes(repo.remotes, candidates)) {
+      if (!paths.has(match.projectId)) paths.set(match.projectId, repo.path);
+    }
+  }
+  return paths;
+}
+
 function localStateFor(
   projectId: string,
   repoUrl: string | null,
+  openPath: string | undefined,
   input: RosterInput,
 ): { localState: LocalState; localPath?: string } {
   if (!repoUrl) return { localState: "no-repo" };
 
   // An open repository is the strongest evidence: it is on disk right now and
   // its remote is being read from git itself.
-  for (const repo of input.openRepos) {
-    if (repo.remotes.some((remote) => sameRepo(remote, repoUrl))) {
-      return { localState: "local", localPath: repo.path };
-    }
-  }
+  if (openPath) return { localState: "local", localPath: openPath };
 
   // Then the cache, which is what lets a second window offer Open rather than
   // a duplicate Clone. Validated on every use: a folder the user moved or
@@ -116,11 +134,17 @@ function compareProjects(a: ProjectRow, b: ProjectRow): number {
 
 export function buildRoster(input: RosterInput): WorkspaceRow[] {
   const rows: WorkspaceRow[] = [];
+  const openPaths = openClonePaths(input);
   for (const entry of input.entries) {
     const projects: ProjectRow[] = [];
     for (const project of entry.projects) {
       const repoUrl = safeRepoUrl(project.repo_url);
-      const { localState, localPath } = localStateFor(project.id, repoUrl, input);
+      const { localState, localPath } = localStateFor(
+        project.id,
+        repoUrl,
+        openPaths.get(project.id),
+        input,
+      );
       projects.push({
         projectId: project.id,
         projectName: project.name,

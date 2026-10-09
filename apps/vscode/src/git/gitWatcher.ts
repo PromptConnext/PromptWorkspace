@@ -34,9 +34,9 @@ import type { TaskStore } from "../tasks/taskStore.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { CommitRef, GitBridge, RepoRef } from "./gitBridge.ts";
 import { aheadOf, partitionWithHeld } from "./publication.ts";
+import { attributeCommits, mergeBaseCandidates } from "./divergence.ts";
 import {
   collidingRefs,
-  refsForCommit,
   taskRefFromBranch,
   taskRefFromFeatureTag,
 } from "@promptworkspace/cloud-client";
@@ -242,12 +242,15 @@ export class GitWatcher {
     }
 
     const branchRef = this.branchRefFor(repo, projectId);
+    // #41: the branch's ref covers only commits after it left the default
+    // branch, never the history it inherited.
+    const base =
+      branchRef && fresh.length > 0 ? await this.branchPoint(repo, projectId) : undefined;
     const pending = [...(state.pending ?? [])];
     const known = new Set(pending.map((p) => p.sha));
     // Oldest first, matching the order tasks were worked in.
-    for (const commit of [...fresh].reverse()) {
+    for (const { commit, refs } of attributeCommits(fresh, branchRef, base)) {
       if (known.has(commit.sha)) continue;
-      const refs = refsForCommit(commit.subject, branchRef);
       if (refs.length === 0) continue;
       pending.push({ sha: commit.sha, subject: commit.subject, refs });
       known.add(commit.sha);
@@ -302,6 +305,24 @@ export class GitWatcher {
     const declared = this.defaultBranchFor(projectId);
     if (declared ? name === declared : ASSUMED_DEFAULT_BRANCHES.has(name)) return null;
     return taskRefFromBranch(name);
+  }
+
+  /** Where HEAD's branch left the default branch: the merge-base with the
+   *  remote-tracking default, else the local one. Undefined when neither
+   *  resolves or the Git API cannot answer, which keeps the old attribution. */
+  private async branchPoint(repo: RepoRef, projectId: string): Promise<string | undefined> {
+    const head = repo.head?.name;
+    if (!head) return undefined;
+    for (const ref of mergeBaseCandidates(this.defaultBranchFor(projectId), repo.head?.upstream)) {
+      const base = await this.git.mergeBase(repo.root, head, ref);
+      if (base) return base;
+    }
+    this.logOnce(
+      `${repo.root.toString()}:no-merge-base`,
+      `${repo.root.fsPath}: no merge-base with the default branch; ` +
+        `attributing every new commit on ${head} to its task`,
+    );
+    return undefined;
   }
 
   private republishPending(projectId: string, pending: PendingCommit[]): void {
