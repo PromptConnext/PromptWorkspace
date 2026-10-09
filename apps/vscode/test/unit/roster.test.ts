@@ -69,6 +69,29 @@ test("an open folder's SSH remote matches an https repo_url", () => {
   assert.equal(ws.projects[0].localPath, "/src/checkout");
 });
 
+test("an open folder whose remote is an SSH host alias is local (#35)", () => {
+  const [ws] = buildRoster(
+    input({ openRepos: [{ path: "/src/checkout", remotes: ["git@github.com-work:acme/checkout.git"] }] }),
+  );
+  assert.equal(ws.projects[0].localState, "local");
+  assert.equal(ws.projects[0].localPath, "/src/checkout");
+});
+
+test("an SSH host alias that fits two projects makes neither local", () => {
+  const [ws] = buildRoster(
+    input({
+      entries: [
+        {
+          workspace: WS,
+          projects: [project(), project({ id: "p2", name: "Checkout fork" })],
+        },
+      ],
+      openRepos: [{ path: "/src/checkout", remotes: ["git@github.com-work:acme/checkout.git"] }],
+    }),
+  );
+  assert.deepEqual(ws.projects.map((p) => p.localState), ["remote-only", "remote-only"]);
+});
+
 test("a knownClones entry makes a project local even with nothing open", () => {
   const [ws] = buildRoster(input({ knownClones: { p1: "/src/checkout" } }));
   assert.equal(ws.projects[0].localState, "local");

@@ -21,7 +21,11 @@
 
 import * as vscode from "vscode";
 import { projectIdFor, setProjectId } from "../config.ts";
-import { isCloneableRepoUrl, sameRepo, type StorageLike } from "@promptworkspace/cloud-client";
+import {
+  isCloneableRepoUrl,
+  projectsMatchingRemotes,
+  type StorageLike,
+} from "@promptworkspace/cloud-client";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
 import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
@@ -64,15 +68,15 @@ export class ProjectLink {
     return projectIdFor(folder?.uri ?? root);
   }
 
-  /** Candidates whose repo_url matches this folder's remotes. */
+  /** Candidates whose repo_url matches this folder's remotes. An SSH host
+   *  alias (`git@github.com-work:org/repo`) matches only when it fits exactly
+   *  one project — see `projectsMatchingRemotes`. */
   candidatesFor(folder: vscode.Uri, candidates: ProjectCandidate[]): ProjectCandidate[] {
     const remotes = this.remotesFor(folder);
     if (remotes.length === 0) return [];
-    return candidates.filter(
-      (candidate) =>
-        candidate.repoUrl != null &&
-        isCloneableRepoUrl(candidate.repoUrl) &&
-        remotes.some((remote) => sameRepo(remote, candidate.repoUrl)),
+    return projectsMatchingRemotes(
+      remotes,
+      candidates.filter((c) => c.repoUrl != null && isCloneableRepoUrl(c.repoUrl)),
     );
   }
 
