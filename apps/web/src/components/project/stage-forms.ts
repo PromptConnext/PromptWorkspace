@@ -51,7 +51,7 @@ function standardText(text: string): Pick<StageField, "placeholder" | "fallback"
 //
 // The principles arrive filled in (they are required, and a list to edit line
 // by line). The other sections are optional and open empty, showing house
-// rules a competent team would write anyway as their placeholder: left blank,
+// rules a competent team would write anyway as their placeholder: left untouched,
 // that standard text is what the stage is given, so the Tech Lead only types to
 // replace it. It is a placeholder rather than a value because typing into a
 // prefilled box appended to the default with no newline. Deliberately

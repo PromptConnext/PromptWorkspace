@@ -2,6 +2,7 @@
 
 import type { DeliveryChange, ProjectGraph } from "@/lib/types";
 import { ApprovalControl } from "./ApprovalControl";
+import { changeProgress } from "./changeProgress";
 import { ProgressBar } from "./ProgressBar";
 import { useDeliveryPlanData } from "./DeliveryOverview";
 import { RetryButton } from "./RetryButton";
@@ -83,6 +84,13 @@ export function DeliveryPlan({
     );
   }
 
+  // The overview is fetched once per tab visit but the graph is polled, so a
+  // Change's counts come from the graph when it is here and from the server's
+  // numbers until then.
+  const changes = graph
+    ? plan.changes.map((c) => ({ ...c, ...changeProgress(c.id, graph.tasks) }))
+    : plan.changes;
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
@@ -95,7 +103,7 @@ export function DeliveryPlan({
         <ApprovalControl projectId={projectId} kind="plan_approval" />
       </div>
       <div className="grid gap-4 md:grid-flow-col md:auto-cols-fr">
-        {groupByWave(plan.changes).map((wave, index) => (
+        {groupByWave(changes).map((wave, index) => (
           <section key={index} aria-label={`Wave ${index + 1}`} className="flex flex-col gap-3">
             <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
               Wave {index + 1}

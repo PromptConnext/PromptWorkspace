@@ -182,3 +182,57 @@ describe("DeliveryPlan", () => {
     expect(screen.queryByText(/done$/)).not.toBeInTheDocument();
   });
 });
+
+describe("DeliveryPlan progress follows the polled graph", () => {
+  const withStatuses = (second: "in_progress" | "implemented") =>
+    ({
+      tasks: [
+        { id: "a", feature_tag: "T001", title: "One", change_id: "c1", status: "implemented", deleted_at: null },
+        { id: "b", feature_tag: "T002", title: "Two", change_id: "c1", status: second, deleted_at: null },
+        { id: "c", feature_tag: "T003", title: "Three", change_id: "c1", status: "todo", deleted_at: null },
+      ],
+    }) as unknown as ProjectGraph;
+
+  it("moves with the graph while the overview, fetched once, stays as it was", () => {
+    // The server's numbers from when the tab opened.
+    plan = {
+      plan_approval: "none",
+      changes: [change({ id: "c1", ref: "C1", task_ids: ["a", "b", "c"], done: 1, total: 3 })],
+    };
+    const { rerender } = render(<DeliveryPlan graph={withStatuses("in_progress")} projectId="p1" />);
+    expect(screen.getByText("1/3 done")).toBeInTheDocument();
+
+    // A push closes task b; the 30 s poll brings a new graph, the overview is not refetched.
+    rerender(<DeliveryPlan graph={withStatuses("implemented")} projectId="p1" />);
+
+    expect(screen.getByText("2/3 done")).toBeInTheDocument();
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "2");
+    expect(bar).toHaveAttribute("aria-valuemax", "3");
+  });
+
+  it("uses the server's numbers when there is no graph", () => {
+    plan = {
+      plan_approval: "none",
+      changes: [change({ id: "c1", ref: "C1", task_ids: ["a", "b", "c"], done: 1, total: 3 })],
+    };
+    render(<DeliveryPlan graph={null} projectId="p1" />);
+    expect(screen.getByText("1/3 done")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+  });
+
+  it("does not count a retired task, even when the server's numbers still include it", () => {
+    plan = {
+      plan_approval: "none",
+      changes: [change({ id: "c1", ref: "C1", task_ids: ["a", "b"], done: 2, total: 2 })],
+    };
+    const g = {
+      tasks: [
+        { id: "a", feature_tag: "T001", title: "One", change_id: "c1", status: "implemented", deleted_at: null },
+        { id: "b", feature_tag: "T002", title: "Two", change_id: "c1", status: "verified", deleted_at: "2026-10-09T00:00:00Z" },
+      ],
+    } as unknown as ProjectGraph;
+    render(<DeliveryPlan graph={g} projectId="p1" />);
+    expect(screen.getByText("1/1 done")).toBeInTheDocument();
+  });
+});
