@@ -53,16 +53,21 @@ export function attributeCommits<T extends LogEntry>(
 }
 
 /**
- * Refs to take the merge-base against, best first: the remote-tracking default
- * branch (a local `main` may be weeks stale), then the local one. With no
- * declared default the usual names are tried, as `gitWatcher.ts` assumes.
+ * Refs to take the merge-base against, best first: `origin`'s default branch,
+ * then the upstream remote's (when that is not `origin`), then the local one.
+ * `origin` first because the upstream may be a fork whose `main` is weeks
+ * stale, which would put the branch point back in old history (#41 again);
+ * a local `main` can be stale too, so it comes last. With no declared default
+ * the usual names are tried, as `gitWatcher.ts` assumes.
  */
 export function mergeBaseCandidates(
   defaultBranch: string | null,
   upstream: string | undefined,
 ): string[] {
   const slash = upstream ? upstream.indexOf("/") : -1;
-  const remote = upstream && slash > 0 ? upstream.slice(0, slash) : "origin";
+  const upstreamRemote = upstream && slash > 0 ? upstream.slice(0, slash) : undefined;
+  const remotes =
+    upstreamRemote && upstreamRemote !== "origin" ? ["origin", upstreamRemote] : ["origin"];
   const names = defaultBranch ? [defaultBranch] : ["main", "master"];
-  return names.flatMap((name) => [`${remote}/${name}`, name]);
+  return names.flatMap((name) => [...remotes.map((remote) => `${remote}/${name}`), name]);
 }

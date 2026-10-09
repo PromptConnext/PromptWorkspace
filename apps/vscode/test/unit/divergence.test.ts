@@ -69,11 +69,15 @@ test("with no merge-base the old behaviour stands", () => {
   assert.deepEqual(commitsSinceDivergence(log, "far-back").map((x) => x.sha), ["b1", "m1"]);
 });
 
-test("merge-base is taken against the remote default branch first, then the local one", () => {
-  assert.deepEqual(mergeBaseCandidates("develop", "upstream/T1-x"), [
-    "upstream/develop",
+test("merge-base is taken against origin's default branch first, then the upstream's, then the local one", () => {
+  // A fork remote's `main` can be weeks stale; measuring against it would put
+  // the branch point back in old history and bring #41 back.
+  assert.deepEqual(mergeBaseCandidates("develop", "fork/T1-x"), [
+    "origin/develop",
+    "fork/develop",
     "develop",
   ]);
+  assert.deepEqual(mergeBaseCandidates("main", "origin/T1-x"), ["origin/main", "main"]);
   assert.deepEqual(mergeBaseCandidates(null, undefined), [
     "origin/main",
     "main",

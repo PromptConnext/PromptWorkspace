@@ -4,7 +4,8 @@
 // to prefill the commit message instead — so a second Start on the same task,
 // or a branch the developer had made by hand, left HEAD on whatever branch it
 // was on and the next `T14:` commit landed on another task's branch. Now an
-// existing branch is checked out. No `vscode` import: the git calls are the
+// existing branch (local, or only on the remote) is checked out, and only a
+// branch that exists nowhere is created. No `vscode` import: the git calls are the
 // two `GitBridge` methods, injected.
 
 export type TaskBranchResult = "created" | "checked_out" | "failed";
@@ -19,9 +20,13 @@ export async function ensureTaskBranch<Root>(
   root: Root,
   branch: string,
 ): Promise<TaskBranchResult> {
-  if (await git.createBranch(root, branch)) return "created";
-  // Refused, most often because the name exists. Checking it out is exactly
-  // what the developer asked for; if git refuses that too (local changes that
-  // would be overwritten, an unborn HEAD), say so rather than pretend.
-  return (await git.checkout(root, branch)) ? "checked_out" : "failed";
+  // Check out first: an existing local branch is switched to, and a branch
+  // that exists only on the remote (a teammate pushed it, or this developer
+  // on another machine) gets git's tracking branch from it. Creating first
+  // would cut a new, unrelated local branch from HEAD in that second case.
+  if (await git.checkout(root, branch)) return "checked_out";
+  // No such branch anywhere: create it. If git refuses that too (local
+  // changes that would be overwritten, an unborn HEAD), say so rather than
+  // pretend.
+  return (await git.createBranch(root, branch)) ? "created" : "failed";
 }
