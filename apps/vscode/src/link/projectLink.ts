@@ -28,7 +28,13 @@ import {
 } from "@promptworkspace/cloud-client";
 import type { GitBridge } from "../git/gitBridge.ts";
 import { pendingCloneMatches, PENDING_CLONE_TTL_MS, type PendingClone } from "../projects/roster.ts";
-import { readPendingClone, rememberClone, writePendingClone } from "../projects/knownClones.ts";
+import {
+  markNotProjectFolder,
+  readNotProjectFolders,
+  readPendingClone,
+  rememberClone,
+  writePendingClone,
+} from "../projects/knownClones.ts";
 import type { OutputLogger } from "../util/log.ts";
 
 export interface ProjectCandidate {
@@ -68,6 +74,17 @@ export class ProjectLink {
     return projectIdFor(folder?.uri ?? root);
   }
 
+  /** The user answered "Not a project folder" for this folder (persisted,
+   *  shared across windows, cleared on sign-out with the clone state). */
+  isNotProjectFolder(folder: vscode.Uri): boolean {
+    return readNotProjectFolders(this.state).includes(folder.toString());
+  }
+
+  async markNotProjectFolder(folder: vscode.Uri): Promise<void> {
+    await markNotProjectFolder(this.state, folder.toString());
+    this.log.info(`${folder.fsPath} marked as not a project folder`);
+  }
+
   /** Candidates whose repo_url matches this folder's remotes. An SSH host
    *  alias (`git@github.com-work:org/repo`) matches only when it fits exactly
    *  one project — see `projectsMatchingRemotes`. */
@@ -98,6 +115,7 @@ export class ProjectLink {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const key = folder.uri.toString();
       if (projectIdFor(folder.uri) || this.promptedFolders.has(key)) continue;
+      if (this.isNotProjectFolder(folder.uri)) continue;
       const matches = this.candidatesFor(folder.uri, candidates);
       if (matches.length === 0) continue;
       this.promptedFolders.add(key);

@@ -240,9 +240,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       .map((folder) => ({
         name: folder.name,
         linked: projectIdFor(folder.uri) !== undefined,
+        declined: link.isNotProjectFolder(folder.uri),
         hasMatch: link.candidatesFor(folder.uri, linkable).length > 0,
       }));
-  const renderConnection = (allowNotify = true) => {
+  // "Not a project folder": every repository folder the warning was about.
+  const declineUnlinkedFolders = async () => {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (!git.repositoryFor(folder.uri) || projectIdFor(folder.uri)) continue;
+      if (link.isNotProjectFolder(folder.uri)) continue;
+      await link.markNotProjectFolder(folder.uri);
+    }
+    renderConnection();
+  };
+  const renderConnection = () => {
     const linkable = candidates();
     const next = connectionState(
       {
@@ -254,6 +264,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     const changed = next.state !== connection.state || next.message !== connection.message;
     connection = next;
+    // Back to normal: a later, second loss in this window is news again.
+    if (next.state === "ok") notified.clear();
     const signedIn = next.state !== "signed_out";
     if (signedIn !== signedInContext) {
       signedInContext = signedIn;
@@ -274,10 +286,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showTitle();
     projectsView.description = describeRoster();
     const action = next.action;
-    if (allowNotify && next.notify && action && !notified.has(next.state)) {
+    // Never during an explicit Sign Out: secrets, session and both stores all
+    // fire while it runs, and the user already knows.
+    if (!signingOut && next.notify && action && !notified.has(next.state)) {
       notified.add(next.state);
-      void vscode.window.showWarningMessage(next.message, action.title).then((choice) => {
+      const buttons: string[] = [action.title];
+      if (next.dismiss) buttons.push(next.dismiss.title);
+      void vscode.window.showWarningMessage(next.message, ...buttons).then((choice) => {
         if (choice === action.title) void vscode.commands.executeCommand(action.command);
+        else if (next.dismiss && choice === next.dismiss.title) void declineUnlinkedFolders();
       });
     }
   };
@@ -335,16 +352,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     session.onDidChange((current) => {
       // A session this window lost without being asked (a refused refresh)
-      // is worth a notification; one the user just signed out of is not.
-      renderConnection(current !== null || !signingOut);
-      signingOut = false;
+      // is worth a notification; one the user just signed out of is not —
+      // `signingOut` stays set until the stores have finished clearing, since
+      // their change events render again.
+      renderConnection();
       if (current) {
+        signingOut = false;
         // Then look at git again: commits held while signed out can close now.
         void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
         void roster.refresh();
       } else {
-        void store.clear();
-        void roster.clear();
+        void Promise.all([store.clear(), roster.clear()]).finally(() => {
+          signingOut = false;
+        });
         void clearCloneState(context.globalState);
         void queue.clear().then(refreshStatusBar);
         // Otherwise a folder user A declined to link stays declined for user

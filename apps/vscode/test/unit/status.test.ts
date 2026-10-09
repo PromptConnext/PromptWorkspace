@@ -19,8 +19,8 @@ import {
 
 const SIGNED_IN = { stored: true, authFailed: false };
 const ROSTER = { cached: true, linkable: 2 };
-const linked: FolderLink = { name: "checkout", linked: true, hasMatch: true };
-const unlinked: FolderLink = { name: "checkout", linked: false, hasMatch: false };
+const linked: FolderLink = { name: "checkout", linked: true, declined: false, hasMatch: true };
+const unlinked: FolderLink = { name: "checkout", linked: false, declined: false, hasMatch: false };
 
 test("no session is signed_out, with a Sign in action", () => {
   const state = connectionState({ stored: false, authFailed: false }, ROSTER, [linked]);
@@ -55,6 +55,17 @@ test("a session with an unlinked folder is unlinked, with a Link this folder act
   assert.equal(state.action?.command, "promptworkspace.linkProject");
   assert.match(state.message, /"checkout" is not linked/);
   assert.equal(state.notify, true);
+  // The notification can be answered for good: an unrelated repository must
+  // not carry a warning forever.
+  assert.equal(state.dismiss?.title, "Not a project folder");
+});
+
+test("a folder marked 'Not a project folder' counts as linked: no toast, status item or banner", () => {
+  const state = connectionState(SIGNED_IN, ROSTER, [{ ...unlinked, declined: true }]);
+  assert.equal(state.state, "ok");
+  assert.equal(state.statusText, undefined);
+  assert.equal(state.notify, false);
+  assert.deepEqual(withBanner(state, ["a"]), ["a"]);
 });
 
 test("a linked folder is ok", () => {

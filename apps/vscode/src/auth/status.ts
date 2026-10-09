@@ -33,6 +33,8 @@ export interface RosterSignal {
 export interface FolderLink {
   name: string;
   linked: boolean;
+  /** Answered "Not a project folder": counts as linked for the unlinked rule. */
+  declined: boolean;
   /** Its remotes match a roster project, so `ProjectLink.offerLinks` is
    *  already asking about it; a second notification would be noise. */
   hasMatch: boolean;
@@ -50,6 +52,8 @@ export interface Connection {
   /** Short label for the banner row at the top of each tree. */
   banner: string;
   action?: ConnectionAction;
+  /** A second notification button that settles the question for good. */
+  dismiss?: { title: "Not a project folder" };
   /** Status-bar text; undefined hides the item. */
   statusText?: string;
   /** Worth a notification (at most once per window per state). */
@@ -85,7 +89,9 @@ export function connectionState(
   // Unlinked only when nothing in this window is linked: in a multi-root
   // window the other folder may be unrelated, and only a window where no
   // repository can close a task is silently broken.
-  const unlinked = links.filter((f) => !f.linked);
+  // A folder the user called "Not a project folder" is settled: it counts as
+  // linked, or an unrelated repository would carry the warning forever.
+  const unlinked = links.filter((f) => !f.linked && !f.declined);
   if (roster.linkable > 0 && links.length > 0 && unlinked.length === links.length) {
     const names = unlinked.map((f) => `"${f.name}"`).join(", ");
     return {
@@ -95,6 +101,7 @@ export function connectionState(
         "project, so commits here will not close tasks.",
       banner: "Folder not linked: click to link it to a project",
       action: { title: "Link this folder", command: "promptworkspace.linkProject" },
+      dismiss: { title: "Not a project folder" },
       statusText: "$(link) PromptWorkspace: link this folder",
       notify: !unlinked.some((f) => f.hasMatch),
     };
