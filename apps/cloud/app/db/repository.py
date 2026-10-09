@@ -243,6 +243,12 @@ class Repository(abc.ABC):
         0016 M5)."""
 
     @abc.abstractmethod
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        """The projects, in any workspace, whose repo_id is one of `repo_ids`:
+        `find_project_by_repo_id` for many ids in one read. Unscoped by
+        membership for the same reason; the caller decides what it may show."""
+
+    @abc.abstractmethod
     def list_projects(self, user_id: str) -> list[Project]:
         """Projects across every workspace the user is a member of."""
 
@@ -1057,6 +1063,10 @@ class InMemoryRepository(Repository):
             if project.repo_id == repo_id:
                 return project
         return None
+
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        wanted = set(repo_ids)
+        return [p for p in self._projects.values() if p.repo_id in wanted]
 
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         project = self._projects[project_id]

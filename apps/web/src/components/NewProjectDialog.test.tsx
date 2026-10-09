@@ -50,6 +50,7 @@ function repo(overrides: Partial<Record<string, unknown>> = {}) {
     archived: false,
     empty: false,
     pushed_at: "2026-09-15T00:00:00Z",
+    imported_by: null,
     ...overrides,
   };
 }
@@ -188,6 +189,42 @@ describe("NewProjectDialog", () => {
     expect(emptyRow).not.toBeDisabled();
     expect(emptyRow.textContent).toMatch(/github reports no commits yet/i);
     expect(emptyRow.textContent).toMatch(/you can still import it/i);
+  });
+
+  it("disables a repository a project already imported and names that project", async () => {
+    mockFetch({
+      [REPO_LIST_PATH]: {
+        owner: "acme",
+        owner_type: "Organization",
+        account_login: "acme-bot",
+        repositories: [
+          repo({
+            full_name: "acme/marketing-studio",
+            name: "marketing-studio",
+            imported_by: { project_id: "p9", name: "Marketing Studio" },
+          }),
+          repo({
+            full_name: "acme/elsewhere",
+            name: "elsewhere",
+            imported_by: { project_id: null, name: null },
+          }),
+          repo({ full_name: "acme/fresh", name: "fresh" }),
+        ],
+        truncated: false,
+      },
+    });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={vi.fn()} onCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Import a GitHub repository"));
+    const taken = await screen.findByRole("button", { name: /marketing-studio/ });
+    const elsewhere = screen.getByRole("button", { name: /elsewhere/ });
+    const fresh = screen.getByRole("button", { name: /^fresh/ });
+
+    expect(taken).toBeDisabled();
+    expect(taken.textContent).toContain("Already imported as Marketing Studio");
+    expect(elsewhere).toBeDisabled();
+    expect(elsewhere.textContent).toMatch(/already imported by another workspace/i);
+    expect(fresh).not.toBeDisabled();
   });
 
   it("shows a clear message when the server refuses an empty repository", async () => {

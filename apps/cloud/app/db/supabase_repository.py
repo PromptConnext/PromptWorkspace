@@ -525,6 +525,12 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Project(**rows[0]) if rows else None
 
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        if not repo_ids:
+            return []
+        res = self._table(_PROJECTS).select("*").in_("repo_id", list(repo_ids)).execute()
+        return [Project(**row) for row in res.data or []]
+
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         patch = {"lifecycle_status": status, "updated_at": utcnow().isoformat()}
         self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()

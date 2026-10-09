@@ -240,6 +240,9 @@ export interface GithubRepo {
   // exit.
   empty: boolean;
   pushed_at: string | null;
+  // The project that already imported this repository. Both fields are null
+  // when it belongs to a workspace the caller is not in: taken, but not named.
+  imported_by: { project_id: string | null; name: string | null } | null;
 }
 
 // owner/owner_type/account_login are present even when repositories is
