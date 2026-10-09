@@ -320,6 +320,25 @@ def filter_paths(paths: list[str]) -> list[str]:
     return sorted(p for p in paths if p and not is_excluded_path(p))
 
 
+# Templates for an environment file (finding #56). The secret filter drops
+# every `.env*`, so a task added `.env.example` to a repository that had one.
+# Their *names* are listed; their content is never fetched, excerpted,
+# outlined, grepped or embedded — a template is one typo away from a real key.
+_ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
+
+
+def is_env_template_path(path: str) -> bool:
+    parts = path.split("/")
+    return parts[-1].lower() in _ENV_TEMPLATE_NAMES and not any(
+        part in _EXCLUDED_DIRS for part in parts[:-1]
+    )
+
+
+def listed_paths(paths: list[str]) -> list[str]:
+    """The snapshot's file list: `filter_paths`, plus env template names."""
+    return sorted({*filter_paths(paths), *(p for p in paths if p and is_env_template_path(p))})
+
+
 def skipped_files(
     paths: list[str], limit: int = MAX_SKIPPED
 ) -> tuple[list[RepoSkippedFile], int]:
@@ -333,7 +352,7 @@ def skipped_files(
     entries: dict[str, str] = {}
     count = 0
     for path in paths:
-        if not path or not is_excluded_path(path):
+        if not path or not is_excluded_path(path) or is_env_template_path(path):
             continue
         count += 1
         parts = path.split("/")
@@ -535,12 +554,15 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
     """
     head_sha = await github_client.get_branch_head(token, repo, branch)
     raw_paths, truncated = await github_client.get_tree(token, repo, head_sha)
-    paths = filter_paths(raw_paths)
+    # `paths` is what is listed; `readable` is what may be fetched, and never
+    # includes an env template.
+    paths = listed_paths(raw_paths)
+    readable = filter_paths(raw_paths)
     skipped, skipped_count = skipped_files(raw_paths)
 
     excerpts: list[RepoExcerpt] = []
     remaining = EXCERPT_TOTAL_CHARS
-    for path in excerpt_paths(paths):
+    for path in excerpt_paths(readable):
         if remaining <= 0:
             break
         try:
@@ -555,7 +577,7 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
             RepoExcerpt(path=path, content=clipped, truncated=len(clipped) < len(content))
         )
 
-    source_outlines = await _outline_sources(github_client, token, repo, head_sha, paths)
+    source_outlines = await _outline_sources(github_client, token, repo, head_sha, readable)
 
     return RepoSnapshot(
         commit_sha=head_sha,

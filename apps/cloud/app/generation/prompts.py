@@ -51,6 +51,38 @@ def _template(name: str) -> str:
     return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
 
 
+# Observed on a real import (finding #33): the repository as shipped did not
+# install, and with no CI and no tests nothing said so until an agent tried.
+NO_CI_FIRST_TASK_RULE = (
+    "When [codebase_baseline] reports no CI workflow or no tests, the first task (T001, in a "
+    "'Baseline gaps' phase) is to confirm that the project installs, lints and builds as "
+    "shipped, using the commands its manifest defines, and record the result: what passed, "
+    "and the exact error for what did not. Every later task builds on that result."
+)
+
+# Author-supplied plan fields beat the documents they were typed to correct
+# (finding #16): a fix to the baseline's storage claim typed into the plan's
+# architecture field lost to the specification that had copied the claim.
+PLAN_AUTHOR_OVERRIDE_RULE = (
+    "The text above CONTEXT is the author's own answers for this plan. Where an answer "
+    "disagrees with the [specification] or the [codebase_baseline] (a storage mechanism, a "
+    "library, an architecture choice), the author's answer wins: write the plan from it, and "
+    "say in the Summary which statement it overrides and which document made it, so the "
+    "disagreement can be fixed where it started."
+)
+
+# The constitution template's examples ("Test-First (NON-NEGOTIABLE)",
+# "Red-Green-Refactor ... strictly enforced") came back as rules nobody gave
+# (finding #15), along with practices the app does not have.
+CONSTITUTION_STRENGTH_RULE = (
+    "Write the principles from the author's rules in the user's input, each as strong as the "
+    "author wrote it. Do not mark a principle NON-NEGOTIABLE, mandatory or strictly enforced, "
+    "and do not require test-first or Red-Green-Refactor, unless the author's rules say so. "
+    "The template's examples are illustrations, not defaults. Do not describe files, tools or "
+    "practices (a translation file, a localization layer) that neither the author's rules nor "
+    "the codebase baseline mention."
+)
+
 # Rules for `tasks` on an imported repository. Observed on a real import
 # (2026-10-04): with only "do not re-scaffold" the model still emitted the
 # template's Setup/Foundational skeleton, invented paths for modules that
@@ -69,10 +101,12 @@ EXISTING_CODEBASE_TASK_RULES = [
     "already exists: find the file that holds it in the list and name that one. If the list is "
     "marked partial and a path is not shown, say (new) only when sure.",
     "Never create `.env`, `.env.local`, key or credential files. Configuration the task adds "
-    "goes in `.env.example` with placeholder values.",
+    "goes in `.env.example` with placeholder values. When the file list already lists "
+    "`.env.example` (or `.env.sample`, `.env.template`), extend that file; do not add another.",
     "Stay inside the specification. Do not add tasks for anything in its out-of-scope list or "
     "contradicting its constraints, and do not add a catch-all phase for documentation, "
     "cleanup, performance or hardening unless a user story names that work.",
+    NO_CI_FIRST_TASK_RULE,
 ]
 
 
@@ -102,6 +136,10 @@ def driver_prompt(
         "entire line, don't just leave the marker unresolved.",
         f"Today's date is {today.isoformat()}; use it for any date field in the template.",
     ]
+    if kind == "constitution":
+        lines.append(CONSTITUTION_STRENGTH_RULE)
+    if kind == "plan":
+        lines.append(PLAN_AUTHOR_OVERRIDE_RULE)
     if kind in ("plan", "tasks"):
         lines.append(
             "The [specification] in CONTEXT defines what is being built, and its title is the "
@@ -195,6 +233,20 @@ CURRENT_SERVICES_RULE = (
 _MARKER_PATTERN = re.compile(r"(?i)<\s*/?\s*untrusted_repository_content[^>]*>")
 
 
+# The baseline's claims are what the spec and plan trust (findings #5, #7): it
+# said core state lived in IndexedDB where store.tsx uses localStorage and a
+# server endpoint, and the spec repeated it. A cited file makes a claim
+# checkable; a named mechanism makes the wrong one visible.
+BASELINE_EVIDENCE_RULE = (
+    "Every bullet under Implemented ends with the file or files it rests on in parentheses, "
+    "as in '- Campaign state persists in the browser via localStorage (src/lib/store.tsx)'. "
+    "A claim about storage or persistence names the mechanism the code uses (localStorage, "
+    "IndexedDB, a server endpoint, an in-memory variable, a database) and the file that uses "
+    "it; never infer it from a key name, a dependency or a README. When state lives only in "
+    "a server process's memory, say under Gaps and Risks that a restart loses it."
+)
+
+
 def codebase_baseline_prompt() -> str:
     doc = _template("codebase-baseline-template.md")
     return "\n".join(
@@ -211,6 +263,7 @@ def codebase_baseline_prompt() -> str:
             "Fill in the template completely. The template's HTML comments are guidance for "
             "you — omit them from the output. Say only what the material supports; where it "
             "is silent, write 'Not evident from the snapshot'.",
+            BASELINE_EVIDENCE_RULE,
             "",
             "TEMPLATE:",
             doc,

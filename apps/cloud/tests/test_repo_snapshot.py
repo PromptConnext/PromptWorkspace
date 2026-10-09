@@ -557,3 +557,41 @@ def test_the_skipped_list_is_capped_but_the_count_is_not():
 
     assert len(snapshot.skipped) == MAX_SKIPPED
     assert snapshot.skipped_count == MAX_SKIPPED + 25
+
+
+# --- env template names (task 4.3, finding #56) --------------------------------
+
+
+def test_env_template_names_are_listed_without_contents():
+    fake = _fake_repo(
+        {"README.md": "# Story app"},
+        extra_paths=[
+            ".env",
+            ".env.local",
+            ".env.example",
+            "web/.env.sample",
+            "api/.env.template",
+            "node_modules/pkg/.env.example",
+            "src/index.ts",
+        ],
+    )
+    fake.set_file(REPO, ".env.example", "abc123", "API_KEY=sk-live-should-never-be-read")
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    # The names are listed, so a task can extend the file instead of adding it.
+    for name in (".env.example", "web/.env.sample", "api/.env.template"):
+        assert name in snapshot.paths
+    # A real secret file is still neither listed nor read.
+    assert ".env" not in snapshot.paths
+    assert ".env.local" not in snapshot.paths
+    assert "node_modules/pkg/.env.example" not in snapshot.paths
+    # ...and no template's content is ever fetched, excerpted or outlined.
+    fetched = {path for _repo, path, _sha in fake.fetched_files}
+    assert not any(".env" in path for path in fetched)
+    stored = snapshot.model_dump_json()
+    assert "sk-live-should-never-be-read" not in stored
+    # A listed name is not a skipped one; the real secrets still are.
+    assert {s.path for s in snapshot.skipped} == {".env", ".env.local", "node_modules/"}
+    assert snapshot.file_count == 5
+    # Nor is a template embedded with the code: names only.
+    assert ".env.example" not in indexable_code_paths(snapshot.paths, CODE_INDEX_MAX_FILES)
