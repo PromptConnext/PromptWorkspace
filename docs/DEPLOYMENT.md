@@ -71,7 +71,7 @@ psql "$POOLER_URL" -c "select has_table_privilege('service_role','public.pw_work
 
 If the privilege check prints `f`, migration 0005 has not been applied. (It checks `pw_workspace_members` on purpose: the baseline grants `service_role` on the graph tables such as `pw_tasks` explicitly, so a check on those passes on a database that is missing the rest.)
 
-**Confirm what the database has applied from its ledger, not from `/health`.** `/health.schema_version` is the stem of the newest migration file in the deployed image — the version the *code* expects — and never reads the database, so it now answers `"0004_pw_delivery_and_decisions"` whether or not 0004 was applied (it answered `"0003_pw_stage_inputs"` before plan 0029; and because the API tolerates a missing `pw_stage_inputs`, a missing 0003 looks fine too, while a missing 0004 fails every task write (`pw_tasks.change_id`: the Planner's tasks generation and save, and the sync push) as well as the delivery-plan and decision routes, so unlike 0003 it is not silent: apply it before deploying this code). The proof is `python scripts/migrate.py --db-url "$POOLER_URL" status`, which must list every file on disk under `Applied` and print `Pending (0)`, or the ledger itself:
+**Confirm what the database has applied from its ledger, not from `/health`.** `/health.schema_version` is the stem of the newest migration file in the deployed image — the version the *code* expects — and never reads the database, so it now answers `"0006_pw_decision_subject_content"` whether or not 0004 through 0006 were applied (it answered `"0003_pw_stage_inputs"` before plan 0029; and because the API tolerates a missing `pw_stage_inputs`, a missing 0003 looks fine too, while a missing 0004 fails every task write (`pw_tasks.change_id`: the Planner's tasks generation and save, and the sync push) as well as the delivery-plan and decision routes, so unlike 0003 it is not silent: apply it before deploying this code). The proof is `python scripts/migrate.py --db-url "$POOLER_URL" status`, which must list every file on disk under `Applied` and print `Pending (0)`, or the ledger itself:
 
 ```bash
 psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations order by filename"   # last row: 0006_pw_decision_subject_content.sql
@@ -117,7 +117,7 @@ Webhook URLs registered with GitHub (`PUBLIC_API_URL`) and the web app's `NEXT_P
 
 ##### Measuring page load before and after
 
-The move is done when `GET /projects/{id}/decisions` answers in under 0.8 s from the browser. Measure the Delivery, Decisions and Tasks tabs of one project the same way before and after: open the tab, hard-reload it (Cmd+Shift+R), wait for it to settle, and paste this into the DevTools console. It prints every request the page made, when it started and how long it took, and the request it waited for, if it started only after another one finished (a chain).
+The move is done when `GET /projects/{id}/delivery-overview`, the one request the Delivery and Decisions tabs read, answers in under 0.8 s from the browser. Measure the Delivery, Decisions and Tasks tabs of one project the same way before and after: open the tab, hard-reload it (Cmd+Shift+R), wait for it to settle, and paste this into the DevTools console. It prints every request the page made, when it started and how long it took, and the request it waited for, if it started only after another one finished (a chain).
 
 ```js
 (() => {
@@ -543,7 +543,7 @@ A third, short-lived stack for the agent-native delivery work in [plan 0029](pla
 
 When `feature/trust-outcome` merges into `develop`:
 
-1. Apply migration 0004 to develop's database **before** the merge deploys (§2.2).
+1. Apply the pending migrations to develop's database **before** the merge deploys (§2.2): run `scripts/migrate.py apply --var embed_dim=<N>` and confirm `status` lists 0004 through 0006 as applied.
 2. Revert the temporary branch from the CI push triggers: remove `feature/trust-outcome` from `branches:` under `push` in `.github/workflows/ci.yml` and `.github/workflows/cloud-contract.yml`.
 3. Revert the Vercel Ignored Build Step edit (back to `main` and `develop` only), then delete the Vercel branch domain and the Preview env vars scoped to `feature/trust-outcome`.
 4. Delete the Northflank service `promptworkspace-trust`.
