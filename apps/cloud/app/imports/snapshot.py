@@ -15,9 +15,11 @@ functions only sequence reads — `build_snapshot` one file at a time,
 
 **Nothing secret-shaped is ever fetched.** `.env*`, private keys, certificates
 and credential files are dropped from the path list before anything else looks
-at it, so they are not listed, not summarised, not excerpted and not stored —
-the model reading the snapshot never sees one, and neither does
-`pw_repo_analyses`. Repository content is still untrusted prompt input after
+at it, so they are not summarised, not excerpted and their content is not
+stored — the model reading the snapshot never sees one. Two names do survive:
+env templates (`.env.example` and family) are listed by name so a task can
+extend one, and the `skipped` list names what was left out, shown to admins
+only. Repository content is still untrusted prompt input after
 that filter; the prompt that reads it treats it as data (app/generation/
 prompts.py::codebase_baseline_prompt), which is a separate defence against a
 separate problem. And a file that passes the filter can still quote a key
@@ -346,13 +348,15 @@ def skipped_files(
     as (entries sorted by path and capped at `limit`, total files skipped).
 
     A vendored or build directory is one entry (`node_modules/`), not one per
-    file inside it. Naming a secret-shaped file here is not reading it: the
-    name is already in the repository's own listing, and its content is never
-    fetched."""
+    file inside it. Naming a secret-shaped file here is not reading it (its
+    content is never fetched), but the name alone says where a repository
+    keeps its keys, so only admins are shown these entries
+    (app/api/repo_analysis.py::_out). An env template is listed in the
+    snapshot's paths and still counted here: its name is shown, never read."""
     entries: dict[str, str] = {}
     count = 0
     for path in paths:
-        if not path or not is_excluded_path(path) or is_env_template_path(path):
+        if not path or not is_excluded_path(path):
             continue
         count += 1
         parts = path.split("/")
@@ -582,7 +586,8 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
     return RepoSnapshot(
         commit_sha=head_sha,
         default_branch=branch,
-        file_count=len(paths),
+        # Files read; an env template's name is listed but counted as skipped.
+        file_count=len(readable),
         tree_truncated=truncated,
         tree_summary=summarize_tree(paths),
         stack=detect_stack(paths),

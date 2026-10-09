@@ -73,16 +73,24 @@ def _out(
     include_excerpts: bool = True,
 ):
     """`include_excerpts=False` empties `snapshot.excerpts` and
-    `snapshot.source_outlines` and nothing else: both are verbatim file
-    contents, which only the admins who ran the analysis see — members get
-    the same shape with empty lists."""
+    `snapshot.source_outlines`, which are verbatim file contents, and drops
+    the secret-shaped names from `snapshot.skipped`: a member need not have
+    GitHub access to the repository, and where its keys live is not theirs to
+    learn here. Only the admins who ran the analysis see those; members get
+    the same shape, with `skipped_count` unchanged."""
     if analysis is None:
         return RepoAnalysisOut(
             project_id=project.id, status="none", required=requires_repo_analysis(project)
         )
     snapshot = analysis.snapshot
     if not include_excerpts:
-        snapshot = snapshot.model_copy(update={"excerpts": [], "source_outlines": []})
+        snapshot = snapshot.model_copy(
+            update={
+                "excerpts": [],
+                "source_outlines": [],
+                "skipped": [s for s in snapshot.skipped if s.reason != "secret"],
+            }
+        )
     return RepoAnalysisOut(
         project_id=project.id,
         status=analysis.status,

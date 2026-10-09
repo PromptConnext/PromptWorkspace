@@ -382,6 +382,26 @@ def test_get_reuses_a_staleness_answer_within_the_ttl(client: TestClient, monkey
     assert head_reads() == reads + 1
 
 
+def test_skipped_secret_names_are_shown_to_admins_only(client: TestClient):
+    """A member need not have GitHub access to the repository, so the names
+    of its credential-shaped files (`keys/deploy.pem`) are an admin's to see.
+    The count stays, so "N of M files read" reads the same for both."""
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+
+    admin = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()["snapshot"]
+    member = client.get(f"/projects/{pid}/repo-analysis", headers=BOB).json()["snapshot"]
+
+    assert admin["skipped"] == [
+        {"path": ".env", "reason": "secret"},
+        {"path": "keys/deploy.pem", "reason": "secret"},
+    ]
+    assert admin["skipped_count"] == 2
+    assert member["skipped"] == []
+    assert member["skipped_count"] == 2
+    assert "deploy.pem" not in json.dumps(member)
+
+
 def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):
     _, pid = _imported_project(client)
     _analyze(client, pid)
@@ -392,8 +412,9 @@ def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):
     assert [o["path"] for o in admin["snapshot"]["source_outlines"]] == ["src/server.js"]
     assert member["snapshot"]["excerpts"] == []
     assert member["snapshot"]["source_outlines"] == []
-    # Everything else in the snapshot is the same for both.
-    withheld = {"excerpts", "source_outlines"}
+    # Everything else in the snapshot is the same for both (the skipped list
+    # differs by its secret-shaped names; see the test below).
+    withheld = {"excerpts", "source_outlines", "skipped"}
     assert {k: v for k, v in member["snapshot"].items() if k not in withheld} == {
         k: v for k, v in admin["snapshot"].items() if k not in withheld
     }

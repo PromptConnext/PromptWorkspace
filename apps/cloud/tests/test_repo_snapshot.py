@@ -595,9 +595,17 @@ def test_env_template_names_are_listed_without_contents():
     assert not any(".env" in path for path in fetched)
     stored = snapshot.model_dump_json()
     assert "sk-live-should-never-be-read" not in stored
-    # A listed name is not a skipped one; the real secrets still are.
-    assert {s.path for s in snapshot.skipped} == {".env", ".env.local", "node_modules/"}
-    assert snapshot.file_count == 5
+    # Listed, but never read: so a template is not counted as read, and the
+    # skipped list says why (review of 0f49de3).
+    assert snapshot.file_count == 2
+    assert {(s.path, s.reason) for s in snapshot.skipped} == {
+        (".env", "secret"),
+        (".env.local", "secret"),
+        (".env.example", "secret"),
+        ("api/.env.template", "secret"),
+        ("web/.env.sample", "secret"),
+        ("node_modules/", "vendored"),
+    }
     # Nor is a template embedded with the code: names only.
     assert ".env.example" not in indexable_code_paths(snapshot.paths, CODE_INDEX_MAX_FILES)
 
