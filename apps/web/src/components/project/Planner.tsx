@@ -678,6 +678,15 @@ export function Planner({
   const settle = useCallback(() => {
     settled.current = true;
   }, []);
+  // A click, key or edit inside a step's panel is the user working in that
+  // step: it counts as choosing it when nothing was chosen yet, as when the
+  // Planner opened there by itself. Only then can the handoff below fire for
+  // a step the Planner opened on (a Tech Lead acting in Plan or Repository);
+  // loading, hovering or focusing alone never chooses.
+  const workIn = useCallback((key: string) => {
+    settled.current = true;
+    setChosenStep((prev) => prev ?? key);
+  }, []);
   const setActive = useCallback(
     (key: string) => {
       settled.current = true;
@@ -748,7 +757,8 @@ export function Planner({
   // to remember to press; both transitions are fire-and-forget because the
   // cloud rejects an out-of-order one and nothing here depends on the result.
   // Only a step the user chose counts: the Planner opening on Plan by itself
-  // (the first step not done) must not move the project into tech review.
+  // (the first step not done) must not move the project into tech review,
+  // but the Tech Lead then working in that step does (`workIn`).
   useEffect(() => {
     const entered = chosenStep === "plan" || chosenStep === "repository";
     if (!entered || !isTechLead || advanced.current) return;
@@ -1060,6 +1070,9 @@ export function Planner({
           aria-labelledby={`planner-tab-${tab.key}`}
           hidden={active !== tab.key}
           className="space-y-4"
+          onClickCapture={() => workIn(tab.key)}
+          onKeyDownCapture={() => workIn(tab.key)}
+          onChangeCapture={() => workIn(tab.key)}
         >
           {tab.key === "foundation" && (
             <>

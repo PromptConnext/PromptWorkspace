@@ -239,6 +239,73 @@ describe("Planner", () => {
     expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
   });
 
+  it("working in an auto-opened Repository step hands it over, once", async () => {
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /4 · Repository/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]); // loading alone hands nothing over
+
+    fireEvent.click(screen.getByRole("tabpanel"));
+    fireEvent.click(screen.getByRole("tabpanel")); // a second click: still once
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(lifecycleCalls().filter((href) => href.includes("submit-for-review"))).toHaveLength(1);
+    expect(lifecycleCalls().filter((href) => href.includes("start-tech-review"))).toHaveLength(1);
+
+    // The page reloads the project; the Create repository panel is there
+    // without re-clicking the tab that was already open.
+    rerender(
+      <Planner
+        project={makeProject({ ...SPEC_DONE, lifecycle_status: "tech_review" })}
+        projectId="p1"
+        onChange={onChange}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Create repository" })).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("working in an auto-opened Plan step hands it over", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /2 · Plan/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(lifecycleCalls()).toEqual([]);
+
+    fireEvent.keyDown(screen.getByRole("tabpanel"), { key: "a" });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(lifecycleCalls().some((href) => href.includes("start-tech-review"))).toBe(true);
+  });
+
+  it("a member's clicks in an auto-opened step never hand it over", async () => {
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    mockStageDocuments({ specify: "# Spec", plan: "# Plan", tasks: "# Tasks" });
+    const onChange = vi.fn();
+    render(<Planner project={makeProject(SPEC_DONE)} projectId="p1" onChange={onChange} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /4 · Repository/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("tabpanel"));
+    fireEvent.click(screen.getByRole("tab", { name: /2 · Plan/ }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lifecycleCalls()).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("a step=plan URL is the Tech Lead choosing Plan, and hands it over", async () => {
     mockStageDocuments({ specify: "# Spec" });
     const onChange = vi.fn();
