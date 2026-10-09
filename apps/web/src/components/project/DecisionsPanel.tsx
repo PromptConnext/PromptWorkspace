@@ -53,6 +53,7 @@ function DecisionRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = (id: string | null) => memberFullName(members.find((m) => m.user_id === id));
+  const resolver = members.find((m) => m.user_id === decision.resolved_by);
 
   async function resolve(outcome: "approved" | "rejected") {
     setBusy(true);
@@ -82,6 +83,12 @@ function DecisionRow({
       <p className="mt-1 text-xs text-slate-500">
         Requested by {name(decision.requested_by)} · {new Date(decision.created_at).toLocaleString()}
       </p>
+      {(decision.status === "approved" || decision.status === "rejected") && decision.resolved_at && (
+        <p className="mt-1 text-xs text-slate-500">
+          {STATUS_LABEL[decision.status]} by {resolver ? memberFullName(resolver) : "a former member"} ·{" "}
+          {new Date(decision.resolved_at).toLocaleString()}
+        </p>
+      )}
       <DecisionSubject decision={decision} previous={previous} />
       {decision.rationale && <p className="mt-2 text-sm text-slate-700">{decision.rationale}</p>}
       {decision.status === "open" && !decision.can_resolve && (

@@ -6,6 +6,7 @@ import type { Decision, DecisionsOut } from "@/lib/types";
 import { DecisionsPanel } from "./DecisionsPanel";
 
 let decisions: DecisionsOut | null = null;
+let members: unknown[] = [];
 const refetch = vi.fn();
 const mutate = vi.fn();
 vi.mock("@/lib/hooks", async () => {
@@ -15,7 +16,7 @@ vi.mock("@/lib/hooks", async () => {
       // Like the real hook, a mutate re-renders the component that owns it.
       const [, rerender] = useState(0);
       return {
-        data: path?.endsWith("/decisions") ? decisions : [],
+        data: path?.endsWith("/decisions") ? decisions : members,
         error: null,
         loading: false,
         refetch,
@@ -37,6 +38,7 @@ vi.mock("@/lib/api", () => ({
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  members = [];
 });
 
 const decision = (o: Partial<Decision>): Decision => ({
@@ -163,5 +165,34 @@ describe("DecisionsPanel", () => {
     expect(within(diff).getByText("Build it.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
     // The earlier approval is the first approval of its kind: full text.
     expect(screen.getByText(/nothing was approved before/)).toBeInTheDocument();
+  });
+
+  it("a resolved decision shows the resolver's name and time", () => {
+    members = [{ workspace_id: "w1", user_id: "u2", email: "sam@x.com", role: "admin",
+      invited_by: null, created_at: "2026-10-01T00:00:00Z" }];
+    decisions = {
+      decisions: [decision({
+        status: "approved", can_resolve: false, resolved_by: "u2",
+        resolved_at: "2026-10-04T09:30:00Z",
+      })],
+      states: { intent: "none", plan: "approved" },
+    };
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    const line = screen.getByText(/Approved by sam@x\.com/);
+    expect(line).toHaveTextContent(new Date("2026-10-04T09:30:00Z").toLocaleString());
+  });
+
+  it("names a resolver who has left the workspace as a former member", () => {
+    decisions = {
+      decisions: [decision({
+        status: "rejected", can_resolve: false, resolved_by: "gone",
+        resolved_at: "2026-10-04T09:30:00Z", rationale: "No.",
+      })],
+      states: { intent: "none", plan: "changes_requested" },
+    };
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    expect(screen.getByText(/Changes requested by a former member/)).toBeInTheDocument();
   });
 });
