@@ -23,6 +23,7 @@ from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prompts import UNTRUSTED_CLOSE, UNTRUSTED_OPEN, UNTRUSTED_SECURITY_RULE
 from app.generation.service import FakeGenerationProvider
+from app.imports.snapshot import MAX_SKIPPED
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
 from app.models.schemas import ModelConnection, Role
@@ -382,6 +383,48 @@ def test_get_reuses_a_staleness_answer_within_the_ttl(client: TestClient, monkey
     assert head_reads() == reads + 1
 
 
+def test_skipped_secret_names_are_shown_to_admins_only(client: TestClient):
+    """A member need not have GitHub access to the repository, so the names
+    of its credential-shaped files (`keys/deploy.pem`) are an admin's to see.
+    The count stays, so "N of M files read" reads the same for both."""
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+
+    admin = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()["snapshot"]
+    member = client.get(f"/projects/{pid}/repo-analysis", headers=BOB).json()["snapshot"]
+
+    assert admin["skipped"] == [
+        {"path": ".env", "reason": "secret"},
+        {"path": "keys/deploy.pem", "reason": "secret"},
+    ]
+    assert admin["skipped_count"] == 2
+    assert member["skipped"] == []
+    assert member["skipped_count"] == 2
+    assert "deploy.pem" not in json.dumps(member)
+
+
+def test_a_members_skipped_list_is_capped_after_the_secret_names_are_dropped(
+    client: TestClient,
+):
+    """Review of ff0403f: capping before filtering left a member an empty list
+    whenever the first MAX_SKIPPED entries were secret-shaped, though other
+    skipped files existed."""
+    _, pid = _imported_project(client)
+    fake: FakeGithubClient = client.app.state.github_client
+    keys = [f"keys/k{i:02d}.pem" for i in range(MAX_SKIPPED + 10)]
+    fake.trees[REPO] = [*fake.trees[REPO], *keys, "public/zz.png"]
+    _analyze(client, pid)
+
+    admin = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()["snapshot"]
+    member = client.get(f"/projects/{pid}/repo-analysis", headers=BOB).json()["snapshot"]
+
+    total = MAX_SKIPPED + 10 + 3  # the keys, .env, keys/deploy.pem, public/zz.png
+    assert admin["skipped_count"] == member["skipped_count"] == total
+    assert len(admin["skipped"]) == MAX_SKIPPED
+    assert all(entry["reason"] == "secret" for entry in admin["skipped"])
+    assert member["skipped"] == [{"path": "public/zz.png", "reason": "binary"}]
+
+
 def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):
     _, pid = _imported_project(client)
     _analyze(client, pid)
@@ -392,8 +435,9 @@ def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):
     assert [o["path"] for o in admin["snapshot"]["source_outlines"]] == ["src/server.js"]
     assert member["snapshot"]["excerpts"] == []
     assert member["snapshot"]["source_outlines"] == []
-    # Everything else in the snapshot is the same for both.
-    withheld = {"excerpts", "source_outlines"}
+    # Everything else in the snapshot is the same for both (the skipped list
+    # differs by its secret-shaped names; see the test below).
+    withheld = {"excerpts", "source_outlines", "skipped"}
     assert {k: v for k, v in member["snapshot"].items() if k not in withheld} == {
         k: v for k, v in admin["snapshot"].items() if k not in withheld
     }
@@ -776,3 +820,59 @@ def test_the_file_list_keeps_its_partial_marker_and_drops_hostile_names(
     # The marker counts what is not shown (40 files, 2 listed) and survives: the
     # list has its own budget instead of sharing the header's truncation.
     assert "(partial list: 38 more files not shown)" in listing
+
+
+# --------------------------------------------------------------------------- #
+# Where the specification's strings live (task 4.2, finding #54)
+# --------------------------------------------------------------------------- #
+
+RENAME_SPEC = (
+    "# Rename\n\nThe product is renamed: every \"Story App\" becomes \"Tale Hub\", "
+    "and the `storyapp` keys move.\n"
+)
+
+
+def _spec_quotes(client: TestClient, pid: str) -> None:
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify", json={"content": RENAME_SPEC}, headers=ALICE
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_tasks_get_the_files_that_contain_the_specs_quoted_strings(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    assert _generate(client, pid, "tasks").status_code == 200
+    _, user_content = provider.calls[-1]
+    segment = user_content.split("[repo_occurrences]", 1)[1]
+    inside = segment.split(UNTRUSTED_OPEN, 1)[1].split(UNTRUSTED_CLOSE, 1)[0]
+    assert '"Story App" is in 1 files: README.md (1)' in inside
+    assert "Tale Hub" not in inside  # nothing to point at for the new name
+    # Never read for this: the secret-shaped files the snapshot filtered out.
+    fetched = {path for _repo, path, _sha in client.app.state.github_client.fetched_files}
+    assert ".env" not in fetched
+    assert "keys/deploy.pem" not in fetched
+
+    # Only tasks names files per task; plan gets the file list, not the counts.
+    assert _generate(client, pid, "plan").status_code == 200
+    assert "[repo_occurrences]" not in provider.calls[-1][1]
+
+
+def test_tasks_still_generate_when_github_cannot_be_read(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    async def unreachable(*_args, **_kwargs):
+        raise httpx.ConnectError("github is down")
+
+    client.app.state.github_client.fetch_file_content = unreachable
+
+    res = _generate(client, pid, "tasks")
+
+    assert res.status_code == 200, res.text
+    assert "[repo_occurrences]" not in client.app.state.generation_provider.calls[-1][1]

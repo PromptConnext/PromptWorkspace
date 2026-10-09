@@ -42,7 +42,7 @@ from app.db.merge import PLANNER_SEED_FIELDS
 from app.db.repository import Repository
 from app.delivery.approvals import sync_approval_mirrors
 from app.delivery.changes import reconcile_delivery_changes
-from app.generation.parsing import parse_task_lines
+from app.generation.parsing import parse_task_lines, titles_match
 from app.integrations.task_refs import task_ref_from_feature_tag
 from app.models.schemas import (
     AcceptanceCriterion,
@@ -53,6 +53,7 @@ from app.models.schemas import (
     SpecDocument,
     StageDocument,
     Task,
+    TaskStatus,
     utcnow,
 )
 from app.rag.queue import EmbedJob, enqueue
@@ -315,6 +316,9 @@ def _apply_plan(
     return spec.id
 
 
+_CLOSED = frozenset({TaskStatus.implemented, TaskStatus.verified})
+
+
 def _apply_tasks(
     repo: Repository,
     project: Project,
@@ -328,6 +332,12 @@ def _apply_tasks(
     of `feature_tag` could never do this job. `parse_task_lines` only ever
     emits `T\\d+` refs, which `task_ref_from_feature_tag` always normalizes, so
     every ref handled below is a real string, never `None`.
+
+    A matched row keeps its id, status and assignee — unless it is closed work
+    (implemented, verified, or carrying an artifact) and the new title no
+    longer describes it (`titles_match`). Then reusing the row would present
+    different work as already done, with someone else's commit as evidence,
+    so the old row is retired and a fresh `todo` row takes the reference.
     """
     spec = repo.get_latest_spec_document(project.id)
     spec_id = spec.id if spec is not None else None
@@ -343,7 +353,8 @@ def _apply_tasks(
     # below — otherwise the collision survives every regeneration forever,
     # which is the exact bug this module exists to fix.
     duplicate_live: list[Task] = []
-    for task in repo.get_graph(project.id).tasks:
+    graph = repo.get_graph(project.id)
+    for task in graph.tasks:
         ref = task_ref_from_feature_tag(task.feature_tag)
         if ref is None:
             continue
@@ -352,7 +363,12 @@ def _apply_tasks(
         else:
             live[ref] = task
 
+    # A task with a commit attributed to it is closed work for reconciliation
+    # purposes whatever its status says.
+    evidenced = {artifact.task_id for artifact in graph.artifacts}
+
     writes: list[Task] = []
+    superseded: list[Task] = []
     claimed: set[str] = set()
     for row in parsed:
         raw_ref = str(row["ref"])
@@ -379,15 +395,25 @@ def _apply_tasks(
             "change_id": (change_of or {}).get(ref),
         }
         existing = live.get(ref)
-        if existing is not None:
+        closed = existing is not None and (
+            existing.status in _CLOSED or existing.id in evidenced
+        )
+        if existing is not None and (not closed or titles_match(existing.title, title)):
             # Same id, same assignee, same status — only the content moves.
             writes.append(existing.model_copy(update=fields))
         else:
+            if existing is not None:
+                # Closed work whose ref now names different work: the old row
+                # keeps its title, status, assignee and artifacts as history,
+                # and the new work starts fresh rather than arriving "done".
+                superseded.append(existing)
             writes.append(Task(project_id=project.id, **fields))
         claimed.add(ref)
 
     live_count = len(writes)
     retired_at = utcnow()
+    for task in superseded:
+        writes.append(task.model_copy(update={"deleted_at": retired_at}))
     for ref, task in live.items():
         if ref in claimed:
             continue

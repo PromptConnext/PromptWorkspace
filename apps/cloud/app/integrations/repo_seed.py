@@ -15,7 +15,7 @@ Derived views, one SeedFile per non-empty input:
   README.md                          specify (or a stub)
   docs/scope.md                      specify
   docs/architecture.md               plan
-  docs/tasks.md                      tasks
+  docs/tasks.md                      tasks, minus the Spec Kit header boilerplate
   docs/conventions.md                the constitution's "Conventions" section (or a stub)
   .specify/memory/constitution.md    the constitution verbatim — this is what makes the
                                       engine's own `withConstitution()` (apps/engine/src/
@@ -33,6 +33,7 @@ the derived views under `docs/promptworkspace/` and drops whatever still collide
 from __future__ import annotations
 
 import posixpath
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -96,6 +97,52 @@ def _conventions_section(constitution: str | None) -> str | None:
     return section or None
 
 
+# Spec Kit header lines a generated tasks.md carries over from its template
+# (finding #31): they name design documents under /specs/ that a seeded
+# repository never has, and "Tests are OPTIONAL" contradicts a constitution
+# that asks for tests. Only the template's bold form, and only in the header
+# before the first `## ` heading: a phase paragraph that starts "Input:", or a
+# **Tests** line the model wrote for this project (no "OPTIONAL"), is content.
+_HEADER_BOILERPLATE_RE = re.compile(
+    r"^[ \t]*\*\*(?:Input|Prerequisites)\*\*[ \t]*:"
+    r"|^[ \t]*\*\*Tests\*\*[ \t]*:.*\bOPTIONAL\b"
+)
+# A reference to the Spec Kit feature folder's spec, plan or tasks
+# (`/specs/001-name/plan.md`, `specs/001/spec.md`). The seeded views of those
+# three sit together in one folder (docs/, or docs/promptworkspace/ in an
+# imported repository), so each becomes its sibling's name and works in either
+# layout. Any other /specs/ path is left alone: the seed writes no such file,
+# and a `specs/` folder inside another path (`tests/specs/001/`) is the
+# repository's own.
+_SPECS_REF_RE = re.compile(
+    r"(?<![\w./-])/?specs/\d{3}(?:-[\w.-]*)?/(spec|plan|tasks)\.md\b"
+)
+_SEEDED_NAME = {"spec": "scope.md", "plan": "architecture.md", "tasks": "tasks.md"}
+_FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+
+
+def _seeded_tasks_doc(tasks: str) -> str:
+    """The tasks document as seeded: without the Spec Kit header boilerplate,
+    and with references to the feature folder's spec/plan/tasks pointing at
+    the seeded documents. Fenced code is copied untouched."""
+    header: list[str] = []
+    body: list[str] = []
+    in_fence = False
+    for line in tasks.split("\n"):
+        in_header = not body and not line.startswith("## ")
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        elif not in_fence:
+            if in_header and _HEADER_BOILERPLATE_RE.match(line):
+                continue
+            line = _SPECS_REF_RE.sub(lambda m: _SEEDED_NAME[m.group(1)], line)
+        (header if in_header else body).append(line)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(header)).rstrip("\n")
+    if body:
+        text = f"{text}\n\n" + "\n".join(body) if text else "\n".join(body)
+    return text.strip()
+
+
 def build_seed_files(project: Project, stage_docs: dict[str, str | None]) -> list[SeedFile]:
     """`stage_docs` maps stage name ("constitution"/"specify"/"plan"/"tasks")
     to its content, or is missing/None/empty for a stage never generated.
@@ -138,7 +185,7 @@ def build_seed_files(project: Project, stage_docs: dict[str, str | None]) -> lis
         files.append(SeedFile("docs/architecture.md", plan + _footer(project)))
 
     if tasks:
-        files.append(SeedFile("docs/tasks.md", tasks + _footer(project)))
+        files.append(SeedFile("docs/tasks.md", _seeded_tasks_doc(tasks) + _footer(project)))
 
     conventions = _conventions_section(constitution)
     if conventions:

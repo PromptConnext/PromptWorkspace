@@ -3,9 +3,17 @@
 
 from __future__ import annotations
 
+from app.generation.prefill import PREFILL_JOURNEYS_RULE
+from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prompts import (
+    BASELINE_EVIDENCE_RULE,
+    CONSTITUTION_STRENGTH_RULE,
     CURRENT_SERVICES_RULE,
     EXISTING_CODEBASE_TASK_RULES,
+    NO_CI_FIRST_TASK_RULE,
+    PLAN_AUTHOR_OVERRIDE_RULE,
+    REPO_OCCURRENCES_RULE,
+    codebase_baseline_prompt,
     driver_prompt,
 )
 
@@ -61,3 +69,74 @@ def test_the_brownfield_rules_name_the_failure_modes():
 def test_the_other_stages_do_not_change_for_an_imported_project():
     for kind in ("constitution", "specify", "plan"):
         assert EXISTING_CODEBASE_TASK_RULES[0] not in driver_prompt(kind, existing_codebase=True)
+
+
+# --- prompt-quality batch (task 4.3) ------------------------------------------
+
+
+def test_the_baseline_prompt_asks_each_implemented_claim_to_cite_its_file():
+    """#5, #7: the baseline said IndexedDB where store.tsx uses localStorage,
+    and the spec trusted it."""
+    prompt = codebase_baseline_prompt()
+    assert BASELINE_EVIDENCE_RULE in prompt
+    assert "(src/lib/store.tsx)" in BASELINE_EVIDENCE_RULE
+    for mechanism in ("localStorage", "IndexedDB", "in-memory"):
+        assert mechanism in BASELINE_EVIDENCE_RULE
+    # The template's own example bullet uses the same citation shape.
+    assert "(src/server.js, src/routes/stories.js)" in prompt
+
+
+def test_the_plan_prompt_lets_the_authors_fields_override_the_spec_and_baseline():
+    """#16: an author's correction in the plan fields did not beat the spec."""
+    for existing in (False, True):
+        assert PLAN_AUTHOR_OVERRIDE_RULE in driver_prompt("plan", existing_codebase=existing)
+    for kind in ("constitution", "specify", "tasks"):
+        assert PLAN_AUTHOR_OVERRIDE_RULE not in driver_prompt(kind, existing_codebase=True)
+    assert "Summary" in PLAN_AUTHOR_OVERRIDE_RULE
+
+
+def test_the_constitution_prompt_marks_nothing_non_negotiable_unless_the_author_does():
+    """#15: "Test-First (NON-NEGOTIABLE)" came from the template's example."""
+    assert CONSTITUTION_STRENGTH_RULE in driver_prompt("constitution")
+    assert CONSTITUTION_STRENGTH_RULE in driver_prompt("constitution", existing_codebase=True)
+    for kind in ("specify", "plan", "tasks"):
+        assert CONSTITUTION_STRENGTH_RULE not in driver_prompt(kind)
+    assert "NON-NEGOTIABLE" in CONSTITUTION_STRENGTH_RULE
+
+
+def test_the_prefill_prompt_drafts_journeys_only_from_the_prds_goals():
+    """#8: the draft invented a journey and dropped two of the PRD's goals."""
+    assert PREFILL_JOURNEYS_RULE in PREFILL_SYSTEM_PROMPT
+    assert "every goal" in PREFILL_JOURNEYS_RULE
+
+
+def test_brownfield_tasks_start_by_confirming_the_build_when_there_is_no_ci_or_tests():
+    """#33: the shipped repository did not install, and nothing checked."""
+    assert NO_CI_FIRST_TASK_RULE in EXISTING_CODEBASE_TASK_RULES
+    assert NO_CI_FIRST_TASK_RULE in driver_prompt("tasks", existing_codebase=True)
+    assert NO_CI_FIRST_TASK_RULE not in driver_prompt("tasks")
+    for needle in ("install", "lint", "build", "record", "Baseline gaps"):
+        assert needle in NO_CI_FIRST_TASK_RULE
+    # Review of 0f49de3: only when the specification adds CI or tests (rule 1's
+    # "only when a story needs it"), and never pinned to T001, which would
+    # shift every ref of an existing board and retire its closed tasks (4.1).
+    assert "AND the specification adds CI or tests" in NO_CI_FIRST_TASK_RULE
+    assert "T001" not in NO_CI_FIRST_TASK_RULE
+
+
+def test_brownfield_tasks_extend_an_env_template_the_file_list_already_shows():
+    """#56: T025 "Add .env.example" for a repository that has one."""
+    text = " ".join(EXISTING_CODEBASE_TASK_RULES)
+    assert "already lists `.env.example`" in text
+
+
+def test_brownfield_tasks_name_the_files_repo_occurrences_lists():
+    """#54: rebrand tasks named files the old name was not in."""
+    assert REPO_OCCURRENCES_RULE in driver_prompt("tasks", existing_codebase=True)
+    for kind in ("constitution", "specify", "plan"):
+        assert REPO_OCCURRENCES_RULE not in driver_prompt(kind, existing_codebase=True)
+    assert REPO_OCCURRENCES_RULE not in driver_prompt("tasks")
+    # The list is capped and may cover part of the repository; the rule must
+    # leave room for a file it does not show in exactly those cases.
+    assert "and N more files" in REPO_OCCURRENCES_RULE
+    assert "searched" in REPO_OCCURRENCES_RULE

@@ -14,11 +14,15 @@ import time
 
 import pytest
 
+import app.imports.snapshot as snapshot_module
 from app.imports.snapshot import (
     CODE_INDEX_MAX_FILES,
     EXCERPT_FILE_CHARS,
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
+    MAX_SKIPPED,
+    OCCURRENCE_FILES_PER_TOKEN,
+    OCCURRENCE_MAX_TOKENS,
     OUTLINE_MAX_FILES,
     build_snapshot,
     detect_stack,
@@ -27,9 +31,12 @@ from app.imports.snapshot import (
     indexable_code_paths,
     is_secret_path,
     is_test_path,
+    occurrences_text,
     outline_paths,
     outline_source,
+    quoted_strings,
     redact_secrets,
+    repo_occurrences,
     summarize_tests,
     summarize_tree,
 )
@@ -508,3 +515,181 @@ def test_a_snapshot_stored_before_outlines_still_validates():
     snapshot = RepoSnapshot.model_validate(old)
     assert snapshot.source_outlines == []
     assert snapshot.test_summary == ""
+
+
+# --- which files the analysis skipped (task 4.5, finding #6) -----------------
+
+
+def test_52_of_53_files_read_lists_the_skipped_file_and_why():
+    sources = [f"src/m{i:02d}.ts" for i in range(52)]
+    fake = _fake_repo({}, extra_paths=[*sources, "certs/server.pem"])
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert snapshot.file_count == 52
+    assert snapshot.skipped_count == 1
+    assert [(s.path, s.reason) for s in snapshot.skipped] == [("certs/server.pem", "secret")]
+    # Naming a skipped secret-shaped file is not reading it.
+    assert "certs/server.pem" not in {path for _repo, path, _sha in fake.fetched_files}
+
+
+def test_skipped_files_say_why_and_a_vendored_directory_is_one_entry():
+    fake = _fake_repo(
+        {},
+        extra_paths=[
+            "src/index.ts",
+            "public/logo.png",
+            ".env",
+            "node_modules/react/index.js",
+            "node_modules/react/package.json",
+            "web/dist/app.js",
+        ],
+    )
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert snapshot.file_count == 1
+    assert snapshot.skipped_count == 5
+    assert [(s.path, s.reason) for s in snapshot.skipped] == [
+        (".env", "secret"),
+        ("node_modules/", "vendored"),
+        ("public/logo.png", "binary"),
+        ("web/dist/", "vendored"),
+    ]
+
+
+def test_the_skipped_list_is_capped_but_the_count_is_not():
+    images = [f"img/{i:04d}.png" for i in range(MAX_SKIPPED + 25)]
+    fake = _fake_repo({}, extra_paths=["src/index.ts", *images])
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    assert len(snapshot.skipped) == MAX_SKIPPED
+    assert snapshot.skipped_count == MAX_SKIPPED + 25
+
+
+# --- env template names (task 4.3, finding #56) --------------------------------
+
+
+def test_env_template_names_are_listed_without_contents():
+    fake = _fake_repo(
+        {"README.md": "# Story app"},
+        extra_paths=[
+            ".env",
+            ".env.local",
+            ".env.example",
+            "web/.env.sample",
+            "api/.env.template",
+            "node_modules/pkg/.env.example",
+            "src/index.ts",
+        ],
+    )
+    fake.set_file(REPO, ".env.example", "abc123", "API_KEY=sk-live-should-never-be-read")
+    snapshot = asyncio.run(build_snapshot(fake, "tok", REPO, "main"))
+
+    # The names are listed, so a task can extend the file instead of adding it.
+    for name in (".env.example", "web/.env.sample", "api/.env.template"):
+        assert name in snapshot.paths
+    # A real secret file is still neither listed nor read.
+    assert ".env" not in snapshot.paths
+    assert ".env.local" not in snapshot.paths
+    assert "node_modules/pkg/.env.example" not in snapshot.paths
+    # ...and no template's content is ever fetched, excerpted or outlined.
+    fetched = {path for _repo, path, _sha in fake.fetched_files}
+    assert not any(".env" in path for path in fetched)
+    stored = snapshot.model_dump_json()
+    assert "sk-live-should-never-be-read" not in stored
+    # Listed, but never read: so a template is not counted as read, and the
+    # skipped list says why (review of 0f49de3).
+    assert snapshot.file_count == 2
+    assert {(s.path, s.reason) for s in snapshot.skipped} == {
+        (".env", "secret"),
+        (".env.local", "secret"),
+        (".env.example", "secret"),
+        ("api/.env.template", "secret"),
+        ("web/.env.sample", "secret"),
+        ("node_modules/", "vendored"),
+    }
+    # Nor is a template embedded with the code: names only.
+    assert ".env.example" not in indexable_code_paths(snapshot.paths, CODE_INDEX_MAX_FILES)
+
+
+# --- where the specification's strings live (task 4.2, finding #54) ------------
+
+
+def test_quoted_strings_are_distinct_in_order_and_skip_paths_and_apostrophes():
+    spec = (
+        'Rename every "ASSET GROW" to \u201cMarketing Studio\u201d. The `assetgrow` keys move; '
+        "the user's data and the team's settings stay. Edit `src/App.tsx` and 'Asset Grow'. "
+        'Also "asset grow" again, and "ok".'
+    )
+    assert quoted_strings(spec) == ["ASSET GROW", "Marketing Studio", "assetgrow"]
+    assert quoted_strings(spec, limit=2) == ["ASSET GROW", "Marketing Studio"]
+
+
+def test_the_segment_lists_the_files_that_contain_a_quoted_spec_string():
+    files = {
+        "index.html": "<title>ASSET GROW</title><meta content='ASSET GROW'>",
+        "src/App.tsx": "<b>Asset Grow</b>",
+        "src/lib/exporters.ts": "https://assetgrow.app/share",
+        "src/lib/format.ts": "export const x = 1",
+        ".env.example": "BRAND=ASSET GROW",
+        "certs/server.pem": "ASSET GROW",
+    }
+    fake = _fake_repo(files)
+
+    # Every path goes in, the secret and the template included: the filter
+    # inside repo_occurrences is what has to keep them unread.
+    occurrences = asyncio.run(
+        repo_occurrences(
+            fake, "tok", REPO, "abc123", list(files), ["ASSET GROW", "assetgrow", "Not There"]
+        )
+    )
+    text = occurrences_text(occurrences)
+
+    assert text.splitlines() == [
+        '"ASSET GROW" is in 2 files: index.html (2), src/App.tsx (1)',
+        '"assetgrow" is in 1 files: src/lib/exporters.ts (1)',
+    ]
+    # Read through the code-index filter: never a secret or an env template.
+    fetched = {path for _repo, path, _sha in fake.fetched_files}
+    assert ".env.example" not in fetched
+    assert "certs/server.pem" not in fetched
+    assert all(sha == "abc123" for _repo, _path, sha in fake.fetched_files)
+
+
+def test_occurrences_are_capped_per_string_and_in_strings():
+    files = {f"src/m{i:02d}.ts": "ACME" for i in range(OCCURRENCE_FILES_PER_TOKEN + 3)}
+    files["src/brands.ts"] = " ".join(f"brand{i}" for i in range(OCCURRENCE_MAX_TOKENS + 2))
+    strings = ["ACME", *(f"brand{i}" for i in range(OCCURRENCE_MAX_TOKENS + 2))]
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), strings)
+    )
+    assert len(occurrences.found) == OCCURRENCE_MAX_TOKENS
+    first = occurrences_text(occurrences).splitlines()[0]
+    assert first.startswith(f'"ACME" is in {OCCURRENCE_FILES_PER_TOKEN + 3} files: ')
+    assert first.endswith(", and 3 more files")
+
+
+def test_no_quoted_strings_fetch_nothing():
+    fake = _fake_repo({"src/a.ts": "x"})
+    occurrences = asyncio.run(repo_occurrences(fake, "tok", REPO, "abc123", ["src/a.ts"], []))
+    assert occurrences.found == []
+    assert fake.fetched_files == []
+
+
+def test_a_partial_search_says_so(monkeypatch):
+    """Only OCCURRENCE_MAX_FILES files are read, and a file can fail to
+    fetch: the segment then says other files may hold the strings too, so
+    the model is not told a list is complete when it is not."""
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_MAX_FILES", 2)
+    files = {f"src/m{i}.ts": "ACME" for i in range(3)}
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+    assert (occurrences.searched, occurrences.searchable) == (2, 3)
+    assert occurrences_text(occurrences).splitlines()[-1] == (
+        "(searched 2 of 3 files; others may contain these strings too)"
+    )
+
+    complete = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files)[:2], ["ACME"])
+    )
+    assert "searched" not in occurrences_text(complete)

@@ -21,6 +21,15 @@ from app.generation.parsing import extract_json_object
 # paragraph and still bounds a model that decides to write an essay into one.
 MAX_FIELD_CHARS = 2_000
 
+# Finding #8: the draft invented a journey no PRD goal asked for and dropped
+# two goals that were stated. The journeys are the PRD's, not the codebase's.
+PREFILL_JOURNEYS_RULE = (
+    "Goals and user journeys come only from the PRD (the uploaded documents): every goal the "
+    "PRD states appears in at least one journey, and no journey is drafted for a goal the PRD "
+    "does not state. A specification or codebase baseline in the material informs technical "
+    "fields only; it is never a source of goals or journeys."
+)
+
 SYSTEM_PROMPT = (
     "You are reading a project's source material to fill in an intake form on the author's "
     "behalf. Answer only from the material you are given.\n"
@@ -30,7 +39,7 @@ SYSTEM_PROMPT = (
     "(a sentence or a few lines). If a field asks for a list, put one item per line. If the "
     "material does not answer a field, return an empty string for it — never guess, never "
     "write 'N/A' or 'unknown'. Do not invent technology choices, metrics, or dates that are "
-    "not stated."
+    "not stated.\n" + PREFILL_JOURNEYS_RULE
 )
 
 

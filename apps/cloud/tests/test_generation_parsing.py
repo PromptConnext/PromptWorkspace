@@ -6,10 +6,13 @@ generated document instead of treating it as instructions to itself.
 
 from __future__ import annotations
 
+import pytest
+
 from app.generation.parsing import (
     fix_template_placeholders,
     parse_task_lines,
     strip_template_scaffolding,
+    titles_match,
 )
 
 
@@ -165,3 +168,66 @@ def test_feature_placeholder_untouched_inside_code_fence():
     out = fix_template_placeholders(doc)
     assert "run [FEATURE NAME]" in out
     assert "Use [FEATURE] here." not in out
+
+
+# --- titles_match (task 4.1, finding #57) -----------------------------------
+# A regenerated task keeps its row (and a closed row its status) only when its
+# title still describes the same work. Light rewording matches; different work
+# does not, in either script.
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        # identical, and identical after case/space/punctuation normalisation
+        ("Persist the payment record", "Persist the payment record", True),
+        ("Persist the payment record", "  persist the Payment record. ", True),
+        # light rewording keeps the task
+        ("Persist the payment record", "Persist the payment ledger", True),
+        (
+            "[US1] Replace ASSET GROW in src/App.tsx",
+            "[US1] Replace ASSET GROW in src/App.tsx and src/lib/exporters.ts",
+            True,
+        ),
+        # different work under the same ref
+        ("Add the payment intent endpoint", "Reconcile settlements nightly", False),
+        ("Persist the payment record", "Replace ASSET GROW in src/App.tsx", False),
+        # Thai has no spaces between words; similarity must still see it
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "เพิ่มหน้าตั้งค่าโปรไฟล์ของผู้ใช้", True),
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "แก้ไขการส่งออกรายงานยอดขาย", False),
+        ("[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx", "[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx ทั้งหมด", True),
+        # adding the files the work touches is not different work (review of 4.1)
+        (
+            "Replace ASSET GROW branding",
+            "Replace ASSET GROW branding in `src/App.tsx`, `src/lib/exporters.ts` and "
+            "`index.html`",
+            True,
+        ),
+        ("Create user model", "Create the User model in src/models/user.ts", True),
+        # ...and different work naming the same files is still different work
+        (
+            "Add the payment intent endpoint in `src/api/payments.ts`",
+            "Reconcile settlements nightly in `src/api/payments.ts`",
+            False,
+        ),
+        # ...a path without backticks counts as a path only with a slash and an extension
+        ("Create user model", "Create user model in src/models/user.ts and src/db/user.sql", True),
+        # a dotted technology name or a slash phrase is a word, not a path (review of 2609900)
+        ("Switch to Socket.io", "Switch to Express.js", False),
+        ("Rewrite in Rust.rs", "Rewrite in Go.go", False),
+        ("Add Socket.io server", "Add Express.js server", False),
+        ("Set up CI/CD", "Set up client/server split", False),
+        # other scripts are compared too, not reduced to nothing
+        ("Добавить экспорт отчётов", "Добавить экспорт всех отчётов", True),
+        ("Добавить экспорт отчётов", "Исправить вход пользователя", False),
+        ("添加用户导出功能", "添加用户数据导出功能", True),
+        ("添加用户导出功能", "修复登录页面错误", False),
+        # empty titles are only the same as each other
+        ("", "", True),
+        ("", "Persist the payment record", False),
+    ],
+)
+def test_titles_match(old: str, new: str, expected: bool):
+    assert titles_match(old, new) is expected
+    # symmetric: which generation came first does not change the answer
+    assert titles_match(new, old) is expected

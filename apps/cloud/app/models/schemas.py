@@ -1368,11 +1368,23 @@ class RepoExcerpt(BaseModel):
     truncated: bool = False
 
 
+class RepoSkippedFile(BaseModel):
+    """A path the snapshot left out (app/imports/snapshot.py::skipped_files):
+    a vendored or build directory (one entry, path ending in `/`), a binary
+    file, or a secret-shaped file whose content is never fetched."""
+
+    path: str
+    reason: Literal["vendored", "binary", "secret"]
+
+
 class RepoSnapshot(BaseModel):
     """Deterministic read of one commit of the repository
     (app/imports/snapshot.py). Secret-shaped files (`.env*`, keys,
-    certificates) are excluded before anything is listed or fetched, so none
-    of this ever carried a credential into a prompt or into this row."""
+    certificates) are never fetched, so none of this ever carried a
+    credential into a prompt or into this row. Their *names* are stored in
+    `skipped` (shown to admins only, app/api/repo_analysis.py::_out), and env
+    templates (`.env.example`, `.env.sample`, `.env.template`) are also listed
+    in `paths` so a task extends one rather than adding another."""
 
     commit_sha: str
     default_branch: str
@@ -1384,7 +1396,8 @@ class RepoSnapshot(BaseModel):
     tree_summary: str = ""
     stack: RepoStack = Field(default_factory=RepoStack)
     excerpts: list[RepoExcerpt] = Field(default_factory=list)
-    # The filtered file paths, capped — enough for the Planner to show and for
+    # The filtered file paths plus env template names, capped — enough for the
+    # Planner to show and for
     # a reader to know what was looked at. The no-overwrite check at repository
     # creation does NOT read this: it reads the live tree, so a file pushed
     # after the analysis still cannot be overwritten.
@@ -1396,6 +1409,13 @@ class RepoSnapshot(BaseModel):
     # "N test files: tests/ 12, src/ 3" or "no test files found". Empty on a
     # snapshot stored before plan 0028.
     test_summary: str = ""
+    # What the filter left out and why, capped; `skipped_count` is every file
+    # skipped, so `file_count` of `file_count + skipped_count` were read. An env
+    # template is listed in `paths` but never read, so it is counted here and
+    # not in `file_count`. Empty on a snapshot stored before the trust-test
+    # fixes (finding #6).
+    skipped: list[RepoSkippedFile] = Field(default_factory=list)
+    skipped_count: int = 0
 
 
 class RepoAnalysis(BaseModel):
