@@ -267,3 +267,35 @@ def parse_task_phases(doc: str) -> list[TaskPhase]:
         )
         for key in order
     ]
+
+
+# Latin/digit words, and runs of Thai (U+0E00-U+0E7F, marks included).
+_TITLE_WORD_RE = re.compile(r"[0-9a-z]+|[\u0e00-\u0e7f]+")
+_THAI_RUN_RE = re.compile(r"[\u0e00-\u0e7f]+")
+# Below this, a regenerated title describes different work (task 4.1, #57).
+TITLE_MATCH_THRESHOLD = 0.6
+
+
+def _title_tokens(title: str) -> set[str]:
+    """Normalized tokens of a task title: lowercase Latin/digit words, and
+    character bigrams of each Thai run — Thai writes words without spaces,
+    so a whitespace split would make every Thai title one opaque token."""
+    text = unicodedata.normalize("NFC", title).lower()
+    tokens: set[str] = set()
+    for word in _TITLE_WORD_RE.findall(text):
+        if _THAI_RUN_RE.fullmatch(word) and len(word) > 1:
+            tokens.update(word[i : i + 2] for i in range(len(word) - 1))
+        else:
+            tokens.add(word)
+    return tokens
+
+
+def titles_match(old: str, new: str) -> bool:
+    """Whether two titles for the same task ref still describe the same work:
+    the Dice similarity of their normalized tokens is at least
+    TITLE_MATCH_THRESHOLD. Case, spacing and punctuation never matter; light
+    rewording ("record" -> "ledger") matches; different work does not."""
+    a, b = _title_tokens(old), _title_tokens(new)
+    if not a or not b:
+        return a == b
+    return 2 * len(a & b) / (len(a) + len(b)) >= TITLE_MATCH_THRESHOLD

@@ -6,10 +6,13 @@ generated document instead of treating it as instructions to itself.
 
 from __future__ import annotations
 
+import pytest
+
 from app.generation.parsing import (
     fix_template_placeholders,
     parse_task_lines,
     strip_template_scaffolding,
+    titles_match,
 )
 
 
@@ -165,3 +168,40 @@ def test_feature_placeholder_untouched_inside_code_fence():
     out = fix_template_placeholders(doc)
     assert "run [FEATURE NAME]" in out
     assert "Use [FEATURE] here." not in out
+
+
+# --- titles_match (task 4.1, finding #57) -----------------------------------
+# A regenerated task keeps its row (and a closed row its status) only when its
+# title still describes the same work. Light rewording matches; different work
+# does not, in either script.
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        # identical, and identical after case/space/punctuation normalisation
+        ("Persist the payment record", "Persist the payment record", True),
+        ("Persist the payment record", "  persist the Payment record. ", True),
+        # light rewording keeps the task
+        ("Persist the payment record", "Persist the payment ledger", True),
+        (
+            "[US1] Replace ASSET GROW in src/App.tsx",
+            "[US1] Replace ASSET GROW in src/App.tsx and src/lib/exporters.ts",
+            True,
+        ),
+        # different work under the same ref
+        ("Add the payment intent endpoint", "Reconcile settlements nightly", False),
+        ("Persist the payment record", "Replace ASSET GROW in src/App.tsx", False),
+        # Thai has no spaces between words; similarity must still see it
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "เพิ่มหน้าตั้งค่าโปรไฟล์ของผู้ใช้", True),
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "แก้ไขการส่งออกรายงานยอดขาย", False),
+        ("[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx", "[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx ทั้งหมด", True),
+        # empty titles are only the same as each other
+        ("", "", True),
+        ("", "Persist the payment record", False),
+    ],
+)
+def test_titles_match(old: str, new: str, expected: bool):
+    assert titles_match(old, new) is expected
+    # symmetric: which generation came first does not change the answer
+    assert titles_match(new, old) is expected
