@@ -3,7 +3,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOSAVE_DELAY_MS, StageInputForm } from "./StageInputForm";
-import { stageDraftKey, type StageAnswers, type StageField } from "./stage-forms";
+import {
+  CONSTITUTION_FIELDS,
+  stageDraftKey,
+  type StageAnswers,
+  type StageField,
+} from "./stage-forms";
 
 vi.mock("@/lib/auth", () => {
   const auth = { authHeaders: () => ({ Authorization: "Bearer test" }) };
@@ -232,6 +237,23 @@ describe("StageInputForm — answers stored in the cloud", () => {
     await settle();
     await advance(AUTOSAVE_DELAY_MS * 3);
     expect(putStageInputs).not.toHaveBeenCalled();
+  });
+
+  it("typing in an optional rules field does not append to default text", async () => {
+    serverHas({});
+    render(<Harness fields={CONSTITUTION_FIELDS} />);
+    await settle();
+
+    const quality = screen.getByLabelText(/Quality bar/) as HTMLTextAreaElement;
+    // The standard text is a hint to read, not a value to edit around.
+    expect(quality.value).toBe("");
+    expect(quality.placeholder).toContain("Tests, linting, and type checks pass in CI");
+
+    fireEvent.change(quality, { target: { value: "100% coverage" } });
+    expect(quality.value).toBe("100% coverage");
+    await advance(AUTOSAVE_DELAY_MS * 2);
+    expect(putStageInputs.mock.calls[0][2]).toMatchObject({ quality: "100% coverage" });
+    expect(putStageInputs.mock.calls[0][2].quality).not.toContain("Tests, linting");
   });
 
   it("sends the pending save, with the latest answers, when unmounted", async () => {
