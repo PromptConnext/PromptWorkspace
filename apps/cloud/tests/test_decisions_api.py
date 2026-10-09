@@ -612,3 +612,92 @@ def test_overview_is_for_members_only(client, project):
     assert res.status_code == 403
     res = client.get("/projects/nope/delivery-overview", headers=ALICE)
     assert res.status_code == 404
+
+
+def _outsider(client, project, kind: str) -> dict[str, str]:
+    """A caller who is not a member of the project's workspace: never was
+    (`stranger`), belongs to another workspace (`other_workspace`), or was a
+    member holding a hat with an open decision routed to them and was then
+    removed (`removed`)."""
+    if kind == "stranger":
+        return {"X-User-Id": "eve"}
+    if kind == "other_workspace":
+        carol = {"X-User-Id": "carol"}
+        res = client.post("/workspaces", json={"name": "Carol's"}, headers=carol)
+        assert res.status_code == 201, res.text
+        return carol
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert _request(client, project, "intent_approval", headers=BOB).status_code == 200
+    me = client.get("/me/decisions", headers=BOB).json()
+    assert [item["project_id"] for item in me] == [project]  # routed to bob while a member
+    repo.remove_member(repo.get_project(project).workspace_id, "bob")
+    return BOB
+
+
+PROJECT_ROUTES = [
+    ("GET", "/projects/{pid}/decisions", None),
+    ("POST", "/projects/{pid}/decisions", {"kind": "intent_approval"}),
+    ("POST", "/projects/{pid}/decisions/{did}/resolve", {"outcome": "approved"}),
+    ("GET", "/projects/{pid}/delivery-overview", None),
+]
+
+
+@pytest.mark.parametrize("kind", ["stranger", "other_workspace", "removed"])
+@pytest.mark.parametrize(("method", "path", "body"), PROJECT_ROUTES)
+def test_the_decision_routes_refuse_a_non_member(client, project, kind, method, path, body):
+    # An open decision to resolve, made by the admin.
+    did = _request(client, project, "intent_approval", headers=ALICE).json()["id"]
+    who = _outsider(client, project, kind)
+    url = path.format(pid=project, did=did)
+    res = client.request(method, url, json=body, headers=who)
+    assert res.status_code == 403, res.text
+    assert res.json()["detail"] == "not_a_member"
+
+
+@pytest.mark.parametrize("kind", ["stranger", "other_workspace", "removed"])
+def test_the_inbox_shows_a_non_member_nothing(client, project, kind):
+    _request(client, project, "intent_approval", headers=ALICE)
+    who = _outsider(client, project, kind)
+    res = client.get("/me/decisions", headers=who)
+    assert res.status_code == 200, res.text
+    assert res.json() == []
+
+
+def _member_list_without(monkeypatch, repo, user_id: str) -> None:
+    """`list_members` leaves `user_id` out, as a PostgREST page capped at
+    max_rows can for a workspace larger than the cap."""
+    full = repo.list_members
+    monkeypatch.setattr(
+        repo, "list_members", lambda ws: [m for m in full(ws) if m.user_id != user_id]
+    )
+
+
+def test_a_member_missing_from_a_truncated_member_list_is_still_let_in(
+    client, project, monkeypatch
+):
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    _request(client, project, "intent_approval", headers=ALICE)
+    _member_list_without(monkeypatch, repo, "bob")
+
+    assert client.get(f"/projects/{project}/decisions", headers=BOB).status_code == 200
+    assert client.get(f"/projects/{project}/delivery-overview", headers=BOB).status_code == 200
+    # The inbox does not drop the workspace either. (Whether the decision shows
+    # also depends on the routing context's member ids, read from the same
+    # list: a known, separate limit, not pinned here.)
+    assert client.get("/me/decisions", headers=BOB).status_code == 200
+
+
+def test_a_caller_neither_read_finds_is_refused(client, project, monkeypatch):
+    repo = client.app.state.repository
+    _member_list_without(monkeypatch, repo, "bob")
+    monkeypatch.setattr(repo, "get_membership", lambda ws, user_id: None)
+
+    res = client.get(f"/projects/{project}/decisions", headers=BOB)
+    assert res.status_code == 403
+    assert res.json()["detail"] == "not_a_member"

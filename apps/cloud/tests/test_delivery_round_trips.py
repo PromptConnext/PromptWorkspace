@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.sync import _require_delivery_gates
-from app.delivery.approvals import stage_hashes
+from app.delivery.approvals import plan_state, stage_hashes
 from app.main import create_app
 from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument
 
@@ -206,3 +206,32 @@ def test_the_create_repository_gate_reads_the_stage_documents_once(client, proje
         _require_delivery_gates(repo, pid)  # passes: constitution, tasks, approved plan
     print("create-repository gates:", len(repo.calls), repo.calls)
     assert repo.calls == ["list_stage_documents", "list_decisions"], repo.calls
+
+
+def test_the_inbox_reads_the_member_list_once_per_workspace(client, project):
+    repo = client.app.state.repository
+    ws = repo.get_project(project).workspace_id
+    second = client.post("/projects", json={"name": "Q", "workspace_id": ws},
+                         headers=ALICE).json()["id"]
+    repo.upsert_stage_document(second, ws, "specify", "# Spec\n\nAnother.", "alice")
+    for pid in (project, second):
+        res = client.post(f"/projects/{pid}/decisions", json={"kind": "intent_approval"},
+                          headers=BOB)
+        assert res.status_code == 200, res.text
+    with counting(client) as counted:
+        res = client.get("/me/decisions", headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert len(res.json()) == 2
+    print("GET /me/decisions, two projects:", len(counted.calls), counted.calls)
+    assert counted.calls.count("list_members") == 1, counted.calls
+    assert membership_reads(counted.calls) == 1, counted.calls
+    assert len(counted.calls) <= 7, counted.calls
+
+
+def test_plan_state_trusts_a_missing_document_the_caller_already_read(client, project):
+    with counting(client) as repo:
+        assert plan_state(repo, project, None) == "none"
+    assert repo.calls == ["list_decisions"], repo.calls  # no second read of `tasks`
+    with counting(client) as repo:
+        plan_state(repo, project)
+    assert repo.calls.count("get_stage_document") == 1, repo.calls

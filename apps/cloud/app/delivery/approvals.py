@@ -11,6 +11,8 @@ edit that makes an approval stale also takes the "Approved" badge away.
 
 from __future__ import annotations
 
+from typing import cast
+
 from app.db.repository import Repository
 from app.delivery.decisions import (
     STAGE_OF,
@@ -62,15 +64,19 @@ def states_of(
     }
 
 
+_UNREAD = object()  # plan_state's "the caller has not read the tasks document"
+
+
 def plan_state(
-    repo: Repository, project_id: str, tasks_content: str | None = None
+    repo: Repository, project_id: str, tasks_content: str | None | object = _UNREAD
 ) -> ApprovalState:
     """The plan approval alone: reads only the `tasks` document, not both, and
-    not even that when the caller passes the text it already read."""
-    tasks_hash = (
-        document_hash(tasks_content) if tasks_content is not None
-        else current_hash(repo, project_id, STAGE_OF["plan_approval"])
-    )
+    not even that when the caller passes what it already read: the text, or
+    None for a document that does not exist."""
+    if tasks_content is _UNREAD:
+        tasks_hash = current_hash(repo, project_id, STAGE_OF["plan_approval"])
+    else:
+        tasks_hash = document_hash(cast("str | None", tasks_content))
     return approval_state(repo.list_decisions(project_id), "plan_approval", tasks_hash)
 
 

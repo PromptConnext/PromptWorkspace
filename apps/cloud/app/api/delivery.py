@@ -258,7 +258,9 @@ def _routing_context(
     repo: Repository, project: Project, role: Role, members: list[WorkspaceMember]
 ):
     """Who may resolve what, from the caller's `role` and the workspace
-    `members` that `require_project_members` already read."""
+    `members` that `require_project_members` already read. Known limit: the
+    list is one PostgREST page (max_rows), so in a workspace larger than that
+    a hat holder left off the page reads as a non-member here."""
     roles = repo.list_project_roles(project.id)
     return roles, {m.user_id for m in members}, role == Role.admin
 

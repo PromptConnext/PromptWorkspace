@@ -23,13 +23,15 @@ def test_list_stage_documents_matches_get_stage_document(repo: Repository) -> No
     other = h.project(repo, ws, admin)
     repo.upsert_stage_document(project.id, ws.id, "specify", "# Spec\n\nBook a slot.", admin)
     repo.upsert_stage_document(project.id, ws.id, "tasks", "# Tasks\n\n- [ ] T001", admin)
-    repo.upsert_stage_document(project.id, ws.id, "plan", "# Plan", admin)
+    repo.upsert_stage_document(project.id, ws.id, "plan", "", admin)  # present but blank
     repo.upsert_stage_document(other.id, ws.id, "constitution", "# Other project", admin)
 
-    docs = repo.list_stage_documents(project.id, ["specify", "tasks", "constitution"])
+    docs = repo.list_stage_documents(project.id, ["specify", "tasks", "plan", "constitution"])
 
-    # Only the stages asked for, and only those that have a document.
-    assert set(docs) == {"specify", "tasks"}
+    # Only the stages asked for, and only those that have a document, blank
+    # ones included (what counts as approvable is the caller's rule).
+    assert set(docs) == {"specify", "tasks", "plan"}
+    assert docs["plan"].content == ""
     for stage, doc in docs.items():
         single = repo.get_stage_document(project.id, stage)
         assert single is not None

@@ -234,6 +234,17 @@ def role_in(members: list[WorkspaceMember], user_id: str) -> Role | None:
     return next((m.role for m in members if m.user_id == user_id), None)
 
 
+def member_role(
+    repo: Repository, workspace_id: str, members: list[WorkspaceMember], user_id: str
+) -> Role | None:
+    """The user's role from the member list, confirmed with `get_membership`
+    when the list leaves them out. PostgREST caps a response at max_rows
+    (supabase/config.toml), so in a workspace larger than that a real member
+    can be missing from the list; the extra read happens only then."""
+    role = role_in(members, user_id)
+    return role if role is not None else repo.get_membership(workspace_id, user_id)
+
+
 def require_project_members(
     repo: Repository, project_id: str, user: User
 ) -> tuple[Project, Role, list[WorkspaceMember]]:
@@ -244,7 +255,7 @@ def require_project_members(
     if project is None:
         raise HTTPException(status_code=404, detail="project_not_found")
     members = repo.list_members(project.workspace_id)
-    role = role_in(members, user.id)
+    role = member_role(repo, project.workspace_id, members, user.id)
     if role is None:
         raise HTTPException(status_code=403, detail="not_a_member")
     tag_workspace(project.workspace_id)

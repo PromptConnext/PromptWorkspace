@@ -8,6 +8,15 @@ signal reaches it, which needs uvicorn to *be* the container's main process
 (`exec`), not a child of the shell that started it. The platform's own grace
 period (docs/DEPLOYMENT.md) must outlast uvicorn's, or the instance is killed
 mid-drain.
+
+What these tests do not prove: anything about the container. The first three
+pin the Dockerfile and the documented grace period; the SIGTERM test runs the
+image's command under the host's `sh` (not the image's), and passes against
+the old command too. The deployed container is verified only by the live
+check in docs/DEPLOYMENT.md ("Deploys that don't cut requests"). The SIGTERM
+test binds a localhost port and takes about two seconds; it needs no outbound
+network, so it carries no marker (the repo's only opt-out marker, `network`,
+is for real DNS/HTTP).
 """
 
 from __future__ import annotations
