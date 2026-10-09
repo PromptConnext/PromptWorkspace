@@ -24,7 +24,7 @@ from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prompts import UNTRUSTED_CLOSE, UNTRUSTED_OPEN, UNTRUSTED_SECURITY_RULE
 from app.generation.service import FakeGenerationProvider
 from app.imports.snapshot import MAX_SKIPPED
-from app.integrations.github import FakeGithubClient
+from app.integrations.github import FakeGithubClient, GithubWriteError
 from app.main import create_app
 from app.models.schemas import ModelConnection, Role
 
@@ -876,3 +876,37 @@ def test_tasks_still_generate_when_github_cannot_be_read(client: TestClient):
 
     assert res.status_code == 200, res.text
     assert "[repo_occurrences]" not in client.app.state.generation_provider.calls[-1][1]
+
+
+def test_tasks_with_a_rate_limited_search_keep_the_partial_counts_and_log_why(
+    client: TestClient, monkeypatch, caplog
+):
+    import app.imports.snapshot as snapshot_module
+
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    github = client.app.state.github_client
+    # One file at a time, in the order the search reads them: src/server.js,
+    # README.md, then package.json, which GitHub rate limits.
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_FETCH_CONCURRENCY", 1)
+    real_fetch = github.fetch_file_content
+
+    async def limited_fetch(token, repo, path, sha):
+        if path == "package.json":
+            raise GithubWriteError("rate limited", status_code=429)
+        return await real_fetch(token, repo, path, sha)
+
+    github.fetch_file_content = limited_fetch
+
+    with caplog.at_level("WARNING", logger="promptworkspace.generation"):
+        res = _generate(client, pid, "tasks")
+
+    assert res.status_code == 200, res.text
+    _, user_content = client.app.state.generation_provider.calls[-1]
+    segment = user_content.split("[repo_occurrences]", 1)[1]
+    assert '"Story App" is in 1 files: README.md (1)' in segment
+    assert "searched 2 of 3 files" in segment
+    warning = next(r.getMessage() for r in caplog.records if "occurrences" in r.getMessage())
+    assert "rate_limit" in warning and "2/3" in warning

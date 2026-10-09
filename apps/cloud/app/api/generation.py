@@ -26,7 +26,6 @@ the graph.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -659,11 +658,6 @@ def _paths_text(snapshot) -> str:
     return text
 
 
-# A tasks run waits for the occurrence count before the model starts; past
-# this it goes ahead without one.
-_OCCURRENCES_TIMEOUT_SECONDS = 20.0
-
-
 async def _occurrences_segment(
     request: Request, repo: Repository, project: Project, analysis: RepoAnalysis
 ) -> str:
@@ -682,22 +676,30 @@ async def _occurrences_segment(
 
     try:
         token, full_name = _github_access(request, repo, project)
-        occurrences = await asyncio.wait_for(
-            repo_occurrences(
-                request.app.state.github_client,
-                token,
-                full_name,
-                analysis.commit_sha,
-                analysis.snapshot.paths,
-                strings,
-            ),
-            timeout=_OCCURRENCES_TIMEOUT_SECONDS,
+        occurrences = await repo_occurrences(
+            request.app.state.github_client,
+            token,
+            full_name,
+            analysis.commit_sha,
+            analysis.snapshot.paths,
+            strings,
         )
     except Exception:
         logger.warning(
-            "repo occurrences skipped for project=%s", project.id, exc_info=True
+            "repo occurrences skipped for project=%s reason=error", project.id, exc_info=True
         )
         return ""
+    # The search stops at its own budget or at a rate limit and keeps what it
+    # counted; the user sees nothing of it, so the log is the only record.
+    if occurrences.stopped or occurrences.searched < occurrences.searchable:
+        logger.warning(
+            "repo occurrences partial for project=%s reason=%s searched=%d/%d found=%d",
+            project.id,
+            occurrences.stopped or "error",
+            occurrences.searched,
+            occurrences.searchable,
+            len(occurrences.found),
+        )
     if not occurrences.found:
         return ""
     note = (

@@ -21,6 +21,7 @@ from app.imports.snapshot import (
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
     MAX_SKIPPED,
+    OCCURRENCE_BUDGET_SECONDS,
     OCCURRENCE_FILES_PER_TOKEN,
     OCCURRENCE_MAX_TOKENS,
     OUTLINE_MAX_FILES,
@@ -693,3 +694,101 @@ def test_a_partial_search_says_so(monkeypatch):
         repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files)[:2], ["ACME"])
     )
     assert "searched" not in occurrences_text(complete)
+
+
+class _ScriptedRepo(FakeGithubClient):
+    """The fake GitHub client with per-path behaviour: a path in `slow` hangs
+    until cancelled, a path in `fail` answers with that HTTP status."""
+
+    def __init__(self, slow=(), fail=None):
+        super().__init__()
+        self.slow = set(slow)
+        self.fail = dict(fail or {})
+
+    async def fetch_file_content(self, token, repo, path, sha):
+        if path in self.slow:
+            self.fetched_files.append((repo, path, sha))
+            await asyncio.sleep(60)
+        if path in self.fail:
+            self.fetched_files.append((repo, path, sha))
+            raise GithubWriteError(f"fake {self.fail[path]}", status_code=self.fail[path])
+        return await super().fetch_file_content(token, repo, path, sha)
+
+
+def _scripted(files: dict[str, str], **kwargs) -> _ScriptedRepo:
+    fake = _ScriptedRepo(**kwargs)
+    for path, content in files.items():
+        fake.set_file(REPO, path, "abc123", content)
+    return fake
+
+
+def test_the_occurrence_budget_is_eight_seconds():
+    assert OCCURRENCE_BUDGET_SECONDS == 8.0
+
+
+def test_a_deadline_keeps_the_counts_already_made(monkeypatch):
+    """The wait used to cancel the whole gather on timeout and throw away every
+    count: now the files read before the deadline are kept, the rest are
+    cancelled, and the segment says it searched part of the repository."""
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_BUDGET_SECONDS", 0.3)
+    files = {f"src/m{i}.ts": "ACME" for i in range(10)}
+    fake = _scripted(files, slow={f"src/m{i}.ts" for i in range(3, 10)})
+
+    started = time.monotonic()
+    occurrences = asyncio.run(
+        repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+
+    assert time.monotonic() - started < 5
+    assert occurrences.stopped == "timeout"
+    assert (occurrences.searched, occurrences.searchable) == (3, 10)
+    assert occurrences.found == [
+        ("ACME", [("src/m0.ts", 1), ("src/m1.ts", 1), ("src/m2.ts", 1)])
+    ]
+    assert occurrences_text(occurrences).splitlines()[-1] == (
+        "(searched 3 of 10 files; others may contain these strings too)"
+    )
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_rate_limit_stops_further_fetches_and_keeps_earlier_counts(monkeypatch, status):
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_FETCH_CONCURRENCY", 1)
+    files = {f"src/m{i}.ts": "ACME" for i in range(10)}
+    fake = _scripted(files, fail={"src/m2.ts": status})
+
+    occurrences = asyncio.run(
+        repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+
+    # The third file was the last one asked for.
+    assert [path for _r, path, _s in fake.fetched_files] == [
+        "src/m0.ts",
+        "src/m1.ts",
+        "src/m2.ts",
+    ]
+    assert occurrences.stopped == "rate_limit"
+    assert (occurrences.searched, occurrences.searchable) == (2, 10)
+    assert occurrences.found == [("ACME", [("src/m0.ts", 1), ("src/m1.ts", 1)])]
+    assert "searched 2 of 10 files" in occurrences_text(occurrences)
+
+
+def test_another_failed_file_does_not_stop_the_search():
+    files = {f"src/m{i}.ts": "ACME" for i in range(4)}
+    fake = _scripted(files, fail={"src/m1.ts": 404})
+
+    occurrences = asyncio.run(
+        repo_occurrences(fake, "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+
+    assert occurrences.stopped is None
+    assert (occurrences.searched, occurrences.searchable) == (3, 4)
+    assert len(fake.fetched_files) == 4
+
+
+def test_a_complete_search_reports_no_stop():
+    files = {"src/a.ts": "ACME", "src/b.ts": "nothing"}
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+    assert occurrences.stopped is None
+    assert (occurrences.searched, occurrences.searchable) == (2, 2)

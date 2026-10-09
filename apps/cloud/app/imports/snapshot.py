@@ -639,6 +639,13 @@ OCCURRENCE_MAX_TOKENS = 5
 OCCURRENCE_MAX_FILES = 200
 OCCURRENCE_FILES_PER_TOKEN = 20
 OCCURRENCE_FETCH_CONCURRENCY = 8
+# The whole lookup runs before the model starts, so it is time the user spends
+# watching nothing (and, in a deploy, time against the server's drain). Past
+# this the files counted so far are used.
+OCCURRENCE_BUDGET_SECONDS = 8.0
+# GitHub answers these when the token is rate limited or out of scope: the
+# next fetch would fail the same way, so none is made.
+_RATE_LIMIT_STATUSES = (403, 429)
 
 # "double", “curly”, `backticked` or 'single' quoted, 3-64 characters on one
 # line. A single quote must stand outside a word, so an apostrophe in "the
@@ -670,11 +677,13 @@ def quoted_strings(text: str, limit: int = OCCURRENCE_CANDIDATES) -> list[str]:
 @dataclass(frozen=True)
 class RepoOccurrences:
     """`found` is (string, [(path, count), ...]) per string with a hit, files
-    by count then path; `searched` of `searchable` files were read."""
+    by count then path; `searched` of `searchable` files were read. `stopped`
+    is why the search ended early — "timeout" or "rate_limit" — or None."""
 
     found: list[tuple[str, list[tuple[str, int]]]]
     searched: int
     searchable: int
+    stopped: str | None = None
 
 
 def _counts_in(content: str, needles: list[str]) -> dict[str, int]:
@@ -685,38 +694,76 @@ def _counts_in(content: str, needles: list[str]) -> dict[str, int]:
 
 
 async def repo_occurrences(
-    github_client, token: str, repo: str, sha: str, paths: list[str], strings: list[str]
+    github_client,
+    token: str,
+    repo: str,
+    sha: str,
+    paths: list[str],
+    strings: list[str],
+    budget_seconds: float | None = None,
 ) -> RepoOccurrences:
     """Fetch the code-index selection of `paths` at `sha` and count `strings`
     in it; at most OCCURRENCE_MAX_TOKENS strings with a hit are returned.
     Each file is counted as it arrives and its content dropped, so at most
     OCCURRENCE_FETCH_CONCURRENCY files are held at once. A file that fails to
-    fetch is left out, and counts against `searched`."""
+    fetch is left out, and counts against `searched`.
+
+    The search is best effort: when `budget_seconds` (OCCURRENCE_BUDGET_SECONDS)
+    runs out the fetches still pending are cancelled, and at the first
+    403/429 from GitHub no further file is requested; either way the counts
+    already made are returned, with `stopped` saying why."""
     if not strings:
         return RepoOccurrences(found=[], searched=0, searchable=0)
     needles = [s.lower() for s in strings]
     semaphore = asyncio.Semaphore(OCCURRENCE_FETCH_CONCURRENCY)
+    counted: dict[str, dict[str, int] | None] = {}
+    stopped: str | None = None
 
-    async def count(path: str) -> tuple[str, dict[str, int] | None]:
+    async def count(path: str) -> None:
+        nonlocal stopped
         async with semaphore:
+            if stopped == "rate_limit":
+                return
             try:
                 content = await github_client.fetch_file_content(token, repo, path, sha)
-            except GithubWriteError:
-                return path, None
-            return path, _counts_in(content, needles)
+            except GithubWriteError as exc:
+                counted[path] = None
+                if exc.status_code in _RATE_LIMIT_STATUSES:
+                    stopped = "rate_limit"
+                return
+            counted[path] = _counts_in(content, needles)
 
     searchable = indexable_code_paths(paths, len(paths))
     selected = searchable[:OCCURRENCE_MAX_FILES]
-    results = await asyncio.gather(*(count(p) for p in selected))
+    tasks = [asyncio.create_task(count(p)) for p in selected]
+    budget = OCCURRENCE_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=budget)
+    finally:
+        # Also on the caller's own cancellation: no fetch outlives the lookup.
+        for task in tasks:
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    if pending and stopped is None:
+        stopped = "timeout"
+    for task in tasks:
+        # An error that is not a GitHub answer is a bug or a dead network: it
+        # surfaces to the caller, which logs it and goes without the segment.
+        if task.cancelled():
+            continue
+        if (error := task.exception()) is not None:
+            raise error
+
     found: list[tuple[str, list[tuple[str, int]]]] = []
     for string, needle in zip(strings, needles, strict=True):
-        hits = [(path, c[needle]) for path, c in results if c and needle in c]
+        hits = [(path, c[needle]) for path, c in counted.items() if c and needle in c]
         if hits:
             found.append((string, sorted(hits, key=lambda hit: (-hit[1], hit[0]))))
     return RepoOccurrences(
         found=found[:OCCURRENCE_MAX_TOKENS],
-        searched=sum(1 for _path, c in results if c is not None),
+        searched=sum(1 for c in counted.values() if c is not None),
         searchable=len(searchable),
+        stopped=stopped,
     )
 
 
