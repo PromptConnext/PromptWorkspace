@@ -16,6 +16,8 @@ import { taskRefFromFeatureTag } from "@promptworkspace/cloud-client";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
+import { bannerTreeItem } from "../auth/banner.ts";
+import { withBanner, type BannerRow, type Connection } from "../auth/status.ts";
 
 export class TaskNode {
   readonly kind = "task";
@@ -26,7 +28,7 @@ export class TaskNode {
   }
 }
 
-export type TreeNode = TaskNode;
+export type TreeNode = TaskNode | BannerRow;
 
 export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined>();
@@ -35,6 +37,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly store: TaskStore;
   private readonly active: () => ActiveProject | undefined;
   private readonly pendingRefs: (projectId: string) => ReadonlySet<string>;
+  private readonly connection: () => Connection;
 
   constructor(
     store: TaskStore,
@@ -44,10 +47,13 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     // number parsed. Injected rather than read, so the tree keeps no state
     // that could disagree with the watcher's.
     pendingRefs: (projectId: string) => ReadonlySet<string>,
+    // Signed out / unlinked (findings #37, #42): a banner row above the tasks.
+    connection: () => Connection,
   ) {
     this.store = store;
     this.active = active;
     this.pendingRefs = pendingRefs;
+    this.connection = connection;
   }
 
   refresh(): void {
@@ -55,6 +61,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   getTreeItem(node: TreeNode): vscode.TreeItem {
+    if (node.kind === "banner") return bannerTreeItem(node);
     const { task } = node.entry;
     const item = new vscode.TreeItem(task.title, vscode.TreeItemCollapsibleState.None);
     item.id = `task:${task.id}`;
@@ -86,7 +93,8 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     if (node) return [];
     const current = this.active();
     if (!current) return [];
-    return this.store.forProject(current.projectId).map((entry) => new TaskNode(entry));
+    const tasks = this.store.forProject(current.projectId).map((entry) => new TaskNode(entry));
+    return withBanner(this.connection(), tasks);
   }
 
   private tooltip(entry: AssignedTask): vscode.MarkdownString {

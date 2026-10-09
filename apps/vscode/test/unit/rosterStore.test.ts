@@ -172,3 +172,29 @@ test("sign-out during in-flight refresh scrubs the cache (does not repopulate af
   assert.deepEqual(slowRoster.all(), [], "roster memory is empty after sign-out");
   assert.equal(files.has(CACHE_FILES.roster), false, "cache file was not repopulated after sign-out");
 });
+
+test("a refused session is recorded as an auth failure; offline is not (#42)", async () => {
+  const { CloudNotLoggedInError } = await import("@promptworkspace/cloud-client");
+  const { store } = memoryStore();
+  let fail: Error | null = new CloudNotLoggedInError();
+  const roster = new RosterStore(
+    fakeClient({
+      listWorkspaces: async () => {
+        if (fail) throw fail;
+        return [{ id: "w1", name: "Acme" }];
+      },
+    }),
+    new JsonCache(store),
+    silentLog,
+  );
+  await roster.refresh();
+  assert.equal(roster.lastRefreshAuthFailed, true);
+
+  fail = new Error("fetch failed");
+  await roster.refresh();
+  assert.equal(roster.lastRefreshAuthFailed, false, "offline is not signed out");
+
+  fail = null;
+  await roster.refresh();
+  assert.equal(roster.lastRefreshAuthFailed, false);
+});

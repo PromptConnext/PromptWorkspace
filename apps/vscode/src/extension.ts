@@ -6,6 +6,14 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { SignInFlow } from "./auth/signIn.ts";
+import {
+  CONNECTED,
+  cachedLabel,
+  connectionState,
+  type Connection,
+  type ConnectionKind,
+  type FolderLink,
+} from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
 import { SessionStore } from "@promptworkspace/cloud-client";
 import {
@@ -85,8 +93,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // a holder rather than the other way round. Before it exists, nothing is
   // pending — which is true, not a placeholder.
   let watcher: GitWatcher | undefined;
-  const tree = new TaskTreeProvider(store, activeProject, (projectId) =>
-    watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING,
+  // Signed out / unlinked (findings #37, #42), recomputed by renderConnection
+  // below; the trees read it for their banner row.
+  let connection: Connection = CONNECTED;
+  const tree = new TaskTreeProvider(
+    store,
+    activeProject,
+    (projectId) => (watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING),
+    () => connection,
   );
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
@@ -95,15 +109,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: tree,
   });
   const roster = new RosterStore(client, cache, log);
-  const rosterTree = new RosterTreeProvider(roster, store, git, context.globalState);
+  const rosterTree = new RosterTreeProvider(
+    roster,
+    store,
+    git,
+    context.globalState,
+    () => connection,
+  );
   const projectsView = vscode.window.createTreeView("promptworkspace.projects", {
     treeDataProvider: rosterTree,
   });
+  const connectionItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 6);
   context.subscriptions.push(
     treeView,
     projectsView,
     rosterTree,
     statusBar,
+    connectionItem,
     store,
     tree,
     contextView,
@@ -153,13 +175,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // failure this prevents. Who is signed in moves to the Projects view in a
   // later task; sign-out stays reachable from the view title menu regardless.
   const showTitle = () => {
-    const current = session.read();
-    if (!current) {
+    const active = activeProject();
+    const project = active ? projectNameFor(active.projectId) : undefined;
+    if (connection.state === "signed_out") {
+      // A cached list shown while signed out must say so (#42): it used to
+      // read "updated 11:24 PM" for hours while every refresh failed.
+      treeView.description =
+        store.all().length > 0
+          ? [project, cachedLabel(store.refreshedAt, formatTime)].filter(Boolean).join(" · ")
+          : undefined;
+      return;
+    }
+    if (!session.read()) {
       treeView.description = undefined;
       return;
     }
-    const active = activeProject();
-    const project = active ? projectNameFor(active.projectId) : undefined;
     if (store.lastRefreshError) {
       treeView.description = project ? `${project} · offline` : "offline";
       return;
@@ -173,6 +203,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // carries the project instead. Both also have to say when they last reached
   // the cloud, or a refresh that legitimately changes nothing looks broken.
   const describeRoster = () => {
+    if (connection.state === "signed_out") {
+      return roster.all().length > 0 ? cachedLabel(roster.refreshedAt, formatTime) : undefined;
+    }
     const current = session.read();
     if (!current) return undefined;
     const who = current.email ?? current.userId;
@@ -185,6 +218,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Candidates come from the roster, not the task list: a project with no
   // work assigned to this developer still needs to be linkable.
   const candidates = () => linkCandidatesFrom(rosterTree.rows());
+
+  // One answer to "is this window connected?" for the status bar, both trees'
+  // banner rows, the view descriptions, the signed-in context key and one
+  // notification per window per state. Called from every event that can
+  // change it; cheap (a roster rebuild and a config read per folder).
+  const notified = new Set<ConnectionKind>();
+  const folderLinks = (linkable: ReturnType<typeof candidates>): FolderLink[] =>
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => git.repositoryFor(folder.uri) !== undefined)
+      .map((folder) => ({
+        name: folder.name,
+        linked: projectIdFor(folder.uri) !== undefined,
+        hasMatch: link.candidatesFor(folder.uri, linkable).length > 0,
+      }));
+  const renderConnection = () => {
+    const linkable = candidates();
+    const next = connectionState(
+      {
+        stored: session.read() !== null,
+        authFailed: store.lastRefreshAuthFailed || roster.lastRefreshAuthFailed,
+      },
+      { cached: store.all().length > 0 || roster.all().length > 0, linkable: linkable.length },
+      folderLinks(linkable),
+    );
+    const changed = next.state !== connection.state || next.message !== connection.message;
+    connection = next;
+    void setSignedInContext(next.state !== "signed_out");
+    if (next.statusText) {
+      connectionItem.text = next.statusText;
+      connectionItem.tooltip = next.message;
+      connectionItem.command = next.action?.command;
+      connectionItem.show();
+    } else {
+      connectionItem.hide();
+    }
+    if (changed) {
+      tree.refresh();
+      rosterTree.refresh();
+    }
+    showTitle();
+    projectsView.description = describeRoster();
+    const action = next.action;
+    if (next.notify && action && !notified.has(next.state)) {
+      notified.add(next.state);
+      void vscode.window.showWarningMessage(next.message, action.title).then((choice) => {
+        if (choice === action.title) void vscode.commands.executeCommand(action.command);
+      });
+    }
+  };
 
   // Shared by every event that can change the answer to "which project is
   // the active one": switching the focused editor, editing
@@ -205,7 +287,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const active = activeProject();
     await setActiveProjectContext(active);
     tree.refresh();
-    showTitle();
+    renderConnection();
     await contextView.render();
   };
 
@@ -213,14 +295,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store.onDidChange(() => {
       tree.refresh();
       rosterTree.refresh();
-      showTitle();
+      renderConnection();
     }),
     roster.onDidChange(() => {
       rosterTree.refresh();
-      projectsView.description = describeRoster();
+      renderConnection();
       void link.offerLinks(candidates());
     }),
     git.onDidChangeRepositoryState(() => rosterTree.refresh()),
+    // Another window signing in or out changes the shared secrets without an
+    // event on this window's SessionStore; this is the only signal we get.
+    context.secrets.onDidChange(() => renderConnection()),
     // A freshly cloned window can activate before vscode.git has finished
     // discovering the repository `git.clone` just created (getAPI(1) returns
     // ahead of discovery — see gitBridge.ts). The activation-time call to
@@ -229,12 +314,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Memento read so the common case — no clone in flight — costs nothing
     // more than that.
     git.onDidOpenRepository(() => {
+      // A repository appearing can make this window "unlinked".
+      renderConnection();
       if (!readPendingClone(context.globalState)) return;
       void link.applyPendingClone(candidates());
     }),
     session.onDidChange((current) => {
-      void setSignedInContext(current !== null);
-      showTitle();
+      renderConnection();
       if (current) {
         // Then look at git again: commits held while signed out can close now.
         void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
@@ -331,7 +417,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await contextView.render(true);
         },
       );
-      showTitle();
+      renderConnection();
       const failure = store.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
@@ -441,7 +527,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: { viewId: "promptworkspace.projects" } },
         () => roster.refresh(),
       );
-      projectsView.description = describeRoster();
+      renderConnection();
       const failure = roster.lastRefreshError;
       if (!failure) return;
       const choice = await vscode.window.showWarningMessage(
@@ -480,18 +566,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ------------------------------------------------------------- start-up
 
-  await setSignedInContext(session.read() !== null);
   await setActiveProjectContext(activeProject());
-  showTitle();
   refreshStatusBar();
   await store.loadFromCache();
   await roster.loadFromCache();
+  renderConnection();
   // Off the cache, not the refresh: this is what makes a freshly cloned
   // window link itself before it has ever reached the network. The fast
   // path — repository discovery already finished by the time we get here.
   // The `onDidOpenRepository` subscription above covers the slow path.
   await link.applyPendingClone(candidates());
-  projectsView.description = describeRoster();
 
   watcher = new GitWatcher(
     git,
@@ -560,5 +644,7 @@ function createFileStore(root: vscode.Uri): FileStoreLike {
 }
 
 const EMPTY_PENDING: ReadonlySet<string> = new Set();
+
+const formatTime = (ms: number) => new Date(ms).toLocaleTimeString();
 
 export { ALL_CACHE_FILES };

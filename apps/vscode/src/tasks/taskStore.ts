@@ -11,6 +11,7 @@ import type { CloudClient } from "@promptworkspace/cloud-client";
 import type { AssignedTask, TaskStatus } from "@promptworkspace/cloud-client";
 import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { OutputLogger } from "../util/log.ts";
+import { isAuthFailure } from "../auth/status.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;
 
@@ -18,6 +19,7 @@ export class TaskStore {
   private tasks: AssignedTask[] = [];
   private lastRefreshedAt = 0;
   private lastError: string | null = null;
+  private lastErrorWasAuth = false;
   private refreshing: Promise<void> | null = null;
   // Mirrors rosterStore.ts's fix for the identical bug: `clear()` (sign-out)
   // did not guard against a `doRefresh()` already awaiting the network, so
@@ -55,6 +57,12 @@ export class TaskStore {
    *  indistinguishable from a broken button. */
   get lastRefreshError(): string | null {
     return this.lastError;
+  }
+
+  /** The last refresh failed because the cloud refused the session (see
+   *  `isAuthFailure`), not because it was unreachable. */
+  get lastRefreshAuthFailed(): boolean {
+    return this.lastErrorWasAuth;
   }
 
   /** Epoch ms of the last *successful* refresh; 0 if there has never been one. */
@@ -109,6 +117,7 @@ export class TaskStore {
     this.tasks = [];
     this.lastRefreshedAt = 0;
     this.lastError = null;
+    this.lastErrorWasAuth = false;
     await this.cache.clear([CACHE_FILES.tasks]);
     this.emitter.fire();
   }
@@ -129,6 +138,7 @@ export class TaskStore {
       this.tasks = tasks;
       this.lastRefreshedAt = Date.now();
       this.lastError = null;
+      this.lastErrorWasAuth = false;
       await this.cache.write(CACHE_FILES.tasks, this.tasks);
       this.emitter.fire();
     } catch (err) {
@@ -139,6 +149,7 @@ export class TaskStore {
       // than thrown so background refreshes stay quiet and the explicit command
       // can still report it.
       this.lastError = err instanceof Error ? err.message : String(err);
+      this.lastErrorWasAuth = isAuthFailure(err);
       this.log.info(`task refresh failed, keeping cache: ${String(err)}`);
       this.emitter.fire();
     }
