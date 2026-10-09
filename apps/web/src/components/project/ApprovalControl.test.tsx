@@ -8,6 +8,7 @@ import { ApprovalControl } from "./ApprovalControl";
 let data: DecisionsOut | null = null;
 let loadError: string | null = null;
 const refetch = vi.fn();
+const retry = vi.fn();
 const mutate = vi.fn();
 vi.mock("@/lib/hooks", () => ({
   useCloudGet: () => ({
@@ -15,6 +16,7 @@ vi.mock("@/lib/hooks", () => ({
     error: loadError,
     loading: data === null && loadError === null,
     refetch,
+    retry,
     mutate,
   }),
 }));
@@ -127,7 +129,17 @@ describe("ApprovalControl", () => {
     render(<ApprovalControl projectId="p1" kind="plan_approval" />);
     expect(screen.getByRole("alert")).toHaveTextContent("Network down");
     expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Request/ })).not.toBeInTheDocument();
+  });
+
+  it("an error state shows Retry and clicking it refetches", async () => {
+    data = null;
+    loadError = "Failed to fetch";
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("refetches when the refresh key changes, and not on the first render", () => {

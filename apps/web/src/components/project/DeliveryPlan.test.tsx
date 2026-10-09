@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeliveryChange, DeliveryPlan as Plan, ProjectGraph } from "@/lib/types";
 import { DeliveryPlan, groupByWave } from "./DeliveryPlan";
@@ -7,8 +8,9 @@ import { DeliveryPlan, groupByWave } from "./DeliveryPlan";
 let plan: Plan | null = null;
 let loading = false;
 let loadError: string | null = null;
+const retry = vi.fn();
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data: plan, error: loadError, loading, refetch: vi.fn() }),
+  useCloudGet: () => ({ data: plan, error: loadError, loading, refetch: vi.fn(), retry }),
 }));
 vi.mock("./ApprovalControl", () => ({
   ApprovalControl: () => <div>approval-control</div>,
@@ -55,6 +57,16 @@ describe("DeliveryPlan", () => {
     render(<DeliveryPlan graph={graph} projectId="p1" />);
     expect(screen.getByText("Network down")).toBeInTheDocument();
     expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
+  });
+
+  it("an error state shows Retry and clicking it refetches", async () => {
+    plan = null;
+    loadError = "Failed to fetch";
+    render(<DeliveryPlan graph={graph} projectId="p1" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("lists a change's tasks by task number, not graph order, with unnumbered ones last", () => {

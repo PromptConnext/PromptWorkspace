@@ -3,6 +3,7 @@
 import { useCloudGet } from "@/lib/hooks";
 import type { DeliveryChange, DeliveryPlan as Plan, ProjectGraph } from "@/lib/types";
 import { ApprovalControl } from "./ApprovalControl";
+import { RetryButton } from "./RetryButton";
 
 const KIND_LABEL: Record<DeliveryChange["kind"], string> = {
   setup: "Setup",
@@ -41,10 +42,17 @@ function byTaskNumber<T extends { feature_tag?: string | null }>(tasks: T[]): T[
 /** Plan 0029's Delivery Plan: Changes in dependency waves. Changes in one
  * wave can run in parallel; each wave waits for the one before it. */
 export function DeliveryPlan({ graph, projectId }: { graph: ProjectGraph; projectId: string }) {
-  const { data: plan, error } = useCloudGet<Plan>(`/projects/${projectId}/delivery-plan`);
+  const { data: plan, error, retry } = useCloudGet<Plan>(`/projects/${projectId}/delivery-plan`);
   const taskById = new Map(graph.tasks.map((t) => [t.id, t]));
 
-  if (error) return <p className="text-sm text-rose-700">{error}</p>;
+  if (error) {
+    return (
+      <div role="alert" className="flex items-center gap-3 text-sm text-rose-700">
+        <span>{error}</span>
+        <RetryButton onClick={retry} />
+      </div>
+    );
+  }
   if (!plan) return <p className="text-sm text-slate-500">Loading delivery plan…</p>;
   if (plan.changes.length === 0) {
     // Tasks saved before Changes existed (plan 0029) have none to show until

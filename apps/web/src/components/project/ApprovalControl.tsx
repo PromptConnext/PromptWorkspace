@@ -5,6 +5,7 @@ import { requestDecision } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { ApprovalState, DecisionKind, DecisionsOut } from "@/lib/types";
+import { RetryButton } from "./RetryButton";
 
 export const APPROVAL_LABEL: Record<ApprovalState, string> = {
   none: "Not requested",
@@ -43,7 +44,7 @@ export function ApprovalControl({
   refreshKey?: string | number | null;
 }) {
   const { authHeaders } = useAuth();
-  const { data, error: loadError, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error: loadError, refetch, retry, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,9 +77,10 @@ export function ApprovalControl({
     // Until the states load there is nothing true to show, and a request
     // button here could ask again over an approval the user can't see yet.
     return loadError ? (
-      <p role="alert" className="text-xs text-rose-700">
-        {loadError}
-      </p>
+      <div role="alert" className="flex items-center gap-2 text-xs text-rose-700">
+        <span>{loadError}</span>
+        <RetryButton onClick={retry} />
+      </div>
     ) : (
       <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">Loading…</span>
     );

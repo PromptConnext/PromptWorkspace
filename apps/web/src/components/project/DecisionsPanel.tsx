@@ -8,6 +8,7 @@ import type { Decision, DecisionsOut, WorkspaceMember } from "@/lib/types";
 import { APPROVAL_LABEL } from "./ApprovalControl";
 import { DecisionSubject } from "./DecisionSubject";
 import { memberFullName } from "./MemberChip";
+import { RetryButton } from "./RetryButton";
 
 const HAT_LABEL: Record<Decision["routed_hat"], string> = {
   business_owner: "business owner",
@@ -143,14 +144,21 @@ function DecisionRow({
 /** Plan 0029 Decisions tab: where the project's approvals stand and every
  * decision behind them, with the resolve form for decisions routed to me. */
 export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; workspaceId: string }) {
-  const { data, error, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error, retry, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   // Apply the resolve's snapshot; refetch when it carries none.
   const onResolved = (snapshot: DecisionsOut | null | undefined) =>
     snapshot ? mutate(snapshot) : refetch();
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
 
-  if (error) return <p className="text-sm text-rose-700">{error}</p>;
-  if (!data) return null;
+  if (error) {
+    return (
+      <div role="alert" className="flex items-center gap-3 text-sm text-rose-700">
+        <span>{error}</span>
+        <RetryButton onClick={retry} />
+      </div>
+    );
+  }
+  if (!data) return <p className="text-sm text-slate-500">Loading decisions…</p>;
   const visible = data.decisions.filter((d) => d.status !== "withdrawn");
 
   return (

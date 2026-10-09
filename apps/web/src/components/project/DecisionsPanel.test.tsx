@@ -7,6 +7,9 @@ import { DecisionsPanel } from "./DecisionsPanel";
 
 let decisions: DecisionsOut | null = null;
 let members: unknown[] = [];
+let decisionsError: string | null = null;
+let decisionsLoading = false;
+const retry = vi.fn();
 const refetch = vi.fn();
 const mutate = vi.fn();
 vi.mock("@/lib/hooks", async () => {
@@ -17,9 +20,10 @@ vi.mock("@/lib/hooks", async () => {
       const [, rerender] = useState(0);
       return {
         data: path?.endsWith("/decisions") ? decisions : members,
-        error: null,
-        loading: false,
+        error: path?.endsWith("/decisions") ? decisionsError : null,
+        loading: path?.endsWith("/decisions") ? decisionsLoading : false,
         refetch,
+        retry,
         mutate: (next: unknown) => {
           mutate(next);
           rerender((n) => n + 1);
@@ -39,6 +43,8 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
   members = [];
+  decisionsError = null;
+  decisionsLoading = false;
 });
 
 const decision = (o: Partial<Decision>): Decision => ({
@@ -211,5 +217,24 @@ describe("DecisionsPanel", () => {
     expect(screen.getByText("Superseded by edit")).toBeInTheDocument();
     // The state card and the current approval still read plain "Approved".
     expect(screen.getAllByText("Approved")).toHaveLength(2);
+  });
+
+  it("the Decisions tab shows a loading line, not a blank page", () => {
+    decisions = null;
+    decisionsLoading = true;
+    const { container } = render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+    expect(screen.getByText("Loading decisions…")).toBeInTheDocument();
+    expect(container).not.toBeEmptyDOMElement();
+  });
+
+  it("an error state shows Retry and clicking it refetches", async () => {
+    decisions = null;
+    decisionsError = "Failed to fetch";
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to fetch");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });

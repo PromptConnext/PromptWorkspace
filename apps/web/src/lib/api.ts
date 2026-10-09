@@ -92,6 +92,33 @@ export async function apiFetch<T>(
   authHeaders: Record<string, string>,
   init: RequestInit = {},
 ): Promise<T> {
+  // A read that failed in transit or at the gateway is tried once more; a
+  // write never is, because the first attempt may have landed.
+  const method = (init.method ?? "GET").toUpperCase();
+  const mayRetry = method === "GET" && !init.signal?.aborted;
+  try {
+    return await attempt<T>(path, authHeaders, init);
+  } catch (err) {
+    if (!mayRetry || !isTransient(err) || init.signal?.aborted) throw err;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return attempt<T>(path, authHeaders, init);
+  }
+}
+
+const RETRY_DELAY_MS = 400;
+
+/** A network failure (fetch itself threw) or a gateway answer that says the
+ * service was briefly unavailable. Anything else is the server's real answer. */
+function isTransient(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504;
+  return err instanceof TypeError;
+}
+
+async function attempt<T>(
+  path: string,
+  authHeaders: Record<string, string>,
+  init: RequestInit,
+): Promise<T> {
   const res = await fetch(`${CLOUD_API_URL}${path}`, {
     ...init,
     headers: {
