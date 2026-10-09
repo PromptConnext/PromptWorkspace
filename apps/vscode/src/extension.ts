@@ -15,7 +15,7 @@ import {
   type FolderLink,
 } from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
-import { SessionStore } from "@promptworkspace/cloud-client";
+import { SessionStore, fileLeaseStorage } from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
@@ -47,7 +47,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const log = new OutputLogger();
   context.subscriptions.push(log);
 
-  const session = new SessionStore(context.secrets, context.globalState);
+  // The refresh lease (#50a) gets a file of its own rather than a globalState
+  // key: globalState is one blob per extension, and a lease written from a
+  // window with a stale copy would revert another window's session key.
+  const session = new SessionStore(
+    context.secrets,
+    context.globalState,
+    fileLeaseStorage(createFileStore(context.globalStorageUri)),
+  );
   const client = new CloudClient({
     session,
     config: () => {

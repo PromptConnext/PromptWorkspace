@@ -53,9 +53,10 @@ const ROTATION_LOOK_MS = 200;
 const LEASE_MS = 10_000;
 /** Write, wait this long, read back: the last writer in that window holds the
  *  lease. Shared storage has no compare-and-set, so this is the arbitration.
- *  Longer than VS Code's storage flush-and-broadcast between windows (~100 ms),
- *  so a near-simultaneous write from another window has landed by the time we
- *  read back. Costs this much once per refresh, i.e. once an hour. */
+ *  apps/vscode's lease file is visible to every window on rename; the margin
+ *  is for stores that propagate slower (the tests model a delayed, whole-blob
+ *  one). Costs this much once per refresh, i.e. once an hour. Getting it wrong
+ *  in either direction (both win, both lose) is survivable — see doRefresh. */
 const LEASE_SETTLE_MS = 300;
 /** How often a window waiting on another's refresh re-reads the secrets. */
 const LEASE_POLL_MS = 200;
@@ -73,11 +74,11 @@ export class CloudClient {
   // client over the same SecretStorage, so a rejection must also be checked
   // against what another window has since stored: see `awaitRotatedSession`.
   private inFlightRefresh: Promise<string | null> | null = null;
-  // And across windows, a lease in the shared state (finding #50a): N windows
-  // used to make N refresh calls per expiry, all but one losing the rotation.
-  // One holds the lease and refreshes; the others re-read the secrets for the
-  // pair it stores. Best-effort by construction — when it fails, two windows
-  // refresh, which `awaitRotatedSession` already survives.
+  // And across windows, a lease in a store every window reads (finding
+  // #50a): N windows used to make N refresh calls per expiry, all but one
+  // losing the rotation. One holds the lease and refreshes; the others re-read
+  // the secrets for the pair it stores. Best-effort by construction — when it
+  // fails, two windows refresh, which `awaitRotatedSession` already survives.
   private readonly leaseOwner = globalThis.crypto.randomUUID();
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -178,17 +179,19 @@ export class CloudClient {
     if (!this.deps.session.read()) return null;
 
     // One window refreshes at a time. If another holds the lease, wait for
-    // the pair it stores (`adopt`); otherwise we now hold the lease (it was
-    // free, released or expired) or gave up waiting. `failed` is the token
+    // the pair it stores (`adopt`). Otherwise refresh: holding the lease, or —
+    // when it could not be won in time — without it, because a lease is only
+    // a way to cut duplicate refreshes and must never turn into a 401 of its
+    // own; `awaitRotatedSession` settles a collision. `failed` is the token
     // this window last had: anything else stored later is newer.
     const failed = rejectedAccess ?? stored;
     const turn = await this.awaitRefreshTurn(failed);
     if (turn.kind === "adopt") return turn.accessToken;
-    if (turn.kind === "gave_up") return null;
+    if (turn.kind === "signed_out") return null;
     try {
       return await this.refreshHoldingLease(failed);
     } finally {
-      if (this.deps.session.readRefreshLease()?.owner === this.leaseOwner) {
+      if ((await this.deps.session.readRefreshLease())?.owner === this.leaseOwner) {
         await this.deps.session.writeRefreshLease(undefined);
       }
     }
@@ -201,15 +204,20 @@ export class CloudClient {
    * LEASE_POLL_MS: a stored access token that is not the one that just failed
    * is that window's result, adopted without a refresh call of our own. A
    * lease that is released, or that outlives its `until` (its holder crashed),
-   * is taken. The whole wait is bounded, so a lease renewed forever by others
-   * cannot hang a request.
+   * is taken. The whole wait is bounded: past it the caller refreshes without
+   * the lease (`no_lease`) rather than failing the request.
    */
   private async awaitRefreshTurn(
     failedAccess: string | undefined,
-  ): Promise<{ kind: "lease" } | { kind: "adopt"; accessToken: string } | { kind: "gave_up" }> {
+  ): Promise<
+    | { kind: "lease" }
+    | { kind: "no_lease" }
+    | { kind: "adopt"; accessToken: string }
+    | { kind: "signed_out" }
+  > {
     const deadline = this.now() + 2 * LEASE_MS;
     for (;;) {
-      const lease = this.deps.session.readRefreshLease();
+      const lease = await this.deps.session.readRefreshLease();
       const free = !lease || lease.owner === this.leaseOwner || lease.until <= this.now();
       if (free && (await this.takeRefreshLease())) return { kind: "lease" };
 
@@ -220,11 +228,11 @@ export class CloudClient {
       }
       // Signed out (by another window, or by us) while waiting.
       if (!(await this.deps.session.refreshToken()) || !this.deps.session.read()) {
-        return { kind: "gave_up" };
+        return { kind: "signed_out" };
       }
       if (this.now() >= deadline) {
-        this.deps.log.info("gave up waiting for another window's refresh");
-        return { kind: "gave_up" };
+        this.deps.log.info("could not win the refresh lease in time; refreshing without it");
+        return { kind: "no_lease" };
       }
       await this.sleep(LEASE_POLL_MS);
     }
@@ -236,7 +244,9 @@ export class CloudClient {
       until: this.now() + LEASE_MS,
     });
     await this.sleep(LEASE_SETTLE_MS);
-    return this.deps.session.readRefreshLease()?.owner === this.leaseOwner;
+    const won = (await this.deps.session.readRefreshLease())?.owner === this.leaseOwner;
+    if (!won) this.deps.log.info("lost the refresh lease to another window; waiting for its refresh");
+    return won;
   }
 
   private async refreshHoldingLease(failedAccess: string | undefined): Promise<string | null> {
