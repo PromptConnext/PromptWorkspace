@@ -4,6 +4,11 @@ import type { Task, TaskStatus } from "@/lib/types";
  * per-Change numbers. */
 export const DONE_STATUSES: TaskStatus[] = ["implemented", "verified"];
 
+/** The live (not retired) tasks that belong to a Change. */
+export function tasksOfChange(changeId: string, tasks: Task[]): Task[] {
+  return tasks.filter((t) => t.change_id === changeId && !t.deleted_at);
+}
+
 /**
  * A Change's done/total counted from the project graph's tasks.
  *
@@ -18,6 +23,6 @@ export function changeProgress(
   changeId: string,
   tasks: Task[],
 ): { done: number; total: number } {
-  const live = tasks.filter((t) => t.change_id === changeId && !t.deleted_at);
+  const live = tasksOfChange(changeId, tasks);
   return { done: live.filter((t) => DONE_STATUSES.includes(t.status)).length, total: live.length };
 }

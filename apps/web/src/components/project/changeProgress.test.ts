@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "@/lib/types";
-import { changeProgress } from "./changeProgress";
+import { changeProgress, tasksOfChange } from "./changeProgress";
 
 const task = (o: Partial<Task>): Task =>
   ({ id: "t", change_id: "c1", status: "todo", deleted_at: null, ...o }) as unknown as Task;
@@ -27,5 +27,17 @@ describe("changeProgress", () => {
       task({ id: "c", status: "todo", deleted_at: "2026-10-09T00:00:00Z" }),
     ];
     expect(changeProgress("c1", tasks)).toEqual({ done: 1, total: 1 });
+  });
+});
+
+describe("tasksOfChange", () => {
+  it("is the live tasks of that Change, in the given order", () => {
+    const tasks = [
+      task({ id: "a" }),
+      task({ id: "b", change_id: "c2" }),
+      task({ id: "c", deleted_at: "2026-10-09T00:00:00Z" }),
+      task({ id: "d" }),
+    ];
+    expect(tasksOfChange("c1", tasks).map((t) => t.id)).toEqual(["a", "d"]);
   });
 });

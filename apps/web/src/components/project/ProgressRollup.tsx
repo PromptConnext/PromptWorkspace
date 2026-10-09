@@ -7,7 +7,7 @@ import type {
   ProjectGraph,
   Task,
 } from "@/lib/types";
-import { DONE_STATUSES } from "./changeProgress";
+import { DONE_STATUSES, tasksOfChange } from "./changeProgress";
 import { useDeliveryPlanData } from "./DeliveryOverview";
 import { ProgressBar } from "./ProgressBar";
 import { RetryButton } from "./RetryButton";
@@ -138,7 +138,7 @@ export function ProgressRollup({ graph, projectId }: { graph: ProjectGraph; proj
     return (
       <div className="flex flex-col gap-3">
         {ordered.map((c) => {
-          const tasks = graph.tasks.filter((t) => t.change_id === c.id);
+          const tasks = tasksOfChange(c.id, graph.tasks);
           // A Change with no tasks has nothing to measure.
           return tasks.length === 0 ? null : (
             <RollupRow key={c.id} title={`${c.ref} ${c.title}`} tasks={tasks} {...shared} />
