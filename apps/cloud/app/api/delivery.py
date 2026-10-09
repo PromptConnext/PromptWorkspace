@@ -255,14 +255,20 @@ def decision_out(
 
 
 def _routing_context(
-    repo: Repository, project: Project, role: Role, members: list[WorkspaceMember]
+    repo: Repository,
+    project: Project,
+    user_id: str,
+    role: Role,
+    members: list[WorkspaceMember],
 ):
-    """Who may resolve what, from the caller's `role` and the workspace
-    `members` that `require_project_members` already read. Known limit: the
-    list is one PostgREST page (max_rows), so in a workspace larger than that
-    a hat holder left off the page reads as a non-member here."""
+    """Who may resolve what, for the caller `user_id`, whose membership and
+    `role` are already confirmed, and the workspace `members` read with it.
+    The caller always counts as a member: the list is one PostgREST page
+    (max_rows), and in a workspace larger than that a caller confirmed through
+    `get_membership` is missing from it. Known limit: another hat holder left
+    off the page still reads as a non-member."""
     roles = repo.list_project_roles(project.id)
-    return roles, {m.user_id for m in members}, role == Role.admin
+    return roles, {m.user_id for m in members} | {user_id}, role == Role.admin
 
 
 def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
@@ -316,7 +322,7 @@ def _read_listing(
     read on the way. One membership check, and one read each of the roles, the
     decisions and the stage documents."""
     project, role, members = require_project_members(repo, project_id, user)
-    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin)
     listing = _listing(repo.list_decisions(project_id), stage_hashes(repo, project_id), out)
@@ -375,7 +381,7 @@ def request_decision(
     current = content_hash(document.content)
     if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
-    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin)
 
@@ -431,7 +437,7 @@ def resolve_decision(
         raise HTTPException(status_code=404, detail="decision_not_found")
     if decision.status != "open":
         raise HTTPException(status_code=409, detail="decision_not_open")
-    roles, member_ids, is_admin = _routing_context(repo, project, role, members)
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     if not can_resolve(decision, user.id, roles, member_ids, is_admin):
         raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
     current = current_hash(repo, project_id, decision.subject_stage)

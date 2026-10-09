@@ -76,7 +76,7 @@ def list_my_decisions(
                 role = member_role(repo, workspace.id, members, user.id)
             if role is None:
                 break  # left the workspace while this request ran
-            roles, member_ids, is_admin = _routing_context(repo, project, role, members)
+            roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
             for decision in decisions:
                 if can_resolve(decision, user.id, roles, member_ids, is_admin):
                     items.append(

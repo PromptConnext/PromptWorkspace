@@ -687,10 +687,14 @@ def test_a_member_missing_from_a_truncated_member_list_is_still_let_in(
 
     assert client.get(f"/projects/{project}/decisions", headers=BOB).status_code == 200
     assert client.get(f"/projects/{project}/delivery-overview", headers=BOB).status_code == 200
-    # The inbox does not drop the workspace either. (Whether the decision shows
-    # also depends on the routing context's member ids, read from the same
-    # list: a known, separate limit, not pinned here.)
-    assert client.get("/me/decisions", headers=BOB).status_code == 200
+    # The hat holder confirmed this way still sees, and may resolve, the
+    # decision routed to them: the caller counts as a member of the routing.
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert [d["can_resolve"] for d in listing["decisions"]] == [True]
+    inbox = client.get("/me/decisions", headers=BOB).json()
+    assert [item["project_id"] for item in inbox] == [project]
+    did = listing["decisions"][0]["id"]
+    assert _resolve(client, project, did, headers=BOB).status_code == 200
 
 
 def test_a_caller_neither_read_finds_is_refused(client, project, monkeypatch):
