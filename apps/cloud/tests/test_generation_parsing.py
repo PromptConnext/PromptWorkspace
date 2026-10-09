@@ -210,6 +210,13 @@ def test_feature_placeholder_untouched_inside_code_fence():
             "Reconcile settlements nightly in `src/api/payments.ts`",
             False,
         ),
+        # ...a path without backticks counts as a path only with a slash and an extension
+        ("Create user model", "Create user model in src/models/user.ts and src/db/user.sql", True),
+        # a dotted technology name or a slash phrase is a word, not a path (review of 2609900)
+        ("Switch to Socket.io", "Switch to Express.js", False),
+        ("Rewrite in Rust.rs", "Rewrite in Go.go", False),
+        ("Add Socket.io server", "Add Express.js server", False),
+        ("Set up CI/CD", "Set up client/server split", False),
         # other scripts are compared too, not reduced to nothing
         ("Добавить экспорт отчётов", "Добавить экспорт всех отчётов", True),
         ("Добавить экспорт отчётов", "Исправить вход пользователя", False),

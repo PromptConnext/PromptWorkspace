@@ -273,11 +273,16 @@ def parse_task_phases(doc: str) -> list[TaskPhase]:
 # marks, or any other script) is compared by character bigrams.
 _TITLE_WORD_RE = re.compile(r"[0-9a-z]+|[\u0e00-\u0e7f]+|[^\W\d_]+")
 _LATIN_WORD_RE = re.compile(r"[0-9a-z]+")
-# A file path in a title: anything with a `/`, or a `name.ext`, backticked or
-# not. Removed before comparing, because a regenerated task that only names
-# the files it touches is the same work, and each path would otherwise add
-# three or four tokens that swamp a short title.
-_TITLE_PATH_RE = re.compile(r"`[^`]*[/.][^`]*`|\S*/\S*|\b[\w-]+\.[a-z][a-z0-9]{0,5}\b")
+# A file path in a title: a backticked span holding a `/` or a `.`, or an
+# unticked token with a `/` whose last segment has an extension
+# (`src/models/user.ts`). Removed before comparing, because a regenerated
+# task that only names the files it touches is the same work, and each path
+# would otherwise add three or four tokens that swamp a short title. A dotted
+# word on its own (Socket.io, Express.js) and a slash phrase with no extension
+# (CI/CD, client/server) are words: they say what the work is.
+_TITLE_PATH_RE = re.compile(
+    r"`[^`]*[/.][^`]*`|[^\s`]*/[\w.-]*\.[a-z][a-z0-9]{0,5}\b"
+)
 # Below this, a regenerated title describes different work (task 4.1, #57).
 TITLE_MATCH_THRESHOLD = 0.6
 
