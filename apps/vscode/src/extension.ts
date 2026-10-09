@@ -224,6 +224,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // notification per window per state. Called from every event that can
   // change it; cheap (a roster rebuild and a config read per folder).
   const notified = new Set<ConnectionKind>();
+  // Set by the Sign Out command: a sign-out the user asked for is not news.
+  let signingOut = false;
+  let signedInContext: boolean | undefined;
   const folderLinks = (linkable: ReturnType<typeof candidates>): FolderLink[] =>
     (vscode.workspace.workspaceFolders ?? [])
       .filter((folder) => git.repositoryFor(folder.uri) !== undefined)
@@ -232,7 +235,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         linked: projectIdFor(folder.uri) !== undefined,
         hasMatch: link.candidatesFor(folder.uri, linkable).length > 0,
       }));
-  const renderConnection = () => {
+  const renderConnection = (allowNotify = true) => {
     const linkable = candidates();
     const next = connectionState(
       {
@@ -244,7 +247,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     const changed = next.state !== connection.state || next.message !== connection.message;
     connection = next;
-    void setSignedInContext(next.state !== "signed_out");
+    const signedIn = next.state !== "signed_out";
+    if (signedIn !== signedInContext) {
+      signedInContext = signedIn;
+      void setSignedInContext(signedIn);
+    }
     if (next.statusText) {
       connectionItem.text = next.statusText;
       connectionItem.tooltip = next.message;
@@ -260,7 +267,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showTitle();
     projectsView.description = describeRoster();
     const action = next.action;
-    if (next.notify && action && !notified.has(next.state)) {
+    if (allowNotify && next.notify && action && !notified.has(next.state)) {
       notified.add(next.state);
       void vscode.window.showWarningMessage(next.message, action.title).then((choice) => {
         if (choice === action.title) void vscode.commands.executeCommand(action.command);
@@ -320,7 +327,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void link.applyPendingClone(candidates());
     }),
     session.onDidChange((current) => {
-      renderConnection();
+      // A session this window lost without being asked (a refused refresh)
+      // is worth a notification; one the user just signed out of is not.
+      renderConnection(current !== null || !signingOut);
+      signingOut = false;
       if (current) {
         // Then look at git again: commits held while signed out can close now.
         void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
@@ -399,6 +409,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         if (choice !== "Sign out anyway") return;
       }
+      signingOut = true;
       await session.clear();
     }),
     // Explicit refresh, unlike the background triggers, owes the user an
