@@ -96,6 +96,49 @@ Northflank cannot move a running service between regions, so a move is a rebuild
 
 Webhook URLs registered with GitHub (`PUBLIC_API_URL`) and the web app's `NEXT_PUBLIC_CLOUD_*` variables do not change, because the domain does not.
 
+##### Measuring page load before and after
+
+The move is done when `GET /projects/{id}/decisions` answers in under 0.8 s from the browser. Measure the Delivery, Decisions and Tasks tabs of one project the same way before and after: open the tab, hard-reload it (Cmd+Shift+R), wait for it to settle, and paste this into the DevTools console. It prints every request the page made, when it started and how long it took, and the request it waited for, if it started only after another one finished (a chain).
+
+```js
+(() => {
+  const rows = performance
+    .getEntriesByType("resource")
+    .filter((e) => e.initiatorType === "fetch")
+    .map((e) => {
+      const url = new URL(e.name);
+      return {
+        request: `${url.host}${url.pathname}`,
+        start: Math.round(e.startTime),
+        duration: Math.round(e.duration),
+        end: Math.round(e.responseEnd),
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+  for (const r of rows) {
+    // Started within 50 ms of another request's end: it most likely waited for it.
+    const before = rows.filter((o) => o !== r && o.end <= r.start && r.start - o.end < 50);
+    r.after = before.map((o) => o.request.split("/").slice(-1)[0]).join(", ") || "-";
+  }
+  console.table(rows);
+  console.log("page load (last response), ms:", Math.max(...rows.map((r) => r.end)));
+})();
+```
+
+Measured on the trust stack, Marketing Studio project, hard reload of `?tab=delivery` (2026-10-09, API in `europe-west4`, Supabase in `ap-southeast-1`), ms from navigation start:
+
+| request | start | duration | ran |
+|---|---|---|---|
+| (JS and sign-in before the first API call) | 0 | ~2800 | |
+| `GET /sync/projects/{id}/graph` | 2791 | 3466 | in parallel with `/workspaces` |
+| `GET /workspaces` | 2792 | 1177 | in parallel with the graph |
+| `GET /projects/{id}/delivery-plan` | 6260 | 1828 | after the graph finished |
+| `GET /projects/{id}/decisions` | 8093 | 2795 | after the delivery plan finished |
+
+About 11 s until the approval control left "Loading…": the three project calls ran one after the other. Single calls from the same browser: `/health` 0.64 s, `delivery-plan` 1.6 s, `decisions` 2.8 s. The chain was the web app's doing (the Delivery tab waited for the graph before mounting, and the approval control mounted only once the plan had loaded).
+
+After the region move, run the snippet on the same three tabs and add the numbers here beside these, so the two are comparable.
+
 ### 2.4 Environment variables (Northflank → service → Runtime variables)
 
 Production values (develop differs only where noted in §2.7):
