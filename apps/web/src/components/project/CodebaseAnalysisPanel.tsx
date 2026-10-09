@@ -144,7 +144,14 @@ export function CodebaseAnalysisPanel({
             {skippedCount > 0 && ` of ${snapshot.file_count + skippedCount}`} file
             {snapshot.file_count + skippedCount === 1 ? "" : "s"} read
           </p>
-          {skippedCount > 0 && (
+          {skippedCount > 0 && skipped.length === 0 && (
+            // A member's list arrives without the secret-shaped names, so it
+            // can be empty while the count is not: nothing to expand.
+            <p>
+              {skippedCount} file{skippedCount === 1 ? "" : "s"} skipped
+            </p>
+          )}
+          {skipped.length > 0 && (
             <details>
               <summary className="cursor-pointer text-slate-700">
                 {skippedCount} file{skippedCount === 1 ? "" : "s"} skipped

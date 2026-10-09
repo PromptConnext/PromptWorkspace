@@ -23,6 +23,7 @@ from app.generation.managed import MANAGED_WORKSPACE_MARKER
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prompts import UNTRUSTED_CLOSE, UNTRUSTED_OPEN, UNTRUSTED_SECURITY_RULE
 from app.generation.service import FakeGenerationProvider
+from app.imports.snapshot import MAX_SKIPPED
 from app.integrations.github import FakeGithubClient
 from app.main import create_app
 from app.models.schemas import ModelConnection, Role
@@ -400,6 +401,28 @@ def test_skipped_secret_names_are_shown_to_admins_only(client: TestClient):
     assert member["skipped"] == []
     assert member["skipped_count"] == 2
     assert "deploy.pem" not in json.dumps(member)
+
+
+def test_a_members_skipped_list_is_capped_after_the_secret_names_are_dropped(
+    client: TestClient,
+):
+    """Review of ff0403f: capping before filtering left a member an empty list
+    whenever the first MAX_SKIPPED entries were secret-shaped, though other
+    skipped files existed."""
+    _, pid = _imported_project(client)
+    fake: FakeGithubClient = client.app.state.github_client
+    keys = [f"keys/k{i:02d}.pem" for i in range(MAX_SKIPPED + 10)]
+    fake.trees[REPO] = [*fake.trees[REPO], *keys, "public/zz.png"]
+    _analyze(client, pid)
+
+    admin = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()["snapshot"]
+    member = client.get(f"/projects/{pid}/repo-analysis", headers=BOB).json()["snapshot"]
+
+    total = MAX_SKIPPED + 10 + 3  # the keys, .env, keys/deploy.pem, public/zz.png
+    assert admin["skipped_count"] == member["skipped_count"] == total
+    assert len(admin["skipped"]) == MAX_SKIPPED
+    assert all(entry["reason"] == "secret" for entry in admin["skipped"])
+    assert member["skipped"] == [{"path": "public/zz.png", "reason": "binary"}]
 
 
 def test_get_shows_excerpts_and_outlines_to_admins_only(client: TestClient):

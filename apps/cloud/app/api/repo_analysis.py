@@ -37,7 +37,7 @@ from app.deployments.preview_url import repo_full_name_from_url
 from app.generation.parsing import extract_document, parse_files, strip_thinking
 from app.generation.prompts import codebase_baseline_prompt, codebase_baseline_user_content
 from app.generation.service import HttpGenerationProvider
-from app.imports.snapshot import build_snapshot
+from app.imports.snapshot import MAX_SKIPPED, build_snapshot
 from app.integrations.github import GithubWriteError
 from app.integrations.github_auth import resolve_token
 from app.models.schemas import (
@@ -83,14 +83,14 @@ def _out(
             project_id=project.id, status="none", required=requires_repo_analysis(project)
         )
     snapshot = analysis.snapshot
+    # Filtered before it is capped, so a member's list is not emptied by the
+    # secret-shaped entries they are not shown.
+    skipped = snapshot.skipped if include_excerpts else [
+        s for s in snapshot.skipped if s.reason != "secret"
+    ]
+    snapshot = snapshot.model_copy(update={"skipped": skipped[:MAX_SKIPPED]})
     if not include_excerpts:
-        snapshot = snapshot.model_copy(
-            update={
-                "excerpts": [],
-                "source_outlines": [],
-                "skipped": [s for s in snapshot.skipped if s.reason != "secret"],
-            }
-        )
+        snapshot = snapshot.model_copy(update={"excerpts": [], "source_outlines": []})
     return RepoAnalysisOut(
         project_id=project.id,
         status=analysis.status,

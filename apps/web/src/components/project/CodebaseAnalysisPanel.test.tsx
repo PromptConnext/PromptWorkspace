@@ -103,6 +103,26 @@ describe("CodebaseAnalysisPanel", () => {
     expect(screen.getByText("900 files skipped")).toBeInTheDocument();
   });
 
+  it("shows a member the skipped count without an empty list to expand", () => {
+    // The API drops secret-shaped names for a member, so the list can be empty
+    // while the count is not.
+    const base = analysis();
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({
+          snapshot: { ...base.snapshot!, file_count: 52, skipped: [], skipped_count: 1 },
+        })}
+        canEdit={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/52 of 53 files read/)).toBeInTheDocument();
+    const count = screen.getByText("1 file skipped");
+    expect(count.tagName).not.toBe("SUMMARY");
+    expect(count.closest("details")).toBeNull();
+  });
+
   it("flags a stale analysis and a truncated tree", () => {
     const base = analysis();
     render(

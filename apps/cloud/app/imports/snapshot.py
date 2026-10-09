@@ -346,7 +346,8 @@ def skipped_files(
     paths: list[str], limit: int = MAX_SKIPPED
 ) -> tuple[list[RepoSkippedFile], int]:
     """What the filter above left out of the analysis and why (finding #6),
-    as (entries sorted by path and capped at `limit`, total files skipped).
+    as (entries sorted by path, total files skipped). Secret-shaped and other
+    entries are each capped at `limit`; the API caps what it shows.
 
     A vendored or build directory is one entry (`node_modules/`), not one per
     file inside it. Naming a secret-shaped file here is not reading it (its
@@ -370,7 +371,13 @@ def skipped_files(
             entries[path] = "secret"
         else:
             entries[path] = "binary"
-    listed = [RepoSkippedFile(path=p, reason=entries[p]) for p in sorted(entries)[:limit]]
+    # Secret-shaped entries are capped apart from the rest: members are shown
+    # the list without them (app/api/repo_analysis.py::_out), and one cap over
+    # both could leave them nothing when the first `limit` paths are secrets.
+    ordered = sorted(entries)
+    secret = [p for p in ordered if entries[p] == "secret"][:limit]
+    other = [p for p in ordered if entries[p] != "secret"][:limit]
+    listed = [RepoSkippedFile(path=p, reason=entries[p]) for p in sorted([*secret, *other])]
     return listed, count
 
 
