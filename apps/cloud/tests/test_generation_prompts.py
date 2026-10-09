@@ -115,8 +115,13 @@ def test_brownfield_tasks_start_by_confirming_the_build_when_there_is_no_ci_or_t
     assert NO_CI_FIRST_TASK_RULE in EXISTING_CODEBASE_TASK_RULES
     assert NO_CI_FIRST_TASK_RULE in driver_prompt("tasks", existing_codebase=True)
     assert NO_CI_FIRST_TASK_RULE not in driver_prompt("tasks")
-    for needle in ("install", "lint", "build", "record the result"):
+    for needle in ("install", "lint", "build", "record", "Baseline gaps"):
         assert needle in NO_CI_FIRST_TASK_RULE
+    # Review of 0f49de3: only when the specification adds CI or tests (rule 1's
+    # "only when a story needs it"), and never pinned to T001, which would
+    # shift every ref of an existing board and retire its closed tasks (4.1).
+    assert "AND the specification adds CI or tests" in NO_CI_FIRST_TASK_RULE
+    assert "T001" not in NO_CI_FIRST_TASK_RULE
 
 
 def test_brownfield_tasks_extend_an_env_template_the_file_list_already_shows():
@@ -131,3 +136,7 @@ def test_brownfield_tasks_name_the_files_repo_occurrences_lists():
     for kind in ("constitution", "specify", "plan"):
         assert REPO_OCCURRENCES_RULE not in driver_prompt(kind, existing_codebase=True)
     assert REPO_OCCURRENCES_RULE not in driver_prompt("tasks")
+    # The list is capped and may cover part of the repository; the rule must
+    # leave room for a file it does not show in exactly those cases.
+    assert "and N more files" in REPO_OCCURRENCES_RULE
+    assert "searched" in REPO_OCCURRENCES_RULE

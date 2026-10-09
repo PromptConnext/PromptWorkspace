@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+import app.imports.snapshot as snapshot_module
 from app.imports.snapshot import (
     CODE_INDEX_MAX_FILES,
     EXCERPT_FILE_CHARS,
@@ -633,11 +634,12 @@ def test_the_segment_lists_the_files_that_contain_a_quoted_spec_string():
         "certs/server.pem": "ASSET GROW",
     }
     fake = _fake_repo(files)
-    paths = [p for p in files if p != "certs/server.pem"]
 
+    # Every path goes in, the secret and the template included: the filter
+    # inside repo_occurrences is what has to keep them unread.
     occurrences = asyncio.run(
         repo_occurrences(
-            fake, "tok", REPO, "abc123", paths, ["ASSET GROW", "assetgrow", "Not There"]
+            fake, "tok", REPO, "abc123", list(files), ["ASSET GROW", "assetgrow", "Not There"]
         )
     )
     text = occurrences_text(occurrences)
@@ -660,7 +662,7 @@ def test_occurrences_are_capped_per_string_and_in_strings():
     occurrences = asyncio.run(
         repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), strings)
     )
-    assert len(occurrences) == OCCURRENCE_MAX_TOKENS
+    assert len(occurrences.found) == OCCURRENCE_MAX_TOKENS
     first = occurrences_text(occurrences).splitlines()[0]
     assert first.startswith(f'"ACME" is in {OCCURRENCE_FILES_PER_TOKEN + 3} files: ')
     assert first.endswith(", and 3 more files")
@@ -668,5 +670,26 @@ def test_occurrences_are_capped_per_string_and_in_strings():
 
 def test_no_quoted_strings_fetch_nothing():
     fake = _fake_repo({"src/a.ts": "x"})
-    assert asyncio.run(repo_occurrences(fake, "tok", REPO, "abc123", ["src/a.ts"], [])) == []
+    occurrences = asyncio.run(repo_occurrences(fake, "tok", REPO, "abc123", ["src/a.ts"], []))
+    assert occurrences.found == []
     assert fake.fetched_files == []
+
+
+def test_a_partial_search_says_so(monkeypatch):
+    """Only OCCURRENCE_MAX_FILES files are read, and a file can fail to
+    fetch: the segment then says other files may hold the strings too, so
+    the model is not told a list is complete when it is not."""
+    monkeypatch.setattr(snapshot_module, "OCCURRENCE_MAX_FILES", 2)
+    files = {f"src/m{i}.ts": "ACME" for i in range(3)}
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), ["ACME"])
+    )
+    assert (occurrences.searched, occurrences.searchable) == (2, 3)
+    assert occurrences_text(occurrences).splitlines()[-1] == (
+        "(searched 2 of 3 files; others may contain these strings too)"
+    )
+
+    complete = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files)[:2], ["ACME"])
+    )
+    assert "searched" not in occurrences_text(complete)

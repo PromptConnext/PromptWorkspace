@@ -53,19 +53,25 @@ def _template(name: str) -> str:
 
 # Observed on a real import (finding #33): the repository as shipped did not
 # install, and with no CI and no tests nothing said so until an agent tried.
+# Added only when the specification adds CI or tests (the first rule's "only
+# when a story needs it"), and never pinned to T001: a new first task would
+# shift every ref of an existing board, and a shifted ref retires closed work
+# (stage_apply.py::_apply_tasks).
 NO_CI_FIRST_TASK_RULE = (
-    "When [codebase_baseline] reports no CI workflow or no tests, the first task (T001, in a "
-    "'Baseline gaps' phase) is to confirm that the project installs, lints and builds as "
-    "shipped, using the commands its manifest defines, and record the result: what passed, "
-    "and the exact error for what did not. Every later task builds on that result."
+    "When [codebase_baseline] reports no CI workflow or no tests AND the specification adds "
+    "CI or tests, the first task of the 'Baseline gaps' phase confirms that the project "
+    "installs, lints and builds as shipped, using the commands its manifest defines, and "
+    "records the result: what passed, and the exact error for what did not. The CI or test "
+    "tasks build on that result."
 )
 
 # A rebrand task named files the old name was not in (finding #54); the
 # segment is built in app/api/generation.py::_occurrences_segment.
 REPO_OCCURRENCES_RULE = (
     "When [repo_occurrences] lists a string the specification changes or removes, the tasks "
-    "that change it name every file listed for it, together, and no file the list does not "
-    "show for it."
+    "that change it name every file listed for it, together. Name another file for that "
+    "string only when its line ends 'and N more files' or the segment says it searched only "
+    "some of the files, and then only a file from the [repo_snapshot] file list."
 )
 
 # Author-supplied plan fields beat the documents they were typed to correct

@@ -698,7 +698,7 @@ async def _occurrences_segment(
             "repo occurrences skipped for project=%s", project.id, exc_info=True
         )
         return ""
-    if not occurrences:
+    if not occurrences.found:
         return ""
     note = (
         "(files of the existing repository containing strings the specification quotes, "

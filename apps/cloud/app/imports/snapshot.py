@@ -34,6 +34,7 @@ import fnmatch
 import posixpath
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 from app.integrations.github import GithubWriteError
 from app.models.schemas import RepoExcerpt, RepoSkippedFile, RepoSnapshot, RepoStack
@@ -659,54 +660,73 @@ def quoted_strings(text: str, limit: int = OCCURRENCE_CANDIDATES) -> list[str]:
     return found
 
 
-def count_occurrences(
-    contents: dict[str, str], tokens: list[str]
-) -> list[tuple[str, list[tuple[str, int]]]]:
-    """(token, [(path, count), ...]) for each token found in any file, in
-    token order, files by count then path. Case-insensitive: a rename of
-    "ASSET GROW" also has to find "Asset Grow"."""
-    result: list[tuple[str, list[tuple[str, int]]]] = []
-    lowered = {path: content.lower() for path, content in contents.items()}
-    for token in tokens:
-        needle = token.lower()
-        hits = [(path, text.count(needle)) for path, text in lowered.items()]
-        hits = sorted(((p, n) for p, n in hits if n), key=lambda hit: (-hit[1], hit[0]))
-        if hits:
-            result.append((token, hits))
-    return result
+@dataclass(frozen=True)
+class RepoOccurrences:
+    """`found` is (string, [(path, count), ...]) per string with a hit, files
+    by count then path; `searched` of `searchable` files were read."""
+
+    found: list[tuple[str, list[tuple[str, int]]]]
+    searched: int
+    searchable: int
+
+
+def _counts_in(content: str, needles: list[str]) -> dict[str, int]:
+    """Case-insensitive count of each needle in one file, zeros left out — a
+    rename of "ASSET GROW" also has to find "Asset Grow"."""
+    text = content.lower()
+    return {needle: n for needle in needles if (n := text.count(needle))}
 
 
 async def repo_occurrences(
     github_client, token: str, repo: str, sha: str, paths: list[str], strings: list[str]
-) -> list[tuple[str, list[tuple[str, int]]]]:
+) -> RepoOccurrences:
     """Fetch the code-index selection of `paths` at `sha` and count `strings`
-    in it; at most OCCURRENCE_MAX_TOKENS strings with a hit are returned. A
-    file that fails to fetch is left out."""
+    in it; at most OCCURRENCE_MAX_TOKENS strings with a hit are returned.
+    Each file is counted as it arrives and its content dropped, so at most
+    OCCURRENCE_FETCH_CONCURRENCY files are held at once. A file that fails to
+    fetch is left out, and counts against `searched`."""
     if not strings:
-        return []
+        return RepoOccurrences(found=[], searched=0, searchable=0)
+    needles = [s.lower() for s in strings]
     semaphore = asyncio.Semaphore(OCCURRENCE_FETCH_CONCURRENCY)
 
-    async def read(path: str) -> tuple[str, str | None]:
+    async def count(path: str) -> tuple[str, dict[str, int] | None]:
         async with semaphore:
             try:
-                return path, await github_client.fetch_file_content(token, repo, path, sha)
+                content = await github_client.fetch_file_content(token, repo, path, sha)
             except GithubWriteError:
                 return path, None
+            return path, _counts_in(content, needles)
 
-    selected = indexable_code_paths(paths, OCCURRENCE_MAX_FILES)
-    results = await asyncio.gather(*(read(p) for p in selected))
-    contents = {path: content for path, content in results if content is not None}
-    return count_occurrences(contents, strings)[:OCCURRENCE_MAX_TOKENS]
+    searchable = indexable_code_paths(paths, len(paths))
+    selected = searchable[:OCCURRENCE_MAX_FILES]
+    results = await asyncio.gather(*(count(p) for p in selected))
+    found: list[tuple[str, list[tuple[str, int]]]] = []
+    for string, needle in zip(strings, needles, strict=True):
+        hits = [(path, c[needle]) for path, c in results if c and needle in c]
+        if hits:
+            found.append((string, sorted(hits, key=lambda hit: (-hit[1], hit[0]))))
+    return RepoOccurrences(
+        found=found[:OCCURRENCE_MAX_TOKENS],
+        searched=sum(1 for _path, c in results if c is not None),
+        searchable=len(searchable),
+    )
 
 
-def occurrences_text(occurrences: list[tuple[str, list[tuple[str, int]]]]) -> str:
+def occurrences_text(occurrences: RepoOccurrences) -> str:
     """One line per string: the files that contain it, each with its count,
-    capped at OCCURRENCE_FILES_PER_TOKEN files."""
+    capped at OCCURRENCE_FILES_PER_TOKEN files; then, when not every file
+    could be read, a line saying how many were."""
     lines = []
-    for token, hits in occurrences:
+    for token, hits in occurrences.found:
         shown = [(p, n) for p, n in hits if p.isprintable()][:OCCURRENCE_FILES_PER_TOKEN]
         listed = ", ".join(f"{path} ({count})" for path, count in shown)
         more = len(hits) - len(shown)
         suffix = f", and {more} more files" if more > 0 else ""
         lines.append(f'"{token}" is in {len(hits)} files: {listed}{suffix}')
+    if occurrences.searched < occurrences.searchable:
+        lines.append(
+            f"(searched {occurrences.searched} of {occurrences.searchable} files; "
+            "others may contain these strings too)"
+        )
     return "\n".join(lines)
