@@ -20,6 +20,8 @@ from app.imports.snapshot import (
     EXCERPT_TOTAL_CHARS,
     MAX_PATHS,
     MAX_SKIPPED,
+    OCCURRENCE_FILES_PER_TOKEN,
+    OCCURRENCE_MAX_TOKENS,
     OUTLINE_MAX_FILES,
     build_snapshot,
     detect_stack,
@@ -28,9 +30,12 @@ from app.imports.snapshot import (
     indexable_code_paths,
     is_secret_path,
     is_test_path,
+    occurrences_text,
     outline_paths,
     outline_source,
+    quoted_strings,
     redact_secrets,
+    repo_occurrences,
     summarize_tests,
     summarize_tree,
 )
@@ -595,3 +600,65 @@ def test_env_template_names_are_listed_without_contents():
     assert snapshot.file_count == 5
     # Nor is a template embedded with the code: names only.
     assert ".env.example" not in indexable_code_paths(snapshot.paths, CODE_INDEX_MAX_FILES)
+
+
+# --- where the specification's strings live (task 4.2, finding #54) ------------
+
+
+def test_quoted_strings_are_distinct_in_order_and_skip_paths_and_apostrophes():
+    spec = (
+        'Rename every "ASSET GROW" to \u201cMarketing Studio\u201d. The `assetgrow` keys move; '
+        "the user's data and the team's settings stay. Edit `src/App.tsx` and 'Asset Grow'. "
+        'Also "asset grow" again, and "ok".'
+    )
+    assert quoted_strings(spec) == ["ASSET GROW", "Marketing Studio", "assetgrow"]
+    assert quoted_strings(spec, limit=2) == ["ASSET GROW", "Marketing Studio"]
+
+
+def test_the_segment_lists_the_files_that_contain_a_quoted_spec_string():
+    files = {
+        "index.html": "<title>ASSET GROW</title><meta content='ASSET GROW'>",
+        "src/App.tsx": "<b>Asset Grow</b>",
+        "src/lib/exporters.ts": "https://assetgrow.app/share",
+        "src/lib/format.ts": "export const x = 1",
+        ".env.example": "BRAND=ASSET GROW",
+        "certs/server.pem": "ASSET GROW",
+    }
+    fake = _fake_repo(files)
+    paths = [p for p in files if p != "certs/server.pem"]
+
+    occurrences = asyncio.run(
+        repo_occurrences(
+            fake, "tok", REPO, "abc123", paths, ["ASSET GROW", "assetgrow", "Not There"]
+        )
+    )
+    text = occurrences_text(occurrences)
+
+    assert text.splitlines() == [
+        '"ASSET GROW" is in 2 files: index.html (2), src/App.tsx (1)',
+        '"assetgrow" is in 1 files: src/lib/exporters.ts (1)',
+    ]
+    # Read through the code-index filter: never a secret or an env template.
+    fetched = {path for _repo, path, _sha in fake.fetched_files}
+    assert ".env.example" not in fetched
+    assert "certs/server.pem" not in fetched
+    assert all(sha == "abc123" for _repo, _path, sha in fake.fetched_files)
+
+
+def test_occurrences_are_capped_per_string_and_in_strings():
+    files = {f"src/m{i:02d}.ts": "ACME" for i in range(OCCURRENCE_FILES_PER_TOKEN + 3)}
+    files["src/brands.ts"] = " ".join(f"brand{i}" for i in range(OCCURRENCE_MAX_TOKENS + 2))
+    strings = ["ACME", *(f"brand{i}" for i in range(OCCURRENCE_MAX_TOKENS + 2))]
+    occurrences = asyncio.run(
+        repo_occurrences(_fake_repo(files), "tok", REPO, "abc123", list(files), strings)
+    )
+    assert len(occurrences) == OCCURRENCE_MAX_TOKENS
+    first = occurrences_text(occurrences).splitlines()[0]
+    assert first.startswith(f'"ACME" is in {OCCURRENCE_FILES_PER_TOKEN + 3} files: ')
+    assert first.endswith(", and 3 more files")
+
+
+def test_no_quoted_strings_fetch_nothing():
+    fake = _fake_repo({"src/a.ts": "x"})
+    assert asyncio.run(repo_occurrences(fake, "tok", REPO, "abc123", ["src/a.ts"], [])) == []
+    assert fake.fetched_files == []

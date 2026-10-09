@@ -776,3 +776,59 @@ def test_the_file_list_keeps_its_partial_marker_and_drops_hostile_names(
     # The marker counts what is not shown (40 files, 2 listed) and survives: the
     # list has its own budget instead of sharing the header's truncation.
     assert "(partial list: 38 more files not shown)" in listing
+
+
+# --------------------------------------------------------------------------- #
+# Where the specification's strings live (task 4.2, finding #54)
+# --------------------------------------------------------------------------- #
+
+RENAME_SPEC = (
+    "# Rename\n\nThe product is renamed: every \"Story App\" becomes \"Tale Hub\", "
+    "and the `storyapp` keys move.\n"
+)
+
+
+def _spec_quotes(client: TestClient, pid: str) -> None:
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify", json={"content": RENAME_SPEC}, headers=ALICE
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_tasks_get_the_files_that_contain_the_specs_quoted_strings(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    provider: RecordingProvider = client.app.state.generation_provider
+
+    assert _generate(client, pid, "tasks").status_code == 200
+    _, user_content = provider.calls[-1]
+    segment = user_content.split("[repo_occurrences]", 1)[1]
+    inside = segment.split(UNTRUSTED_OPEN, 1)[1].split(UNTRUSTED_CLOSE, 1)[0]
+    assert '"Story App" is in 1 files: README.md (1)' in inside
+    assert "Tale Hub" not in inside  # nothing to point at for the new name
+    # Never read for this: the secret-shaped files the snapshot filtered out.
+    fetched = {path for _repo, path, _sha in client.app.state.github_client.fetched_files}
+    assert ".env" not in fetched
+    assert "keys/deploy.pem" not in fetched
+
+    # Only tasks names files per task; plan gets the file list, not the counts.
+    assert _generate(client, pid, "plan").status_code == 200
+    assert "[repo_occurrences]" not in provider.calls[-1][1]
+
+
+def test_tasks_still_generate_when_github_cannot_be_read(client: TestClient):
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    _ready_for_tasks(client, pid)
+    _spec_quotes(client, pid)
+    async def unreachable(*_args, **_kwargs):
+        raise httpx.ConnectError("github is down")
+
+    client.app.state.github_client.fetch_file_content = unreachable
+
+    res = _generate(client, pid, "tasks")
+
+    assert res.status_code == 200, res.text
+    assert "[repo_occurrences]" not in client.app.state.generation_provider.calls[-1][1]

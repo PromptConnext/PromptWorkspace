@@ -12,6 +12,7 @@ from app.generation.prompts import (
     EXISTING_CODEBASE_TASK_RULES,
     NO_CI_FIRST_TASK_RULE,
     PLAN_AUTHOR_OVERRIDE_RULE,
+    REPO_OCCURRENCES_RULE,
     codebase_baseline_prompt,
     driver_prompt,
 )
@@ -122,3 +123,11 @@ def test_brownfield_tasks_extend_an_env_template_the_file_list_already_shows():
     """#56: T025 "Add .env.example" for a repository that has one."""
     text = " ".join(EXISTING_CODEBASE_TASK_RULES)
     assert "already lists `.env.example`" in text
+
+
+def test_brownfield_tasks_name_the_files_repo_occurrences_lists():
+    """#54: rebrand tasks named files the old name was not in."""
+    assert REPO_OCCURRENCES_RULE in driver_prompt("tasks", existing_codebase=True)
+    for kind in ("constitution", "specify", "plan"):
+        assert REPO_OCCURRENCES_RULE not in driver_prompt(kind, existing_codebase=True)
+    assert REPO_OCCURRENCES_RULE not in driver_prompt("tasks")

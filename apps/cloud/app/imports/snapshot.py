@@ -608,3 +608,100 @@ def indexable_code_paths(paths: list[str], limit: int) -> list[str]:
     ]
     selected.sort(key=lambda p: posixpath.splitext(p)[1].lower() not in _LANGUAGE_BY_EXTENSION)
     return selected[:limit]
+
+
+# --------------------------------------------------------------------------- #
+# Where the specification's strings live (task 4.2, finding #54)
+# --------------------------------------------------------------------------- #
+# The model sees file names and outlines, not where a string is written, so a
+# rebrand task named plausible-but-wrong files. At `tasks` time the strings the
+# specification quotes are counted, file by file, in the snapshot commit's own
+# files: fetched again (contents are never stored), through the same filter as
+# the code index, so a secret-shaped file or an env template is never read.
+# GitHub code search was measured first (2026-10-09) and found 0 of the 14
+# files on the test repository: private repositories were not in its index.
+# Reading the files found all 14 in about 4 s for a 53-file repository.
+OCCURRENCE_CANDIDATES = 12
+OCCURRENCE_MAX_TOKENS = 5
+OCCURRENCE_MAX_FILES = 200
+OCCURRENCE_FILES_PER_TOKEN = 20
+OCCURRENCE_FETCH_CONCURRENCY = 8
+
+# "double", “curly”, `backticked` or 'single' quoted, 3-64 characters on one
+# line. A single quote must stand outside a word, so an apostrophe in "the
+# user's data" does not open a string.
+_QUOTED = re.compile(
+    r"\"([^\"\n]{3,64})\"|\u201c([^\u201d\n]{3,64})\u201d|`([^`\n]{3,64})`"
+    r"|(?<!\w)'([^'\n]{3,64})'(?!\w)"
+)
+
+
+def quoted_strings(text: str, limit: int = OCCURRENCE_CANDIDATES) -> list[str]:
+    """The distinct strings `text` quotes, in order, up to `limit`. A quoted
+    path (anything with a `/`) is skipped: the file list already answers
+    where a path is."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _QUOTED.finditer(text):
+        value = next(group for group in match.groups() if group is not None).strip()
+        key = value.lower()
+        if len(value) < 3 or "/" in value or key in seen:
+            continue
+        seen.add(key)
+        found.append(value)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def count_occurrences(
+    contents: dict[str, str], tokens: list[str]
+) -> list[tuple[str, list[tuple[str, int]]]]:
+    """(token, [(path, count), ...]) for each token found in any file, in
+    token order, files by count then path. Case-insensitive: a rename of
+    "ASSET GROW" also has to find "Asset Grow"."""
+    result: list[tuple[str, list[tuple[str, int]]]] = []
+    lowered = {path: content.lower() for path, content in contents.items()}
+    for token in tokens:
+        needle = token.lower()
+        hits = [(path, text.count(needle)) for path, text in lowered.items()]
+        hits = sorted(((p, n) for p, n in hits if n), key=lambda hit: (-hit[1], hit[0]))
+        if hits:
+            result.append((token, hits))
+    return result
+
+
+async def repo_occurrences(
+    github_client, token: str, repo: str, sha: str, paths: list[str], strings: list[str]
+) -> list[tuple[str, list[tuple[str, int]]]]:
+    """Fetch the code-index selection of `paths` at `sha` and count `strings`
+    in it; at most OCCURRENCE_MAX_TOKENS strings with a hit are returned. A
+    file that fails to fetch is left out."""
+    if not strings:
+        return []
+    semaphore = asyncio.Semaphore(OCCURRENCE_FETCH_CONCURRENCY)
+
+    async def read(path: str) -> tuple[str, str | None]:
+        async with semaphore:
+            try:
+                return path, await github_client.fetch_file_content(token, repo, path, sha)
+            except GithubWriteError:
+                return path, None
+
+    selected = indexable_code_paths(paths, OCCURRENCE_MAX_FILES)
+    results = await asyncio.gather(*(read(p) for p in selected))
+    contents = {path: content for path, content in results if content is not None}
+    return count_occurrences(contents, strings)[:OCCURRENCE_MAX_TOKENS]
+
+
+def occurrences_text(occurrences: list[tuple[str, list[tuple[str, int]]]]) -> str:
+    """One line per string: the files that contain it, each with its count,
+    capped at OCCURRENCE_FILES_PER_TOKEN files."""
+    lines = []
+    for token, hits in occurrences:
+        shown = [(p, n) for p, n in hits if p.isprintable()][:OCCURRENCE_FILES_PER_TOKEN]
+        listed = ", ".join(f"{path} ({count})" for path, count in shown)
+        more = len(hits) - len(shown)
+        suffix = f", and {more} more files" if more > 0 else ""
+        lines.append(f'"{token}" is in {len(hits)} files: {listed}{suffix}')
+    return "\n".join(lines)

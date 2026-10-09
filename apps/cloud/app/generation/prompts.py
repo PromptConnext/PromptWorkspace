@@ -60,6 +60,14 @@ NO_CI_FIRST_TASK_RULE = (
     "and the exact error for what did not. Every later task builds on that result."
 )
 
+# A rebrand task named files the old name was not in (finding #54); the
+# segment is built in app/api/generation.py::_occurrences_segment.
+REPO_OCCURRENCES_RULE = (
+    "When [repo_occurrences] lists a string the specification changes or removes, the tasks "
+    "that change it name every file listed for it, together, and no file the list does not "
+    "show for it."
+)
+
 # Author-supplied plan fields beat the documents they were typed to correct
 # (finding #16): a fix to the baseline's storage claim typed into the plan's
 # architecture field lost to the specification that had copied the claim.
@@ -107,6 +115,7 @@ EXISTING_CODEBASE_TASK_RULES = [
     "contradicting its constraints, and do not add a catch-all phase for documentation, "
     "cleanup, performance or hardening unless a user story names that work.",
     NO_CI_FIRST_TASK_RULE,
+    REPO_OCCURRENCES_RULE,
 ]
 
 
