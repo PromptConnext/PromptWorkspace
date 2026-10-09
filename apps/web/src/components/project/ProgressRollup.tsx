@@ -6,13 +6,11 @@ import type {
   DeploymentStatus,
   ProjectGraph,
   Task,
-  TaskStatus,
 } from "@/lib/types";
+import { DONE_STATUSES } from "./changeProgress";
 import { useDeliveryPlanData } from "./DeliveryOverview";
 import { ProgressBar } from "./ProgressBar";
 import { RetryButton } from "./RetryButton";
-
-const DONE: TaskStatus[] = ["implemented", "verified"];
 
 /**
  * The builds whose contents are in the version currently being served.
@@ -81,7 +79,7 @@ function RollupRow({
   builds: DeploymentOut[];
   complete: boolean;
 }) {
-  const doneTasks = tasks.filter((t) => DONE.includes(t.status));
+  const doneTasks = tasks.filter((t) => DONE_STATUSES.includes(t.status));
   const pct = tasks.length === 0 ? 0 : Math.round((doneTasks.length / tasks.length) * 100);
   const live = doneTasks.filter((t) => shipped.has(t.id)).length;
   return (
