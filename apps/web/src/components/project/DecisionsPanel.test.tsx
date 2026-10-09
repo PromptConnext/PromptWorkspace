@@ -47,7 +47,7 @@ const decision = (o: Partial<Decision>): Decision => ({
   subject_content: "# Tasks\n\nBuild it.",
   routed_hat: "tech_steward", status: "open", rationale: null, requested_by: "u1",
   resolved_by: null, created_at: "2026-10-04T08:00:00Z", resolved_at: null,
-  can_resolve: true, ...o,
+  can_resolve: true, is_current: true, ...o,
 });
 
 describe("DecisionsPanel", () => {
@@ -194,5 +194,22 @@ describe("DecisionsPanel", () => {
     render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
 
     expect(screen.getByText(/Changes requested by a former member/)).toBeInTheDocument();
+  });
+
+  it('a superseded approval shows "Superseded by edit", not plain "Approved"', () => {
+    decisions = {
+      decisions: [
+        decision({ id: "d2", status: "approved", can_resolve: false, is_current: true, resolved_by: "u2",
+          resolved_at: "2026-10-06T08:00:00Z", created_at: "2026-10-06T07:00:00Z" }),
+        decision({ id: "d1", status: "approved", can_resolve: false, is_current: false, resolved_by: "u2",
+          resolved_at: "2026-10-04T09:00:00Z" }),
+      ],
+      states: { intent: "none", plan: "approved" },
+    };
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    expect(screen.getByText("Superseded by edit")).toBeInTheDocument();
+    // The state card and the current approval still read plain "Approved".
+    expect(screen.getAllByText("Approved")).toHaveLength(2);
   });
 });

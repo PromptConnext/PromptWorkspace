@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.api.delivery import DecisionOut, _routing_context, decision_out
 from app.db.repository import Repository
+from app.delivery.approvals import stage_hashes
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import AssignedTask, TaskStatus
 
@@ -67,9 +68,10 @@ def list_my_decisions(
             if not decisions:
                 continue
             roles, member_ids, is_admin = _routing_context(repo, project, user)
+            hashes = stage_hashes(repo, project.id)
             for decision in decisions:
                 out = decision_out(decision, user_id=user.id, roles=roles,
-                                   member_ids=member_ids, is_admin=is_admin)
+                                   member_ids=member_ids, is_admin=is_admin, hashes=hashes)
                 if out.can_resolve:
                     items.append(
                         InboxItem(

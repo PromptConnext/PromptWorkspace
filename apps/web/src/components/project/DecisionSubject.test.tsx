@@ -11,7 +11,7 @@ const decision = (o: Partial<Decision>): Decision => ({
   title: "Approve the intent", subject_stage: "specify", subject_hash: "h",
   subject_content: "# Spec\n\nBook a slot.", routed_hat: "business_owner", status: "open",
   rationale: null, requested_by: "u1", resolved_by: null, created_at: "2026-10-04T08:00:00Z",
-  resolved_at: null, can_resolve: true, ...o,
+  resolved_at: null, can_resolve: true, is_current: true, ...o,
 });
 
 describe("DecisionSubject", () => {

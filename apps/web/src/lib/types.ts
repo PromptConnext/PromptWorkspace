@@ -696,6 +696,8 @@ export interface Decision {
   created_at: string;
   resolved_at: string | null;
   can_resolve: boolean;
+  /** False once the stage document was edited after this decision was made. */
+  is_current: boolean;
 }
 
 export interface DecisionsOut {

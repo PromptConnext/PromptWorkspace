@@ -166,6 +166,9 @@ class DecisionOut(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     can_resolve: bool
+    # True while `subject_hash` is the hash of the stage document as it is now;
+    # false once the document was edited after this decision was made.
+    is_current: bool
 
 
 class DecisionsOut(BaseModel):
@@ -200,10 +203,15 @@ def decision_out(
     roles,
     member_ids: set[str],
     is_admin: bool,
+    hashes: dict[str, str | None] | None = None,
 ) -> DecisionOut:
+    """`hashes` are the stage hashes as they are now. Without them (the read
+    after a write failed) a decision reads as current: the request and resolve
+    routes only write against a document whose hash they just matched."""
     return DecisionOut(
         **decision.model_dump(),
         can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
+        is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
     )
 
 
@@ -238,7 +246,7 @@ def _mutation_out(
     decision: Decision,
     decisions: list[Decision],
     hashes: dict[str, str | None] | None,
-    out: Callable[[Decision], DecisionOut],
+    out: Callable[..., DecisionOut],
 ) -> DecisionMutationOut:
     """`decision` with the listing after the write: `decisions` are the
     project's decisions as they now stand (newest first), `hashes` the stage
@@ -246,9 +254,10 @@ def _mutation_out(
     snapshot = None
     if hashes is not None:
         snapshot = DecisionsOut(
-            decisions=[out(d) for d in decisions], states=states_of(decisions, hashes)
+            decisions=[out(d, hashes=hashes) for d in decisions],
+            states=states_of(decisions, hashes),
         )
-    return DecisionMutationOut(**out(decision).model_dump(), snapshot=snapshot)
+    return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
 
 
 @router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
@@ -260,13 +269,14 @@ def list_project_decisions(
     project, role = require_project_role(repo, project_id, user)
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
     decisions = repo.list_decisions(project_id)
+    hashes = stage_hashes(repo, project_id)
     return DecisionsOut(
         decisions=[
             decision_out(d, user_id=user.id, roles=roles, member_ids=member_ids,
-                         is_admin=is_admin)
+                         is_admin=is_admin, hashes=hashes)
             for d in decisions
         ],
-        states=decisions_state(repo, project_id, decisions),
+        states=decisions_state(repo, project_id, decisions, hashes),
     )
 
 

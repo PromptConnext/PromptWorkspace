@@ -78,7 +78,13 @@ function DecisionRow({
     <li className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex items-center justify-between gap-2 text-sm">
         <span className="font-medium text-slate-900">{decision.title}</span>
-        <span className="text-xs text-slate-500">{STATUS_LABEL[decision.status]}</span>
+        {decision.status === "approved" && !decision.is_current ? (
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+            Superseded by edit
+          </span>
+        ) : (
+          <span className="text-xs text-slate-500">{STATUS_LABEL[decision.status]}</span>
+        )}
       </div>
       <p className="mt-1 text-xs text-slate-500">
         Requested by {name(decision.requested_by)} · {new Date(decision.created_at).toLocaleString()}

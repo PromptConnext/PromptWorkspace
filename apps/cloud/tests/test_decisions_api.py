@@ -504,3 +504,25 @@ def test_a_request_stores_the_document_it_asks_to_approve(client, project):
     stored = client.app.state.repository.get_decision(project, body["id"])
     assert stored is not None and stored.subject_content == "# Spec\n\nBook a slot."
 
+
+def test_an_approval_made_before_an_edit_reads_is_current_false(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    approved = _resolve(client, project, did).json()
+    assert approved["is_current"] is True
+    assert approved["snapshot"]["decisions"][0]["is_current"] is True
+
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    repo.upsert_stage_document(project, ws_id, "specify", "# Spec\n\nBook and cancel.", "alice")
+
+    (old,) = client.get(f"/projects/{project}/decisions", headers=BOB).json()["decisions"]
+    assert old["status"] == "approved" and old["is_current"] is False
+
+    # Asking again withdraws nothing here (the old one is approved, not open);
+    # the new request is current, the old approval stays marked.
+    new = _request(client, project, "intent_approval").json()
+    assert new["is_current"] is True
+    by_id = {d["id"]: d for d in new["snapshot"]["decisions"]}
+    assert by_id[did]["is_current"] is False
+    assert by_id[new["id"]]["is_current"] is True
+
