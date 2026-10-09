@@ -344,6 +344,17 @@ test("get_task assembles criteria, spec excerpt and repository", async () => {
   });
 });
 
+test("get_task names the task branch and the commit prefix (#38)", async () => {
+  await withTools(async ({ call }) => {
+    const body = ((await call("get_task", { task_id: "task-1" })).content[0] as { text: string }).text;
+    assert.match(
+      body,
+      /Work on branch `T12-add-a-retry-to-the-uploader`; start commit subjects with `T12:`\./,
+    );
+    assert.match(body, /commit with `T12: <what you did>`/);
+  });
+});
+
 test("get_task asks for every status, so an implemented task is still readable", async () => {
   await withTools(async ({ call, seen }) => {
     await call("get_task", { task_id: "task-1" });

@@ -3,7 +3,7 @@
 // ADR 0019 calls vscode.git the least stable dependency in the stack: absent
 // from the published API reference, distributed by "copy this .d.ts", and it
 // has changed inside getAPI(1) without deprecation. Feature code therefore
-// sees the four-method interface below and nothing else, so a breaking change
+// sees the small interface below and nothing else, so a breaking change
 // upstream lands in one file with a typecheck failure rather than everywhere
 // at runtime.
 
@@ -50,6 +50,9 @@ export interface GitBridge {
    *  gone or git refuses (a name already taken, an unborn HEAD); the caller
    *  reports it, because only the caller knows what the user asked for. */
   createBranch(root: vscode.Uri, name: string): Promise<boolean>;
+  /** Check out an existing branch. Resolves false when git refuses (no such
+   *  branch, local changes in the way); the caller reports it. */
+  checkout(root: vscode.Uri, name: string): Promise<boolean>;
   /** Pre-fill the Source Control commit message box. Best-effort and silent:
    *  a message the user cannot see us fail to write is not worth a dialog. */
   setCommitMessage(root: vscode.Uri, message: string): void;
@@ -185,6 +188,18 @@ class VscodeGitBridge implements GitBridge {
     }
   }
 
+  async checkout(root: vscode.Uri, name: string): Promise<boolean> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return false;
+    try {
+      await repo.checkout(name);
+      return true;
+    } catch (err) {
+      this.logger.info(`checkout(${name}) refused: ${String(err)}`);
+      return false;
+    }
+  }
+
   setCommitMessage(root: vscode.Uri, message: string): void {
     const repo = this.api?.getRepository(root);
     if (!repo) return;
@@ -247,6 +262,9 @@ class NoopGitBridge implements GitBridge {
     return [];
   }
   async createBranch(): Promise<boolean> {
+    return false;
+  }
+  async checkout(): Promise<boolean> {
     return false;
   }
   setCommitMessage(): void {

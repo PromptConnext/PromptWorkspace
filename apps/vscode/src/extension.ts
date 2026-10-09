@@ -35,7 +35,7 @@ import { linkCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
-import { copyTaskContext } from "./tasks/copyContext.ts";
+import { buildTaskContext } from "./tasks/copyContext.ts";
 import { StatusQueue, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
@@ -431,12 +431,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await writer.flush();
       refreshStatusBar();
     }),
+    // The row click (finding #36): the three things a developer clicking a
+    // task most likely wants, with Start first unless the task is closed.
+    vscode.commands.registerCommand(
+      "promptworkspace.taskActions",
+      async (node?: TreeNode) => {
+        const entry = taskFromNode(node);
+        if (!entry) return;
+        const actions = [
+          {
+            label: "$(play) Start Task",
+            detail: "Assign it to you, mark it in progress and switch to its branch.",
+            command: "promptworkspace.startTask",
+          },
+          {
+            label: "$(clippy) Copy Task Context",
+            detail: "Title, criteria, spec and coding rules, for an AI agent.",
+            command: "promptworkspace.copyTaskContext",
+          },
+          {
+            label: "$(link-external) Open in the Web App",
+            command: "promptworkspace.openTaskInWeb",
+          },
+        ];
+        if (isClosed(entry.task.status)) actions.push(actions.shift()!);
+        const picked = await vscode.window.showQuickPick(actions, { title: entry.task.title });
+        if (picked) await vscode.commands.executeCommand(picked.command, node);
+      },
+    ),
     vscode.commands.registerCommand(
       "promptworkspace.copyTaskContext",
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
-        await copyTaskContext(entry, client, docs, log);
+        await vscode.env.clipboard.writeText(await buildTaskContext(entry, client, docs, log));
+        void vscode.window.showInformationMessage(
+          `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
+        );
       },
     ),
     vscode.commands.registerCommand(

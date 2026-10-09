@@ -20,6 +20,7 @@ import { branchNameForTask, taskRefFromFeatureTag } from "@promptworkspace/cloud
 import type { ProjectLink } from "../link/projectLink.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { StatusWriter } from "./statusWriter.ts";
+import { ensureTaskBranch } from "./taskBranch.ts";
 
 export interface StartTaskDeps {
   assign: (projectId: string, taskId: string, userId: string) => Promise<unknown>;
@@ -70,15 +71,19 @@ export async function startTask(
   if (choice === "neither") return;
 
   if (choice === "branch") {
-    const created = await deps.git.createBranch(root, branch);
-    if (!created) {
+    // Create and check out, or check out the branch that already exists:
+    // either way HEAD ends on the task's branch (finding #38).
+    const result = await ensureTaskBranch(deps.git, root, branch);
+    if (result === "failed") {
       const retry = await vscode.window.showWarningMessage(
-        `Could not create "${branch}" — the name may already be taken. ` +
-          "Prefill the commit message instead?",
+        `Could not create or check out "${branch}" (local changes may be in the way; ` +
+          "see the PromptWorkspace log). Prefill the commit message instead?",
         "Prefill Message",
         "Cancel",
       );
       if (retry !== "Prefill Message") return;
+    } else if (result === "checked_out") {
+      void vscode.window.showInformationMessage(`Switched to the existing branch ${branch}.`);
     }
   }
 
@@ -130,8 +135,10 @@ async function askGitChoice(ref: string, branch: string): Promise<GitChoice> {
   const picked = await vscode.window.showQuickPick(
     [
       {
-        label: `$(git-branch) Create branch ${branch}`,
-        detail: `Every commit on it counts toward ${ref}, however the message is worded.`,
+        label: `$(git-branch) Work on branch ${branch}`,
+        detail:
+          `Created and checked out (or checked out, if it exists). Every commit on it ` +
+          `counts toward ${ref}, however the message is worded.`,
         choice: "branch" as const,
       },
       {

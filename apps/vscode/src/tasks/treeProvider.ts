@@ -81,9 +81,11 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
     item.tooltip = this.tooltip(node.entry);
+    // A row click used to copy the context with only a toast to show for it,
+    // and Start Task was a hover-only icon (finding #36). It now asks.
     item.command = {
-      command: "promptworkspace.copyTaskContext",
-      title: "Copy Task Context",
+      command: "promptworkspace.taskActions",
+      title: "Task Actions",
       arguments: [node],
     };
     return item;
