@@ -6,7 +6,9 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { Decision, DecisionsOut, WorkspaceMember } from "@/lib/types";
 import { APPROVAL_LABEL } from "./ApprovalControl";
+import { DecisionSubject } from "./DecisionSubject";
 import { memberFullName } from "./MemberChip";
+import { RetryButton } from "./RetryButton";
 
 const HAT_LABEL: Record<Decision["routed_hat"], string> = {
   business_owner: "business owner",
@@ -20,12 +22,29 @@ const STATUS_LABEL: Record<Decision["status"], string> = {
   withdrawn: "Withdrawn",
 };
 
+/** The newest approved decision of the same kind made before `decision`:
+ * what its subject is compared against. `all` is newest first. */
+function previousApproved(all: Decision[], decision: Decision): Decision | null {
+  const at = Date.parse(decision.created_at);
+  return (
+    all.find(
+      (d) =>
+        d.id !== decision.id &&
+        d.kind === decision.kind &&
+        d.status === "approved" &&
+        Date.parse(d.created_at) < at,
+    ) ?? null
+  );
+}
+
 function DecisionRow({
   decision,
+  previous,
   members,
   onResolved,
 }: {
   decision: Decision;
+  previous: Decision | null;
   members: WorkspaceMember[];
   /** Receives the listing as it stands after the resolve. */
   onResolved: (snapshot: DecisionsOut | null | undefined) => void;
@@ -35,6 +54,7 @@ function DecisionRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = (id: string | null) => memberFullName(members.find((m) => m.user_id === id));
+  const resolver = members.find((m) => m.user_id === decision.resolved_by);
 
   async function resolve(outcome: "approved" | "rejected") {
     setBusy(true);
@@ -59,11 +79,24 @@ function DecisionRow({
     <li className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex items-center justify-between gap-2 text-sm">
         <span className="font-medium text-slate-900">{decision.title}</span>
-        <span className="text-xs text-slate-500">{STATUS_LABEL[decision.status]}</span>
+        {decision.status === "approved" && !decision.is_current ? (
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+            Superseded by edit
+          </span>
+        ) : (
+          <span className="text-xs text-slate-500">{STATUS_LABEL[decision.status]}</span>
+        )}
       </div>
       <p className="mt-1 text-xs text-slate-500">
         Requested by {name(decision.requested_by)} · {new Date(decision.created_at).toLocaleString()}
       </p>
+      {(decision.status === "approved" || decision.status === "rejected") && decision.resolved_at && (
+        <p className="mt-1 text-xs text-slate-500">
+          {STATUS_LABEL[decision.status]} by {resolver ? memberFullName(resolver) : "a former member"} ·{" "}
+          {new Date(decision.resolved_at).toLocaleString()}
+        </p>
+      )}
+      <DecisionSubject decision={decision} previous={previous} />
       {decision.rationale && <p className="mt-2 text-sm text-slate-700">{decision.rationale}</p>}
       {decision.status === "open" && !decision.can_resolve && (
         <p className="mt-2 text-xs text-slate-500">Waiting on the {HAT_LABEL[decision.routed_hat]}.</p>
@@ -111,14 +144,21 @@ function DecisionRow({
 /** Plan 0029 Decisions tab: where the project's approvals stand and every
  * decision behind them, with the resolve form for decisions routed to me. */
 export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; workspaceId: string }) {
-  const { data, error, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error, retry, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   // Apply the resolve's snapshot; refetch when it carries none.
   const onResolved = (snapshot: DecisionsOut | null | undefined) =>
     snapshot ? mutate(snapshot) : refetch();
   const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
 
-  if (error) return <p className="text-sm text-rose-700">{error}</p>;
-  if (!data) return null;
+  if (error) {
+    return (
+      <div role="alert" className="flex items-center gap-3 text-sm text-rose-700">
+        <span>{error}</span>
+        <RetryButton onClick={retry} />
+      </div>
+    );
+  }
+  if (!data) return <p className="text-sm text-slate-500">Loading decisions…</p>;
   const visible = data.decisions.filter((d) => d.status !== "withdrawn");
 
   return (
@@ -140,7 +180,13 @@ export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; 
       ) : (
         <ul className="flex flex-col gap-3">
           {visible.map((d) => (
-            <DecisionRow key={d.id} decision={d} members={members ?? []} onResolved={onResolved} />
+            <DecisionRow
+              key={d.id}
+              decision={d}
+              previous={previousApproved(data.decisions, d)}
+              members={members ?? []}
+              onResolved={onResolved}
+            />
           ))}
         </ul>
       )}

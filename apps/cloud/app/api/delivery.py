@@ -34,6 +34,7 @@ from app.delivery.decisions import (
     TITLE_OF,
     ApprovalState,
     can_resolve,
+    content_hash,
     latest_decision,
 )
 from app.dependencies import User, get_current_user, get_repository
@@ -148,7 +149,10 @@ def put_project_role(
 DecisionKindIn = Literal["intent_approval", "plan_approval"]
 
 
-class DecisionOut(BaseModel):
+class DecisionBase(BaseModel):
+    """A decision's fields without the two that are costly: the document text
+    (`DecisionOut.subject_content`) and the staleness check (`is_current`)."""
+
     id: str
     project_id: str
     workspace_id: str
@@ -164,6 +168,16 @@ class DecisionOut(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     can_resolve: bool
+
+
+class DecisionOut(DecisionBase):
+    # The document text at request time; null for a decision made before
+    # migration 0006 and for older decisions a listing leaves out
+    # (`content_carriers`).
+    subject_content: str | None
+    # True while `subject_hash` is the hash of the stage document as it is now;
+    # false once the document was edited after this decision was made.
+    is_current: bool
 
 
 class DecisionsOut(BaseModel):
@@ -191,6 +205,21 @@ class DecisionResolve(BaseModel):
     rationale: str | None = None
 
 
+def content_carriers(decisions: list[Decision]) -> set[str]:
+    """The ids of the decisions a listing sends `subject_content` for: the open
+    ones (the approver reads and diffs them) and the newest approved decision of
+    each kind (the diff base for the next request). Every older decision would
+    cost its whole document, up to ~12 KB each, on every tab load."""
+    keep = {d.id for d in decisions if d.status == "open"}
+    newest: dict[str, Decision] = {}
+    for d in decisions:
+        if d.status == "approved" and (
+            d.kind not in newest or d.created_at > newest[d.kind].created_at
+        ):
+            newest[d.kind] = d
+    return keep | {d.id for d in newest.values()}
+
+
 def decision_out(
     decision: Decision,
     *,
@@ -198,10 +227,18 @@ def decision_out(
     roles,
     member_ids: set[str],
     is_admin: bool,
+    hashes: dict[str, str | None] | None = None,
+    with_content: bool = True,
 ) -> DecisionOut:
+    """`hashes` are the stage hashes as they are now. Without them (the read
+    after a write failed) a decision reads as current: the request and resolve
+    routes only write against a document whose hash they just matched.
+    `with_content=False` leaves `subject_content` out (see `content_carriers`)."""
     return DecisionOut(
-        **decision.model_dump(),
+        **decision.model_dump(exclude={"subject_content"}),
+        subject_content=decision.subject_content if with_content else None,
         can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
+        is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
     )
 
 
@@ -236,17 +273,19 @@ def _mutation_out(
     decision: Decision,
     decisions: list[Decision],
     hashes: dict[str, str | None] | None,
-    out: Callable[[Decision], DecisionOut],
+    out: Callable[..., DecisionOut],
 ) -> DecisionMutationOut:
     """`decision` with the listing after the write: `decisions` are the
     project's decisions as they now stand (newest first), `hashes` the stage
     hashes read after it (no snapshot without them)."""
     snapshot = None
     if hashes is not None:
+        keep = content_carriers(decisions)
         snapshot = DecisionsOut(
-            decisions=[out(d) for d in decisions], states=states_of(decisions, hashes)
+            decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
+            states=states_of(decisions, hashes),
         )
-    return DecisionMutationOut(**out(decision).model_dump(), snapshot=snapshot)
+    return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
 
 
 @router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
@@ -258,13 +297,15 @@ def list_project_decisions(
     project, role = require_project_role(repo, project_id, user)
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
     decisions = repo.list_decisions(project_id)
+    hashes = stage_hashes(repo, project_id)
+    keep = content_carriers(decisions)
     return DecisionsOut(
         decisions=[
             decision_out(d, user_id=user.id, roles=roles, member_ids=member_ids,
-                         is_admin=is_admin)
+                         is_admin=is_admin, hashes=hashes, with_content=d.id in keep)
             for d in decisions
         ],
-        states=decisions_state(repo, project_id, decisions),
+        states=decisions_state(repo, project_id, decisions, hashes),
     )
 
 
@@ -277,9 +318,12 @@ def request_decision(
 ) -> DecisionMutationOut:
     project, role = require_project_role(repo, project_id, user)
     stage = STAGE_OF[body.kind]
-    current = current_hash(repo, project_id, stage)
-    if current is None:
+    # One read gives the hash and the text it covers, so the stored snapshot
+    # is exactly the document the hash binds.
+    document = repo.get_stage_document(project_id, stage)
+    if document is None or not document.content.strip():
         raise HTTPException(status_code=409, detail="decision_subject_missing")
+    current = content_hash(document.content)
     if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
@@ -308,6 +352,7 @@ def request_decision(
                 title=TITLE_OF[body.kind],
                 subject_stage=stage,
                 subject_hash=current,
+                subject_content=document.content,
                 routed_hat=HAT_OF[body.kind],
                 requested_by=user.id,
             )

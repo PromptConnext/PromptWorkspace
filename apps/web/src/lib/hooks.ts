@@ -16,6 +16,9 @@ interface FetchState<T> {
   error: string | null;
   loading: boolean;
   refetch: () => void;
+  // The same request as `refetch`, named for the Retry button an error line
+  // offers after a failed load.
+  retry: () => void;
   // True while a background revalidate() is in flight. Never touches `loading`.
   refreshing: boolean;
   // Set when a background revalidate failed; `data` still holds the last good
@@ -166,5 +169,5 @@ export function useCloudGet<T>(
     [],
   );
 
-  return { data, error, loading, refetch, refreshing, refreshError, lastUpdated, revalidate, mutate };
+  return { data, error, loading, refetch, retry: refetch, refreshing, refreshError, lastUpdated, revalidate, mutate };
 }

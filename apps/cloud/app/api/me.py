@@ -13,8 +13,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from app.api.delivery import DecisionOut, _routing_context, decision_out
+from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
+from app.delivery.decisions import can_resolve
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import AssignedTask, TaskStatus
 
@@ -42,7 +43,7 @@ def list_my_tasks(
 
 
 class InboxItem(BaseModel):
-    decision: DecisionOut
+    decision: DecisionBase
     project_id: str
     project_name: str
     workspace_id: str
@@ -68,12 +69,16 @@ def list_my_decisions(
                 continue
             roles, member_ids, is_admin = _routing_context(repo, project, user)
             for decision in decisions:
-                out = decision_out(decision, user_id=user.id, roles=roles,
-                                   member_ids=member_ids, is_admin=is_admin)
-                if out.can_resolve:
+                if can_resolve(decision, user.id, roles, member_ids, is_admin):
                     items.append(
                         InboxItem(
-                            decision=out,
+                            # Not DecisionOut: the inbox lists open decisions and
+                            # needs neither the document text nor is_current
+                            # (two stage-document reads per project).
+                            decision=DecisionBase(
+                                **decision.model_dump(exclude={"subject_content"}),
+                                can_resolve=True,
+                            ),
                             project_id=project.id,
                             project_name=project.name,
                             workspace_id=workspace.id,

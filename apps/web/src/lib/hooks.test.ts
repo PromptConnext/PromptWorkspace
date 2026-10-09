@@ -29,6 +29,18 @@ afterEach(() => {
 });
 
 describe("useCloudGet", () => {
+  it("retry loads again after a failed first load and clears the error", async () => {
+    apiFetch.mockRejectedValueOnce(new Error("Failed to fetch")).mockResolvedValueOnce({ n: 1 });
+    const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));
+    await waitFor(() => expect(result.current.error).toBe("Failed to fetch"));
+
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(result.current.data).toEqual({ n: 1 }));
+    expect(result.current.error).toBeNull();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("mutate replaces the data locally without a request", async () => {
     apiFetch.mockResolvedValueOnce({ n: 1 });
     const { result } = renderHook(() => useCloudGet<{ n: number }>("/x"));

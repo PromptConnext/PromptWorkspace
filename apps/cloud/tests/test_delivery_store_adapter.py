@@ -131,3 +131,55 @@ def test_rows_parse_into_models():
 
 def test_delivery_tables_are_service_only():
     assert {"pw_delivery_changes", "pw_decisions", "pw_project_roles"} <= _SERVICE_ONLY_TABLES
+
+
+NO_CONTENT_COLUMN = {
+    "code": "PGRST204",
+    "message": "Could not find the 'subject_content' column of 'pw_decisions' in the schema cache",
+}
+
+
+class _ColumnlessClient(_Client):
+    """A database that has migration 0004 but not 0006: a write naming
+    `subject_content` is refused, a write without it succeeds."""
+
+    def table(self, name: str):
+        client = self
+
+        class _Q(_Query):
+            def upsert(self, payload, **kw):
+                if "subject_content" in payload:
+                    client.refused += 1
+                    client.error = NO_CONTENT_COLUMN
+                else:
+                    client.error = None
+                return super().upsert(payload, **kw)
+
+        return _Q(self, name)
+
+    refused = 0
+
+
+def test_decisions_still_answer_without_the_content_column():
+    row = DECISION.model_dump(mode="json")
+    row.pop("subject_content")  # a row from a table that has no such column
+    client = _ColumnlessClient(rows=[row])
+    repo = _repo(client)
+
+    assert [d.id for d in repo.list_decisions("p")] == [DECISION.id]
+    assert repo.list_decisions("p")[0].subject_content is None
+    assert repo.get_decision("p", DECISION.id).subject_content is None
+
+    saved = repo.save_decision(DECISION.model_copy(update={"subject_content": "# Spec"}))
+
+    assert saved.subject_content == "# Spec"  # the caller still sees what it asked to save
+    assert client.refused == 1
+    (_, payload) = client.upserts[-1]
+    assert "subject_content" not in payload and payload["id"] == DECISION.id
+
+
+def test_a_failure_unrelated_to_the_content_column_still_raises_on_save():
+    repo = _repo(_Client(error={"code": "42501", "message": "permission denied"}))
+    with pytest.raises(APIError):
+        repo.save_decision(DECISION.model_copy(update={"subject_content": "x"}))
+

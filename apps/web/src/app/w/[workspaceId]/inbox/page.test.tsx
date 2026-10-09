@@ -39,6 +39,22 @@ describe("Inbox", () => {
     expect(screen.getByText("Clinic booking")).toBeInTheDocument();
   });
 
+  it("clicking anywhere on an inbox card navigates", () => {
+    items = [
+      {
+        project_id: "p1", project_name: "Clinic booking", workspace_id: "w1", workspace_name: "WS",
+        decision: { id: "d1", title: "Approve the delivery plan", created_at: "2026-10-04T08:00:00Z" },
+      },
+    ];
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+
+    // The project name and the date are not the title, but they sit inside the link.
+    const href = "/w/w1/p/p1?tab=decisions";
+    expect(screen.getByText("Clinic booking").closest("a")).toHaveAttribute("href", href);
+    expect(screen.getByText(/2026|10/).closest("a")).toHaveAttribute("href", href);
+    expect(screen.getByRole("listitem")).toBe(screen.getByRole("link").parentElement);
+  });
+
   it("says when nothing is waiting", () => {
     items = [];
     render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);

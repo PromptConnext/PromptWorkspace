@@ -5,6 +5,7 @@ import { requestDecision } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { ApprovalState, DecisionKind, DecisionsOut } from "@/lib/types";
+import { RetryButton } from "./RetryButton";
 
 export const APPROVAL_LABEL: Record<ApprovalState, string> = {
   none: "Not requested",
@@ -43,14 +44,29 @@ export function ApprovalControl({
   refreshKey?: string | number | null;
 }) {
   const { authHeaders } = useAuth();
-  const { data, error: loadError, refetch, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
+  const { data, error: loadError, refetch, retry, mutate } = useCloudGet<DecisionsOut>(`/projects/${projectId}/decisions`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A save of the approved document makes the approval stale on the server,
+  // but the answer is a round trip away. Until it lands, show what the save
+  // already means; any new response from the server replaces this guess.
+  const [savedSinceLoad, setSavedSinceLoad] = useState(false);
+  const serverState: ApprovalState | null = data
+    ? data.states[kind === "intent_approval" ? "intent" : "plan"]
+    : null;
+  const serverStateRef = useRef(serverState);
+  serverStateRef.current = serverState;
+
+  useEffect(() => {
+    setSavedSinceLoad(false);
+  }, [data]);
 
   const lastKey = useRef(refreshKey);
   useEffect(() => {
     if (lastKey.current === refreshKey) return;
     lastKey.current = refreshKey;
+    if (serverStateRef.current === "approved") setSavedSinceLoad(true);
     refetch();
   }, [refreshKey, refetch]);
 
@@ -76,15 +92,17 @@ export function ApprovalControl({
     // Until the states load there is nothing true to show, and a request
     // button here could ask again over an approval the user can't see yet.
     return loadError ? (
-      <p role="alert" className="text-xs text-rose-700">
-        {loadError}
-      </p>
+      <div role="alert" className="flex items-center gap-2 text-xs text-rose-700">
+        <span>{loadError}</span>
+        <RetryButton onClick={retry} />
+      </div>
     ) : (
       <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">Loading…</span>
     );
   }
 
-  const state: ApprovalState = data.states[kind === "intent_approval" ? "intent" : "plan"];
+  const state: ApprovalState =
+    savedSinceLoad && serverState === "approved" ? "stale" : (serverState as ApprovalState);
   const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
   return (

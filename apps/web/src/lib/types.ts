@@ -685,6 +685,11 @@ export interface Decision {
   title: string;
   subject_stage: "specify" | "tasks";
   subject_hash: string;
+  /** The document text when the approval was requested. Null for a decision
+   *  made before the API stored it, and for older decisions the listing leaves
+   *  out: it sends the text only for open decisions and the newest approved
+   *  one per kind. */
+  subject_content: string | null;
   routed_hat: ProjectHat;
   status: "open" | "approved" | "rejected" | "withdrawn";
   rationale: string | null;
@@ -693,6 +698,8 @@ export interface Decision {
   created_at: string;
   resolved_at: string | null;
   can_resolve: boolean;
+  /** False once the stage document was edited after this decision was made. */
+  is_current: boolean;
 }
 
 export interface DecisionsOut {
@@ -714,7 +721,9 @@ export interface ProjectRoleOut {
 }
 
 export interface InboxItem {
-  decision: Decision;
+  /** An open decision without the document text and `is_current`, which the
+   *  inbox never reads and its API leaves out. */
+  decision: Omit<Decision, "subject_content" | "is_current">;
   project_id: string;
   project_name: string;
   workspace_id: string;

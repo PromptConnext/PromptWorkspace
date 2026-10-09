@@ -3,11 +3,19 @@ approval writes to the graph."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.models.schemas import GraphUpsertRequest, Requirement, RequirementStatus, SpecDocument
+from app.models.schemas import (
+    Decision,
+    GraphUpsertRequest,
+    Requirement,
+    RequirementStatus,
+    SpecDocument,
+)
 
 ALICE = {"X-User-Id": "alice"}  # admin
 BOB = {"X-User-Id": "bob"}  # member
@@ -493,3 +501,75 @@ def test_a_change_request_returns_the_listing_after_it(client, project):
 
     assert body["snapshot"] == _listing(client, project, ALICE)
     assert body["snapshot"]["states"] == {"intent": "pending", "plan": "changes_requested"}
+
+
+def test_a_request_stores_the_document_it_asks_to_approve(client, project):
+    body = _request(client, project, "intent_approval").json()
+
+    assert body["subject_content"] == "# Spec\n\nBook a slot."
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert listing["decisions"][0]["subject_content"] == "# Spec\n\nBook a slot."
+    stored = client.app.state.repository.get_decision(project, body["id"])
+    assert stored is not None and stored.subject_content == "# Spec\n\nBook a slot."
+
+
+def test_an_approval_made_before_an_edit_reads_is_current_false(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    approved = _resolve(client, project, did).json()
+    assert approved["is_current"] is True
+    assert approved["snapshot"]["decisions"][0]["is_current"] is True
+
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    repo.upsert_stage_document(project, ws_id, "specify", "# Spec\n\nBook and cancel.", "alice")
+
+    (old,) = client.get(f"/projects/{project}/decisions", headers=BOB).json()["decisions"]
+    assert old["status"] == "approved" and old["is_current"] is False
+
+    # Asking again withdraws nothing here (the old one is approved, not open);
+    # the new request is current, the old approval stays marked.
+    new = _request(client, project, "intent_approval").json()
+    assert new["is_current"] is True
+    by_id = {d["id"]: d for d in new["snapshot"]["decisions"]}
+    assert by_id[did]["is_current"] is False
+    assert by_id[new["id"]]["is_current"] is True
+
+
+def test_get_decisions_omits_content_of_superseded_decisions(client, project):
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    base = Decision(
+        project_id=project, workspace_id=ws_id, kind="intent_approval", title="Intent",
+        subject_stage="specify", subject_hash="h", routed_hat="business_owner",
+        requested_by="bob", subject_content="text",
+    )
+    t = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    def make(name, minutes, status, kind="intent_approval"):
+        return repo.save_decision(base.model_copy(update={
+            "id": name, "status": status, "kind": kind,
+            "created_at": t + timedelta(minutes=minutes),
+            "subject_content": f"content of {name}",
+        }))
+
+    make("old-approved", 1, "approved")
+    make("rejected", 2, "rejected")
+    make("new-approved", 3, "approved")
+    make("withdrawn", 4, "withdrawn")
+    make("open", 5, "open")
+    make("plan-approved", 6, "approved", kind="plan_approval")
+
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()["decisions"]
+    content = {d["id"]: d["subject_content"] for d in listing}
+
+    assert content == {
+        "open": "content of open",
+        "new-approved": "content of new-approved",  # the diff base for the next request
+        "plan-approved": "content of plan-approved",  # newest approved of its own kind
+        "old-approved": None,
+        "rejected": None,
+        "withdrawn": None,
+    }
+    # The omitted copy still exists; only the listing leaves it out.
+    assert repo.get_decision(project, "old-approved").subject_content == "content of old-approved"
+
