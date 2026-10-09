@@ -50,6 +50,9 @@ export interface GitBridge {
    *  gone or git refuses (a name already taken, an unborn HEAD); the caller
    *  reports it, because only the caller knows what the user asked for. */
   createBranch(root: vscode.Uri, name: string): Promise<boolean>;
+  /** `git merge-base ref1 ref2`, or undefined when there is none, a ref is
+   *  unknown, or this Git API has no `getMergeBase` (an older fork). */
+  mergeBase(root: vscode.Uri, ref1: string, ref2: string): Promise<string | undefined>;
   /** Check out an existing branch. Resolves false when git refuses (no such
    *  branch, local changes in the way); the caller reports it. */
   checkout(root: vscode.Uri, name: string): Promise<boolean>;
@@ -188,6 +191,18 @@ class VscodeGitBridge implements GitBridge {
     }
   }
 
+  async mergeBase(root: vscode.Uri, ref1: string, ref2: string): Promise<string | undefined> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return undefined;
+    try {
+      return (await repo.getMergeBase(ref1, ref2)) || undefined;
+    } catch {
+      // Unknown ref (no `origin/main` in this clone) is the common case: the
+      // caller tries the next candidate and logs once if none resolves.
+      return undefined;
+    }
+  }
+
   async checkout(root: vscode.Uri, name: string): Promise<boolean> {
     const repo = this.api?.getRepository(root);
     if (!repo) return false;
@@ -263,6 +278,9 @@ class NoopGitBridge implements GitBridge {
   }
   async createBranch(): Promise<boolean> {
     return false;
+  }
+  async mergeBase(): Promise<string | undefined> {
+    return undefined;
   }
   async checkout(): Promise<boolean> {
     return false;
