@@ -81,6 +81,54 @@ def test_delivery_plan_lists_changes_with_waves_dependencies_and_tasks(client, p
     assert body["plan_approval"] == "none"
 
 
+def test_delivery_plan_reports_done_and_total_per_change(client, project):
+    _save_tasks(client, project)
+
+    changes = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+
+    assert [(c["ref"], c["done"], c["total"]) for c in changes] == [
+        ("C1", 0, 1),
+        ("C2", 0, 1),
+        ("C3", 0, 1),
+        ("C4", 0, 1),
+    ]
+
+
+def test_a_closed_task_moves_its_changes_counter(client, project):
+    _save_tasks(client, project)
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    c2, c3 = plan[1], plan[2]
+
+    closed = client.patch(
+        f"/projects/{project}/tasks/{c2['task_ids'][0]}/status",
+        json={"status": "implemented"},
+        headers=ALICE,
+    )
+    assert closed.status_code == 200, closed.text
+    # in_progress is not done.
+    started = client.patch(
+        f"/projects/{project}/tasks/{c3['task_ids'][0]}/status",
+        json={"status": "in_progress"},
+        headers=ALICE,
+    )
+    assert started.status_code == 200, started.text
+
+    after = {
+        c["ref"]: (c["done"], c["total"])
+        for c in client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    }
+    assert after == {"C1": (0, 1), "C2": (1, 1), "C3": (0, 1), "C4": (0, 1)}
+
+    verified = client.patch(
+        f"/projects/{project}/tasks/{c3['task_ids'][0]}/status",
+        json={"status": "verified"},
+        headers=ALICE,
+    )
+    assert verified.status_code == 200, verified.text
+    overview = client.get(f"/projects/{project}/delivery-overview", headers=BOB).json()
+    assert {c["ref"]: c["done"] for c in overview["plan"]["changes"]}["C3"] == 1
+
+
 def test_delivery_plan_requires_membership(client, project):
     assert client.get(f"/projects/{project}/delivery-plan", headers=MALLORY).status_code == 403
 

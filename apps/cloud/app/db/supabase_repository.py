@@ -999,10 +999,12 @@ class SupabaseRepository(Repository):
                 counts[etype] = res.count
         return max_cursor, counts
 
-    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
         res = (
             self._table(_TABLE["tasks"])
-            .select("id,change_id")
+            .select("id,change_id,status")
             .eq("project_id", project_id)
             .is_("deleted_at", "null")
             .not_.is_("updated_at", "null")
@@ -1010,7 +1012,10 @@ class SupabaseRepository(Repository):
             .order("id")
             .execute()
         )
-        return [(row["id"], row.get("change_id")) for row in res.data or []]
+        return [
+            (row["id"], row.get("change_id"), row.get("status") or "todo")
+            for row in res.data or []
+        ]
 
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         res = (

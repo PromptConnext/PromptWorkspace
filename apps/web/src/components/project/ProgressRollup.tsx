@@ -1,7 +1,15 @@
 "use client";
 
 import { useCloudGet } from "@/lib/hooks";
-import type { DeploymentOut, DeploymentStatus, ProjectGraph, TaskStatus } from "@/lib/types";
+import type {
+  DeploymentOut,
+  DeploymentStatus,
+  ProjectGraph,
+  Task,
+  TaskStatus,
+} from "@/lib/types";
+import { useDeliveryPlanData } from "./DeliveryOverview";
+import { ProgressBar } from "./ProgressBar";
 
 const DONE: TaskStatus[] = ["implemented", "verified"];
 
@@ -56,14 +64,86 @@ export function attributionIsComplete(status: DeploymentStatus | null): boolean 
   return shippedBuilds(status).every((deploy) => deploy.attribution_state === "frozen");
 }
 
+/** One roll-up row: a title, "done/total tasks · pct%", a bar, and (when a
+ * build has published) how many of the done tasks are in the version you can
+ * open. */
+function RollupRow({
+  title,
+  tasks,
+  shipped,
+  builds,
+  complete,
+}: {
+  title: string;
+  tasks: Task[];
+  shipped: Set<string>;
+  builds: DeploymentOut[];
+  complete: boolean;
+}) {
+  const doneTasks = tasks.filter((t) => DONE.includes(t.status));
+  const pct = tasks.length === 0 ? 0 : Math.round((doneTasks.length / tasks.length) * 100);
+  const live = doneTasks.filter((t) => shipped.has(t.id)).length;
+  return (
+    <div role="group" aria-label={title} className="rounded border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium">{title}</span>
+        <span className="text-slate-500">
+          {doneTasks.length}/{tasks.length} tasks · {pct}%
+        </span>
+      </div>
+      <div className="mt-2">
+        <ProgressBar done={doneTasks.length} total={tasks.length} label={`${title} tasks done`} />
+      </div>
+      {/* Guarded on whether anything published, not on whether the
+          count is above zero. "0 in the version you can open" is a real
+          answer about a requirement whose work has not shipped yet, and
+          hiding it was how a frozen zero and an unattributed build came
+          to look the same. */}
+      {builds.length > 0 &&
+        (complete ? (
+          <p className="mt-1 text-xs text-slate-500">{live} in the version you can open</p>
+        ) : (
+          <p className="mt-1 text-xs text-slate-500">
+            Not yet recorded which of these are in the version you can open
+          </p>
+        ))}
+    </div>
+  );
+}
+
 export function ProgressRollup({ graph, projectId }: { graph: ProjectGraph; projectId: string }) {
   // Membership-gated on the server, same endpoint the Preview tab reads. A
   // project with no deployment simply answers "not_configured" and the build
   // clause below disappears.
   const { data: status } = useCloudGet<DeploymentStatus>(`/projects/${projectId}/deployment`);
+  const { data: plan } = useDeliveryPlanData();
   const builds = shippedBuilds(status ?? null);
   const shipped = shippedTaskIds(status ?? null);
   const complete = attributionIsComplete(status ?? null);
+  const shared = { shipped, builds, complete };
+
+  // Plan 0029's unit of delivery is the Change, so a project that has Changes
+  // is rolled up by them; tasks that sit in none keep a group of their own.
+  // Until the plan loads (or when there are no Changes) the roll-up is per
+  // requirement, as it was.
+  if (plan && plan.changes.length > 0) {
+    const ordered = [...plan.changes].sort((a, b) => a.position - b.position);
+    const known = new Set(ordered.map((c) => c.id));
+    const loose = graph.tasks.filter((t) => !t.change_id || !known.has(t.change_id));
+    return (
+      <div className="flex flex-col gap-3">
+        {ordered.map((c) => (
+          <RollupRow
+            key={c.id}
+            title={`${c.ref} ${c.title}`}
+            tasks={graph.tasks.filter((t) => t.change_id === c.id)}
+            {...shared}
+          />
+        ))}
+        {loose.length > 0 && <RollupRow title="Not in a change" tasks={loose} {...shared} />}
+      </div>
+    );
+  }
 
   if (graph.requirements.length === 0) {
     return <p className="text-sm text-slate-500">Nothing to roll up yet.</p>;
@@ -76,35 +156,7 @@ export function ProgressRollup({ graph, projectId }: { graph: ProjectGraph; proj
           graph.spec_documents.filter((s) => s.requirement_id === r.id).map((s) => s.id),
         );
         const tasks = graph.tasks.filter((t) => t.spec_id && specIds.has(t.spec_id));
-        const doneTasks = tasks.filter((t) => DONE.includes(t.status));
-        const pct = tasks.length === 0 ? 0 : Math.round((doneTasks.length / tasks.length) * 100);
-        const live = doneTasks.filter((t) => shipped.has(t.id)).length;
-        return (
-          <div key={r.id} className="rounded border border-slate-200 bg-white p-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">{r.title}</span>
-              <span className="text-slate-500">
-                {doneTasks.length}/{tasks.length} tasks · {pct}%
-              </span>
-            </div>
-            <div className="mt-2 h-2 rounded bg-slate-100">
-              <div className="h-2 rounded bg-slate-900" style={{ width: `${pct}%` }} />
-            </div>
-            {/* Guarded on whether anything published, not on whether the
-                count is above zero. "0 in the version you can open" is a real
-                answer about a requirement whose work has not shipped yet, and
-                hiding it was how a frozen zero and an unattributed build came
-                to look the same. */}
-            {builds.length > 0 &&
-              (complete ? (
-                <p className="mt-1 text-xs text-slate-500">{live} in the version you can open</p>
-              ) : (
-                <p className="mt-1 text-xs text-slate-500">
-                  Not yet recorded which of these are in the version you can open
-                </p>
-              ))}
-          </div>
-        );
+        return <RollupRow key={r.id} title={r.title} tasks={tasks} {...shared} />;
       })}
     </div>
   );

@@ -681,6 +681,10 @@ export interface DeliveryChange {
   wave: number;
   depends_on: string[];
   task_ids: string[];
+  /** Live tasks of this Change that are implemented or verified. */
+  done: number;
+  /** Live tasks of this Change (`task_ids.length`). */
+  total: number;
 }
 
 export interface DeliveryPlan {
