@@ -77,6 +77,22 @@ def test_decisions_newest_first_and_saved_by_id(repo: Repository) -> None:
     assert repo.get_decision(project.id, "00000000-0000-4000-8000-0000000000ff") is None
 
 
+def test_decision_keeps_the_document_it_was_asked_about(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    decision = Decision(
+        project_id=project.id, workspace_id=ws.id, kind="intent_approval", title="Intent",
+        subject_stage="specify", subject_hash="a" * 64, routed_hat="business_owner",
+        requested_by=admin, subject_content="# Spec\n\nBook a slot.",
+    )
+    repo.save_decision(decision)
+
+    (stored,) = repo.list_decisions(project.id)
+    assert stored.subject_content == "# Spec\n\nBook a slot."
+    fetched = repo.get_decision(project.id, decision.id)
+    assert fetched is not None and fetched.subject_content == "# Spec\n\nBook a slot."
+
+
 def test_project_roles_set_replace_and_clear(repo: Repository) -> None:
     bob = h.new_id()
     ws, admin = h.workspace(repo, members=(bob,))

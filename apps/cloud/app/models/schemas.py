@@ -1304,6 +1304,10 @@ class Decision(BaseModel):
     title: str
     subject_stage: Literal["specify", "tasks"]
     subject_hash: str
+    # The document text the hash covers, stored at request time (migration
+    # 0006) so an approver sees what they sign and what changed. `None` for a
+    # decision made before the column existed.
+    subject_content: str | None = None
     routed_hat: ProjectHat
     status: DecisionStatus = "open"
     rationale: str | None = None

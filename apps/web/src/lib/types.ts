@@ -685,6 +685,9 @@ export interface Decision {
   title: string;
   subject_stage: "specify" | "tasks";
   subject_hash: string;
+  /** The document text when the approval was requested; null for a decision
+   *  made before the API stored it. */
+  subject_content: string | null;
   routed_hat: ProjectHat;
   status: "open" | "approved" | "rejected" | "withdrawn";
   rationale: string | null;

@@ -493,3 +493,14 @@ def test_a_change_request_returns_the_listing_after_it(client, project):
 
     assert body["snapshot"] == _listing(client, project, ALICE)
     assert body["snapshot"]["states"] == {"intent": "pending", "plan": "changes_requested"}
+
+
+def test_a_request_stores_the_document_it_asks_to_approve(client, project):
+    body = _request(client, project, "intent_approval").json()
+
+    assert body["subject_content"] == "# Spec\n\nBook a slot."
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert listing["decisions"][0]["subject_content"] == "# Spec\n\nBook a slot."
+    stored = client.app.state.repository.get_decision(project, body["id"])
+    assert stored is not None and stored.subject_content == "# Spec\n\nBook a slot."
+

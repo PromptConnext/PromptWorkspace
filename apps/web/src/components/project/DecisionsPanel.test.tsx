@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Decision, DecisionsOut } from "@/lib/types";
@@ -42,6 +42,7 @@ afterEach(() => {
 const decision = (o: Partial<Decision>): Decision => ({
   id: "d1", project_id: "p1", workspace_id: "w1", kind: "plan_approval",
   title: "Approve the delivery plan", subject_stage: "tasks", subject_hash: "h",
+  subject_content: "# Tasks\n\nBuild it.",
   routed_hat: "tech_steward", status: "open", rationale: null, requested_by: "u1",
   resolved_by: null, created_at: "2026-10-04T08:00:00Z", resolved_at: null,
   can_resolve: true, ...o,
@@ -142,5 +143,25 @@ describe("DecisionsPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
     expect(resolveDecision).toHaveBeenCalledWith("p1", "d1", "approved", "Looks right.", {});
+  });
+
+  it("shows an open request's document as a diff against the last approval", () => {
+    decisions = {
+      decisions: [
+        decision({ id: "d2", created_at: "2026-10-05T08:00:00Z", subject_content: "# Tasks\n\nBuild it twice." }),
+        decision({
+          id: "d1", status: "approved", can_resolve: false, subject_content: "# Tasks\n\nBuild it.",
+        }),
+      ],
+      states: { intent: "none", plan: "pending" },
+    };
+    render(<DecisionsPanel projectId="p1" workspaceId="w1" />);
+
+    expect(screen.getByText("Changes since the last approval")).toBeInTheDocument();
+    expect(screen.getByText("Build it twice.")).toBeInTheDocument();
+    const diff = screen.getByText("Changes since the last approval").closest("details") as HTMLElement;
+    expect(within(diff).getByText("Build it.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
+    // The earlier approval is the first approval of its kind: full text.
+    expect(screen.getByText(/nothing was approved before/)).toBeInTheDocument();
   });
 });

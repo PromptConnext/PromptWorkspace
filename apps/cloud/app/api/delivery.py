@@ -34,6 +34,7 @@ from app.delivery.decisions import (
     TITLE_OF,
     ApprovalState,
     can_resolve,
+    content_hash,
     latest_decision,
 )
 from app.dependencies import User, get_current_user, get_repository
@@ -156,6 +157,7 @@ class DecisionOut(BaseModel):
     title: str
     subject_stage: str
     subject_hash: str
+    subject_content: str | None
     routed_hat: str
     status: str
     rationale: str | None
@@ -277,9 +279,12 @@ def request_decision(
 ) -> DecisionMutationOut:
     project, role = require_project_role(repo, project_id, user)
     stage = STAGE_OF[body.kind]
-    current = current_hash(repo, project_id, stage)
-    if current is None:
+    # One read gives the hash and the text it covers, so the stored snapshot
+    # is exactly the document the hash binds.
+    document = repo.get_stage_document(project_id, stage)
+    if document is None or not document.content.strip():
         raise HTTPException(status_code=409, detail="decision_subject_missing")
+    current = content_hash(document.content)
     if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
     roles, member_ids, is_admin = _routing_context(repo, project, user, role)
@@ -308,6 +313,7 @@ def request_decision(
                 title=TITLE_OF[body.kind],
                 subject_stage=stage,
                 subject_hash=current,
+                subject_content=document.content,
                 routed_hat=HAT_OF[body.kind],
                 requested_by=user.id,
             )

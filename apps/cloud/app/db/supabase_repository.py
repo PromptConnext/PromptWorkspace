@@ -123,6 +123,10 @@ _PROJECT_ROLES = "pw_project_roles"
 # importing postgrest's APIError, which would make this module need the
 # supabase package at import time.
 _MISSING_TABLE_CODES = frozenset({"PGRST205", "42P01"})
+# The same for a column: PostgREST's "column not in the schema cache" and
+# Postgres' undefined_column, what a write naming pw_decisions.subject_content
+# returns on a database migration 0006 hasn't reached yet.
+_MISSING_COLUMN_CODES = frozenset({"PGRST204", "42703"})
 _REPO_ANALYSES = "pw_repo_analyses"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
 _WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
@@ -1679,13 +1683,29 @@ class SupabaseRepository(Repository):
         return Decision(**rows[0]) if rows else None
 
     def save_decision(self, decision: Decision) -> Decision:
+        row = _dump(decision)
         try:
-            self._table(_DECISIONS).upsert(_dump(decision), on_conflict="id").execute()
+            try:
+                self._table(_DECISIONS).upsert(row, on_conflict="id").execute()
+            except Exception as exc:
+                if not self._missing_content_column(exc):
+                    raise
+                # Migration 0006 is not applied: save the decision without the
+                # snapshot. The caller keeps the in-memory copy it passed in.
+                row.pop("subject_content", None)
+                self._table(_DECISIONS).upsert(row, on_conflict="id").execute()
         except Exception as exc:
             if self._missing_table(exc):
                 raise DeliveryStoreUnavailable() from exc
             raise
         return decision
+
+    @staticmethod
+    def _missing_content_column(exc: Exception) -> bool:
+        return (
+            getattr(exc, "code", None) in _MISSING_COLUMN_CODES
+            and "subject_content" in str(exc)
+        )
 
     def list_project_roles(self, project_id: str) -> list[ProjectRole]:
         try:

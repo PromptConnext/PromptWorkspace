@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { Decision, DecisionsOut, WorkspaceMember } from "@/lib/types";
 import { APPROVAL_LABEL } from "./ApprovalControl";
+import { DecisionSubject } from "./DecisionSubject";
 import { memberFullName } from "./MemberChip";
 
 const HAT_LABEL: Record<Decision["routed_hat"], string> = {
@@ -20,12 +21,29 @@ const STATUS_LABEL: Record<Decision["status"], string> = {
   withdrawn: "Withdrawn",
 };
 
+/** The newest approved decision of the same kind made before `decision`:
+ * what its subject is compared against. `all` is newest first. */
+function previousApproved(all: Decision[], decision: Decision): Decision | null {
+  const at = Date.parse(decision.created_at);
+  return (
+    all.find(
+      (d) =>
+        d.id !== decision.id &&
+        d.kind === decision.kind &&
+        d.status === "approved" &&
+        Date.parse(d.created_at) < at,
+    ) ?? null
+  );
+}
+
 function DecisionRow({
   decision,
+  previous,
   members,
   onResolved,
 }: {
   decision: Decision;
+  previous: Decision | null;
   members: WorkspaceMember[];
   /** Receives the listing as it stands after the resolve. */
   onResolved: (snapshot: DecisionsOut | null | undefined) => void;
@@ -64,6 +82,7 @@ function DecisionRow({
       <p className="mt-1 text-xs text-slate-500">
         Requested by {name(decision.requested_by)} · {new Date(decision.created_at).toLocaleString()}
       </p>
+      <DecisionSubject decision={decision} previous={previous} />
       {decision.rationale && <p className="mt-2 text-sm text-slate-700">{decision.rationale}</p>}
       {decision.status === "open" && !decision.can_resolve && (
         <p className="mt-2 text-xs text-slate-500">Waiting on the {HAT_LABEL[decision.routed_hat]}.</p>
@@ -140,7 +159,13 @@ export function DecisionsPanel({ projectId, workspaceId }: { projectId: string; 
       ) : (
         <ul className="flex flex-col gap-3">
           {visible.map((d) => (
-            <DecisionRow key={d.id} decision={d} members={members ?? []} onResolved={onResolved} />
+            <DecisionRow
+              key={d.id}
+              decision={d}
+              previous={previousApproved(data.decisions, d)}
+              members={members ?? []}
+              onResolved={onResolved}
+            />
           ))}
         </ul>
       )}
