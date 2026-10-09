@@ -8,9 +8,10 @@
 // at runtime.
 
 import * as vscode from "vscode";
-import type { API, GitExtension, Repository } from "./git";
+import type { API, GitExtension, Ref, Repository } from "./git";
 import type { LoggerLike } from "@promptworkspace/cloud-client";
 import { KeyedDebounce, REMOTE_REF_GLOBS } from "./remoteRefs.ts";
+import type { BranchLocation } from "../tasks/taskBranch.ts";
 
 /** How long a burst of remote-ref writes is allowed to settle before one
  *  `status()`. Short: the whole point is to beat the Git extension's own
@@ -59,6 +60,10 @@ export interface GitBridge {
   /** `git merge-base ref1 ref2`, or undefined when there is none, a ref is
    *  unknown, or this Git API has no `getMergeBase` (an older fork). */
   mergeBase(root: vscode.Uri, ref1: string, ref2: string): Promise<string | undefined>;
+  /** Whether `name` is a local branch, only a remote-tracking branch, or no
+   *  ref at all — read before a checkout, which would otherwise treat a
+   *  missing branch name as a file path. */
+  findBranch(root: vscode.Uri, name: string): Promise<BranchLocation>;
   /** Check out an existing branch. Resolves false when git refuses (no such
    *  branch, local changes in the way); the caller reports it. */
   checkout(root: vscode.Uri, name: string): Promise<boolean>;
@@ -210,6 +215,26 @@ class VscodeGitBridge implements GitBridge {
     }
   }
 
+  async findBranch(root: vscode.Uri, name: string): Promise<BranchLocation> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return "unknown";
+    let refs: readonly Ref[];
+    try {
+      // getRefs is the current API; older hosts only populate state.refs.
+      refs = await repo.getRefs({});
+    } catch {
+      refs = repo.state.refs ?? [];
+      if (refs.length === 0) return "unknown";
+    }
+    // RefType is a const enum in the vendored git.d.ts, which esbuild cannot
+    // inline across files: 0 = Head (local branch), 1 = RemoteHead.
+    if (refs.some((ref) => ref.type === 0 && ref.name === name)) return "local";
+    const remote = refs.some(
+      (ref) => ref.type === 1 && ref.remote !== undefined && ref.name === `${ref.remote}/${name}`,
+    );
+    return remote ? "remote" : "none";
+  }
+
   async checkout(root: vscode.Uri, name: string): Promise<boolean> {
     const repo = this.api?.getRepository(root);
     if (!repo) return false;
@@ -318,6 +343,9 @@ class NoopGitBridge implements GitBridge {
   }
   async mergeBase(): Promise<string | undefined> {
     return undefined;
+  }
+  async findBranch(): Promise<BranchLocation> {
+    return "unknown";
   }
   async checkout(): Promise<boolean> {
     return false;
