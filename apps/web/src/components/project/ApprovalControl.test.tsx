@@ -160,4 +160,38 @@ describe("ApprovalControl", () => {
     rerender(<ApprovalControl projectId="p1" kind="plan_approval" />);
     expect(refetch).not.toHaveBeenCalled();
   });
+
+  it('saving an approved document shows "Changed since approval" before the refetch resolves', () => {
+    data = states("approved");
+    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+
+    // The save lands: the refetch is out (the mock never answers), yet the
+    // chip must already stop claiming approval.
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Changed since approval")).toBeInTheDocument();
+    expect(screen.queryByText("Approved")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request plan approval" })).toBeInTheDocument();
+  });
+
+  it("goes back to the server's answer once the refetch lands", () => {
+    data = states("approved");
+    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    expect(screen.getByText("Changed since approval")).toBeInTheDocument();
+
+    data = states("approved"); // a new response: the save did not change what was approved
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+  });
+
+  it("does not invent a stale state for a document that was not approved", () => {
+    data = states("pending");
+    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+  });
 });

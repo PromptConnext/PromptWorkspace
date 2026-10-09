@@ -48,10 +48,25 @@ export function ApprovalControl({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A save of the approved document makes the approval stale on the server,
+  // but the answer is a round trip away. Until it lands, show what the save
+  // already means; any new response from the server replaces this guess.
+  const [savedSinceLoad, setSavedSinceLoad] = useState(false);
+  const serverState: ApprovalState | null = data
+    ? data.states[kind === "intent_approval" ? "intent" : "plan"]
+    : null;
+  const serverStateRef = useRef(serverState);
+  serverStateRef.current = serverState;
+
+  useEffect(() => {
+    setSavedSinceLoad(false);
+  }, [data]);
+
   const lastKey = useRef(refreshKey);
   useEffect(() => {
     if (lastKey.current === refreshKey) return;
     lastKey.current = refreshKey;
+    if (serverStateRef.current === "approved") setSavedSinceLoad(true);
     refetch();
   }, [refreshKey, refetch]);
 
@@ -86,7 +101,8 @@ export function ApprovalControl({
     );
   }
 
-  const state: ApprovalState = data.states[kind === "intent_approval" ? "intent" : "plan"];
+  const state: ApprovalState =
+    savedSinceLoad && serverState === "approved" ? "stale" : (serverState as ApprovalState);
   const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
   return (

@@ -32,16 +32,17 @@ function InboxView({ workspaceId }: { workspaceId: string }) {
         )}
         <ul className="flex flex-col gap-3">
           {(items ?? []).map((item) => (
-            <li key={item.decision.id} className="rounded-lg border border-slate-200 bg-white p-3">
+            <li key={item.decision.id}>
+              {/* The whole card is the link: a card that looks clickable must be. */}
               <Link
                 href={`/w/${item.workspace_id}/p/${item.project_id}?tab=decisions`}
-                className="text-sm font-medium text-slate-900 hover:underline"
+                className="block rounded-lg border border-slate-200 bg-white p-3 hover:border-slate-300"
               >
-                {item.decision.title}
+                <span className="text-sm font-medium text-slate-900">{item.decision.title}</span>
+                <p className="mt-1 text-xs text-slate-500">
+                  <span>{item.project_name}</span> · {new Date(item.decision.created_at).toLocaleString()}
+                </p>
               </Link>
-              <p className="mt-1 text-xs text-slate-500">
-                <span>{item.project_name}</span> · {new Date(item.decision.created_at).toLocaleString()}
-              </p>
             </li>
           ))}
         </ul>
