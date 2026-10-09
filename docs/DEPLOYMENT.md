@@ -79,7 +79,26 @@ psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations ord
 
 ### 2.3 Create the Northflank service
 
-Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, stop-before-start/recreate if offered. Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
+Per environment: Dockerfile `/apps/cloud/Dockerfile`, build context `/apps/cloud`, port `8080` HTTP public, readiness and liveness `GET /health` on 8080, **instances 1, autoscaling off**, rolling deployment with a termination grace period of at least 35 s (see [Deploys that don't cut requests](#deploys-that-dont-cut-requests) below). Branch `develop` for service `promptworkspace`, `main` for `promptworkspace-prod` (both in Northflank project `promptworkspace`). Keep CI/auto-deploy **off** until that environment's schema is applied and its runtime variables are set; then enable it (or trigger builds manually). Custom domains: `promptworkspace-api.truthledgers.com` / `workspace-api.promptconnext.com`.
+
+#### Deploys that don't cut requests
+
+A deploy used to stop the old instance mid-request: on the trust stack a running "Generate rules" stream died with "Failed to fetch" and the form autosave failed (trust test finding #13). Three settings together let a deploy finish the requests in flight instead:
+
+1. **The container passes SIGTERM to uvicorn.** The image runs `exec uvicorn … --timeout-graceful-shutdown 30` (`apps/cloud/Dockerfile`). On SIGTERM uvicorn stops accepting connections, lets the requests in flight finish (generation streams included) for up to 30 s, closes WebSockets with code 1012 (the presence client reconnects), runs the app's shutdown, and exits. `exec` guarantees uvicorn is PID 1: whether `sh -c` replaces itself with a lone command is up to the shell, and a shell left as PID 1 ignores SIGTERM, so the instance would die at the platform's hard kill. Before this, uvicorn also had no shutdown bound and waited on open streams until that kill. `apps/cloud/tests/test_container_shutdown.py` runs the image's command locally, sends SIGTERM during a stream, and expects the stream to finish and nothing to be left listening.
+2. **Rolling deployment with a readiness probe.** Northflank starts the new instance, waits until its readiness probe passes, moves traffic to it, and only then stops the old one. Readiness: HTTP `GET /health` on port 8080, initial delay 5 s, every 5 s, 3 failures. Liveness: the same path, but more forgiving (initial delay 30 s, every 15 s, 4 failures), so a slow request never gets the instance restarted. Choose rolling over stop-before-start/recreate; recreate stops the old instance before the new one is ready, which is the outage. A rolling deploy briefly overlaps two instances, which the `instance_id` alarm in §2.5 notices once per deploy; that is expected.
+3. **Termination grace period of at least 35 s** (45 s recommended): the time the platform waits after SIGTERM before it kills the instance. It must exceed uvicorn's 30 s, or the instance is killed mid-drain.
+
+Where these settings live in the Northflank UI (deployment strategy, health checks, grace period) is **not verified**. Check the service's health-check and deployment settings, and if Northflank does not expose the grace period, find out its fixed default before relying on it.
+
+What this does not cover: a generation that runs longer than 30 s after the deploy starts is still cut (raise `--timeout-graceful-shutdown` and the grace period together if generations routinely run longer); the in-process embed queue and presence rooms still empty on a restart (§2.5); and requests that reach the old instance between its SIGTERM and the load balancer dropping it can still be refused. If the check below shows that last case, the next step is a drain delay: keep serving with `/health` failing for ~10 s after SIGTERM before uvicorn stops.
+
+**Check it live** (once per environment, after changing the settings):
+
+1. In one terminal, watch the API across the deploy: `while true; do curl -s -o /dev/null -w "%{http_code} " $API/health; sleep 0.2; done`, plus `curl -s $API/health | jq .capacity.instance_id` before and after.
+2. Start a rollout that has an image ready: Northflank's redeploy/restart of the current build is easiest to time. A push works too, but then wait for the build to finish and start step 3 when the new instance is starting.
+3. While the rollout runs, in the web app open a project's Planner and start a generation (Generate rules or Generate specification), and type in a stage form so the autosave fires.
+4. Pass: the generation streams to the end and its document saves; the form shows no "Couldn't save"; the `curl` loop prints only `200` (a `000` or `502` at the switch means connections were refused: see the drain delay above); `instance_id` changed, which proves the rollout happened during the test. The old instance's log ends with uvicorn's "Waiting for connections to close" / "Finished server process", not an abrupt stop.
 
 #### Region
 
