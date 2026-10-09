@@ -1084,6 +1084,17 @@ class GithubConnectionOut(BaseModel):
     owner: str | None = None
 
 
+class GithubRepoImportedBy(BaseModel):
+    """The project that already imported a repository. Both fields are null
+    when that project belongs to a workspace the caller is not a member of:
+    the picker can still say the repository is taken, but must not disclose
+    another workspace's project (the 409 at create time keeps the same
+    silence)."""
+
+    project_id: str | None = None
+    name: str | None = None
+
+
 class GithubRepoOut(BaseModel):
     """One repository the workspace's PAT can see, for the import picker
     (GET /workspaces/{id}/integrations/github/repos)."""
@@ -1101,6 +1112,10 @@ class GithubRepoOut(BaseModel):
     # refuses with `repo_is_empty` when there is no commit to seed from.
     empty: bool = False
     pushed_at: datetime | None = None
+    # Set when a project already imported this repository (matched on GitHub's
+    # numeric id, so a rename does not hide it). Advisory for the picker, which
+    # disables the row; POST /projects still answers 409 `repo_already_imported`.
+    imported_by: GithubRepoImportedBy | None = None
 
 
 class GithubRepoListOut(BaseModel):

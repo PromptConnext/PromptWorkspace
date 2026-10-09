@@ -525,6 +525,12 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Project(**rows[0]) if rows else None
 
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        if not repo_ids:
+            return []
+        res = self._table(_PROJECTS).select("*").in_("repo_id", list(repo_ids)).execute()
+        return [Project(**row) for row in res.data or []]
+
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         patch = {"lifecycle_status": status, "updated_at": utcnow().isoformat()}
         self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
@@ -999,10 +1005,12 @@ class SupabaseRepository(Repository):
                 counts[etype] = res.count
         return max_cursor, counts
 
-    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
         res = (
             self._table(_TABLE["tasks"])
-            .select("id,change_id")
+            .select("id,change_id,status")
             .eq("project_id", project_id)
             .is_("deleted_at", "null")
             .not_.is_("updated_at", "null")
@@ -1010,7 +1018,10 @@ class SupabaseRepository(Repository):
             .order("id")
             .execute()
         )
-        return [(row["id"], row.get("change_id")) for row in res.data or []]
+        return [
+            (row["id"], row.get("change_id"), row.get("status") or "todo")
+            for row in res.data or []
+        ]
 
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         res = (

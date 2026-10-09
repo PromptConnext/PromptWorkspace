@@ -274,9 +274,15 @@ export function NewProjectDialog({
                 )}
                 <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
                   {filtered.map((r) => {
+                    // Already-imported is advisory too: the server answers 409
+                    // `repo_already_imported` at create time whatever this says.
                     const disabledReason = r.archived
                       ? "archived on GitHub — unarchive it first, PromptWorkspace must be able to push"
-                      : null;
+                      : r.imported_by
+                        ? r.imported_by.name
+                          ? `Already imported as ${r.imported_by.name}`
+                          : "Already imported by another workspace"
+                        : null;
                     // Advisory only: GitHub's size lags after a first push, so
                     // the server (which checks the branch head) decides.
                     const hint = r.empty

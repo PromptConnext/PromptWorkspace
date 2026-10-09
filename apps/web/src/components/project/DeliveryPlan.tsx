@@ -2,6 +2,7 @@
 
 import type { DeliveryChange, ProjectGraph } from "@/lib/types";
 import { ApprovalControl } from "./ApprovalControl";
+import { ProgressBar } from "./ProgressBar";
 import { useDeliveryPlanData } from "./DeliveryOverview";
 import { RetryButton } from "./RetryButton";
 
@@ -112,6 +113,18 @@ export function DeliveryPlan({
                   )}
                 </div>
                 <p className="mt-1 text-sm font-medium text-slate-900">{change.title}</p>
+                {change.total > 0 && (
+                  <div className="mt-2">
+                    <p className="mb-1 text-xs text-slate-500">
+                      {change.done}/{change.total} done
+                    </p>
+                    <ProgressBar
+                      done={change.done}
+                      total={change.total}
+                      label={`${change.ref} ${change.title} tasks done`}
+                    />
+                  </div>
+                )}
                 {change.depends_on.length > 0 && (
                   <p className="mt-1 text-xs text-slate-500">After {change.depends_on.join(", ")}</p>
                 )}

@@ -65,11 +65,20 @@ export function TopBar({
               router.push(`/w/${id}`);
             }}
           >
-            <SelectTrigger ref={switcherRef} aria-label="Active workspace" className="ml-2 max-w-[8rem] min-w-0 sm:max-w-[14rem]">
+            <SelectTrigger
+              ref={switcherRef}
+              aria-label="Active workspace"
+              title={activeWorkspace?.name}
+              // Radix ignores className on SelectValue (it is not meant to be
+              // styled), so the value's span is reached from the trigger.
+              className="ml-2 max-w-[8rem] min-w-0 whitespace-nowrap sm:max-w-[14rem] [&>span]:min-w-0 [&>span]:truncate"
+            >
               {/* The old blank <option> is a placeholder now — Radix reserves
                   the empty value for "nothing selected" and refuses it on an
                   item, which also means onValueChange can no longer hand back
                   the "" the previous handler had to guard against. */}
+              {/* One line: a long name ends in an ellipsis (the full name is the
+                  trigger's title) rather than wrapping the bar to two lines. */}
               <SelectValue placeholder="Select workspace…" />
             </SelectTrigger>
             <SelectContent

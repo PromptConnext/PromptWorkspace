@@ -106,6 +106,92 @@ def test_listing_filters_out_a_repo_under_a_different_owner(client: TestClient):
     assert full_names == ["acme/storyapp"]
 
 
+def _import(client: TestClient, ws_id: str, full_name: str, name: str, headers=ALICE):
+    res = client.post(
+        "/projects",
+        json={"name": name, "workspace_id": ws_id, "import_repo_full_name": full_name},
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _listing(client: TestClient, ws_id: str, headers=ALICE) -> dict[str, dict]:
+    res = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=headers)
+    assert res.status_code == 200, res.text
+    return {r["full_name"]: r for r in res.json()["repositories"]}
+
+
+def test_an_imported_repo_is_listed_with_imported_by(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    _seed_repo(client, "acme/fresh")
+    project = _import(client, ws_id, "acme/storyapp", "Story App")
+    client.app.state.repository.add_member(ws_id, "bob", Role.member, invited_by="alice")
+
+    for headers in (ALICE, BOB):
+        repos = _listing(client, ws_id, headers)
+        assert repos["acme/storyapp"]["imported_by"] == {
+            "project_id": project["id"],
+            "name": "Story App",
+        }
+        assert repos["acme/fresh"]["imported_by"] is None
+
+
+def test_a_repo_imported_in_another_workspace_is_marked_without_naming_it(client: TestClient):
+    """The 409 on a second import deliberately says nothing about the other
+    workspace (test_import_duplicate_repo_cross_workspace...), so the listing
+    must not name its project either."""
+    ws_a = _workspace(client)
+    _connect(client, ws_a, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    first = _import(client, ws_a, "acme/storyapp", "Secret Name")
+
+    ws_b = client.post("/workspaces", json={"name": "Bobco"}, headers=BOB).json()["id"]
+    client.put(
+        f"/workspaces/{ws_b}/integrations/github",
+        json={"owner": "acme", "token": TOKEN},
+        headers=BOB,
+    )
+    res = client.get(f"/workspaces/{ws_b}/integrations/github/repos", headers=BOB)
+    assert res.status_code == 200, res.text
+
+    marked = {r["full_name"]: r for r in res.json()["repositories"]}["acme/storyapp"]
+    assert marked["imported_by"] == {"project_id": None, "name": None}
+    assert first["id"] not in res.text and "Secret Name" not in res.text and ws_a not in res.text
+
+
+def test_listing_resolves_imports_with_one_lookup_not_one_per_repo(
+    client: TestClient, monkeypatch
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    for name in ("a", "b", "c", "d"):
+        _seed_repo(client, f"acme/{name}")
+    _import(client, ws_id, "acme/a", "A")
+
+    from app.db.repository import InMemoryRepository
+
+    batch_calls: list[list[int]] = []
+    original = InMemoryRepository.list_projects_by_repo_ids
+
+    def spy(self, repo_ids):
+        batch_calls.append(list(repo_ids))
+        return original(self, repo_ids)
+
+    def forbidden(self, repo_id):
+        raise AssertionError("one lookup per repository")
+
+    monkeypatch.setattr(InMemoryRepository, "list_projects_by_repo_ids", spy)
+    monkeypatch.setattr(InMemoryRepository, "find_project_by_repo_id", forbidden)
+
+    repos = _listing(client, ws_id)
+
+    assert len(batch_calls) == 1 and len(batch_calls[0]) == 4
+    assert repos["acme/a"]["imported_by"]["name"] == "A"
+
+
 @pytest.mark.parametrize(
     ("created_at", "pushed_at", "empty"),
     [

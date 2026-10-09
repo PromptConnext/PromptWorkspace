@@ -6,7 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument
+from app.models.schemas import (
+    GraphUpsertRequest,
+    Requirement,
+    SpecDocument,
+    TaskStatus,
+    new_id,
+    utcnow,
+)
 
 ALICE = {"X-User-Id": "alice"}  # creator, admin
 BOB = {"X-User-Id": "bob"}  # member
@@ -79,6 +86,74 @@ def test_delivery_plan_lists_changes_with_waves_dependencies_and_tasks(client, p
     assert body["changes"][1]["priority"] == "P1"
     assert len(body["changes"][0]["task_ids"]) == 1
     assert body["plan_approval"] == "none"
+
+
+def test_delivery_plan_reports_done_and_total_per_change(client, project):
+    _save_tasks(client, project)
+
+    changes = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+
+    assert [(c["ref"], c["done"], c["total"]) for c in changes] == [
+        ("C1", 0, 1),
+        ("C2", 0, 1),
+        ("C3", 0, 1),
+        ("C4", 0, 1),
+    ]
+
+
+def test_a_closed_task_moves_its_changes_counter(client, project):
+    _save_tasks(client, project)
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    c2, c3 = plan[1], plan[2]
+
+    closed = client.patch(
+        f"/projects/{project}/tasks/{c2['task_ids'][0]}/status",
+        json={"status": "implemented"},
+        headers=ALICE,
+    )
+    assert closed.status_code == 200, closed.text
+    # in_progress is not done.
+    started = client.patch(
+        f"/projects/{project}/tasks/{c3['task_ids'][0]}/status",
+        json={"status": "in_progress"},
+        headers=ALICE,
+    )
+    assert started.status_code == 200, started.text
+
+    after = {
+        c["ref"]: (c["done"], c["total"])
+        for c in client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    }
+    assert after == {"C1": (0, 1), "C2": (1, 1), "C3": (0, 1), "C4": (0, 1)}
+
+    verified = client.patch(
+        f"/projects/{project}/tasks/{c3['task_ids'][0]}/status",
+        json={"status": "verified"},
+        headers=ALICE,
+    )
+    assert verified.status_code == 200, verified.text
+    overview = client.get(f"/projects/{project}/delivery-overview", headers=BOB).json()
+    assert {c["ref"]: c["done"] for c in overview["plan"]["changes"]}["C3"] == 1
+
+
+def test_a_retired_closed_task_counts_in_neither_done_nor_total(client, project):
+    """Regenerating the tasks document retires the old tasks (deleted_at set),
+    closed ones included; they must not keep counting toward a Change."""
+    _save_tasks(client, project)
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    c1 = plan[0]
+    repo = client.app.state.repository
+    live = repo.get_task(project, c1["task_ids"][0])
+    retired = live.model_copy(
+        update={"id": new_id(), "status": TaskStatus.implemented, "deleted_at": utcnow()}
+    )
+    repo.upsert_graph(project, GraphUpsertRequest(tasks=[retired]), source="pz")
+
+    changes = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+
+    first = changes[0]
+    assert (first["done"], first["total"]) == (0, 1)
+    assert retired.id not in first["task_ids"]
 
 
 def test_delivery_plan_requires_membership(client, project):

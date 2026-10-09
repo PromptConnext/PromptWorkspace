@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from app.db.repository import Repository
-from app.models.schemas import Decision, DeliveryChange, Task, new_id, utcnow
+from app.models.schemas import Decision, DeliveryChange, Task, TaskStatus, new_id, utcnow
 
 from . import _helpers as h
 
@@ -108,7 +108,7 @@ def test_project_roles_set_replace_and_clear(repo: Repository) -> None:
     assert [r.hat for r in repo.list_project_roles(project.id)] == ["tech_steward"]
 
 
-def test_task_change_ids_are_the_live_tasks_in_pull_order(repo: Repository) -> None:
+def test_task_change_status_is_the_live_tasks_in_pull_order(repo: Repository) -> None:
     """GET /delivery-plan groups task ids by change from this one narrow read
     instead of a full graph pull (several requests on Supabase). Same rows as
     a bootstrap pull (live tasks only) and the same order, `(updated_at, id)`."""
@@ -132,7 +132,17 @@ def test_task_change_ids_are_the_live_tasks_in_pull_order(repo: Repository) -> N
     # Touching `first` again moves it to the end of the pull order.
     h.push_tasks(repo, project.id, [first.model_copy(update={"title": "first, renamed"})])
 
-    rows = repo.list_task_change_ids(project.id)
+    rows = repo.list_task_change_status(project.id)
 
-    assert rows == [(second.id, change_b), (loose.id, None), (first.id, change_a)]
+    assert rows == [
+        (second.id, change_b, "todo"),
+        (loose.id, None, "todo"),
+        (first.id, change_a, "todo"),
+    ]
     assert [t.id for t in repo.get_graph(project.id).tasks] == [row[0] for row in rows]
+
+    # A status change moves the task's row (and only its row).
+    h.push_tasks(repo, project.id, [second.model_copy(update={"status": TaskStatus.implemented})])
+    after = repo.list_task_change_status(project.id)
+    assert (second.id, change_b, "implemented") in after
+    assert [r for r in after if r[0] != second.id] == [r for r in rows if r[0] != second.id]

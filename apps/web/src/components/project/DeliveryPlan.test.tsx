@@ -24,7 +24,7 @@ afterEach(() => {
 
 const change = (o: Partial<DeliveryChange>): DeliveryChange => ({
   id: "c", ref: "C1", key: "setup", title: "Setup", kind: "setup", story: null,
-  priority: null, position: 0, wave: 0, depends_on: [], task_ids: [], ...o,
+  priority: null, position: 0, wave: 0, depends_on: [], task_ids: [], done: 0, total: 0, ...o,
 });
 
 const graph = {
@@ -150,5 +150,35 @@ describe("DeliveryPlan", () => {
     expect(within(second).getByText("P1")).toBeInTheDocument();
     expect(within(second).getByText("After C1")).toBeInTheDocument();
     expect(screen.getByText("approval-control")).toBeInTheDocument();
+  });
+
+  it("shows how many of a change's tasks are done, with an accessible progress bar", () => {
+    plan = {
+      plan_approval: "none",
+      changes: [
+        change({ id: "c1", ref: "C1", task_ids: ["a", "b", "c"], done: 2, total: 3 }),
+        change({ id: "c2", ref: "C2", key: "story:1", kind: "story", wave: 1, task_ids: ["d"],
+                 done: 0, total: 1 }),
+      ],
+    };
+    render(<DeliveryPlan graph={null} projectId="p1" />);
+
+    expect(screen.getByText("2/3 done")).toBeInTheDocument();
+    const bars = screen.getAllByRole("progressbar");
+    expect(bars).toHaveLength(2);
+    expect(bars[0]).toHaveAttribute("aria-valuenow", "2");
+    expect(bars[0]).toHaveAttribute("aria-valuemin", "0");
+    expect(bars[0]).toHaveAttribute("aria-valuemax", "3");
+    expect(bars[0]).toHaveAccessibleName(/C1/);
+    // Announced as "2 of 3", not as a percentage.
+    expect(bars[0]).toHaveAttribute("aria-valuetext", "2 of 3");
+    expect(bars[1]).toHaveAttribute("aria-valuenow", "0");
+  });
+
+  it("shows no progress for a change that carries no tasks", () => {
+    plan = { plan_approval: "none", changes: [change({ id: "c1", ref: "C1" })] };
+    render(<DeliveryPlan graph={null} projectId="p1" />);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByText(/done$/)).not.toBeInTheDocument();
   });
 });

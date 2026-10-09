@@ -35,7 +35,7 @@ const overview = (): DeliveryOverview => ({
     changes: [
       {
         id: "c1", ref: "C1", key: "setup", title: "Setup", kind: "setup", story: null,
-        priority: null, position: 0, wave: 0, depends_on: [], task_ids: ["t1"],
+        priority: null, position: 0, wave: 0, depends_on: [], task_ids: ["t1"], done: 0, total: 1,
       },
     ],
   },

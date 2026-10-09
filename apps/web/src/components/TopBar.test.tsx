@@ -59,6 +59,24 @@ describe("TopBar responsiveness", () => {
   });
 });
 
+describe("TopBar workspace switcher: label", () => {
+  it("a long workspace name does not wrap", () => {
+    memberships = [{ id: "w1", name: "PromptConnext's workspace of a very long name indeed" }];
+    render(<TopBar />);
+
+    const trigger = screen.getByRole("combobox", { name: "Active workspace" });
+    // The full name stays reachable on hover and to assistive technology.
+    expect(trigger).toHaveAttribute("title", "PromptConnext's workspace of a very long name indeed");
+    // One line, ellipsised: the label cannot wrap and the trigger cannot grow.
+    expect(trigger).toHaveClass("whitespace-nowrap");
+    // The value's span (Radix takes no className on it) is truncated from the trigger.
+    expect(trigger).toHaveClass("[&>span]:truncate", "[&>span]:min-w-0");
+    expect(trigger.firstElementChild).toHaveTextContent(
+      "PromptConnext's workspace of a very long name indeed",
+    );
+  });
+});
+
 describe("TopBar workspace switcher: new workspace", () => {
   async function openSwitcher() {
     memberships = [{ id: "w1", name: "Acme" }];

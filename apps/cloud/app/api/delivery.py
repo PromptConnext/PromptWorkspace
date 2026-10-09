@@ -50,6 +50,9 @@ logger = logging.getLogger("promptworkspace.delivery")
 
 router = APIRouter(tags=["delivery"])
 
+# A task counts toward its Change's progress once it is implemented or verified.
+DONE_STATUSES = frozenset({"implemented", "verified"})
+
 Hat = Literal["business_owner", "tech_steward"]
 HATS: tuple[Hat, ...] = ("business_owner", "tech_steward")
 
@@ -66,6 +69,10 @@ class DeliveryChangeOut(BaseModel):
     wave: int
     depends_on: list[str]
     task_ids: list[str]
+    # Progress: `done` counts the Change's live tasks that are implemented or
+    # verified, `total` all of them (`done <= total == len(task_ids)`).
+    done: int
+    total: int
 
 
 class DeliveryPlanOut(BaseModel):
@@ -89,9 +96,12 @@ def _plan_out(repo: Repository, project_id: str, plan_approval: ApprovalState) -
     waves = wave_of(changes)
     ref_of_key = {c.key: c.ref for c in changes}
     task_ids: dict[str, list[str]] = {c.id: [] for c in changes}
-    for task_id, change_id in repo.list_task_change_ids(project_id):
+    done: dict[str, int] = {c.id: 0 for c in changes}
+    for task_id, change_id, status in repo.list_task_change_status(project_id):
         if change_id in task_ids:
             task_ids[change_id].append(task_id)
+            if status in DONE_STATUSES:
+                done[change_id] += 1
     return DeliveryPlanOut(
         changes=[
             DeliveryChangeOut(
@@ -106,6 +116,8 @@ def _plan_out(repo: Repository, project_id: str, plan_approval: ApprovalState) -
                 wave=waves[c.key],
                 depends_on=[ref_of_key[k] for k in c.depends_on if k in ref_of_key],
                 task_ids=task_ids[c.id],
+                done=done[c.id],
+                total=len(task_ids[c.id]),
             )
             for c in changes
         ],

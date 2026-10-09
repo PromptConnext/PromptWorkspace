@@ -38,13 +38,57 @@ describe("composeStageInput", () => {
   });
 });
 
+describe("composeStageInput: optional constitution fields", () => {
+  const principles = "Ship small";
+
+  it("uses the standard text for an optional field the author never touched", () => {
+    const out = composeStageInput(CONSTITUTION_FIELDS, { principles });
+
+    expect(out).toContain("## Quality bar\n\nTests, linting, and type checks pass in CI");
+    expect(out).not.toContain("## Not provided");
+  });
+
+  it("keeps a field cleared on purpose as 'Not provided', not the standard text", () => {
+    const out = composeStageInput(CONSTITUTION_FIELDS, { principles, quality: "" });
+
+    expect(out).toContain("## Not provided");
+    expect(out).toMatch(/- Quality bar/);
+    expect(out).not.toContain("## Quality bar");
+    expect(out).not.toContain("Tests, linting, and type checks pass in CI");
+    // The untouched fields still get theirs.
+    expect(out).toContain("## Development workflow\n\nShort-lived branches");
+  });
+
+  it("uses what the author typed instead of the standard text, never both", () => {
+    const out = composeStageInput(CONSTITUTION_FIELDS, { principles, quality: "100% coverage" });
+
+    expect(out).toContain("## Quality bar\n\n100% coverage");
+    expect(out).not.toContain("Tests, linting, and type checks pass in CI");
+  });
+});
+
 describe("initialAnswers", () => {
-  it("opens the constitution form on its default house rules", () => {
+  it("opens the constitution form with only the required principles filled in", () => {
     const answers = initialAnswers(CONSTITUTION_FIELDS, {});
 
     expect(answers.principles).toContain("Test-first");
     // Filled by default means generatable on sight — the point of the defaults.
     expect(requiredFieldsFilled(CONSTITUTION_FIELDS, answers)).toBe(true);
+    // The optional fields open empty: their standard text is a placeholder, so
+    // typing into one cannot append to it.
+    expect(Object.keys(answers)).toEqual(["principles"]);
+  });
+
+  it("shows each optional constitution field's standard text as its placeholder", () => {
+    const optional = CONSTITUTION_FIELDS.filter((f) => !f.required);
+    expect(optional.map((f) => f.key)).toEqual(["quality", "standards", "workflow", "governance"]);
+    for (const field of optional) {
+      expect(field.placeholder, field.key).toMatch(/\S/);
+      expect(field.placeholder).toBe(field.fallback);
+    }
+    expect(CONSTITUTION_FIELDS.find((f) => f.key === "quality")?.placeholder).toContain(
+      "Tests, linting, and type checks pass in CI",
+    );
   });
 
   it("leaves the product stages empty — their answers are nobody's to guess", () => {

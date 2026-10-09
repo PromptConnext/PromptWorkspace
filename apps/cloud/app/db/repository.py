@@ -243,6 +243,12 @@ class Repository(abc.ABC):
         0016 M5)."""
 
     @abc.abstractmethod
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        """The projects, in any workspace, whose repo_id is one of `repo_ids`:
+        `find_project_by_repo_id` for many ids in one read. Unscoped by
+        membership for the same reason; the caller decides what it may show."""
+
+    @abc.abstractmethod
     def list_projects(self, user_id: str) -> list[Project]:
         """Projects across every workspace the user is a member of."""
 
@@ -467,12 +473,15 @@ class Repository(abc.ABC):
         materialising rows — the cheap "is there anything to pull" probe (M4)."""
 
     @abc.abstractmethod
-    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
-        """(task id, change_id) for the project's live tasks, in the order a
-        bootstrap `get_graph` lists them, `(updated_at, id)`. One narrow read
-        for callers that need only the task-to-change grouping (plan 0029's
-        delivery plan) rather than a full pull, which is a request per entity
-        type on Supabase."""
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
+        """(task id, change_id, status) for the project's live tasks, in the
+        order a bootstrap `get_graph` lists them, `(updated_at, id)`. One
+        narrow read for callers that need only the task-to-change grouping and
+        each task's status (plan 0029's delivery plan and its per-Change
+        progress) rather than a full pull, which is a request per entity type
+        on Supabase."""
 
     @abc.abstractmethod
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
@@ -1055,6 +1064,10 @@ class InMemoryRepository(Repository):
                 return project
         return None
 
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        wanted = set(repo_ids)
+        return [p for p in self._projects.values() if p.repo_id in wanted]
+
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         project = self._projects[project_id]
         updated = project.model_copy(update={"lifecycle_status": status, "updated_at": utcnow()})
@@ -1403,14 +1416,16 @@ class InMemoryRepository(Repository):
                 counts[etype] = changed
         return max_cursor, counts
 
-    def list_task_change_ids(self, project_id: str) -> list[tuple[str, str | None]]:
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
         tasks = [
             t
             for t in self._graph.get(project_id, {}).get("tasks", {}).values()
             if t.deleted_at is None and t.updated_at is not None
         ]
         tasks.sort(key=lambda t: (t.updated_at, t.id))
-        return [(t.id, t.change_id) for t in tasks]
+        return [(t.id, t.change_id, TaskStatus(t.status).value) for t in tasks]
 
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         store = self._graph.get(project_id)
