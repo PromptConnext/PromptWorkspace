@@ -10,6 +10,7 @@ import type {
 } from "@/lib/types";
 import { useDeliveryPlanData } from "./DeliveryOverview";
 import { ProgressBar } from "./ProgressBar";
+import { RetryButton } from "./RetryButton";
 
 const DONE: TaskStatus[] = ["implemented", "verified"];
 
@@ -116,7 +117,7 @@ export function ProgressRollup({ graph, projectId }: { graph: ProjectGraph; proj
   // project with no deployment simply answers "not_configured" and the build
   // clause below disappears.
   const { data: status } = useCloudGet<DeploymentStatus>(`/projects/${projectId}/deployment`);
-  const { data: plan } = useDeliveryPlanData();
+  const { data: plan, error: planError, retry: retryPlan } = useDeliveryPlanData();
   const builds = shippedBuilds(status ?? null);
   const shipped = shippedTaskIds(status ?? null);
   const complete = attributionIsComplete(status ?? null);
@@ -124,33 +125,44 @@ export function ProgressRollup({ graph, projectId }: { graph: ProjectGraph; proj
 
   // Plan 0029's unit of delivery is the Change, so a project that has Changes
   // is rolled up by them; tasks that sit in none keep a group of their own.
-  // Until the plan loads (or when there are no Changes) the roll-up is per
-  // requirement, as it was.
+  // When there are no Changes the roll-up is per requirement, as it was. The
+  // counts here come from the graph (always at least as fresh as the plan); the
+  // plan's own `done`/`total` are the same numbers computed by the server.
+  if (!plan && !planError) {
+    // Hold the roll-up until the plan settles, so it does not jump from the
+    // per-requirement view to the per-Change one.
+    return <p className="text-sm text-slate-500">Loading progress…</p>;
+  }
   if (plan && plan.changes.length > 0) {
     const ordered = [...plan.changes].sort((a, b) => a.position - b.position);
     const known = new Set(ordered.map((c) => c.id));
     const loose = graph.tasks.filter((t) => !t.change_id || !known.has(t.change_id));
     return (
       <div className="flex flex-col gap-3">
-        {ordered.map((c) => (
-          <RollupRow
-            key={c.id}
-            title={`${c.ref} ${c.title}`}
-            tasks={graph.tasks.filter((t) => t.change_id === c.id)}
-            {...shared}
-          />
-        ))}
+        {ordered.map((c) => {
+          const tasks = graph.tasks.filter((t) => t.change_id === c.id);
+          // A Change with no tasks has nothing to measure.
+          return tasks.length === 0 ? null : (
+            <RollupRow key={c.id} title={`${c.ref} ${c.title}`} tasks={tasks} {...shared} />
+          );
+        })}
         {loose.length > 0 && <RollupRow title="Not in a change" tasks={loose} {...shared} />}
       </div>
     );
   }
 
-  if (graph.requirements.length === 0) {
+  if (graph.requirements.length === 0 && !planError) {
     return <p className="text-sm text-slate-500">Nothing to roll up yet.</p>;
   }
 
   return (
     <div className="flex flex-col gap-3">
+      {planError && (
+        <div role="alert" className="flex items-center gap-3 text-sm text-rose-700">
+          <span>{planError}</span>
+          <RetryButton onClick={retryPlan} />
+        </div>
+      )}
       {graph.requirements.map((r) => {
         const specIds = new Set(
           graph.spec_documents.filter((s) => s.requirement_id === r.id).map((s) => s.id),

@@ -19,6 +19,7 @@ export function ProgressBar({
       aria-valuemin={0}
       aria-valuemax={total}
       aria-valuenow={done}
+      aria-valuetext={`${done} of ${total}`}
       className="h-2 rounded bg-slate-100"
     >
       <div className="h-2 rounded bg-slate-900" style={{ width: `${pct}%` }} />

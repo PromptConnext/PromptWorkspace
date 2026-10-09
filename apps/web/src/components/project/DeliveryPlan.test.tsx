@@ -170,6 +170,8 @@ describe("DeliveryPlan", () => {
     expect(bars[0]).toHaveAttribute("aria-valuemin", "0");
     expect(bars[0]).toHaveAttribute("aria-valuemax", "3");
     expect(bars[0]).toHaveAccessibleName(/C1/);
+    // Announced as "2 of 3", not as a percentage.
+    expect(bars[0]).toHaveAttribute("aria-valuetext", "2 of 3");
     expect(bars[1]).toHaveAttribute("aria-valuenow", "0");
   });
 

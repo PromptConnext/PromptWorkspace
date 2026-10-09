@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attributionIsComplete, ProgressRollup, shippedBuilds, shippedTaskIds } from "./ProgressRollup";
 import type { DeliveryChange, DeliveryPlan, DeploymentStatus, ProjectGraph } from "@/lib/types";
@@ -9,14 +9,25 @@ vi.mock("@/lib/hooks", () => ({
   useCloudGet: () => ({ data: mockStatus, error: null, loading: false }),
 }));
 
-let mockPlan: DeliveryPlan | null = null;
+const NO_CHANGES: DeliveryPlan = { plan_approval: "none", changes: [] };
+let mockPlan: DeliveryPlan | null = NO_CHANGES;
+let mockPlanError: string | null = null;
+const retryPlan = vi.fn();
 vi.mock("./DeliveryOverview", () => ({
-  useDeliveryPlanData: () => ({ data: mockPlan, error: null, loading: false }),
+  useDeliveryPlanData: () => ({
+    data: mockPlan,
+    error: mockPlanError,
+    loading: mockPlan === null && mockPlanError === null,
+    refetch: vi.fn(),
+    retry: retryPlan,
+  }),
 }));
 
 afterEach(() => {
   cleanup();
-  mockPlan = null;
+  mockPlan = NO_CHANGES;
+  mockPlanError = null;
+  retryPlan.mockReset();
 });
 
 const graph = {
@@ -204,6 +215,44 @@ describe("ProgressRollup", () => {
       expect(screen.getByRole("group", { name: /Not in a change/ })).toHaveTextContent("1/1 tasks");
       // The per-requirement view gives way to the per-Change one.
       expect(screen.queryByText("Uploads")).not.toBeInTheDocument();
+    });
+
+    it("skips a Change that has no tasks instead of showing 0/0", () => {
+      mockStatus = null;
+      mockPlan = {
+        plan_approval: "none",
+        changes: [
+          change({ id: "c1", ref: "C1", title: "Setup" }),
+          change({ id: "c9", ref: "C9", title: "Empty", position: 9 }),
+        ],
+      };
+      render(<ProgressRollup graph={changed} projectId="p1" />);
+
+      expect(screen.getByRole("group", { name: /C1/ })).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: /C9/ })).not.toBeInTheDocument();
+      expect(screen.queryByText(/0\/0 tasks/)).not.toBeInTheDocument();
+      for (const bar of screen.getAllByRole("progressbar")) {
+        expect(bar).not.toHaveAttribute("aria-valuemax", "0");
+      }
+    });
+
+    it("holds the roll-up while the plan loads, instead of showing the per-requirement view", () => {
+      mockPlan = null;
+      render(<ProgressRollup graph={changed} projectId="p1" />);
+      expect(screen.getByText("Loading progress…")).toBeInTheDocument();
+      expect(screen.queryByText("Uploads")).not.toBeInTheDocument();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    it("shows the plan's error with Retry, over the per-requirement roll-up", () => {
+      mockPlan = null;
+      mockPlanError = "Network down";
+      render(<ProgressRollup graph={graph} projectId="p1" />);
+
+      expect(screen.getByRole("alert")).toHaveTextContent("Network down");
+      expect(screen.getByText("Uploads")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(retryPlan).toHaveBeenCalledTimes(1);
     });
 
     it("keeps the per-requirement roll-up when the project has no Changes", () => {

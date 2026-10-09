@@ -256,6 +256,17 @@ describe("StageInputForm — answers stored in the cloud", () => {
     expect(putStageInputs.mock.calls[0][2].quality).not.toContain("Tests, linting");
   });
 
+  it("shows governance as a multi-line field so its standard text is not clipped", async () => {
+    serverHas({});
+    render(<Harness fields={CONSTITUTION_FIELDS} />);
+    await settle();
+
+    const governance = screen.getByLabelText(/Governance/);
+    expect(governance.tagName).toBe("TEXTAREA");
+    expect((governance as HTMLTextAreaElement).value).toBe("");
+    expect((governance as HTMLTextAreaElement).placeholder).toContain("Tech Lead approval");
+  });
+
   it("sends the pending save, with the latest answers, when unmounted", async () => {
     serverHas({});
     const { unmount } = render(<Harness />);

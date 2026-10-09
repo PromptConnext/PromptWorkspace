@@ -41,11 +41,22 @@ describe("composeStageInput", () => {
 describe("composeStageInput: optional constitution fields", () => {
   const principles = "Ship small";
 
-  it("uses the standard text for an optional field left blank, not 'Not provided'", () => {
+  it("uses the standard text for an optional field the author never touched", () => {
     const out = composeStageInput(CONSTITUTION_FIELDS, { principles });
 
     expect(out).toContain("## Quality bar\n\nTests, linting, and type checks pass in CI");
     expect(out).not.toContain("## Not provided");
+  });
+
+  it("keeps a field cleared on purpose as 'Not provided', not the standard text", () => {
+    const out = composeStageInput(CONSTITUTION_FIELDS, { principles, quality: "" });
+
+    expect(out).toContain("## Not provided");
+    expect(out).toMatch(/- Quality bar/);
+    expect(out).not.toContain("## Quality bar");
+    expect(out).not.toContain("Tests, linting, and type checks pass in CI");
+    // The untouched fields still get theirs.
+    expect(out).toContain("## Development workflow\n\nShort-lived branches");
   });
 
   it("uses what the author typed instead of the standard text, never both", () => {

@@ -30,12 +30,13 @@ export type StageField = {
    *  than a guess about someone's product. */
   defaultValue?: string;
   /** Standard text for an optional field: shown as the placeholder, and used
-   *  by `composeStageInput` when the author leaves the field blank. Never
+   *  by `composeStageInput` when the author never touched the field (a field
+   *  cleared on purpose stays blank). Never
    *  prefilled as a value, so typing in the field cannot append to it. */
   fallback?: string;
 };
 
-/** An optional field's standard text, as its placeholder and its blank-field
+/** An optional field's standard text, as its placeholder and its untouched-field
  *  fallback (see `StageField.fallback`). */
 function standardText(text: string): Pick<StageField, "placeholder" | "fallback"> {
   return { placeholder: text, fallback: text };
@@ -74,7 +75,7 @@ export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "quality",
     label: "Quality bar",
-    hint: "What must be true before code merges. Leave blank to use the standard text shown.",
+    hint: "What must be true before code merges. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
     ...standardText(
@@ -85,7 +86,7 @@ export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "standards",
     label: "Technology & security standards",
-    hint: "Stack rules, dependency policy, data-handling requirements. Leave blank to use the standard text shown.",
+    hint: "Stack rules, dependency policy, data-handling requirements. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
     ...standardText(
@@ -97,7 +98,7 @@ export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "workflow",
     label: "Development workflow",
-    hint: "Branching, review, and release process. Leave blank to use the standard text shown.",
+    hint: "Branching, review, and release process. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
     ...standardText(
@@ -108,8 +109,11 @@ export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "governance",
     label: "Governance",
-    hint: "Who may amend these rules, and how. Leave blank to use the standard text shown.",
-    type: "text",
+    hint: "Who may amend these rules, and how. Leave untouched to use the standard text shown.",
+    // A textarea, not a one-line input: its standard text is a full sentence
+    // pair that a text input's placeholder would clip.
+    type: "textarea",
+    rows: 2,
     ...standardText(
       "These rules supersede habit; amending them needs Tech Lead approval and a note in the " +
       "change history.",
@@ -312,8 +316,10 @@ export function composeStageInput(fields: StageField[], answers: StageAnswers): 
   const missing: string[] = [];
 
   for (const field of fields) {
-    const typed = (answers[field.key] ?? "").trim();
-    const value = typed || (field.required ? "" : (field.fallback ?? ""));
+    // The standard text stands in only for a field the author never touched
+    // (no key). A field cleared on purpose is "" and stays "Not provided".
+    const raw = answers[field.key];
+    const value = raw === undefined && !field.required ? (field.fallback ?? "") : (raw ?? "").trim();
     if (value) filled.push(`## ${field.label}\n\n${value}`);
     else missing.push(field.label);
   }

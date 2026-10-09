@@ -6,7 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.models.schemas import GraphUpsertRequest, Requirement, SpecDocument
+from app.models.schemas import (
+    GraphUpsertRequest,
+    Requirement,
+    SpecDocument,
+    TaskStatus,
+    new_id,
+    utcnow,
+)
 
 ALICE = {"X-User-Id": "alice"}  # creator, admin
 BOB = {"X-User-Id": "bob"}  # member
@@ -127,6 +134,26 @@ def test_a_closed_task_moves_its_changes_counter(client, project):
     assert verified.status_code == 200, verified.text
     overview = client.get(f"/projects/{project}/delivery-overview", headers=BOB).json()
     assert {c["ref"]: c["done"] for c in overview["plan"]["changes"]}["C3"] == 1
+
+
+def test_a_retired_closed_task_counts_in_neither_done_nor_total(client, project):
+    """Regenerating the tasks document retires the old tasks (deleted_at set),
+    closed ones included; they must not keep counting toward a Change."""
+    _save_tasks(client, project)
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+    c1 = plan[0]
+    repo = client.app.state.repository
+    live = repo.get_task(project, c1["task_ids"][0])
+    retired = live.model_copy(
+        update={"id": new_id(), "status": TaskStatus.implemented, "deleted_at": utcnow()}
+    )
+    repo.upsert_graph(project, GraphUpsertRequest(tasks=[retired]), source="pz")
+
+    changes = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()["changes"]
+
+    first = changes[0]
+    assert (first["done"], first["total"]) == (0, 1)
+    assert retired.id not in first["task_ids"]
 
 
 def test_delivery_plan_requires_membership(client, project):
