@@ -497,3 +497,123 @@ test("a workspace id is escaped into the projects path", async () => {
     },
   );
 });
+
+// ------------------------------------------------------------ refresh lease
+//
+// Finding #50a: every editor window refreshes the shared session at the same
+// moment, so N windows make N refresh calls per expiry and all but one lose
+// the rotation. A lease in the shared state lets one window refresh while the
+// others re-read the secrets for the pair it stores.
+
+/** Two "windows": separate clients and SessionStores over one shared secret
+ *  store and one shared state store, the way every editor window shares
+ *  SecretStorage and globalState. */
+function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}) {
+  const secrets = memorySecrets();
+  const state = memoryState();
+  const make = () => {
+    const session = new SessionStore(secrets, state);
+    const client = new CloudClient({
+      session,
+      config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
+      fetch: (input, init) => fetch(input, init),
+      log: silentLog,
+      now: opts.now,
+      sleep: opts.sleep,
+    });
+    return { client, session };
+  };
+  return { a: make(), b: make(), state };
+}
+
+/** A Supabase stand-in that really rotates: each refresh token works once. */
+function rotatingCloud() {
+  let refreshes = 0;
+  let current = "r0";
+  let issued = 0;
+  const handler: Handler = (req, res) => {
+    if (req.url?.startsWith("/auth/v1/token")) {
+      refreshes += 1;
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const presented = (JSON.parse(body) as { refresh_token: string }).refresh_token;
+        // Answer after a moment, as a real auth server does, so a second
+        // window has time to collide with the first.
+        setTimeout(() => {
+          if (presented !== current) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error_code: "refresh_token_not_found" }));
+            return;
+          }
+          issued += 1;
+          current = `r${issued}`;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ access_token: `access-${issued}`, refresh_token: current }));
+        }, 30);
+      });
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (req.headers.authorization === `Bearer access-${issued}` && issued > 0) {
+      res.end("[]");
+      return;
+    }
+    res.statusCode = 401;
+    res.end(JSON.stringify({ detail: "invalid_token" }));
+  };
+  return { handler, refreshes: () => refreshes };
+}
+
+test("two clients over one store make one refresh call", async () => {
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, b } = twoWindows(base);
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+
+    const [fromA, fromB] = await Promise.all([
+      a.client.listAssignedTasks(),
+      b.client.listAssignedTasks(),
+    ]);
+    assert.deepEqual(fromA, []);
+    assert.deepEqual(fromB, []);
+    assert.equal(cloud.refreshes(), 1, "one window refreshed; the other adopted its pair");
+    assert.equal(a.session.read()?.userId, "u1");
+    assert.equal(await b.session.refreshToken(), "r1");
+  });
+});
+
+test("an expired lease is taken over", async () => {
+  // A window that crashed mid-refresh leaves its lease behind. It must expire,
+  // or one dead window stops every other window from ever refreshing.
+  let t = 1_000_000;
+  const now = () => t;
+  const sleep = async (ms: number) => {
+    t += ms;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, state } = twoWindows(base, { now, sleep });
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+
+    // Already expired: taken at once.
+    await state.update("promptworkspace.cloud.refreshLease", { owner: "dead-window", until: t - 1 });
+    assert.deepEqual(await a.client.listAssignedTasks(), []);
+    assert.equal(cloud.refreshes(), 1);
+    assert.equal(
+      state.get<{ owner: string }>("promptworkspace.cloud.refreshLease"),
+      undefined,
+      "released after the refresh",
+    );
+
+    // Live when we arrive, held by a window that never finishes: waited out
+    // on the injected clock, then taken over.
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale-again");
+    await state.update("promptworkspace.cloud.refreshLease", { owner: "dead-window", until: t + 5_000 });
+    const before = t;
+    assert.deepEqual(await a.client.listAssignedTasks(), []);
+    assert.equal(cloud.refreshes(), 2);
+    assert.ok(t - before >= 5_000, "it waited for the lease to expire, not less");
+  });
+});

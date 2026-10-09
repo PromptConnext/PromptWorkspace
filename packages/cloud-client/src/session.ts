@@ -34,9 +34,18 @@ export interface CloudSession {
   email?: string;
 }
 
+/** Which window may refresh the shared session right now (finding #50a).
+ *  `until` is epoch ms on the holder's clock; a lease past it is free to take,
+ *  so a window that crashed mid-refresh cannot block the others for good. */
+export interface RefreshLease {
+  owner: string;
+  until: number;
+}
+
 const ACCESS_SECRET = "promptworkspace.cloud.access";
 const REFRESH_SECRET = "promptworkspace.cloud.refresh";
 const SESSION_KEY = "promptworkspace.cloud.session";
+const LEASE_KEY = "promptworkspace.cloud.refreshLease";
 
 /** Decode the `email` claim for display. NOT an auth decision — the signature
  *  is never verified here, and must never be trusted for one. Ported verbatim
@@ -104,6 +113,20 @@ export class SessionStore {
     if (current !== undefined && current !== rejected) return false;
     await this.clear();
     return true;
+  }
+
+  /** The refresh lease, in the shared (not secret) state every window reads.
+   *  There is no compare-and-set across windows, so CloudClient writes, waits
+   *  a moment and reads back before trusting it holds the lease. */
+  readRefreshLease(): RefreshLease | undefined {
+    const lease = this.state.get<RefreshLease>(LEASE_KEY);
+    return lease && typeof lease.owner === "string" && typeof lease.until === "number"
+      ? lease
+      : undefined;
+  }
+
+  async writeRefreshLease(lease: RefreshLease | undefined): Promise<void> {
+    await this.state.update(LEASE_KEY, lease);
   }
 
   onDidChange(listener: (s: CloudSession | null) => void): { dispose(): void } {
