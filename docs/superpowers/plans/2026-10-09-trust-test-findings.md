@@ -189,6 +189,7 @@ All under `apps/cloud/app/generation`, `app/imports`, `app/integrations/repo_see
 
 ### Task 4.2: where do the strings live? (#54) — timeboxed spike, then build
 - **Spike (half a day, opus):** choose how `tasks` learns which files contain the strings the spec renames (`ASSET GROW`, `assetgrow`): (a) GitHub code search at generation time for up to 5 quoted strings from the spec (indexing lag on new repos, rate limit), or (b) widen the snapshot fetch and grep what was fetched. Write the decision at the top of this task with the measured recall on `marketing-studio-check`.
+- **Spike decision (2026-10-09):** option (b), reading the repository's own files at `tasks` time, because GitHub code search found 0 of 14 files on private repositories (14 of 14 by reading, 4.2 s); details in `.superpowers/sdd/2026-10-09-trust-test-findings/wave-4-spike-4.2.md`.
 - **Build:** `[repo_occurrences]` segment (file → count per token, capped) injected for `tasks` on imported projects; the checker is unchanged.
 - **Acceptance:** `the segment lists the files that contain a quoted spec string`; live: regenerated tasks name `src/App.tsx` and `src/lib/exporters.ts` for the rebrand.
 
