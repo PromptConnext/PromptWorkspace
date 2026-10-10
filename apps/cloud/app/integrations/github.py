@@ -1236,7 +1236,10 @@ class HttpGithubClient:
         return fallback
 
     async def compare_files(self, token: str, repo: str, base: str, head: str) -> list[str]:
-        """The paths `head` changes relative to its merge base with `base`.
+        """The paths `head` changes relative to its merge base with `base`:
+        every entry's `filename` (a removed file's included) and, for a
+        renamed or copied file, its `previous_filename` too, since a rename
+        changes the path it moved away from as much as the one it lands on.
         A comparison GitHub cannot list in full raises
         `GithubCompareTooLargeError` rather than answering a partial list."""
         resp = await _send(
@@ -1255,7 +1258,13 @@ class HttpGithubClient:
             raise GithubCompareTooLargeError(
                 f"compare_files: {repo} {base}...{head} lists too many files to check"
             )
-        return [f["filename"] for f in files if f.get("filename")]
+        paths: list[str] = []
+        for entry in files:
+            for key in ("filename", "previous_filename"):
+                path = entry.get(key)
+                if path and path not in paths:
+                    paths.append(path)
+        return paths
 
     async def create_pull_request(
         self, token: str, repo: str, head: str, base: str, title: str, body: str
@@ -1595,6 +1604,12 @@ class FakeGithubClient:
         # Paths someone else pushed onto a branch, keyed (repo, branch):
         # `compare_files` lists them with the paths this fake committed there.
         self.branch_extra_files: dict[tuple[str, str], list[str]] = {}
+        # Renames someone else pushed, keyed (repo, branch): (previous, new)
+        # pairs, both listed by `compare_files` as GitHub's compare does.
+        self.branch_renames: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        # A push that lands right after `compare_files` read a branch: the sha
+        # the branch moves to, keyed (repo, branch); used once.
+        self.push_after_compare: dict[tuple[str, str], str] = {}
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
@@ -1921,14 +1936,27 @@ class FakeGithubClient:
         return matches[0] if matches else None
 
     async def compare_files(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        """`head` is a branch name or the sha a branch points at; the paths
+        are those this fake committed on that branch plus the test knobs."""
         self.call_log.append(f"compare_files:{repo}:{base}...{head}")
-        committed = {
+        branches = {
+            name
+            for (ref_repo, name), sha in self.branch_refs.items()
+            if ref_repo == repo and head in (name, sha)
+        }
+        paths = {
             path
             for commit in self.commits
-            if commit["repo"] == repo and commit["branch"] == head
+            if commit["repo"] == repo and commit["branch"] in branches
             for path in commit["paths"]
         }
-        return sorted(committed | set(self.branch_extra_files.get((repo, head), [])))
+        for name in branches:
+            paths.update(self.branch_extra_files.get((repo, name), []))
+            for previous, new in self.branch_renames.get((repo, name), []):
+                paths.update((previous, new))
+            if (repo, name) in self.push_after_compare:
+                self.branch_refs[(repo, name)] = self.push_after_compare.pop((repo, name))
+        return sorted(paths)
 
     async def create_pull_request(
         self, token: str, repo: str, head: str, base: str, title: str, body: str

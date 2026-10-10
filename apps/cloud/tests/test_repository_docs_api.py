@@ -823,3 +823,146 @@ def test_a_branch_a_rule_refuses_to_create_is_branch_protected(client: TestClien
     assert res.status_code == 409
     assert res.json()["detail"] == "github_branch_protected"
     assert fake.pull_requests == []
+
+
+def _adopt_with(client: TestClient, pid: str, *, extra=(), renames=()):
+    """A leftover branch at the name the next sync takes, carrying `extra`
+    paths and `renames` (previous, new) someone else pushed."""
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    fake.branch_extra_files[(full_name, branch)] = list(extra)
+    fake.branch_renames[(full_name, branch)] = list(renames)
+    return fake, full_name, branch
+
+
+def test_a_rename_from_a_foreign_path_is_refused(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, _, _ = _adopt_with(
+        client, pid, renames=[(".github/workflows/ci.yml", "docs/scope.md")]
+    )
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert fake.pull_requests == []
+
+
+def test_a_rename_from_a_foreign_path_shows_on_the_open_pull_request(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    branch = _sync(client, pid).json()["branch"]
+    fake.branch_renames[(_repo_name(client), branch)] = [
+        (".github/workflows/ci.yml", "docs/scope.md")
+    ]
+
+    assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_rename_between_two_document_views_is_allowed(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    _, _, branch = _adopt_with(client, pid, renames=[("docs/scope.md", "docs/architecture.md")])
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+
+
+def test_a_planted_view_the_project_does_not_have_is_foreign(client: TestClient):
+    """docs/policy-scope.md is a document path, but this project has no policy
+    scope, so the sync never writes it: a branch carrying it is someone
+    else's change."""
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    project = client.app.state.repository.get_project(pid)
+    assert "docs/policy-scope.md" not in {
+        f.path for f in build_seed_files(project, STAGE_DOCS)
+    }
+    fake, _, _ = _adopt_with(client, pid, extra=["docs/policy-scope.md"])
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+
+
+def test_an_adopted_branch_holding_only_seeded_views_is_used(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _adopt_with(client, pid, extra=["AGENTS.md", "docs/scope.md"])
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+    assert fake.commits[-1]["branch"] == branch
+    assert len(fake.pull_requests) == 1
+
+
+def test_a_push_between_the_check_and_the_commit_is_a_conflict(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _adopt_with(client, pid)
+    fake.push_after_compare[(full_name, branch)] = "someone-elses-commit"
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "github_branch_conflict"
+    assert len(fake.commits) == commits
+    assert fake.branch_refs[(full_name, branch)] == "someone-elses-commit"
+    assert fake.pull_requests == []
+
+
+def _forget_account_login(client: TestClient, pid: str) -> None:
+    """A connection stored before the login was recorded."""
+    repository = client.app.state.repository
+    ws_id = repository.get_project(pid).workspace_id
+    config = dict(repository.get_workspace(ws_id).integration_config)
+    config["github"] = {k: v for k, v in config["github"].items() if k != "account_login"}
+    repository.update_workspace(ws_id, integration_config=config)
+
+
+def test_without_a_recorded_login_any_authors_pull_request_is_reused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    first = _sync(client, pid).json()
+    fake.pull_requests[0]["author"] = "mallory"
+    _forget_account_login(client, pid)
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["pr_number"] == first["pr_number"]
+    assert res.json()["branch"] == first["branch"]
+    assert len(fake.pull_requests) == 1
+
+
+def test_without_a_recorded_login_foreign_paths_are_still_refused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    branch = _sync(client, pid).json()["branch"]
+    fake.pull_requests[0]["author"] = "mallory"
+    fake.branch_extra_files[(_repo_name(client), branch)] = [".github/workflows/deploy.yml"]
+    _forget_account_login(client, pid)
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True

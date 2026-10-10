@@ -12,9 +12,12 @@ request.
 Anyone with push access can create a branch under the `pw/sync-docs-` prefix,
 and the sync writes under the admin's token. So a branch is only reused (an
 open pull request's, or one left without a pull request) when its comparison
-with the default branch touches planning documents alone, and a pull request
-is only reused when the connected GitHub account opened it. Anything else
-answers 409 `sync_branch_has_foreign_changes` and writes nothing.
+with the default branch touches only the views this project's sync writes
+(both names of a rename count), and a pull request is only reused when the
+connected GitHub account opened it. Anything else answers 409
+`sync_branch_has_foreign_changes` and writes nothing. The branch head is read
+once, and the comparison, the tree read and the commit's pin all use that
+sha, so a push in between makes the commit refuse.
 
 While that pull request is open, both routes compare every document against
 its branch as well (`classify_with_pull_request`): a view the branch already
@@ -158,18 +161,26 @@ def _new_branch(status: _Status) -> str:
     return SYNC_BRANCH_PREFIX + status.head_sha[:12]
 
 
-def _foreign_paths(files: list[str]) -> list[str]:
-    return sorted(path for path in files if path not in DOC_PATHS)
+async def _foreign_paths(gh, status: _Status, branch_head: str) -> list[str]:
+    """The paths the commit `branch_head` changes, relative to the default
+    branch, that this project's sync never writes. Only the rebuilt document
+    views are allowed: a document path the project has no view for (a policy
+    scope it never chose) is as foreign as a workflow. Raises
+    `GithubCompareTooLargeError` when GitHub cannot list the comparison."""
+    allowed = {f.path for f in status.seed_files if f.path in DOC_PATHS}
+    files = await gh.compare_files(
+        status.token, status.full_name, status.default_branch, branch_head
+    )
+    return sorted({path for path in files if path not in allowed})
 
 
-async def _read_sync_branch(gh, status: _Status, branch: str) -> tuple[str, dict[str, str]]:
-    """(head sha, path -> blob sha) of a sync branch: the open pull request's,
-    or one an earlier sync left without an open pull request."""
-    branch_head = await gh.get_branch_head(status.token, status.full_name, branch)
+async def _branch_blobs(gh, status: _Status, branch_head: str) -> dict[str, str]:
+    """path -> blob sha at a sync branch's head: the open pull request's, or
+    one an earlier sync left without an open pull request."""
     entries, truncated = await gh.get_tree_entries(status.token, status.full_name, branch_head)
     if truncated:
         raise HTTPException(status_code=409, detail="repo_tree_too_large")
-    return branch_head, _blobs(entries)
+    return _blobs(entries)
 
 
 def _pr_body(differing: list[SeedFile], reverted: list[SeedFile]) -> str:
@@ -232,28 +243,26 @@ async def docs_status(
             open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"], foreign_changes=True)
         pr = None
     if pr is not None:
+        # Everything about the branch is best-effort decoration: without it
+        # the default-branch comparison stands, and the sync checks again.
         foreign = False
         try:
-            files = await gh.compare_files(
-                status.token, status.full_name, status.default_branch, pr["head"]
-            )
-            foreign = bool(_foreign_paths(files))
-        except GithubCompareTooLargeError:
-            foreign = True
-        except GithubWriteError as exc:
-            # Best-effort, like the branch read below; the sync checks again.
-            logger.warning(
-                "comparing sync branch %s of %s failed: %s", pr["head"], status.full_name, exc
-            )
-        open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"], foreign_changes=foreign)
-        try:
-            _, pr_blobs = await _read_sync_branch(gh, status, pr["head"])
+            branch_head = await gh.get_branch_head(status.token, status.full_name, pr["head"])
+            try:
+                foreign = bool(await _foreign_paths(gh, status, branch_head))
+            except GithubCompareTooLargeError:
+                foreign = True
+            except GithubWriteError as exc:
+                logger.warning(
+                    "comparing sync branch %s of %s failed: %s", pr["head"], status.full_name, exc
+                )
+            pr_blobs = await _branch_blobs(gh, status, branch_head)
             states = classify_with_pull_request(status.seed_files, status.main_blobs, pr_blobs)
         except (GithubWriteError, HTTPException) as exc:
-            # Best-effort: without the branch, the default-branch comparison stands.
             logger.warning(
                 "reading sync branch %s of %s failed: %s", pr["head"], status.full_name, exc
             )
+        open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"], foreign_changes=foreign)
 
     return RepositoryDocsStatus(
         files=[RepositoryDocFile(path=s.path, state=s.state) for s in states],
@@ -311,29 +320,26 @@ async def sync_docs(
             raise HTTPException(status_code=409, detail="sync_branch_has_foreign_changes")
         return None
 
-    async def ensure_docs_only(branch_name: str) -> None:
-        """Refuse an existing branch that changes anything but the planning
-        documents: committing onto it and opening or describing its pull
-        request would put the admin's name on someone else's change."""
+    async def against(branch_name: str) -> tuple[str, list[DocState]]:
+        """(head sha, states) of an existing sync branch, refusing one that
+        changes anything the sync does not write: committing onto it and
+        opening or describing its pull request would put the admin's name on
+        someone else's change. The head is read once and the comparison, the
+        tree and the commit's pin all use it, so a push after the check makes
+        the commit refuse instead of landing on what was never checked."""
         refused = HTTPException(status_code=409, detail="sync_branch_has_foreign_changes")
         try:
-            files = await gh.compare_files(token, full_name, status.default_branch, branch_name)
+            branch_head = await gh.get_branch_head(token, full_name, branch_name)
+            foreign = await _foreign_paths(gh, status, branch_head)
+            if foreign:
+                logger.warning(
+                    "sync-docs refused %s of %s: it changes %s", branch_name, full_name, foreign
+                )
+                raise refused
+            branch_blobs = await _branch_blobs(gh, status, branch_head)
         except GithubCompareTooLargeError as exc:
             logger.warning("sync-docs refused %s of %s: %s", branch_name, full_name, exc)
             raise refused from exc
-        except GithubWriteError as exc:
-            logger.warning("comparing sync branch %s of %s failed: %s", branch_name, full_name, exc)
-            raise _read_failure(exc) from exc
-        foreign = _foreign_paths(files)
-        if foreign:
-            logger.warning(
-                "sync-docs refused %s of %s: it changes %s", branch_name, full_name, foreign
-            )
-            raise refused
-
-    async def against(branch_name: str) -> tuple[str, list[DocState]]:
-        try:
-            branch_head, branch_blobs = await _read_sync_branch(gh, status, branch_name)
         except GithubWriteError as exc:
             logger.warning("reading sync branch %s of %s failed: %s", branch_name, full_name, exc)
             raise _read_failure(exc) from exc
@@ -350,7 +356,6 @@ async def sync_docs(
         base_sha, states = status.head_sha, status.states
     else:
         branch = pr["head"]
-        await ensure_docs_only(branch)
         base_sha, states = await against(branch)
     changed = changed_files(status.seed_files, states)
     if not changed:
@@ -371,7 +376,6 @@ async def sync_docs(
                 pr = own(await find_pr(), branch)
                 if pr is not None:
                     branch = pr["head"]
-                await ensure_docs_only(branch)
                 base_sha, states = await against(branch)
                 changed = changed_files(status.seed_files, states)
                 if not changed and pr is not None:

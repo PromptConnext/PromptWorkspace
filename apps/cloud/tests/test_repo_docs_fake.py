@@ -220,3 +220,32 @@ def test_a_foreign_pull_request_is_returned_when_none_is_ours():
     )
 
     assert found is not None and found["author"] == "mallory"
+
+
+def test_compare_files_lists_both_names_of_a_rename_and_resolves_a_head_sha():
+    fake = FakeGithubClient()
+
+    async def run():
+        await fake.create_branch("tok", REPO, "pw/sync-docs-1", "fake-head-0")
+        await fake.create_commit_with_files(
+            "tok", REPO, "pw/sync-docs-1", [SeedFile("docs/scope.md", "s")], "sync"
+        )
+        fake.branch_renames[(REPO, "pw/sync-docs-1")] = [(".github/workflows/ci.yml", "AGENTS.md")]
+        head = fake.branch_refs[(REPO, "pw/sync-docs-1")]
+        return await fake.compare_files("tok", REPO, "main", head)
+
+    assert sorted(asyncio.run(run())) == [".github/workflows/ci.yml", "AGENTS.md", "docs/scope.md"]
+
+
+def test_a_push_after_compare_moves_the_branch():
+    fake = FakeGithubClient()
+
+    async def run():
+        await fake.create_branch("tok", REPO, "pw/sync-docs-1", "fake-head-0")
+        fake.push_after_compare[(REPO, "pw/sync-docs-1")] = "someone-elses-commit"
+        await fake.compare_files("tok", REPO, "main", "pw/sync-docs-1")
+
+    asyncio.run(run())
+
+    assert fake.branch_refs[(REPO, "pw/sync-docs-1")] == "someone-elses-commit"
+    assert fake.push_after_compare == {}

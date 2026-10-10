@@ -405,3 +405,35 @@ def test_compare_files_failure_carries_the_status(github):
         asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "pw/sync-docs-x"))
     assert not isinstance(excinfo.value, GithubCompareTooLargeError)
     assert excinfo.value.status_code == 404
+
+
+def test_compare_files_lists_both_names_of_a_renamed_or_copied_file(github):
+    """A rename moves a file away from its old path as much as it writes the
+    new one: a branch renaming a workflow onto a document path changes the
+    workflow too."""
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/compare/main...abc123")] = httpx.Response(
+        200,
+        json={
+            "total_commits": 1,
+            "files": [
+                {
+                    "filename": "docs/scope.md",
+                    "previous_filename": ".github/workflows/ci.yml",
+                    "status": "renamed",
+                },
+                {"filename": "AGENTS.md", "previous_filename": "README.md", "status": "copied"},
+                {"filename": "docs/tasks.md", "status": "removed"},
+            ],
+        },
+    )
+
+    files = asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "abc123"))
+
+    assert files == [
+        "docs/scope.md",
+        ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "README.md",
+        "docs/tasks.md",
+    ]
