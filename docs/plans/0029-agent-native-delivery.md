@@ -195,7 +195,7 @@ flowchart TB
 | Verification is a person looking | Admin-only `verified` | Volume of agent output makes per-task human inspection impossible. Proof has to be automated, and people review the *proof* and the *risk* |
 | Context travels by copy-paste | `copyTaskContext` to clipboard | Agents should pull a complete, versioned brief and push structured results back |
 | The AI session is private | No agent observability anywhere in cloud, extension or MCP | Without run traces, there is no evidence, no cost control and no audit trail for regulated buyers |
-| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback |
+| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback. First slice shipped 2026-10-10: the Specify, project-rules and Plan stages stay editable after `repo_created`, and the repository's seeded copies catch up through a pull request a person merges (`docs-status`, `sync-docs`); an edit of a stage document makes its approval stale and `generate/tasks` still reconciles the board |
 | Sprints and assignees are planning tools | `sprint`/`assignee` mirrored from Jira/ClickUp | Sprints pace human capacity. Agent capacity is elastic. The constraint becomes decision latency and risk |
 | Progress is counting finished tasks | `ProgressRollup.tsx` | 100 % of tasks "implemented" says nothing about whether the outcome works |
 | Rules are documents for people to read | Constitution, `docs/conventions.md` | Rules must be enforceable: some as prompts, some as CI checks, some as hard gates |

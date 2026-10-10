@@ -1,6 +1,6 @@
 # Editable plan after the repository exists — design
 
-**Status:** draft for review · **Date:** 2026-10-10 · **Origin:** the Marketing Studio Listings trust run (findings 71, 85, 86) · **Related:** plan 0029 (§1.4 "Planning ends when tasks exist"), ADR 0017, ADR 0021
+**Status:** implemented (2026-10-10) · **Date:** 2026-10-10 · **Origin:** the Marketing Studio Listings trust run (findings 71, 85, 86) · **Related:** plan 0029 (§1.4 "Planning ends when tasks exist"), ADR 0017, ADR 0021
 
 ## Problem
 
@@ -29,7 +29,7 @@ The stage "blocked by" gating (a stage waiting for the one before it) is evaluat
 
 ### 2. Approvals and tasks (no new logic)
 
-Decision subjects are bound to the SHA-256 of the stage documents (`stage_hashes` in `app/delivery/approvals.py`). Editing the plan after approval makes the approval stale and the Decisions tab shows "Changed since approval". Task regeneration after `repo_created` already works and retires superseded tasks through `titles_match` in `stage_apply._apply_tasks`. An acceptance test covers both on a project at `repo_created`.
+Decision subjects are bound to the SHA-256 of the stage documents (`stage_hashes` in `app/delivery/approvals.py`). Editing a document after its approval makes that approval stale and the card shows "Changed since approval". The delivery plan approval (`plan_approval`) binds the `tasks` document, so it goes stale when the Tasks document changes, by hand or by regeneration; an edit of the `plan` document alone does not change it (the scope approval binds `specify`). Task regeneration after `repo_created` already works and retires superseded tasks through `titles_match` in `stage_apply._apply_tasks`. An acceptance test covers both on a project at `repo_created`.
 
 ### 3. Which repository files are out of date (cloud)
 
