@@ -512,11 +512,31 @@ def test_a_sync_racing_another_ends_with_one_pull_request(client: TestClient):
     assert fake.branch_heads[full_name] == head
 
 
-def test_an_existing_sync_branch_without_a_pull_request_is_a_conflict(client: TestClient):
+def test_a_branch_left_by_a_closed_pull_request_gets_a_suffixed_name(client: TestClient):
+    """A sync PR closed without merging leaves its branch behind while the
+    default branch has not moved: the next sync takes `<name>-2`."""
     pid = _created_project(client)
     _write_stage(client, pid, "plan", V2_PLAN)
     fake, full_name, branch = _race_branch(client)
-    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    head = fake.branch_heads[full_name]
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, head))
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == f"{branch}-2"
+    assert fake.commits[-1]["branch"] == f"{branch}-2"
+    assert len(fake.pull_requests) == 1 and fake.pull_requests[0]["head"] == f"{branch}-2"
+    assert fake.branch_refs[(full_name, branch)] == head
+
+
+def test_five_leftover_sync_branches_are_a_conflict(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _race_branch(client)
+    head = fake.branch_heads[full_name]
+    for name in [branch] + [f"{branch}-{n}" for n in range(2, 6)]:
+        asyncio.run(fake.create_branch(TOKEN, full_name, name, head))
     commits = len(fake.commits)
 
     res = _sync(client, pid)

@@ -64,6 +64,9 @@ logger = logging.getLogger("promptworkspace.repository_docs")
 
 SYNC_BRANCH_PREFIX = "pw/sync-docs-"
 SYNC_TITLE = "docs: sync planning documents from PromptWorkspace"
+# A sync pull request closed without merging leaves its branch behind while the
+# default branch stays put; the next sync then tries `<name>-2` .. `<name>-5`.
+SYNC_BRANCH_SUFFIXES = range(2, 6)
 
 
 class _Status(NamedTuple):
@@ -138,6 +141,25 @@ async def _read_pr_branch(gh, status: _Status, pr: dict) -> tuple[str, dict[str,
     if truncated:
         raise HTTPException(status_code=409, detail="repo_tree_too_large")
     return branch_head, _blobs(entries)
+
+
+async def _create_suffixed_branch(
+    gh, token: str, full_name: str, branch: str, from_sha: str
+) -> str:
+    """Create the first free `<branch>-N`, N in SYNC_BRANCH_SUFFIXES, and
+    return its name. With every name taken the last `GithubBranchMovedError`
+    propagates, which the caller answers as a conflict."""
+    logger.warning("sync branch %s of %s exists without a pull request", branch, full_name)
+    taken: GithubBranchMovedError | None = None
+    for suffix in SYNC_BRANCH_SUFFIXES:
+        candidate = f"{branch}-{suffix}"
+        try:
+            await gh.create_branch(token, full_name, candidate, from_sha)
+        except GithubBranchMovedError as exc:
+            taken = exc
+            continue
+        return candidate
+    raise taken
 
 
 def _pr_body(differing: list[SeedFile], reverted: list[SeedFile]) -> str:
@@ -261,19 +283,24 @@ async def sync_docs(
             try:
                 await gh.create_branch(token, full_name, branch, status.head_sha)
             except GithubBranchMovedError:
-                # Another sync created this branch first. Its pull request (if
-                # it got that far) is the one to add to; a branch with no open
-                # pull request is a conflict an admin has to clear.
+                # Another sync created this branch first: its open pull
+                # request is the one to add to. With none open, the branch was
+                # left by a pull request closed without merging, so take the
+                # first free suffixed name; five taken names are a conflict an
+                # admin has to clear.
                 pr = await find_pr()
                 if pr is None:
-                    raise
-                branch = pr["head"]
-                base_sha, states = await against(pr)
-                changed = changed_files(status.seed_files, states)
-                if not changed:
-                    raise HTTPException(
-                        status_code=409, detail="repository_docs_current"
-                    ) from None
+                    branch = await _create_suffixed_branch(
+                        gh, token, full_name, branch, status.head_sha
+                    )
+                else:
+                    branch = pr["head"]
+                    base_sha, states = await against(pr)
+                    changed = changed_files(status.seed_files, states)
+                    if not changed:
+                        raise HTTPException(
+                            status_code=409, detail="repository_docs_current"
+                        ) from None
         await gh.create_commit_with_files(
             token, full_name, branch, changed, SYNC_TITLE, expected_base_sha=base_sha
         )
