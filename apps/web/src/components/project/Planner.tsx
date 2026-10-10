@@ -773,17 +773,13 @@ export function Planner({
   // sync_not_supported_for_imported_repository for them), so they never ask.
   const docsSyncApplies = readOnly && project.repo_origin !== "imported";
   const docsStatusPath = `/projects/${projectId}/repository/docs-status`;
-  const {
-    data: docsStatus,
-    error: docsStatusError,
-    refetch: refetchDocsStatus,
-  } = useCloudGet<RepositoryDocsStatus>(docsStatusPath, docsSyncApplies, {
-    refreshOnFocus: true,
-  });
-  // A status that cannot be read hides the banner; the stages work without it.
-  useEffect(() => {
-    if (docsStatusError) console.warn("repository docs status unavailable:", docsStatusError);
-  }, [docsStatusError]);
+  // A status that cannot be read leaves `data` null, which hides the banner;
+  // the stages work without it.
+  const { data: docsStatus, refetch: refetchDocsStatus } = useCloudGet<RepositoryDocsStatus>(
+    docsStatusPath,
+    docsSyncApplies,
+    { refreshOnFocus: true },
+  );
   const syncDocs = useCallback(async () => {
     const out = await apiFetch<SyncDocsResult>(
       `/projects/${projectId}/repository/sync-docs`,
