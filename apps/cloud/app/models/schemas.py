@@ -1492,7 +1492,9 @@ class RepositoryDocFile(BaseModel):
     branch by git blob sha (app/integrations/repo_docs.py)."""
 
     path: str
-    state: Literal["current", "out_of_date", "missing"]
+    # `in_pull_request`: differs from the default branch, and the open sync
+    # pull request's branch already carries the rebuilt view.
+    state: Literal["current", "out_of_date", "missing", "in_pull_request"]
 
 
 class OpenSyncPr(BaseModel):

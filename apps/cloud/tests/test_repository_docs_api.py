@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.integrations.github import FakeGithubClient
+from app.integrations.github import FakeGithubClient, GithubWriteError
 from app.main import create_app
 from app.models.schemas import Role
 
@@ -219,6 +219,66 @@ def test_second_sync_updates_the_same_pull_request(client: TestClient):
     assert fake.sha_files[branch_head]["docs/architecture.md"].startswith(
         "# Architecture\n\nQueue worker and a cache."
     )
+
+
+def test_synced_files_read_in_pull_request_and_a_second_click_is_409(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", "# Architecture\n\nNow with a queue worker.\n")
+    assert _sync(client, pid).status_code == 200
+
+    states = _states(_status(client, pid))
+    assert states["docs/architecture.md"] == "in_pull_request"
+    assert {s for p, s in states.items() if p != "docs/architecture.md"} == {"current"}
+
+    again = _sync(client, pid)
+    assert again.status_code == 409
+    assert again.json()["detail"] == "repository_docs_current"
+    assert len(_fake(client).pull_requests) == 1
+
+
+def test_editing_another_doc_after_a_sync_commits_only_that_doc(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", "# Architecture\n\nNow with a queue worker.\n")
+    first = _sync(client, pid).json()
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+
+    states = _states(_status(client, pid))
+    assert states["docs/scope.md"] == "out_of_date"
+    assert states["docs/architecture.md"] == "in_pull_request"
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    # README.md carries the Specify text too, so it changes with docs/scope.md;
+    # docs/architecture.md is already on the branch and is not committed again.
+    assert res.json()["files"] == ["README.md", "docs/scope.md"]
+    assert res.json()["branch"] == first["branch"]
+    assert fake.commits[-1]["branch"] == first["branch"]
+    assert fake.commits[-1]["paths"] == ["README.md", "docs/scope.md"]
+    body = fake.pull_requests[0]["body"]
+    assert "docs/scope.md" in body and "docs/architecture.md" in body
+    assert set(_states(_status(client, pid)).values()) == {"current", "in_pull_request"}
+
+
+def test_an_unreadable_sync_branch_falls_back_to_the_default_branch(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", "# Architecture\n\nNow with a queue worker.\n")
+    branch = _sync(client, pid).json()["branch"]
+    branch_head = fake.branch_refs[(_repo_name(client), branch)]
+    real_entries = fake.get_tree_entries
+
+    async def failing_on_the_branch(token, repo, sha, *, recursive=True):
+        if sha == branch_head:
+            raise GithubWriteError("fake branch read failure", status_code=500)
+        return await real_entries(token, repo, sha, recursive=recursive)
+
+    fake.get_tree_entries = failing_on_the_branch
+
+    body = _status(client, pid)
+    assert _states(body)["docs/architecture.md"] == "out_of_date"
+    assert body["open_sync_pr"] is not None
 
 
 def test_sync_when_nothing_changed_is_409(client: TestClient):

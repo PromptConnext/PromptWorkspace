@@ -7,6 +7,10 @@ without fetching any file: GitHub's tree listing already carries each blob's
 git sha, and a git blob sha is a pure function of the content, so it can be
 computed locally from the rebuilt seed file and compared.
 
+While a sync pull request is open, a document whose rebuilt view is already
+on that pull request's branch reads `in_pull_request`: it differs from the
+default branch, but syncing it again would add nothing.
+
 Only document views are ever in scope. The deployment template's files
 (`.github/workflows/*`, `site/`, `docs/deployment.md`) are owned by the
 template and never offered for sync.
@@ -41,10 +45,13 @@ def git_blob_sha(content: str) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()  # noqa: S324
 
 
+DocStateName = Literal["current", "out_of_date", "missing", "in_pull_request"]
+
+
 @dataclass(frozen=True)
 class DocState:
     path: str
-    state: Literal["current", "out_of_date", "missing"]
+    state: DocStateName
 
 
 def classify_docs(seed_files: list[SeedFile], tree_blobs: dict[str, str]) -> list[DocState]:
@@ -64,6 +71,31 @@ def classify_docs(seed_files: list[SeedFile], tree_blobs: dict[str, str]) -> lis
     return states
 
 
+def mark_in_pull_request(
+    seed_files: list[SeedFile], states: list[DocState], pr_blobs: dict[str, str]
+) -> list[DocState]:
+    """Re-read every document that differs from the default branch against the
+    open sync pull request's branch (`pr_blobs`, path -> blob sha): one whose
+    rebuilt view is already there is `in_pull_request`."""
+    content = {f.path: f.content for f in seed_files}
+    return [
+        DocState(s.path, "in_pull_request")
+        if s.state != "current" and pr_blobs.get(s.path) == git_blob_sha(content[s.path])
+        else s
+        for s in states
+    ]
+
+
 def changed_files(seed_files: list[SeedFile], states: list[DocState]) -> list[SeedFile]:
+    """What a sync must commit: views missing from, or different on, both the
+    default branch and the open sync pull request's branch."""
+    wanted = {s.path for s in states if s.state in ("out_of_date", "missing")}
+    return [f for f in seed_files if f.path in wanted]
+
+
+def differing_files(seed_files: list[SeedFile], states: list[DocState]) -> list[SeedFile]:
+    """Every view that differs from the default branch, whether or not the
+    open sync pull request already carries it: what that pull request's
+    description lists."""
     wanted = {s.path for s in states if s.state != "current"}
     return [f for f in seed_files if f.path in wanted]
