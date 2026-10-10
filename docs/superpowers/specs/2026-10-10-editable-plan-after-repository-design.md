@@ -45,7 +45,7 @@ Decision subjects are bound to the SHA-256 of the stage documents (`stage_hashes
   - `missing`: the default branch has no file at that path (for example a plan added after creation).
   - `in_pull_request`: the open sync PR's branch already carries exactly this view; it waits on a merge, not on a sync.
 - While a sync PR is open, every view is compared with that PR's branch as well as with the default branch (`classify_with_pull_request`). Reading the PR's branch is best-effort: if it fails the default-branch comparison stands.
-- `open_sync_pr.foreign_changes` is true when the PR's branch changes any path outside the document views (by `compare_files`, below), or when a pull request someone else opened sits on the branch the next sync would create. Best-effort: a failed comparison reads as false; the sync checks again and refuses.
+- `open_sync_pr.foreign_changes` is true when the PR's branch changes any path the sync does not write (by `compare_files`, below), or when a pull request someone else opened sits on the branch the next sync would create. Best-effort: a failed comparison reads as false; the sync checks again and refuses.
 - A file the repository owner edited by hand reports `out_of_date`; the PR diff shows it (see section 4).
 
 ### 4. The sync pull request (cloud)
@@ -55,12 +55,12 @@ Decision subjects are bound to the SHA-256 of the stage documents (`stage_hashes
 1. Computes the status above (against the open sync PR's branch when there is one). If no view differs, answers 409 `repository_docs_current`.
 2. Looks for the open sync PR: an open pull request into the default branch whose head branch starts with `pw/sync-docs-` and lives in the repository itself (a fork's PR is ignored). It is reused only when the connected GitHub account (`account_login` in the workspace's GitHub config) opened it; with no recorded login every author passes. A pull request someone else opened is not adopted: ignored when it is on another branch, refused with 409 `sync_branch_has_foreign_changes` when it is on the branch this sync would create.
 3. With no open sync PR, creates the branch `pw/sync-docs-<default-branch head sha[:12]>` from the default branch head. Naming it after the head makes two syncs racing from the same head collide on one name instead of opening two PRs. If the name is taken (another sync still uploading, or a PR closed without merging left it), the existing branch is adopted: compared like an open PR's branch and written pinned to the head just read.
-4. Before committing onto any existing branch (an open PR's head or an adopted one), compares it with the default branch (`compare_files`, GitHub's `compare/{base}...{head}`). A branch that changes any path outside the document views, or whose comparison GitHub cannot list in full (300 files or more), is refused with 409 `sync_branch_has_foreign_changes` and nothing is written: a collaborator can push any `pw/sync-docs-*` branch, and the sync writes and describes the PR under the admin's token.
-5. Commits only the changed views with `create_commit_with_files(token, repo, branch, files, message, expected_base_sha)`, message `docs: sync planning documents from PromptWorkspace`, pinned to the branch head the comparison read.
+4. Before committing onto any existing branch (an open PR's head or an adopted one), reads its head sha once and compares that commit with the default branch (`compare_files`, GitHub's `compare/{base}...{head}`). The allowed paths are only those this sync writes for this project: the rebuilt document views (`seed_files` within the document set), not every document path, so a `docs/policy-scope.md` planted on a project with no policy scope is foreign. Every entry counts by its `filename` (a removed file included) and, for a rename or copy, by its `previous_filename` as well, so renaming `.github/workflows/ci.yml` onto `docs/scope.md` is foreign while a rename between two views is not. A branch that changes any other path, or whose comparison GitHub cannot list in full (300 files or more), is refused with 409 `sync_branch_has_foreign_changes` and nothing is written: a collaborator can push any `pw/sync-docs-*` branch, and the sync writes and describes the PR under the admin's token.
+5. Commits only the changed views with `create_commit_with_files(token, repo, branch, files, message, expected_base_sha)`, message `docs: sync planning documents from PromptWorkspace`, pinned to the same head sha the comparison and the tree read used, so a push after the check refuses with `github_branch_conflict` instead of landing on unchecked content.
 6. Opens the PR (or updates the existing PR's body) with a list of the views that differ from the default branch, the views this commit changes back, and a note that a hand-edited file in the repository shows up in the diff and should be reviewed, not assumed overwritten.
 7. Never force-pushes, never writes to the default branch, never merges.
 
-New `GithubClient` methods (Protocol, real client and fake): `create_branch(token, repo, branch, from_sha)`, `find_open_pull_request(token, repo, head_prefix, base, author=None)` (returns `number`, `html_url`, `head`, `author`; prefers a PR by `author`, else the first by anyone), `create_pull_request(token, repo, head, base, title, body)`, `update_pull_request(token, repo, number, body)` and `compare_files(token, repo, base, head)`.
+New `GithubClient` methods (Protocol, real client and fake): `create_branch(token, repo, branch, from_sha)`, `find_open_pull_request(token, repo, head_prefix, base, author=None)` (returns `number`, `html_url`, `head`, `author`; prefers a PR by `author`, else the first by anyone), `create_pull_request(token, repo, head, base, title, body)`, `update_pull_request(token, repo, number, body)` and `compare_files(token, repo, base, head)` (both names of a renamed or copied entry).
 
 Error codes (`app/api/repository_docs.py`), shared by both routes where they apply:
 
@@ -74,7 +74,7 @@ Error codes (`app/api/repository_docs.py`), shared by both routes where they app
 | `github_unreachable` | 502 | Any other read failure. |
 | `repo_tree_too_large` | 409 | GitHub truncated a tree listing. |
 | `repository_docs_current` | 409 | Nothing to sync. |
-| `sync_branch_has_foreign_changes` | 409 | The sync branch changes more than the document views, or someone else's PR sits on it. |
+| `sync_branch_has_foreign_changes` | 409 | The sync branch (with or without a PR) changes a path the sync does not write, or GitHub cannot list its comparison, or someone else's PR sits on it. |
 | `github_pr_permission_denied` | 400 | Listing, opening or updating a pull request answered 401/403/404 (the token lacks Pull requests write). |
 | `github_branch_conflict` | 409 | The branch moved between the comparison and the commit. |
 | `github_branch_protected` | 409 | A protection or ruleset refused the branch update, or refused creating the branch (a 422 other than "Reference already exists"). |
@@ -85,7 +85,7 @@ The generic `github_repo_not_in_token_scope` message is not reused here (finding
 
 ### 5. Web: banner and action
 
-When the project is at `repo_created` and its `repo_origin` is `created`, the Planner calls `docs-status` (refetched on focus, after a sync, and after any stage document is saved or regenerated) and shows, above the stages, either nothing (all current), a banner "Repository documents are out of date: N files" with a **Review and open a pull request** button, or "Pull request #n is open" with a link (and **Update the pull request** when files still need updating). When `open_sync_pr.foreign_changes` is true it shows a muted line instead, with a link to the PR and no button: "The pull request branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing." The button calls `sync-docs`, shows the returned link, and shows a specific text for every error code above. A status that cannot be read shows a muted "Could not check repository documents: …" line with no button; the stages keep working. Only admins and tech stewards see the button; members see the banner as information.
+When the project is at `repo_created` and its `repo_origin` is `created`, the Planner calls `docs-status` (refetched on focus, after a sync, and after any stage document is saved or regenerated) and shows, above the stages, either nothing (all current), a banner "Repository documents are out of date: N files" with a **Review and open a pull request** button, or "Pull request #n is open" with a link (and **Update the pull request** when files still need updating). When `open_sync_pr.foreign_changes` is true it shows a muted line instead, with a link to the PR and no button: "The sync branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing." The button calls `sync-docs`, shows the returned link, and shows a specific text for every error code above. A status that cannot be read shows a muted "Could not check repository documents: …" line with no button; the stages keep working. Only admins and tech stewards see the button; members see the banner as information.
 
 ### 6. Token permission
 
@@ -101,6 +101,7 @@ None. Staleness is computed on demand from the cloud documents and the repositor
 - A repository whose default branch moved between status and PR: `expected_base_sha` makes the commit fail with `github_branch_conflict`; the UI asks the user to retry.
 - Empty plan or rules (document deleted): the file is omitted from the rebuilt set exactly as `build_seed_files` omits it, so it is never reported `out_of_date`.
 - Rate limits and GitHub outages return 502 (`github_unreachable` on reads, `github_sync_failed` on writes); the Planner shows a muted "Could not check repository documents" line and the stages keep working.
+- Cost: a `docs-status` read with a sync PR open makes about 6 GitHub calls on the admin's token (default-branch head and tree, the pull request list, the PR branch head, the comparison and the PR branch tree; 3 to 4 with no PR open). It runs on every Planner focus and after every stage save or regeneration, so a busy project spends the workspace token's rate limit at that pace.
 - A collaborator's branch or pull request under the `pw/sync-docs-` prefix: refused with `sync_branch_has_foreign_changes` when it carries anything but document views or sits on the sync's branch name; see section 4.
 
 ## Testing
@@ -124,6 +125,7 @@ None. Staleness is computed on demand from the cloud documents and the repositor
 - Projects at `repo_created` with a NULL `repo_origin` (from-scratch projects created before migration 0035) get no document edit and no sync: nothing tells them apart from a legacy import.
 - `in_pull_request` compares trees, not diffs. While a sync PR is open it is reused whatever the default branch head is now, so a hand edit on the default branch after the PR's branch forked stays hidden until the merge, and GitHub then reports a conflict on the PR.
 - The first sync PR on a repository seeded before this feature rewrites every seeded document, because the seed's footer and preamble changed (the footer no longer carries a date).
+- The docs-only guarantee holds at sync time. A push to the PR branch after a sync is not refused until the next sync; it surfaces as `foreign_changes` on the next status read, and a person reviewing the PR sees it in the diff.
 - The banner cannot be dismissed. A hand-edited `AGENTS.md` (or any seeded document the team maintains by hand) keeps it showing "out of date" for good.
 
 ## Open question left for review
