@@ -130,6 +130,91 @@ describe("RepositoryDocsBanner", () => {
     expect(onSync).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a synced pull request as a link only: in_pull_request files are not stale", () => {
+    render(
+      <RepositoryDocsBanner
+        status={{
+          files: [
+            { path: "docs/architecture.md", state: "in_pull_request" },
+            { path: "docs/conventions.md", state: "in_pull_request" },
+            { path: "docs/tasks.md", state: "current" },
+          ],
+          open_sync_pr: { number: 7, url: RESULT.pr_url },
+        }}
+        canSync
+        onSync={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Pull request #7 is open");
+    expect(screen.getByRole("status")).not.toHaveTextContent("changed since");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers the update when one more document is edited after the sync", () => {
+    render(
+      <RepositoryDocsBanner
+        status={{
+          files: [
+            { path: "docs/architecture.md", state: "in_pull_request" },
+            { path: "docs/conventions.md", state: "out_of_date" },
+            { path: "docs/tasks.md", state: "current" },
+          ],
+          open_sync_pr: { number: 7, url: RESULT.pr_url },
+        }}
+        canSync
+        onSync={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Pull request #7 is open and 1 file changed since",
+    );
+    expect(screen.getByRole("button", { name: "Update the pull request" })).toBeInTheDocument();
+  });
+
+  it("renders nothing when the only differences are already in a pull request that is gone", () => {
+    const { container } = render(
+      <RepositoryDocsBanner
+        status={{ files: [{ path: "docs/tasks.md", state: "in_pull_request" }], open_sync_pr: null }}
+        canSync
+        onSync={vi.fn()}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("still shows the success line when a revalidation replaces the status mid-sync", async () => {
+    let resolve!: (r: SyncDocsResult) => void;
+    const onSync = vi.fn(() => new Promise<SyncDocsResult>((r) => (resolve = r)));
+    const { rerender } = render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+    rerender(
+      <RepositoryDocsBanner status={{ ...STALE, files: [...STALE.files] }} canSync onSync={onSync} />,
+    );
+    resolve(RESULT);
+
+    expect(await screen.findByRole("link", { name: /pull request #7 opened/i })).toBeInTheDocument();
+  });
+
+  it("clears the success line on the next sync click", async () => {
+    const onSync = vi
+      .fn()
+      .mockResolvedValueOnce(RESULT)
+      .mockRejectedValueOnce(new Error("github_branch_conflict"));
+    const { rerender } = render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+    await screen.findByRole("link", { name: /pull request #7 opened/i });
+
+    const next = {
+      files: [{ path: "docs/tasks.md", state: "out_of_date" as const }],
+      open_sync_pr: { number: 7, url: RESULT.pr_url },
+    };
+    rerender(<RepositoryDocsBanner status={next} canSync onSync={onSync} />);
+    fireEvent.click(screen.getByRole("button", { name: "Update the pull request" }));
+    expect(await screen.findByText(/default branch changed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pull request #7 opened/)).not.toBeInTheDocument();
+  });
+
   it("offers no update button to someone who cannot sync", () => {
     render(
       <RepositoryDocsBanner
@@ -183,11 +268,9 @@ describe("RepositoryDocsBanner", () => {
     render(
       <RepositoryDocsBanner status={null} statusError="github_read_forbidden" canSync onSync={vi.fn()} />,
     );
-    expect(
-      screen.getByText(
-        "Could not check repository documents: The workspace's GitHub token can't read this repository.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Could not check repository documents: The workspace's GitHub token can't read this repository.",
+    );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 

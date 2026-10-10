@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { RepositoryDocsStatus, SyncDocsResult } from "@/lib/types";
 
 // The cloud's refusals from GET docs-status and POST sync-docs
@@ -36,8 +36,8 @@ const MERGE_HINT = ". Merge it on GitHub to bring the repository documents up to
 
 /** Tells whoever edits a planning document after the repository exists that the
  *  repository's seeded copy is behind, and (for an admin) opens or updates the
- *  pull request that catches it up. Renders nothing when every document is
- *  current and no sync pull request is open.
+ *  pull request that catches it up. Renders nothing when no document is stale
+ *  and no sync pull request is open.
  *
  *  What it shows follows the latest `status`. The result of a sync this banner
  *  ran is shown only until the status is next replaced (the Planner refetches
@@ -62,32 +62,40 @@ export function RepositoryDocsBanner({
     forStatus: RepositoryDocsStatus | null;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const latest = useRef<RepositoryDocsStatus | null>(null);
 
   // A malformed body (anything without a file list) counts as no status
   // rather than crashing the Planner around it.
   const valid = status && Array.isArray(status.files) ? status : null;
+  latest.current = valid;
 
   if (!valid) {
     if (!statusError) return null;
     return (
-      <p className="text-xs text-slate-500">
+      <p role="status" className="text-xs text-slate-500">
         Could not check repository documents: {textFor(statusError)}
       </p>
     );
   }
 
-  const stale = valid.files.filter((f) => f.state !== "current").length;
+  // `in_pull_request` is waiting on a merge, not on a sync, so it is not stale.
+  const stale = valid.files.filter((f) => f.state === "out_of_date" || f.state === "missing").length;
   const openPr = valid.open_sync_pr;
   const shown = done && done.forStatus === valid ? done : null;
   if (stale === 0 && !openPr && !shown) return null;
 
   async function handleSync() {
     setError(null);
+    setDone(null);
     setPending(true);
-    const forStatus = valid;
-    const updated = Boolean(forStatus?.open_sync_pr);
+    const updated = Boolean(valid?.open_sync_pr);
     try {
-      setDone({ result: await onSync(), updated, forStatus });
+      const result = await onSync();
+      // Keyed on the status in hand when the sync finished, not the one it
+      // started with: a focus revalidation can land while the POST is in
+      // flight. The Planner's refetch after the sync replaces it, which ends
+      // the line in favour of the real state.
+      setDone({ result, updated, forStatus: latest.current });
     } catch (err) {
       setError(textFor(err instanceof Error ? err.message : String(err)));
     } finally {

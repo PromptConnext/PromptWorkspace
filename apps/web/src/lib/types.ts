@@ -220,7 +220,9 @@ export interface PendingInvitation {
 // request a person merges.
 export interface RepositoryDocFile {
   path: string;
-  state: "current" | "out_of_date" | "missing";
+  // `in_pull_request`: differs from the default branch but already matches the
+  // open sync pull request's branch, so it is waiting on a merge, not on a sync.
+  state: "current" | "out_of_date" | "missing" | "in_pull_request";
 }
 
 export interface RepositoryDocsStatus {
