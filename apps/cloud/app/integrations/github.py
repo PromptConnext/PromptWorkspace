@@ -44,6 +44,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -1115,7 +1116,7 @@ class HttpGithubClient:
 
         ref_resp = await _send(
             "PATCH",
-            f"{GITHUB_API}/repos/{repo}/git/refs/heads/{branch}",
+            f"{GITHUB_API}/repos/{repo}/git/refs/heads/{quote(branch, safe='/')}",
             token=token,
             what=f"update_ref for {repo}",
             json={"sha": commit_sha, "force": False},
@@ -1146,7 +1147,7 @@ class HttpGithubClient:
         non-forced ref update rather than silently overwritten."""
         ref_resp = await _send(
             "GET",
-            f"{GITHUB_API}/repos/{repo}/git/ref/heads/{branch}",
+            f"{GITHUB_API}/repos/{repo}/git/ref/heads/{quote(branch, safe='/')}",
             token=token,
             what=f"read_ref for {repo}",
         )

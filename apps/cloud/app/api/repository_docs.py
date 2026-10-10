@@ -36,6 +36,7 @@ seeded files as conflicts.
 from __future__ import annotations
 
 import logging
+import re
 from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -77,6 +78,7 @@ router = APIRouter(tags=["repository-docs"])
 logger = logging.getLogger("promptworkspace.repository_docs")
 
 SYNC_BRANCH_PREFIX = "pw/sync-docs-"
+_SYNC_BRANCH_RE = re.compile(r"^pw/sync-docs-[0-9A-Za-z-]{1,12}$")
 SYNC_TITLE = "docs: sync planning documents from PromptWorkspace"
 
 
@@ -150,9 +152,13 @@ async def _load_status(request: Request, repo: Repository, project: Project) -> 
 
 
 def _is_ours(pr: dict, status: _Status) -> bool:
-    """Whether the connected account opened `pr`. Without a recorded login
-    there is nothing to compare, and every pull request passes."""
+    """Whether `pr` is one this feature opened: its head has the exact shape the
+    sync creates (so a head name with URL-special characters can never be
+    reused) and, when a login is recorded, the connected account opened it.
+    Without a recorded login only the shape is checked."""
     login = status.account_login
+    if not _SYNC_BRANCH_RE.fullmatch(pr.get("head") or ""):
+        return False
     return not login or (pr.get("author") or "").lower() == login.lower()
 
 
@@ -422,7 +428,7 @@ async def sync_docs(
             except GithubPullRequestExistsError:
                 # Another sync on the same branch opened it first: add to it.
                 pr = own(await find_pr(), branch)
-                if pr is None:
+                if pr is None or pr["head"] != branch:
                     raise
                 await gh.update_pull_request(token, full_name, pr["number"], body)
         else:

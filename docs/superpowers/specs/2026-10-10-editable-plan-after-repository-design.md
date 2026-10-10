@@ -101,7 +101,7 @@ None. Staleness is computed on demand from the cloud documents and the repositor
 - A repository whose default branch moved between status and PR: `expected_base_sha` makes the commit fail with `github_branch_conflict`; the UI asks the user to retry.
 - Empty plan or rules (document deleted): the file is omitted from the rebuilt set exactly as `build_seed_files` omits it, so it is never reported `out_of_date`.
 - Rate limits and GitHub outages return 502 (`github_unreachable` on reads, `github_sync_failed` on writes); the Planner shows a muted "Could not check repository documents" line and the stages keep working.
-- Cost: a `docs-status` read with a sync PR open makes about 6 GitHub calls on the admin's token (default-branch head and tree, the pull request list, the PR branch head, the comparison and the PR branch tree; 3 to 4 with no PR open). It runs on every Planner focus and after every stage save or regeneration, so a busy project spends the workspace token's rate limit at that pace.
+- Cost: a `docs-status` read with a sync PR open makes about 8 GitHub calls on the admin's token (default-branch head, which costs two requests, and tree, the pull request list, the PR branch head, which costs two, the comparison and the PR branch tree; about 4 with no PR open). It runs on every Planner focus and after every stage save or regeneration, so a busy project spends the workspace token's rate limit at that pace.
 - A collaborator's branch or pull request under the `pw/sync-docs-` prefix: refused with `sync_branch_has_foreign_changes` when it carries anything but document views or sits on the sync's branch name; see section 4.
 
 ## Testing

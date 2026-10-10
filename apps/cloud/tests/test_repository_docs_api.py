@@ -966,3 +966,20 @@ def test_without_a_recorded_login_foreign_paths_are_still_refused(client: TestCl
     assert res.json()["detail"] == "sync_branch_has_foreign_changes"
     assert len(fake.commits) == commits
     assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_pull_request_head_with_url_special_characters_is_never_reused(client: TestClient):
+    """Without a recorded login only the head's shape guards reuse. A head name
+    with a `#` would make an HTTP client cut the ref URL there and read or write
+    a different branch than the one compared, so such a PR is not the sync PR."""
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    first = _sync(client, pid).json()
+    fake.pull_requests[0]["head"] = first["branch"] + "#evil"
+    fake.pull_requests[0]["author"] = "mallory"
+    _forget_account_login(client, pid)
+
+    status = client.get(f"/projects/{pid}/repository/docs-status", headers=ALICE).json()
+
+    assert status["open_sync_pr"] is None
