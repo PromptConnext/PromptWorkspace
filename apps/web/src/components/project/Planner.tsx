@@ -15,6 +15,7 @@ import { useCloudGet } from "@/lib/hooks";
 import { DocumentUpload } from "./DocumentUpload";
 import { GenerationWarnings } from "./GenerationWarnings";
 import { DocumentPreview } from "./DocumentPreview";
+import { RepositoryDocsBanner } from "./RepositoryDocsBanner";
 import { DeploymentTemplatePanel } from "./DeploymentTemplatePanel";
 import { PolicyScopePanel } from "./PolicyScopePanel";
 import { useStageGeneration } from "./useStageGeneration";
@@ -38,7 +39,9 @@ import type {
   Project,
   ProjectionState,
   RepoAnalysisOut,
+  RepositoryDocsStatus,
   StageKind,
+  SyncDocsResult,
   WorkspaceMember,
 } from "@/lib/types";
 
@@ -150,6 +153,9 @@ const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
 // so this only turns the section read-only rather than hiding it.
 const ADMIN_ONLY_STAGES: StageKind[] = ["constitution", "plan"];
 
+const REPLACE_CONFIRM =
+  "This replaces the current document and makes the repository copy out of date. Continue?";
+
 const TECH_LEAD_NOTE =
   "Your Tech Lead writes this step. You can read it here once they generate it.";
 
@@ -207,6 +213,7 @@ function StageSection({
   recommendation,
   prefill,
   prefillHint,
+  confirmReplace,
 }: {
   projectId: string;
   stage: StageKind;
@@ -242,6 +249,10 @@ function StageSection({
   recommendation?: string;
   prefill?: PrefillOption;
   prefillHint?: ReactNode;
+  /** Asked before a generation overwrites the document, when the repository
+   *  already holds a copy of it (the project is at `repo_created`): the copy
+   *  falls behind and has to be synced through a pull request. */
+  confirmReplace?: string;
 }) {
   const { authHeaders } = useAuth();
   const fields = STAGE_FIELDS[stage];
@@ -356,6 +367,10 @@ function StageSection({
   // are injected server-side as context, so there is nothing left to ask.
   const userInput = fields ? composeStageInput(fields, answers) : TASKS_INPUT;
   const ready = fields ? requiredFieldsFilled(fields, answers) : true;
+  const generateAfterConfirm = () => {
+    if (confirmReplace && !window.confirm(confirmReplace)) return;
+    generate(stage, userInput);
+  };
   // Until the stage has a document, generating it is the thing to do here;
   // after that the tab's "Continue to …" takes over as the primary action.
   const hasDoc = docContent.trim().length > 0;
@@ -411,7 +426,7 @@ function StageSection({
             }
             onClick={() => {
               flushAnswers.current?.();
-              generate(stage, userInput);
+              generateAfterConfirm();
             }}
             className={hasDoc ? SECONDARY_BUTTON : PRIMARY_BUTTON}
           >
@@ -443,7 +458,7 @@ function StageSection({
               {error.retryable && (
                 <button
                   type="button"
-                  onClick={() => generate(stage, userInput)}
+                  onClick={generateAfterConfirm}
                   className="mt-2 rounded border border-red-300 bg-white px-2 py-1 text-xs"
                 >
                   Retry
@@ -460,7 +475,7 @@ function StageSection({
               </p>
               <button
                 type="button"
-                onClick={() => generate(stage, userInput)}
+                onClick={generateAfterConfirm}
                 className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-xs"
               >
                 Generate again
@@ -742,12 +757,42 @@ export function Planner({
     [setActive],
   );
 
-  // Only the finished project is frozen. Earlier states stay editable: the
-  // explicit "Send to Tech Lead" handoff is gone, so there is no moment at
+  // Only the finished project is frozen, and only the parts the repository
+  // was seeded from by a one-shot write: the policy scope, the PRD upload, the
+  // deployment template and the repository panel. Earlier states stay editable:
+  // the explicit "Send to Tech Lead" handoff is gone, so there is no moment at
   // which a business user deliberately locks their own specification, and
   // freezing during tech review would disable the Plan step in exactly the
-  // state it exists for.
+  // state it exists for. The planning documents themselves stay editable after
+  // the repository exists; their repository copies catch up through a pull
+  // request (RepositoryDocsBanner).
   const readOnly = project.lifecycle_status === "repo_created";
+
+  // Whether the repository's seeded documents have fallen behind the planning
+  // documents. Imported repositories are out of scope (the cloud answers 409
+  // sync_not_supported_for_imported_repository for them), so they never ask.
+  const docsSyncApplies = readOnly && project.repo_origin !== "imported";
+  const docsStatusPath = `/projects/${projectId}/repository/docs-status`;
+  const {
+    data: docsStatus,
+    error: docsStatusError,
+    refetch: refetchDocsStatus,
+  } = useCloudGet<RepositoryDocsStatus>(docsStatusPath, docsSyncApplies, {
+    refreshOnFocus: true,
+  });
+  // A status that cannot be read hides the banner; the stages work without it.
+  useEffect(() => {
+    if (docsStatusError) console.warn("repository docs status unavailable:", docsStatusError);
+  }, [docsStatusError]);
+  const syncDocs = useCallback(async () => {
+    const out = await apiFetch<SyncDocsResult>(
+      `/projects/${projectId}/repository/sync-docs`,
+      authHeaders(),
+      { method: "POST" },
+    );
+    refetchDocsStatus();
+    return out;
+  }, [projectId, authHeaders, refetchDocsStatus]);
 
   const advanced = useRef(false);
   const lifecycle = project.lifecycle_status;
@@ -1059,6 +1104,10 @@ export function Planner({
       </div>
       )}
 
+      {docsSyncApplies && (
+        <RepositoryDocsBanner status={docsStatus} canSync={isTechLead} onSync={syncDocs} />
+      )}
+
       {/* Every stage stays mounted so a half-typed intake form survives
           switching tabs; the inactive ones are hidden rather than unmounted,
           which also keeps them out of the accessibility tree. */}
@@ -1106,11 +1155,13 @@ export function Planner({
           {tab.stages.map((stage) => {
             const meta = STAGE_META[stage];
             const authorGated = ADMIN_ONLY_STAGES.includes(stage) && !isTechLead;
-            // Tasks stay generatable after `repo_created`: they are graph rows
-            // the board works from, not part of the seeded repository, and the
-            // cloud does not refuse the stage there. Freezing them stranded a
-            // project that reached the repo with no task graph.
-            const stageReadOnly = (readOnly && stage !== "tasks") || authorGated;
+            // After the repository exists the planning documents stay editable:
+            // their repository copies are synced through a pull request, so
+            // only the author gate (rules and plan belong to the Tech Lead)
+            // makes a stage read-only. Tasks are graph rows the board works
+            // from, not part of the seeded repository, so replacing them never
+            // needs a confirmation.
+            const stageReadOnly = authorGated;
             return (
               <StageSection
                 key={stage}
@@ -1120,7 +1171,7 @@ export function Planner({
                 buttonLabel={meta.buttonLabel}
                 blurb={meta.blurb}
                 blockedBy={stageReadOnly ? undefined : blockedBy(meta)}
-                note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
+                note={authorGated ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
                 onDocStamp={noteStamp}
                 onGraphChange={onChange}
@@ -1136,6 +1187,7 @@ export function Planner({
                 }
                 prefill={PREFILLABLE_STAGES.includes(stage) ? prefillFor(stage) : undefined}
                 prefillHint={stage === "specify" ? specifyPrefillHint : undefined}
+                confirmReplace={readOnly && stage !== "tasks" ? REPLACE_CONFIRM : undefined}
               />
             );
           })}
