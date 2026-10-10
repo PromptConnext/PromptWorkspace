@@ -30,6 +30,7 @@ from app.api import (
     policies,
     presence,
     repo_analysis,
+    repository_docs,
     stage_documents,
     stage_inputs,
     sync,
@@ -286,6 +287,7 @@ def create_app() -> FastAPI:
     app.include_router(integrations.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
+    app.include_router(repository_docs.router)
     app.include_router(me.router)
     app.include_router(assistant.router)
     app.include_router(discussions.router)
