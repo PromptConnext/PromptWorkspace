@@ -38,6 +38,7 @@ from app.dependencies import User, get_current_user, get_repository
 from app.deployments.preview_url import repo_full_name_from_url
 from app.integrations.github import (
     GithubBranchMovedError,
+    GithubPullRequestExistsError,
     GithubRefUpdateRejectedError,
     GithubWriteError,
 )
@@ -64,9 +65,6 @@ logger = logging.getLogger("promptworkspace.repository_docs")
 
 SYNC_BRANCH_PREFIX = "pw/sync-docs-"
 SYNC_TITLE = "docs: sync planning documents from PromptWorkspace"
-# A sync pull request closed without merging leaves its branch behind while the
-# default branch stays put; the next sync then tries `<name>-2` .. `<name>-5`.
-SYNC_BRANCH_SUFFIXES = range(2, 6)
 
 
 class _Status(NamedTuple):
@@ -134,32 +132,14 @@ async def _load_status(request: Request, repo: Repository, project: Project) -> 
     )
 
 
-async def _read_pr_branch(gh, status: _Status, pr: dict) -> tuple[str, dict[str, str]]:
-    """(head sha, path -> blob sha) of the open sync pull request's branch."""
-    branch_head = await gh.get_branch_head(status.token, status.full_name, pr["head"])
+async def _read_sync_branch(gh, status: _Status, branch: str) -> tuple[str, dict[str, str]]:
+    """(head sha, path -> blob sha) of a sync branch: the open pull request's,
+    or one an earlier sync left without an open pull request."""
+    branch_head = await gh.get_branch_head(status.token, status.full_name, branch)
     entries, truncated = await gh.get_tree_entries(status.token, status.full_name, branch_head)
     if truncated:
         raise HTTPException(status_code=409, detail="repo_tree_too_large")
     return branch_head, _blobs(entries)
-
-
-async def _create_suffixed_branch(
-    gh, token: str, full_name: str, branch: str, from_sha: str
-) -> str:
-    """Create the first free `<branch>-N`, N in SYNC_BRANCH_SUFFIXES, and
-    return its name. With every name taken the last `GithubBranchMovedError`
-    propagates, which the caller answers as a conflict."""
-    logger.warning("sync branch %s of %s exists without a pull request", branch, full_name)
-    taken: GithubBranchMovedError | None = None
-    for suffix in SYNC_BRANCH_SUFFIXES:
-        candidate = f"{branch}-{suffix}"
-        try:
-            await gh.create_branch(token, full_name, candidate, from_sha)
-        except GithubBranchMovedError as exc:
-            taken = exc
-            continue
-        return candidate
-    raise taken
 
 
 def _pr_body(differing: list[SeedFile], reverted: list[SeedFile]) -> str:
@@ -214,7 +194,7 @@ async def docs_status(
     if pr is not None:
         open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"])
         try:
-            _, pr_blobs = await _read_pr_branch(gh, status, pr)
+            _, pr_blobs = await _read_sync_branch(gh, status, pr["head"])
             states = classify_with_pull_request(status.seed_files, status.main_blobs, pr_blobs)
         except (GithubWriteError, HTTPException) as exc:
             # Best-effort: without the branch, the default-branch comparison stands.
@@ -244,28 +224,30 @@ async def sync_docs(
     token, full_name = status.token, status.full_name
 
     async def find_pr() -> dict | None:
-        return await gh.find_open_pull_request(
-            token, full_name, SYNC_BRANCH_PREFIX, status.default_branch
-        )
-
-    async def against(pr: dict) -> tuple[str, list[DocState]]:
+        """The open sync pull request; every lookup fails the same way."""
         try:
-            branch_head, pr_blobs = await _read_pr_branch(gh, status, pr)
+            return await gh.find_open_pull_request(
+                token, full_name, SYNC_BRANCH_PREFIX, status.default_branch
+            )
         except GithubWriteError as exc:
-            logger.warning("reading sync branch %s of %s failed: %s", pr["head"], full_name, exc)
+            logger.warning("sync-docs pull request lookup for %s failed: %s", full_name, exc)
+            if getattr(exc, "status_code", None) in (403, 404):
+                raise HTTPException(
+                    status_code=400, detail="github_pr_permission_denied"
+                ) from exc
+            raise HTTPException(status_code=502, detail="github_sync_failed") from exc
+
+    async def against(branch_name: str) -> tuple[str, list[DocState]]:
+        try:
+            branch_head, branch_blobs = await _read_sync_branch(gh, status, branch_name)
+        except GithubWriteError as exc:
+            logger.warning("reading sync branch %s of %s failed: %s", branch_name, full_name, exc)
             raise _read_failure(exc) from exc
         return branch_head, classify_with_pull_request(
-            status.seed_files, status.main_blobs, pr_blobs
+            status.seed_files, status.main_blobs, branch_blobs
         )
 
-    try:
-        pr = await find_pr()
-    except GithubWriteError as exc:
-        logger.warning("sync-docs pull request lookup for %s failed: %s", full_name, exc)
-        if getattr(exc, "status_code", None) in (403, 404):
-            raise HTTPException(status_code=400, detail="github_pr_permission_denied") from exc
-        raise HTTPException(status_code=502, detail="github_sync_failed") from exc
-
+    pr = await find_pr()
     if pr is None:
         # Named after the default-branch head, so two syncs racing from the
         # same head collide on the name instead of opening two pull requests.
@@ -273,7 +255,7 @@ async def sync_docs(
         base_sha, states = status.head_sha, status.states
     else:
         branch = pr["head"]
-        base_sha, states = await against(pr)
+        base_sha, states = await against(branch)
     changed = changed_files(status.seed_files, states)
     if not changed:
         raise HTTPException(status_code=409, detail="repository_docs_current")
@@ -283,27 +265,27 @@ async def sync_docs(
             try:
                 await gh.create_branch(token, full_name, branch, status.head_sha)
             except GithubBranchMovedError:
-                # Another sync created this branch first: its open pull
-                # request is the one to add to. With none open, the branch was
-                # left by a pull request closed without merging, so take the
-                # first free suffixed name; five taken names are a conflict an
-                # admin has to clear.
+                # The name is taken: another sync's open pull request is the
+                # one to add to. With none open, the branch belongs to a sync
+                # still uploading or to a pull request closed without merging;
+                # either way it is adopted, compared like an open pull
+                # request's branch and written pinned to the head just read,
+                # so a lost race refuses and a retry converges.
                 pr = await find_pr()
-                if pr is None:
-                    branch = await _create_suffixed_branch(
-                        gh, token, full_name, branch, status.head_sha
-                    )
-                else:
+                if pr is not None:
                     branch = pr["head"]
-                    base_sha, states = await against(pr)
-                    changed = changed_files(status.seed_files, states)
-                    if not changed:
-                        raise HTTPException(
-                            status_code=409, detail="repository_docs_current"
-                        ) from None
-        await gh.create_commit_with_files(
-            token, full_name, branch, changed, SYNC_TITLE, expected_base_sha=base_sha
-        )
+                base_sha, states = await against(branch)
+                changed = changed_files(status.seed_files, states)
+                if not changed and pr is not None:
+                    raise HTTPException(
+                        status_code=409, detail="repository_docs_current"
+                    ) from None
+        # An adopted branch may already hold every change; its pull request
+        # still has to be opened below.
+        if changed:
+            await gh.create_commit_with_files(
+                token, full_name, branch, changed, SYNC_TITLE, expected_base_sha=base_sha
+            )
     except GithubBranchMovedError as exc:
         logger.warning("sync-docs onto %s of %s refused: %s", branch, full_name, exc)
         raise HTTPException(status_code=409, detail="github_branch_conflict") from exc
@@ -325,14 +307,21 @@ async def sync_docs(
     )
     try:
         if pr is None:
-            pr = await gh.create_pull_request(
-                token, full_name, branch, status.default_branch, SYNC_TITLE, body
-            )
+            try:
+                pr = await gh.create_pull_request(
+                    token, full_name, branch, status.default_branch, SYNC_TITLE, body
+                )
+            except GithubPullRequestExistsError:
+                # Another sync on the same branch opened it first: add to it.
+                pr = await find_pr()
+                if pr is None:
+                    raise
+                await gh.update_pull_request(token, full_name, pr["number"], body)
         else:
             await gh.update_pull_request(token, full_name, pr["number"], body)
     except GithubWriteError as exc:
         # The sync branch already holds the commit; naming it lets an operator
-        # find (or delete) a branch left without a pull request.
+        # find it. The next sync adopts it.
         logger.warning(
             "sync-docs pull request for %s failed, branch %s left without one: %s",
             full_name,

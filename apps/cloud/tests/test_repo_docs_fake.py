@@ -11,6 +11,7 @@ import pytest
 from app.integrations.github import (
     FakeGithubClient,
     GithubBranchMovedError,
+    GithubPullRequestExistsError,
     GithubRefUpdateRejectedError,
     GithubWriteError,
 )
@@ -156,3 +157,12 @@ def test_branch_protection_applies_to_the_default_branch_only():
         asyncio.run(
             fake.create_commit_with_files("tok", REPO, "main", [SeedFile("AGENTS.md", "a")], "s")
         )
+
+
+def test_a_second_open_pull_request_for_the_same_head_is_refused():
+    fake = FakeGithubClient()
+    asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
+
+    with pytest.raises(GithubPullRequestExistsError):
+        asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
+    assert len(fake.pull_requests) == 1

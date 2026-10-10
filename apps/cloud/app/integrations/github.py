@@ -304,6 +304,12 @@ class GithubRefUpdateRejectedError(GithubWriteError):
     the protection changes."""
 
 
+class GithubPullRequestExistsError(GithubWriteError):
+    """`create_pull_request` got GitHub's 422 "A pull request already exists"
+    for this head and base: another sync opened it first, and the caller adds
+    to that pull request instead of failing."""
+
+
 class GithubAuthError(GithubWriteError):
     """The supplied PAT was rejected (401/403). Distinguished from a generic
     write failure so the settings endpoint can answer 400 "bad token" rather
@@ -489,13 +495,14 @@ def _pull_request_row(data: dict) -> dict:
     }
 
 
+_PULL_REQUEST_PAGES = 5
+
+
 # GitHub can stamp an empty repository's pushed_at a moment after created_at,
 # so a push counts only when it lands more than this after creation. The
 # trade-off: a repository created and pushed within the grace stays flagged
 # `empty` while `size` lags. That is acceptable because the flag is only a
 # picker hint; the import route checks the branch head.
-_PULL_REQUEST_PAGES = 5
-
 _FIRST_PUSH_GRACE = timedelta(seconds=2)
 
 
@@ -1215,6 +1222,11 @@ class HttpGithubClient:
             what=f"create_pull_request for {repo}",
             json={"head": head, "base": base, "title": title, "body": body},
         )
+        if resp.status_code == 422 and "pull request already exists" in resp.text.lower():
+            raise GithubPullRequestExistsError(
+                f"create_pull_request: {repo} already has a pull request from {head}",
+                status_code=422,
+            )
         if resp.is_error:
             raise GithubWriteError(
                 f"create_pull_request failed for {repo}: {resp.status_code} {resp.text}",
@@ -1858,6 +1870,13 @@ class FakeGithubClient:
         if self.fail_pr_status is not None:
             raise GithubWriteError(
                 f"fake create_pull_request failure for {repo}", status_code=self.fail_pr_status
+            )
+        if any(
+            p["repo"] == repo and p["head"] == head and p["base"] == base and p["state"] == "open"
+            for p in self.pull_requests
+        ):
+            raise GithubPullRequestExistsError(
+                f"fake pull request from {head} already exists in {repo}", status_code=422
             )
         number = len(self.pull_requests) + 1
         pull = {

@@ -512,38 +512,117 @@ def test_a_sync_racing_another_ends_with_one_pull_request(client: TestClient):
     assert fake.branch_heads[full_name] == head
 
 
-def test_a_branch_left_by_a_closed_pull_request_gets_a_suffixed_name(client: TestClient):
-    """A sync PR closed without merging leaves its branch behind while the
-    default branch has not moved: the next sync takes `<name>-2`."""
+def test_a_branch_left_by_a_closed_pull_request_is_adopted(client: TestClient):
+    """A sync PR closed without merging leaves its branch (with its commit)
+    while the default branch has not moved: the next sync commits onto that
+    same branch and opens one new PR from it."""
     pid = _created_project(client)
-    _write_stage(client, pid, "plan", V2_PLAN)
     fake, full_name, branch = _race_branch(client)
     head = fake.branch_heads[full_name]
-    asyncio.run(fake.create_branch(TOKEN, full_name, branch, head))
+    _write_stage(client, pid, "plan", V2_PLAN)
+    assert _sync(client, pid).json()["branch"] == branch
+    fake.pull_requests[0]["state"] = "closed"
+    _write_stage(client, pid, "plan", "# Architecture\n\nQueue worker and a cache.\n")
 
     res = _sync(client, pid)
 
     assert res.status_code == 200, res.text
-    assert res.json()["branch"] == f"{branch}-2"
-    assert fake.commits[-1]["branch"] == f"{branch}-2"
-    assert len(fake.pull_requests) == 1 and fake.pull_requests[0]["head"] == f"{branch}-2"
-    assert fake.branch_refs[(full_name, branch)] == head
+    assert res.json()["branch"] == branch
+    assert res.json()["files"] == ["docs/architecture.md"]
+    assert fake.commits[-1]["branch"] == branch
+    open_prs = [p for p in fake.pull_requests if p["state"] == "open"]
+    assert len(open_prs) == 1 and open_prs[0]["head"] == branch
+    assert res.json()["pr_number"] == open_prs[0]["number"] == 2
+    assert [b for (_, b) in fake.branch_refs] == [branch]
+    assert fake.branch_heads[full_name] == head
 
 
-def test_five_leftover_sync_branches_are_a_conflict(client: TestClient):
+def test_a_branch_another_sync_is_still_uploading_is_adopted(client: TestClient):
+    """The other sync created the branch but has not opened its PR yet: this
+    sync adopts the branch and opens the one PR."""
     pid = _created_project(client)
     _write_stage(client, pid, "plan", V2_PLAN)
     fake, full_name, branch = _race_branch(client)
-    head = fake.branch_heads[full_name]
-    for name in [branch] + [f"{branch}-{n}" for n in range(2, 6)]:
-        asyncio.run(fake.create_branch(TOKEN, full_name, name, head))
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+    assert len(fake.pull_requests) == 1 and fake.pull_requests[0]["head"] == branch
+    assert [b for (_, b) in fake.branch_refs] == [branch]
+
+
+def test_a_sync_whose_pull_request_was_opened_first_by_another_ends_with_one(
+    client: TestClient,
+):
+    """Both syncs found no PR and share the branch; the other one opened the
+    PR first, so this one's create answers "already exists" and it updates
+    that PR instead."""
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    asyncio.run(fake.create_pull_request(TOKEN, full_name, branch, "main", "t", "first body"))
+    real_find = fake.find_open_pull_request
+    calls = []
+
+    async def misses_twice(token, repo, prefix, base):
+        calls.append(prefix)
+        if len(calls) <= 2:
+            return None
+        return await real_find(token, repo, prefix, base)
+
+    fake.find_open_pull_request = misses_twice
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert len(calls) == 3
+    assert len(fake.pull_requests) == 1
+    assert res.json()["pr_number"] == 1 and res.json()["branch"] == branch
+    assert fake.pull_requests[0]["body"] != "first body"
+    assert "docs/architecture.md" in fake.pull_requests[0]["body"]
+
+
+def test_a_fixed_token_retries_onto_the_same_branch(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, _, branch = _race_branch(client)
+    fake.fail_pr_status = 403
+    assert _sync(client, pid).json()["detail"] == "github_pr_permission_denied"
+    fake.fail_pr_status = None
     commits = len(fake.commits)
 
     res = _sync(client, pid)
 
-    assert res.status_code == 409
-    assert res.json()["detail"] == "github_branch_conflict"
-    assert len(fake.commits) == commits and fake.pull_requests == []
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+    # The branch already holds the change from the failed attempt.
+    assert len(fake.commits) == commits
+    assert len(fake.pull_requests) == 1 and fake.pull_requests[0]["head"] == branch
+    assert [b for (_, b) in fake.branch_refs] == [branch]
+
+
+def test_a_failing_second_pull_request_lookup_maps_like_the_first(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    calls = []
+
+    async def fails_second(token, repo, prefix, base):
+        calls.append(prefix)
+        if len(calls) == 1:
+            return None
+        raise GithubWriteError("fake pulls 403", status_code=403)
+
+    fake.find_open_pull_request = fails_second
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "github_pr_permission_denied"
 
 
 def test_a_pull_request_branch_that_moved_is_not_written_over(client: TestClient):

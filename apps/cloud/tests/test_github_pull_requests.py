@@ -14,7 +14,12 @@ import json
 import httpx
 import pytest
 
-from app.integrations.github import GithubBranchMovedError, GithubWriteError, HttpGithubClient
+from app.integrations.github import (
+    GithubBranchMovedError,
+    GithubPullRequestExistsError,
+    GithubWriteError,
+    HttpGithubClient,
+)
 
 REPO = "acme/make-story-time"
 
@@ -235,6 +240,46 @@ def test_create_pull_request_forbidden_carries_403(github):
             )
         )
     assert excinfo.value.status_code == 403
+
+
+def test_create_pull_request_that_exists_raises_pull_request_exists(github):
+    responses, _ = github
+    responses[("POST", f"/repos/{REPO}/pulls")] = httpx.Response(
+        422,
+        json={
+            "message": "Validation Failed",
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "custom",
+                    "message": "A pull request already exists for acme:pw/sync-docs-x.",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(GithubPullRequestExistsError) as excinfo:
+        asyncio.run(
+            HttpGithubClient().create_pull_request(
+                "tok", REPO, "pw/sync-docs-x", "main", "docs: sync", "body"
+            )
+        )
+    assert excinfo.value.status_code == 422
+
+
+def test_create_pull_request_other_422_is_a_plain_write_error(github):
+    responses, _ = github
+    responses[("POST", f"/repos/{REPO}/pulls")] = httpx.Response(
+        422, json={"message": "Validation Failed", "errors": [{"field": "head"}]}
+    )
+
+    with pytest.raises(GithubWriteError) as excinfo:
+        asyncio.run(
+            HttpGithubClient().create_pull_request(
+                "tok", REPO, "pw/sync-docs-x", "main", "docs: sync", "body"
+            )
+        )
+    assert not isinstance(excinfo.value, GithubPullRequestExistsError)
 
 
 def test_update_pull_request_patches_the_body(github):
