@@ -120,9 +120,10 @@ function NotConfiguredMessage({ workspaceId }: { workspaceId?: string }) {
           fine-grained personal access token
         </a>{" "}
         (<code>github_pat_…</code>) with <strong>Contents</strong>, <strong>Administration</strong>,{" "}
-        <strong>Webhooks</strong>, <strong>Secrets</strong> and <strong>Variables</strong> write
-        access. The token is verified against GitHub before it is stored, so a bad one fails on that
-        form rather than here — except the last two, which GitHub gives no way to check in advance.
+        <strong>Webhooks</strong>, <strong>Secrets</strong>, <strong>Variables</strong>,{" "}
+        <strong>Workflows</strong> and <strong>Pull requests</strong> read and write access. The
+        token is verified against GitHub before it is stored, so a bad one fails on that form
+        rather than here — except the last four, which GitHub gives no way to check in advance.
       </p>
     </>
   );

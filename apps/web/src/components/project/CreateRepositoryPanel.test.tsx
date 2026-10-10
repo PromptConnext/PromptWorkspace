@@ -140,6 +140,8 @@ describe("CreateRepositoryPanel", () => {
     expect(screen.getByText(/fine-grained personal access token/i)).toBeInTheDocument();
     expect(screen.getByText("Administration")).toBeInTheDocument();
     expect(screen.getByText("Webhooks")).toBeInTheDocument();
+    expect(screen.getByText("Workflows")).toBeInTheDocument();
+    expect(screen.getByText("Pull requests")).toBeInTheDocument();
     expect(screen.getByText(/verified against github before it is stored/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /workspace settings/i })).toHaveAttribute(
       "href",
