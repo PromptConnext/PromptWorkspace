@@ -76,6 +76,27 @@ export function partitionByPublication<T extends HasSha>(
   return { published, unpublished, dropped };
 }
 
+/**
+ * `partitionByPublication`, for pending entries that may be `held`: a held
+ * entry was already published when it was last looked at and only its close
+ * failed to land (no session, task list not loaded). It is published by
+ * definition, so it skips the log lookup — it may long since have fallen off
+ * the page, and reading that as "rewritten away" would lose the close.
+ */
+export function partitionWithHeld<T extends HasSha & { held?: boolean }>(
+  pending: readonly T[],
+  commits: readonly HasSha[],
+  ahead: number | undefined,
+): Publication<T> {
+  const held = pending.filter((p) => p.held);
+  const rest = partitionByPublication(
+    pending.filter((p) => !p.held),
+    commits,
+    ahead,
+  );
+  return { ...rest, published: [...held, ...rest.published] };
+}
+
 /** The upstream-aware ahead count, or undefined when nothing is tracked.
  *  A branch with no `upstream` reports whatever `ahead` the Git extension
  *  last happened to compute, which is not a publication signal — reading it

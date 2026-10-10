@@ -29,7 +29,18 @@ export type StageField = {
    *  practice, not project facts, so a starting text is a draft to edit rather
    *  than a guess about someone's product. */
   defaultValue?: string;
+  /** Standard text for an optional field: shown as the placeholder, and used
+   *  by `composeStageInput` when the author never touched the field (a field
+   *  cleared on purpose stays blank). Never
+   *  prefilled as a value, so typing in the field cannot append to it. */
+  fallback?: string;
 };
+
+/** An optional field's standard text, as its placeholder and its untouched-field
+ *  fallback (see `StageField.fallback`). */
+function standardText(text: string): Pick<StageField, "placeholder" | "fallback"> {
+  return { placeholder: text, fallback: text };
+}
 
 // The constitution is the only project-level document — it has no graph entity
 // and no stage gates it, but it steers every later generation and is what
@@ -38,10 +49,13 @@ export type StageField = {
 // constitution-template.md's own sections: principles, then two free sections,
 // then governance.
 //
-// Every field arrives filled in. These are house rules a competent team would
-// write anyway, so the Tech Lead's job is to strike what doesn't apply and add
-// what's theirs — quicker, and more likely to be read, than an empty box.
-// Deliberately conservative: nothing here names a stack or a vendor.
+// The principles arrive filled in (they are required, and a list to edit line
+// by line). The other sections are optional and open empty, showing house
+// rules a competent team would write anyway as their placeholder: left untouched,
+// that standard text is what the stage is given, so the Tech Lead only types to
+// replace it. It is a placeholder rather than a value because typing into a
+// prefilled box appended to the default with no newline. Deliberately
+// conservative: nothing here names a stack or a vendor.
 export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "principles",
@@ -61,42 +75,49 @@ export const CONSTITUTION_FIELDS: StageField[] = [
   {
     key: "quality",
     label: "Quality bar",
-    hint: "What must be true before code merges.",
+    hint: "What must be true before code merges. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
-    defaultValue:
+    ...standardText(
       "Tests, linting, and type checks pass in CI. At least one other engineer reviews " +
       "every change. Public behaviour is documented where a user would look for it.",
+    ),
   },
   {
     key: "standards",
     label: "Technology & security standards",
-    hint: "Stack rules, dependency policy, data-handling requirements.",
+    hint: "Stack rules, dependency policy, data-handling requirements. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
-    defaultValue:
+    ...standardText(
       "Stay on the stack chosen in the implementation plan; a new runtime dependency needs " +
       "review. Secrets live in the environment, never in source. Validate input at the " +
       "boundary and log no personal data.",
+    ),
   },
   {
     key: "workflow",
     label: "Development workflow",
-    hint: "Branching, review, and release process.",
+    hint: "Branching, review, and release process. Leave untouched to use the standard text shown.",
     type: "textarea",
     rows: 3,
-    defaultValue:
+    ...standardText(
       "Short-lived branches off main, opened as a pull request and merged once CI is green. " +
       "Commits explain why, not just what. Releases come from main.",
+    ),
   },
   {
     key: "governance",
     label: "Governance",
-    hint: "Who may amend these rules, and how.",
-    type: "text",
-    defaultValue:
+    hint: "Who may amend these rules, and how. Leave untouched to use the standard text shown.",
+    // A textarea, not a one-line input: its standard text is a full sentence
+    // pair that a text input's placeholder would clip.
+    type: "textarea",
+    rows: 2,
+    ...standardText(
       "These rules supersede habit; amending them needs Tech Lead approval and a note in the " +
       "change history.",
+    ),
   },
 ];
 
@@ -295,7 +316,10 @@ export function composeStageInput(fields: StageField[], answers: StageAnswers): 
   const missing: string[] = [];
 
   for (const field of fields) {
-    const value = (answers[field.key] ?? "").trim();
+    // The standard text stands in only for a field the author never touched
+    // (no key). A field cleared on purpose is "" and stays "Not provided".
+    const raw = answers[field.key];
+    const value = raw === undefined && !field.required ? (field.fallback ?? "") : (raw ?? "").trim();
     if (value) filled.push(`## ${field.label}\n\n${value}`);
     else missing.push(field.label);
   }

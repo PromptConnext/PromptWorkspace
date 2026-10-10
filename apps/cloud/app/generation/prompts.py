@@ -26,6 +26,10 @@ _STAGE_TEMPLATE: dict[StageKind, str] = {
     "tasks": "tasks-template.md",
 }
 
+# `tasks` for a project imported from a repository: the greenfield template's
+# Setup/Foundational/Polish skeleton makes the model re-scaffold a working app.
+_TASKS_TEMPLATE_EXISTING = "tasks-template-existing.md"
+
 _STAGE_ROLE: dict[StageKind, str] = {
     "constitution": "project-constitution",
     "specify": "specification",
@@ -47,6 +51,80 @@ def _template(name: str) -> str:
     return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
 
 
+# Observed on a real import (finding #33): the repository as shipped did not
+# install, and with no CI and no tests nothing said so until an agent tried.
+# Added only when the specification adds CI or tests (the first rule's "only
+# when a story needs it"), and never pinned to T001: a new first task would
+# shift every ref of an existing board, and a shifted ref retires closed work
+# (stage_apply.py::_apply_tasks).
+NO_CI_FIRST_TASK_RULE = (
+    "When [codebase_baseline] reports no CI workflow or no tests AND the specification adds "
+    "CI or tests, the first task of the 'Baseline gaps' phase confirms that the project "
+    "installs, lints and builds as shipped, using the commands its manifest defines, and "
+    "records the result: what passed, and the exact error for what did not. The CI or test "
+    "tasks build on that result."
+)
+
+# A rebrand task named files the old name was not in (finding #54); the
+# segment is built in app/api/generation.py::_occurrences_segment.
+REPO_OCCURRENCES_RULE = (
+    "When [repo_occurrences] lists a string the specification changes or removes, the tasks "
+    "that change it name every file listed for it, together. Name another file for that "
+    "string only when its line ends 'and N more files' or the segment says it searched only "
+    "some of the files, and then only a file from the [repo_snapshot] file list."
+)
+
+# Author-supplied plan fields beat the documents they were typed to correct
+# (finding #16): a fix to the baseline's storage claim typed into the plan's
+# architecture field lost to the specification that had copied the claim.
+PLAN_AUTHOR_OVERRIDE_RULE = (
+    "The text above CONTEXT is the author's own answers for this plan. Where an answer "
+    "disagrees with the [specification] or the [codebase_baseline] (a storage mechanism, a "
+    "library, an architecture choice), the author's answer wins: write the plan from it, and "
+    "say in the Summary which statement it overrides and which document made it, so the "
+    "disagreement can be fixed where it started."
+)
+
+# The constitution template's examples ("Test-First (NON-NEGOTIABLE)",
+# "Red-Green-Refactor ... strictly enforced") came back as rules nobody gave
+# (finding #15), along with practices the app does not have.
+CONSTITUTION_STRENGTH_RULE = (
+    "Write the principles from the author's rules in the user's input, each as strong as the "
+    "author wrote it. Do not mark a principle NON-NEGOTIABLE, mandatory or strictly enforced, "
+    "and do not require test-first or Red-Green-Refactor, unless the author's rules say so. "
+    "The template's examples are illustrations, not defaults. Do not describe files, tools or "
+    "practices (a translation file, a localization layer) that neither the author's rules nor "
+    "the codebase baseline mention."
+)
+
+# Rules for `tasks` on an imported repository. Observed on a real import
+# (2026-10-04): with only "do not re-scaffold" the model still emitted the
+# template's Setup/Foundational skeleton, invented paths for modules that
+# exist under other names, created a `.env.local`, and padded a Polish phase
+# with work the specification put out of scope.
+EXISTING_CODEBASE_TASK_RULES = [
+    "This is a change to a codebase that already exists and runs, not a new project. Do NOT "
+    "write tasks that create the project structure, initialise the project, install or "
+    "configure frameworks it already uses, set up linting or formatting, or build routing, "
+    "authentication, logging, error handling, environment configuration or a database layer "
+    "that [codebase_baseline] lists as implemented. Add such a task only when the baseline "
+    "lists it as missing AND a user story needs it, in the 'Baseline gaps' phase, naming the gap.",
+    "Name only real files. Write every file path in backticks. Each must appear in the file "
+    "list of [repo_snapshot], or be followed by `(new)` right after the closing backtick when "
+    "the task creates it, as in `src/lib/x.ts` (new). Never invent a path for behaviour that "
+    "already exists: find the file that holds it in the list and name that one. If the list is "
+    "marked partial and a path is not shown, say (new) only when sure.",
+    "Never create `.env`, `.env.local`, key or credential files. Configuration the task adds "
+    "goes in `.env.example` with placeholder values. When the file list already lists "
+    "`.env.example` (or `.env.sample`, `.env.template`), extend that file; do not add another.",
+    "Stay inside the specification. Do not add tasks for anything in its out-of-scope list or "
+    "contradicting its constraints, and do not add a catch-all phase for documentation, "
+    "cleanup, performance or hardening unless a user story names that work.",
+    NO_CI_FIRST_TASK_RULE,
+    REPO_OCCURRENCES_RULE,
+]
+
+
 def driver_prompt(
     kind: StageKind, existing_codebase: bool = False, today: date | None = None
 ) -> str:
@@ -58,7 +136,8 @@ def driver_prompt(
     `today` (UTC by default) is stated so the templates' date fields are not
     filled with a date the model makes up."""
     today = today or utcnow().date()
-    doc = _template(_STAGE_TEMPLATE[kind])
+    brownfield_tasks = existing_codebase and kind == "tasks"
+    doc = _template(_TASKS_TEMPLATE_EXISTING if brownfield_tasks else _STAGE_TEMPLATE[kind])
     lines = [
         f"You are the {_STAGE_ROLE[kind]} engine inside PromptWorkspace.",
         "Fill in the following template completely, based on the user's input. Replace every "
@@ -72,6 +151,10 @@ def driver_prompt(
         "entire line, don't just leave the marker unresolved.",
         f"Today's date is {today.isoformat()}; use it for any date field in the template.",
     ]
+    if kind == "constitution":
+        lines.append(CONSTITUTION_STRENGTH_RULE)
+    if kind == "plan":
+        lines.append(PLAN_AUTHOR_OVERRIDE_RULE)
     if kind in ("plan", "tasks"):
         lines.append(
             "The [specification] in CONTEXT defines what is being built, and its title is the "
@@ -90,6 +173,12 @@ def driver_prompt(
             "acceptance scenarios and requirements for that task's user story. Each criterion "
             "states a verifiable behaviour or artifact; never restate the task title."
         )
+        lines.append(
+            "Keep the template's phase headings exactly as `## Phase <number>: <name>`, one per "
+            "phase, with every task line under its phase. User-story phases are named "
+            "`User Story <n> - <title> (Priority: P<n>)`. Do not add other `##` headings "
+            "between phases."
+        )
     if existing_codebase:
         lines.append(UNTRUSTED_SECURITY_RULE)
     if existing_codebase and kind in ("plan", "tasks"):
@@ -104,6 +193,8 @@ def driver_prompt(
             "path the work touches. Finish an item listed under Partial or Stubbed only when "
             "the specification needs it."
         )
+    if brownfield_tasks:
+        lines += EXISTING_CODEBASE_TASK_RULES
     lines += [
         "",
         "TEMPLATE:",
@@ -157,6 +248,20 @@ CURRENT_SERVICES_RULE = (
 _MARKER_PATTERN = re.compile(r"(?i)<\s*/?\s*untrusted_repository_content[^>]*>")
 
 
+# The baseline's claims are what the spec and plan trust (findings #5, #7): it
+# said core state lived in IndexedDB where store.tsx uses localStorage and a
+# server endpoint, and the spec repeated it. A cited file makes a claim
+# checkable; a named mechanism makes the wrong one visible.
+BASELINE_EVIDENCE_RULE = (
+    "Every bullet under Implemented ends with the file or files it rests on in parentheses, "
+    "as in '- Campaign state persists in the browser via localStorage (src/lib/store.tsx)'. "
+    "A claim about storage or persistence names the mechanism the code uses (localStorage, "
+    "IndexedDB, a server endpoint, an in-memory variable, a database) and the file that uses "
+    "it; never infer it from a key name, a dependency or a README. When state lives only in "
+    "a server process's memory, say under Gaps and Risks that a restart loses it."
+)
+
+
 def codebase_baseline_prompt() -> str:
     doc = _template("codebase-baseline-template.md")
     return "\n".join(
@@ -173,6 +278,7 @@ def codebase_baseline_prompt() -> str:
             "Fill in the template completely. The template's HTML comments are guidance for "
             "you — omit them from the output. Say only what the material supports; where it "
             "is silent, write 'Not evident from the snapshot'.",
+            BASELINE_EVIDENCE_RULE,
             "",
             "TEMPLATE:",
             doc,

@@ -36,6 +36,7 @@ from app.api._guards import (
     require_workspace,
 )
 from app.db.repository import CrossProjectWrite, Repository
+from app.delivery.approvals import plan_state
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.plan_profile import StackProfile
 from app.deployments.preview_url import (
@@ -119,6 +120,31 @@ logger = logging.getLogger("promptworkspace.sync")
 _REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 
+async def _has_commits(github_client, token: str, found: dict) -> bool:
+    """Whether the repository's default branch has a head commit. Run on every
+    import: the listing's `empty` flag is derived from GitHub's lazily
+    recomputed `size` and `pushed_at`, so it can miss a repository whose
+    branches were all deleted, and refusing at import beats a seed-time
+    failure. GitHub answers a ref read on a repository with no commits with
+    409; 404 means the branch is missing, which also covers a renamed or
+    deleted default branch, and is treated as empty too. 401/403 is the
+    token's scope (it can see the repository but not read its contents), as
+    for `get_repo`; any other error is not an answer to this question and
+    becomes 502 github_unreachable."""
+    try:
+        await github_client.get_branch_head(token, found["full_name"], found["default_branch"])
+    except GithubWriteError as exc:
+        status = getattr(exc, "status_code", None)
+        if status in (404, 409):
+            return False
+        if status in (401, 403):
+            raise HTTPException(
+                status_code=400, detail="github_repo_not_in_token_scope"
+            ) from exc
+        raise HTTPException(status_code=502, detail="github_unreachable") from exc
+    return True
+
+
 @router.post("/projects", response_model=Project, status_code=201)
 async def create_project(
     body: ProjectCreate,
@@ -167,9 +193,6 @@ async def create_project(
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
     if found is None:
         raise HTTPException(status_code=404, detail="repo_not_found")
-    if found.get("empty"):
-        raise HTTPException(status_code=400, detail="repo_is_empty")
-
     # A second project importing the same repo would silently steal the
     # first's webhook binding (pw_repo_webhooks is keyed by repo_full_name) —
     # corrupting deploy state and build attribution for both with no error
@@ -179,6 +202,9 @@ async def create_project(
     # sees repos another workspace already imported (plan 0016 M5).
     if repo.find_project_by_repo_id(found["id"]) is not None:
         raise HTTPException(status_code=409, detail="repo_already_imported")
+    # After the local collision check, which costs no GitHub round trip.
+    if not await _has_commits(github_client, token, found):
+        raise HTTPException(status_code=400, detail="repo_is_empty")
 
     return repo.create_project(
         workspace_id=body.workspace_id,
@@ -352,6 +378,11 @@ async def create_repository(
         return project
     if project.lifecycle_status != "tech_review":
         raise HTTPException(status_code=409, detail="not_in_tech_review")
+
+    # Plan 0029 delivery gates, before any external mutation. Behind a setting
+    # so develop/main keep today's behaviour (docs/DEPLOYMENT.md §8).
+    if request.app.state.settings.require_plan_approval:
+        _require_delivery_gates(repo, project_id)
 
     workspace = repo.get_workspace(project.workspace_id)
     resolved = resolve_token(request.app, workspace)
@@ -737,10 +768,18 @@ def _enqueue_initial_code_index(
 
 
 def _seed_stage_docs(repo: Repository, project_id: str) -> dict[str, str | None]:
-    return {
-        stage: (doc.content if doc else None)
-        for stage, doc in ((s, repo.get_stage_document(project_id, s)) for s in _SEED_STAGES)
-    }
+    docs = repo.list_stage_documents(project_id, _SEED_STAGES)
+    return {stage: (docs[stage].content if stage in docs else None) for stage in _SEED_STAGES}
+
+
+def _require_delivery_gates(repo: Repository, project_id: str) -> None:
+    docs = _seed_stage_docs(repo, project_id)
+    if not (docs["constitution"] or "").strip():
+        raise HTTPException(status_code=409, detail="constitution_required")
+    if not (docs["tasks"] or "").strip():
+        raise HTTPException(status_code=409, detail="tasks_required")
+    if plan_state(repo, project_id, docs["tasks"]) != "approved":
+        raise HTTPException(status_code=409, detail="plan_approval_required")
 
 
 def _detected_runtime(repo: Repository, project: Project) -> str | None:

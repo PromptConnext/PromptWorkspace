@@ -3,6 +3,8 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
+  DecisionKind,
+  DecisionMutationOut,
   DeployConnection,
   DeploymentStatus,
   DeploymentTemplateOut,
@@ -13,6 +15,8 @@ import type {
   PolicyTemplateOut,
   PrefillOut,
   Project,
+  ProjectHat,
+  ProjectRoleOut,
   RepoAnalysisOut,
   SeedPreview,
   StageDocumentOut,
@@ -87,6 +91,33 @@ export async function apiFetch<T>(
   path: string,
   authHeaders: Record<string, string>,
   init: RequestInit = {},
+): Promise<T> {
+  // A read that failed in transit or at the gateway is tried once more; a
+  // write never is, because the first attempt may have landed.
+  const method = (init.method ?? "GET").toUpperCase();
+  const mayRetry = method === "GET" && !init.signal?.aborted;
+  try {
+    return await attempt<T>(path, authHeaders, init);
+  } catch (err) {
+    if (!mayRetry || !isTransient(err) || init.signal?.aborted) throw err;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return attempt<T>(path, authHeaders, init);
+  }
+}
+
+const RETRY_DELAY_MS = 400;
+
+/** A network failure (fetch itself threw) or a gateway answer that says the
+ * service was briefly unavailable. Anything else is the server's real answer. */
+function isTransient(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504;
+  return err instanceof TypeError;
+}
+
+async function attempt<T>(
+  path: string,
+  authHeaders: Record<string, string>,
+  init: RequestInit,
 ): Promise<T> {
   const res = await fetch(`${CLOUD_API_URL}${path}`, {
     ...init,
@@ -427,4 +458,41 @@ export function reindexWorkspace(workspaceId: string, authHeaders: Record<string
     authHeaders,
     { method: "POST" },
   );
+}
+
+export function requestDecision(
+  projectId: string,
+  kind: DecisionKind,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<DecisionMutationOut>(`/projects/${projectId}/decisions`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ kind }),
+  });
+}
+
+export function resolveDecision(
+  projectId: string,
+  decisionId: string,
+  outcome: "approved" | "rejected",
+  rationale: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<DecisionMutationOut>(`/projects/${projectId}/decisions/${decisionId}/resolve`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ outcome, rationale }),
+  });
+}
+
+/** null clears the hat. */
+export function setProjectRole(
+  projectId: string,
+  hat: ProjectHat,
+  userId: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<ProjectRoleOut[]>(`/projects/${projectId}/roles/${hat}`, authHeaders, {
+    method: "PUT",
+    body: JSON.stringify({ user_id: userId }),
+  });
 }

@@ -54,6 +54,75 @@ describe("CodebaseAnalysisPanel", () => {
     expect(screen.getByRole("button", { name: "Re-analyze" })).toBeInTheDocument();
   });
 
+  it("52 of 53 files read lists the skipped file and why", () => {
+    const base = analysis();
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({
+          snapshot: {
+            ...base.snapshot!,
+            file_count: 52,
+            skipped: [{ path: "certs/<b>server</b>.pem", reason: "secret" }],
+            skipped_count: 1,
+          },
+        })}
+        canEdit
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/52 of 53 files read/)).toBeInTheDocument();
+    expect(screen.getByText("1 file skipped")).toBeInTheDocument();
+    // A repository path is text, never markup.
+    expect(screen.getByText("certs/<b>server</b>.pem")).toBeInTheDocument();
+    expect(screen.getByText(/credential-shaped file, never read/)).toBeInTheDocument();
+  });
+
+  it("counts every skipped file and lists a vendored directory once", () => {
+    const base = analysis();
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({
+          snapshot: {
+            ...base.snapshot!,
+            skipped: [
+              { path: "node_modules/", reason: "vendored" },
+              { path: "public/logo.png", reason: "binary" },
+            ],
+            skipped_count: 900,
+          },
+        })}
+        canEdit
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/42 of 942 files read/)).toBeInTheDocument();
+    expect(screen.getByText(/vendored or build directory/)).toBeInTheDocument();
+    expect(screen.getByText(/binary file/)).toBeInTheDocument();
+    expect(screen.getByText("900 files skipped")).toBeInTheDocument();
+  });
+
+  it("shows a member the skipped count without an empty list to expand", () => {
+    // The API drops secret-shaped names for a member, so the list can be empty
+    // while the count is not.
+    const base = analysis();
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({
+          snapshot: { ...base.snapshot!, file_count: 52, skipped: [], skipped_count: 1 },
+        })}
+        canEdit={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/52 of 53 files read/)).toBeInTheDocument();
+    const count = screen.getByText("1 file skipped");
+    expect(count.tagName).not.toBe("SUMMARY");
+    expect(count.closest("details")).toBeNull();
+  });
+
   it("flags a stale analysis and a truncated tree", () => {
     const base = analysis();
     render(

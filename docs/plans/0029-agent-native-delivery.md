@@ -1,6 +1,6 @@
 # Plan 0029: Agent-native delivery. Agents do the work, people govern the outcome
 
-**Date:** 2026-10-04 · **Status:** Draft for review (product reframing; no code yet) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
+**Date:** 2026-10-04 · **Status:** Draft for review. **Slice 1 (M1 + M2) in progress on `feature/trust-outcome`**, test environment `promptworkspace-trust.truthledgers.com` ([implementation plan](../superpowers/plans/2026-10-04-trust-outcome-m1-m2.md)) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
 
 **Relationship to existing documents.** This builds on the product vision rather than replacing it. The vision said PromptWorkspace is "a governance and auditability product wearing a planning-tool interface" (§4). This plan takes that literally: the planning-tool interface (task board, assignment, manual `verified`) is the part designed for the old way of working. The governance core underneath (evidence graph, policy scope, seeded repo, CI-observed deploys) is what the agent era needs most. Four follow-up ADRs are proposed in §12. Until they are accepted, nothing here overrides an accepted ADR.
 
@@ -195,7 +195,7 @@ flowchart TB
 | Verification is a person looking | Admin-only `verified` | Volume of agent output makes per-task human inspection impossible. Proof has to be automated, and people review the *proof* and the *risk* |
 | Context travels by copy-paste | `copyTaskContext` to clipboard | Agents should pull a complete, versioned brief and push structured results back |
 | The AI session is private | No agent observability anywhere in cloud, extension or MCP | Without run traces, there is no evidence, no cost control and no audit trail for regulated buyers |
-| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback |
+| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback. First slice shipped 2026-10-10: the Specify, project-rules and Plan stages stay editable after `repo_created`, and the repository's seeded copies catch up through a pull request a person merges (`docs-status`, `sync-docs`); an edit of the Tasks document (by hand or by regeneration) makes the delivery-plan approval stale, while an edit of the Plan document alone does not yet (§13 item 14), and `generate/tasks` still reconciles the board |
 | Sprints and assignees are planning tools | `sprint`/`assignee` mirrored from Jira/ClickUp | Sprints pace human capacity. Agent capacity is elastic. The constraint becomes decision latency and risk |
 | Progress is counting finished tasks | `ProgressRollup.tsx` | 100 % of tasks "implemented" says nothing about whether the outcome works |
 | Rules are documents for people to read | Constitution, `docs/conventions.md` | Rules must be enforceable: some as prompts, some as CI checks, some as hard gates |
@@ -716,6 +716,8 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 | **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. Auto-green for T0/T1, Decision for T2/T3 |
 | **M6** | **Mission Control and outcome progress** | `ProgressRollup.tsx`, `pw_deployment_tasks`, Preview tab | Outcome progress from scenario evidence on the latest `develop` build. "Needs you" strip. Live Change states. Release Candidate is a read-only report on the existing Preview tab |
 
+**Slice 1 notes (2026-10-04).** In code, a Change is `DeliveryChange` (`pw_delivery_changes`, `/projects/{id}/delivery-plan`) because `/sync/projects/{id}/changes` already names the sync head. Three M1/M2 items moved: scenario IDs `O<story>.S<n>` move to M4 (nothing consumes them before evidence exists); decision email moves to after M3 (the cloud has no general email transport yet; in-app Inbox only); separation of duties on self-approval waits for real teams (it would block one-person test projects). The create-repository approval gate ships behind `REQUIRE_PLAN_APPROVAL`, on in the trust environment only.
+
 ### 9.3 Explicitly not in the MVP
 
 - **Specialised Security, Architecture and Docs agents.** Use deterministic scanners and the Reviewer's checklist (which includes constitution and ADR conformance) first. Add roles once the Reviewer's findings data shows where it misses.
@@ -852,4 +854,8 @@ An audit of every earlier plan against `develop` on 2026-10-04 updated their Sta
 | 11 | Business-user desktop follow-up plan | ADR 0028 | Open question 4 in §12 |
 | 12 | Drop `pw_projects.owner_id`; make `workspace_id` NOT NULL | Plans 0001 / 0002 | Low priority. Any later migration |
 | 13 | Pricing rewrite, download page, product copy, contact-webhook loss, locale tests | Plan 0022 | **Not this repo.** `PromptConnext/promptconnext-corp-web` |
+| 14 | Bind `plan_approval` to the Plan document as well as Tasks, so a plan edit after approval stales it | Editable plan after the repository (2026-10-10) | **Phase 1**, with plan approval in the Decision Inbox |
+| 15 | Legacy `repo_created` projects with a NULL `repo_origin` (pre-migration 0035, from scratch or imported) get no document edit and no sync: backfill the origin or let an admin declare it | Editable plan after the repository (2026-10-10) | Low priority. Any later migration |
+| 16 | Sync PR for imported repositories: re-derive the relocated seed (`fit_to_existing_repo`) against a tree that already holds it | Editable plan after the repository (2026-10-10) | **Phase 2**, with the other PRs into existing repos |
+| 17 | The docs banner cannot be dismissed, so a hand-maintained `AGENTS.md` (or any seeded document a team edits on GitHub) keeps it showing "out of date" | Editable plan after the repository (2026-10-10) | Low priority. Any later release |
 

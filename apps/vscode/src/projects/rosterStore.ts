@@ -12,6 +12,7 @@
 import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
 import { CACHE_FILES, type JsonCache } from "@promptworkspace/cloud-client";
 import type { RosterEntry } from "./roster.ts";
+import { refreshFailureIsAuth } from "../auth/status.ts";
 
 const FOCUS_REFRESH_THROTTLE_MS = 60_000;
 
@@ -19,6 +20,7 @@ export class RosterStore {
   private entries: RosterEntry[] = [];
   private lastRefreshedAt = 0;
   private lastError: string | null = null;
+  private lastErrorWasAuth = false;
   private refreshing: Promise<void> | null = null;
   private readonly listeners = new Set<() => void>();
   private generation = 0;
@@ -39,6 +41,11 @@ export class RosterStore {
 
   get lastRefreshError(): string | null {
     return this.lastError;
+  }
+
+  /** See TaskStore.lastRefreshAuthFailed. */
+  get lastRefreshAuthFailed(): boolean {
+    return this.lastErrorWasAuth;
   }
 
   get refreshedAt(): number {
@@ -76,6 +83,7 @@ export class RosterStore {
     this.entries = [];
     this.lastRefreshedAt = 0;
     this.lastError = null;
+    this.lastErrorWasAuth = false;
     await this.cache.clear([CACHE_FILES.roster]);
     this.emit();
   }
@@ -110,12 +118,16 @@ export class RosterStore {
       this.entries = entries;
       this.lastRefreshedAt = Date.now();
       this.lastError = null;
+      this.lastErrorWasAuth = false;
       await this.cache.write(CACHE_FILES.roster, this.entries);
       this.emit();
     } catch (err) {
       // If clear() was called, drop the error silently too.
       if (gen !== this.generation) return;
+      const auth = await refreshFailureIsAuth(err, this.client);
+      if (gen !== this.generation) return;
       this.lastError = err instanceof Error ? err.message : String(err);
+      this.lastErrorWasAuth = auth;
       this.log.info(`roster refresh failed, keeping cache: ${String(err)}`);
       this.emit();
     }

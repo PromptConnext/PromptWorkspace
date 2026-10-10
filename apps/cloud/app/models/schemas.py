@@ -160,6 +160,9 @@ class Task(GraphEntity):
     # pw-owned: a workspace member's user_id, set by the app (ADR 0018).
     # Distinct from the pmo `assignee` free-text tracker name above.
     assigned_user_id: str | None = None
+    # pw-owned: the delivery change (plan 0029) this task is a step of, set by
+    # the Planner from tasks.md's phase headings.
+    change_id: str | None = None
 
 
 class Artifact(GraphEntity):
@@ -676,6 +679,7 @@ FIELD_AUTHORITY: dict[str, dict[str, str]] = {
         "assignee": "pmo",
         "sprint": "pmo",
         "assigned_user_id": "pz",
+        "change_id": "pz",
     },
     "requirements": {"title": "shared", "description": "shared", "status": "pz"},
     "spec_documents": {"content": "pz", "status": "pz", "version": "pz"},
@@ -1080,6 +1084,17 @@ class GithubConnectionOut(BaseModel):
     owner: str | None = None
 
 
+class GithubRepoImportedBy(BaseModel):
+    """The project that already imported a repository. Both fields are null
+    when that project belongs to a workspace the caller is not a member of:
+    the picker can still say the repository is taken, but must not disclose
+    another workspace's project (the 409 at create time keeps the same
+    silence)."""
+
+    project_id: str | None = None
+    name: str | None = None
+
+
 class GithubRepoOut(BaseModel):
     """One repository the workspace's PAT can see, for the import picker
     (GET /workspaces/{id}/integrations/github/repos)."""
@@ -1090,12 +1105,17 @@ class GithubRepoOut(BaseModel):
     default_branch: str
     private: bool
     archived: bool = False
-    # Derived from GitHub's `size == 0` — the only available proxy for "has no
-    # commits". A repo in that state can't be seeded (the seed step reads the
-    # branch head first, which 404s), so the picker disables the row rather
-    # than letting the failure surface at tech-review exit.
+    # Advisory hint: GitHub's `size == 0` unless a push landed after the
+    # repository was created (`pushed_at` > `created_at` + 2 s), since `size`
+    # lags for hours after a first push. It can be wrong either way, so the
+    # picker only warns; POST /projects confirms the default branch head and
+    # refuses with `repo_is_empty` when there is no commit to seed from.
     empty: bool = False
     pushed_at: datetime | None = None
+    # Set when a project already imported this repository (matched on GitHub's
+    # numeric id, so a rename does not hide it). Advisory for the picker, which
+    # disables the row; POST /projects still answers 409 `repo_already_imported`.
+    imported_by: GithubRepoImportedBy | None = None
 
 
 class GithubRepoListOut(BaseModel):
@@ -1242,6 +1262,76 @@ class StageInputs(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+DeliveryChangeKind = Literal["setup", "foundational", "story", "other", "polish", "unphased"]
+
+
+class DeliveryChange(BaseModel):
+    """One PR-sized slice of delivery, plan 0029's "Change", derived from one
+    `## Phase N:` section of tasks.md. Named DeliveryChange in code because
+    `/sync/projects/{id}/changes` already means the sync head. `ref` ("C3") is
+    assigned once at creation and never renumbered; `key` is what a
+    regeneration matches on ("setup", "story:2", ...)."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    ref: str
+    key: str
+    title: str
+    kind: DeliveryChangeKind
+    story: int | None = None
+    priority: str | None = None
+    position: int
+    depends_on: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    deleted_at: datetime | None = None
+
+
+ProjectHat = Literal["business_owner", "tech_steward"]
+
+
+class ProjectRole(BaseModel):
+    """Who wears a project hat (plan 0029 §5.2). No row means workspace admins
+    act for that hat."""
+
+    project_id: str
+    workspace_id: str
+    hat: ProjectHat
+    user_id: str
+    assigned_by: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+DecisionKind = Literal["intent_approval", "plan_approval"]
+DecisionStatus = Literal["open", "approved", "rejected", "withdrawn"]
+
+
+class Decision(BaseModel):
+    """A recorded human judgement (plan 0029 §5.1). This slice has two kinds,
+    both approvals of a stage document, bound to the SHA-256 of the content
+    the requester saw (`subject_hash`)."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    kind: DecisionKind
+    title: str
+    subject_stage: Literal["specify", "tasks"]
+    subject_hash: str
+    # The document text the hash covers, stored at request time (migration
+    # 0006) so an approver sees what they sign and what changed. `None` for a
+    # decision made before the column existed.
+    subject_content: str | None = None
+    routed_hat: ProjectHat
+    status: DecisionStatus = "open"
+    rationale: str | None = None
+    requested_by: str
+    resolved_by: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    resolved_at: datetime | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
 # `generation_runs` is an audit/cost-accounting record, not itself part of
@@ -1293,11 +1383,23 @@ class RepoExcerpt(BaseModel):
     truncated: bool = False
 
 
+class RepoSkippedFile(BaseModel):
+    """A path the snapshot left out (app/imports/snapshot.py::skipped_files):
+    a vendored or build directory (one entry, path ending in `/`), a binary
+    file, or a secret-shaped file whose content is never fetched."""
+
+    path: str
+    reason: Literal["vendored", "binary", "secret"]
+
+
 class RepoSnapshot(BaseModel):
     """Deterministic read of one commit of the repository
     (app/imports/snapshot.py). Secret-shaped files (`.env*`, keys,
-    certificates) are excluded before anything is listed or fetched, so none
-    of this ever carried a credential into a prompt or into this row."""
+    certificates) are never fetched, so none of this ever carried a
+    credential into a prompt or into this row. Their *names* are stored in
+    `skipped` (shown to admins only, app/api/repo_analysis.py::_out), and env
+    templates (`.env.example`, `.env.sample`, `.env.template`) are also listed
+    in `paths` so a task extends one rather than adding another."""
 
     commit_sha: str
     default_branch: str
@@ -1309,7 +1411,8 @@ class RepoSnapshot(BaseModel):
     tree_summary: str = ""
     stack: RepoStack = Field(default_factory=RepoStack)
     excerpts: list[RepoExcerpt] = Field(default_factory=list)
-    # The filtered file paths, capped — enough for the Planner to show and for
+    # The filtered file paths plus env template names, capped — enough for the
+    # Planner to show and for
     # a reader to know what was looked at. The no-overwrite check at repository
     # creation does NOT read this: it reads the live tree, so a file pushed
     # after the analysis still cannot be overwritten.
@@ -1321,6 +1424,13 @@ class RepoSnapshot(BaseModel):
     # "N test files: tests/ 12, src/ 3" or "no test files found". Empty on a
     # snapshot stored before plan 0028.
     test_summary: str = ""
+    # What the filter left out and why, capped; `skipped_count` is every file
+    # skipped, so `file_count` of `file_count + skipped_count` were read. An env
+    # template is listed in `paths` but never read, so it is counted here and
+    # not in `file_count`. Empty on a snapshot stored before the trust-test
+    # fixes (finding #6).
+    skipped: list[RepoSkippedFile] = Field(default_factory=list)
+    skipped_count: int = 0
 
 
 class RepoAnalysis(BaseModel):
@@ -1375,3 +1485,39 @@ class SeedPreviewOut(BaseModel):
     relocated: list[RelocatedFile] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
+
+
+class RepositoryDocFile(BaseModel):
+    """One seeded planning document, compared with the repository's default
+    branch by git blob sha (app/integrations/repo_docs.py)."""
+
+    path: str
+    # `in_pull_request`: differs from the default branch, and the open sync
+    # pull request's branch already carries the rebuilt view.
+    state: Literal["current", "out_of_date", "missing", "in_pull_request"]
+
+
+class OpenSyncPr(BaseModel):
+    number: int
+    url: str
+    # The pull request's branch changes more than the planning documents (or
+    # someone else opened it on the branch the next sync would use): the
+    # sync refuses with `sync_branch_has_foreign_changes` until it is cleared.
+    foreign_changes: bool = False
+
+
+class RepositoryDocsStatus(BaseModel):
+    """GET /projects/{id}/repository/docs-status."""
+
+    files: list[RepositoryDocFile]
+    open_sync_pr: OpenSyncPr | None = None
+
+
+class SyncDocsOut(BaseModel):
+    """POST /projects/{id}/repository/sync-docs: the pull request the changed
+    documents went to, and which paths were committed."""
+
+    pr_number: int
+    pr_url: str
+    branch: str
+    files: list[str]

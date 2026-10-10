@@ -29,7 +29,7 @@ on:
       - "apps/cloud/tests/rls/**"
       - ".github/workflows/cloud-contract.yml"
   push:
-    branches: [main, develop]
+    branches: [main, develop, feature/trust-outcome]
     paths:
       - "apps/cloud/app/db/**"
       - "apps/cloud/migrations/**"
@@ -86,20 +86,12 @@ jobs:
           DATABASE_URL: ${{ env.CONTRACT_DB_URL }}
         run: python scripts/migrate.py apply --var embed_dim=1024
 
-      # The local stack does not auto-expose tables created by a migration to
-      # the Data API roles (supabase/config.toml's `auto_expose_new_tables`,
-      # left unset), and migration 0006 grants only `authenticated`. The posture
-      # this suite targets is production's RLS-bypassing service key, so grant
-      # that role what the migrations just created. Deliberately here and not in
-      # a migration: it is a property of this disposable target, not of the
-      # schema.
-      - name: Expose the schema to the service role
-        run: |
-          set -euo pipefail
-          psql "$CONTRACT_DB_URL" -v ON_ERROR_STOP=1 \
-            -c 'grant usage on schema public to service_role' \
-            -c 'grant select, insert, update, delete on all tables in schema public to service_role' \
-            -c 'grant execute on all functions in schema public to service_role'
+      # No hand grants after migrating: the local stack, like a new hosted
+      # Supabase project, does not grant `service_role` the tables a migration
+      # creates, and 0005_pw_service_role_grants.sql is what grants them. A
+      # grant added here would hide a missing one in the schema, which is how
+      # the trust environment (built from scratch) first hit `permission
+      # denied for table pw_workspace_members` on 2026-10-04.
 
       - name: Run the contract suite against both adapters
         working-directory: apps/cloud

@@ -275,6 +275,49 @@ def test_member_cannot_write_stage_inputs_directly(
     _denied(read)
 
 
+@pytest.mark.parametrize(
+    ("table", "row"),
+    [
+        (
+            "pw_delivery_changes",
+            lambda f: {"project_id": f.project_id, "workspace_id": f.workspace_id, "ref": "C1",
+                       "key": "setup", "title": "planted", "kind": "setup", "position": 0},
+        ),
+        (
+            "pw_project_roles",
+            lambda f: {"project_id": f.project_id, "workspace_id": f.workspace_id,
+                       "hat": "tech_steward", "user_id": f.member.id,
+                       "assigned_by": f.member.id},
+        ),
+        (
+            "pw_decisions",
+            lambda f: {"project_id": f.project_id, "workspace_id": f.workspace_id,
+                       "kind": "plan_approval", "title": "planted", "subject_stage": "tasks",
+                       "subject_hash": "x", "routed_hat": "tech_steward", "status": "approved",
+                       "requested_by": f.member.id, "resolved_by": f.member.id},
+        ),
+    ],
+)
+def test_member_cannot_touch_delivery_tables_directly(
+    http: httpx.Client, target: Target, fixture: Fixture, table: str, row
+) -> None:
+    """Migration 0004: the plan 0029 tables are born service-only. A member
+    who could insert a decision with status `approved` would approve a plan
+    around `app/api/delivery.py`."""
+    res = http.post(
+        f"{target.rest}/{table}",
+        headers=target.user_headers(fixture.member.access_token),
+        json=row(fixture),
+    )
+    _denied(res)
+    read = http.get(
+        f"{target.rest}/{table}",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"project_id": f"eq.{fixture.project_id}", "select": "*"},
+    )
+    _denied(read)
+
+
 def test_member_cannot_read_graph_tables_directly_either(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:

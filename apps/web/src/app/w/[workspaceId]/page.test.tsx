@@ -4,14 +4,28 @@ import { Suspense } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage from "./page";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+const push = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace: vi.fn() }) }));
 vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
 vi.mock("@/components/NewProjectDialog", () => ({
-  NewProjectDialog: ({ open }: { open: boolean }) =>
-    open ? <div role="dialog">New project dialog</div> : null,
+  NewProjectDialog: ({
+    open,
+    onCreated,
+  }: {
+    open: boolean;
+    onCreated: (project: { id: string }) => void;
+  }) =>
+    open ? (
+      <div role="dialog">
+        New project dialog
+        <button type="button" onClick={() => onCreated({ id: "p9" })}>
+          created
+        </button>
+      </div>
+    ) : null,
 }));
 vi.mock("@/lib/workspace", () => ({
   useWorkspace: () => ({
@@ -65,6 +79,17 @@ describe("workspace home", () => {
       await screen.findByText("No projects yet. Create your first project to start planning."),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "New Project" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps the dialog open while the new project opens", async () => {
+    await renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "created" }));
+
+    expect(push).toHaveBeenCalledWith("/w/w1/p/p9");
+    // Not closed onto the "No projects yet" list for the seconds the
+    // navigation takes (finding #4).
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 

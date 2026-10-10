@@ -13,6 +13,7 @@ from __future__ import annotations
 import abc
 import copy
 import threading
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from app.db.merge import incoming_dump as _incoming_dump
@@ -27,6 +28,8 @@ from app.models.schemas import (
     AssignedTask,
     CodeChunk,
     CodeChunkHit,
+    Decision,
+    DeliveryChange,
     Deployment,
     DeploymentConfig,
     DeploymentState,
@@ -40,6 +43,7 @@ from app.models.schemas import (
     PolicyScope,
     Project,
     ProjectGraph,
+    ProjectRole,
     PullRequest,
     RagChunk,
     RagChunkHit,
@@ -105,6 +109,12 @@ class StageInputsUnavailable(RuntimeError):
     so code can arrive first; reads then come back empty and a write maps to
     503 `stage_inputs_unavailable` (app/api/stage_inputs.py) instead of a
     500."""
+
+
+class DeliveryStoreUnavailable(RuntimeError):
+    """The plan 0029 delivery tables aren't there: migration 0004 not yet
+    applied to this database. Writes map to 503 `delivery_store_unavailable`
+    (app/api/delivery.py); reads return nothing."""
 
 
 class Repository(abc.ABC):
@@ -231,6 +241,12 @@ class Repository(abc.ABC):
         unscoped by membership, since this exists to detect a repository
         already claimed by a workspace the caller may not belong to (plan
         0016 M5)."""
+
+    @abc.abstractmethod
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        """The projects, in any workspace, whose repo_id is one of `repo_ids`:
+        `find_project_by_repo_id` for many ids in one read. Unscoped by
+        membership for the same reason; the caller decides what it may show."""
 
     @abc.abstractmethod
     def list_projects(self, user_id: str) -> list[Project]:
@@ -455,6 +471,17 @@ class Repository(abc.ABC):
     ) -> tuple[datetime | None, dict[str, int]]:
         """Return (max cursor, per-entity changed counts since `since`) without
         materialising rows — the cheap "is there anything to pull" probe (M4)."""
+
+    @abc.abstractmethod
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
+        """(task id, change_id, status) for the project's live tasks, in the
+        order a bootstrap `get_graph` lists them, `(updated_at, id)`. One
+        narrow read for callers that need only the task-to-change grouping and
+        each task's status (plan 0029's delivery plan and its per-Change
+        progress) rather than a full pull, which is a request per entity type
+        on Supabase."""
 
     @abc.abstractmethod
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
@@ -721,6 +748,14 @@ class Repository(abc.ABC):
     def get_stage_document(self, project_id: str, stage: str) -> StageDocument | None: ...
 
     @abc.abstractmethod
+    def list_stage_documents(
+        self, project_id: str, stages: Sequence[str]
+    ) -> dict[str, StageDocument]:
+        """The project's documents for `stages`, keyed by stage, in one read; a
+        stage with no document is left out. One request where a
+        `get_stage_document` per stage would be one each."""
+
+    @abc.abstractmethod
     def upsert_stage_document(
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
     ) -> StageDocument: ...
@@ -739,6 +774,43 @@ class Repository(abc.ABC):
     ) -> StageInputs:
         """Replace (not merge) the stage's answers. Raises
         StageInputsUnavailable when the store doesn't exist yet."""
+
+    # --- Delivery store (plan 0029) ---------------------------------------
+
+    @abc.abstractmethod
+    def list_delivery_changes(
+        self, project_id: str, *, include_deleted: bool = False
+    ) -> list[DeliveryChange]:
+        """Ordered by position. Retired rows only with include_deleted."""
+
+    @abc.abstractmethod
+    def upsert_delivery_changes(self, project_id: str, changes: list[DeliveryChange]) -> None:
+        """Insert or replace each row by id. Raises DeliveryStoreUnavailable."""
+
+    @abc.abstractmethod
+    def list_decisions(self, project_id: str) -> list[Decision]:
+        """Newest first."""
+
+    @abc.abstractmethod
+    def get_decision(self, project_id: str, decision_id: str) -> Decision | None: ...
+
+    @abc.abstractmethod
+    def save_decision(self, decision: Decision) -> Decision:
+        """Insert or replace by id. Raises DeliveryStoreUnavailable."""
+
+    @abc.abstractmethod
+    def list_project_roles(self, project_id: str) -> list[ProjectRole]: ...
+
+    @abc.abstractmethod
+    def set_project_role(
+        self,
+        project_id: str,
+        workspace_id: str,
+        hat: str,
+        user_id: str | None,
+        assigned_by: str,
+    ) -> None:
+        """One user per hat; user_id None clears it. Raises DeliveryStoreUnavailable."""
 
     # -- repository analysis (plan 0027) ---------------------------------- #
     @abc.abstractmethod
@@ -792,6 +864,10 @@ class InMemoryRepository(Repository):
         self._stage_documents: dict[str, dict[str, StageDocument]] = {}
         # (project_id, stage) -> StageInputs (Planner form answers)
         self._stage_inputs: dict[tuple[str, str], StageInputs] = {}
+        # Plan 0029 delivery store
+        self._delivery_changes: dict[str, DeliveryChange] = {}
+        self._decisions: dict[str, Decision] = {}
+        self._project_roles: dict[tuple[str, str], ProjectRole] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
 
@@ -987,6 +1063,10 @@ class InMemoryRepository(Repository):
             if project.repo_id == repo_id:
                 return project
         return None
+
+    def list_projects_by_repo_ids(self, repo_ids: list[int]) -> list[Project]:
+        wanted = set(repo_ids)
+        return [p for p in self._projects.values() if p.repo_id in wanted]
 
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project:
         project = self._projects[project_id]
@@ -1335,6 +1415,17 @@ class InMemoryRepository(Repository):
             if changed:
                 counts[etype] = changed
         return max_cursor, counts
+
+    def list_task_change_status(
+        self, project_id: str
+    ) -> list[tuple[str, str | None, str]]:
+        tasks = [
+            t
+            for t in self._graph.get(project_id, {}).get("tasks", {}).values()
+            if t.deleted_at is None and t.updated_at is not None
+        ]
+        tasks.sort(key=lambda t: (t.updated_at, t.id))
+        return [(t.id, t.change_id, TaskStatus(t.status).value) for t in tasks]
 
     def get_task(self, project_id: str, task_id: str) -> Task | None:
         store = self._graph.get(project_id)
@@ -1735,6 +1826,12 @@ class InMemoryRepository(Repository):
         doc = self._stage_documents.get(project_id, {}).get(stage)
         return copy.deepcopy(doc) if doc else None
 
+    def list_stage_documents(
+        self, project_id: str, stages: Sequence[str]
+    ) -> dict[str, StageDocument]:
+        store = self._stage_documents.get(project_id, {})
+        return {stage: copy.deepcopy(store[stage]) for stage in stages if stage in store}
+
     def upsert_stage_document(
         self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
     ) -> StageDocument:
@@ -1774,6 +1871,58 @@ class InMemoryRepository(Repository):
         )
         self._stage_inputs[(project_id, stage)] = row
         return copy.deepcopy(row)
+
+    def list_delivery_changes(
+        self, project_id: str, *, include_deleted: bool = False
+    ) -> list[DeliveryChange]:
+        rows = [
+            c
+            for c in self._delivery_changes.values()
+            if c.project_id == project_id and (include_deleted or c.deleted_at is None)
+        ]
+        return [copy.deepcopy(c) for c in sorted(rows, key=lambda c: (c.position, c.ref))]
+
+    def upsert_delivery_changes(self, project_id: str, changes: list[DeliveryChange]) -> None:
+        for change in changes:
+            self._delivery_changes[change.id] = copy.deepcopy(change)
+
+    def list_decisions(self, project_id: str) -> list[Decision]:
+        rows = [d for d in self._decisions.values() if d.project_id == project_id]
+        rows.sort(key=lambda d: (d.created_at, d.id), reverse=True)
+        return [copy.deepcopy(d) for d in rows]
+
+    def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
+        row = self._decisions.get(decision_id)
+        if row is None or row.project_id != project_id:
+            return None
+        return copy.deepcopy(row)
+
+    def save_decision(self, decision: Decision) -> Decision:
+        self._decisions[decision.id] = copy.deepcopy(decision)
+        return copy.deepcopy(decision)
+
+    def list_project_roles(self, project_id: str) -> list[ProjectRole]:
+        rows = [r for (pid, _), r in self._project_roles.items() if pid == project_id]
+        return [copy.deepcopy(r) for r in sorted(rows, key=lambda r: r.hat)]
+
+    def set_project_role(
+        self,
+        project_id: str,
+        workspace_id: str,
+        hat: str,
+        user_id: str | None,
+        assigned_by: str,
+    ) -> None:
+        if user_id is None:
+            self._project_roles.pop((project_id, hat), None)
+            return
+        self._project_roles[(project_id, hat)] = ProjectRole(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            hat=hat,
+            user_id=user_id,
+            assigned_by=assigned_by,
+        )
 
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
         analysis = self._repo_analyses.get(project_id)

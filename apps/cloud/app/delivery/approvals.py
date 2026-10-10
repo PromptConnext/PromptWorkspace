@@ -1,0 +1,128 @@
+"""Approval reads over the repository (plan 0029 M2).
+
+`decisions.py` holds the pure rules; this module applies them to a project:
+the hash of a decision's subject document as it is now, the approval state a
+project shows, and the mirror of that state onto the graph entities that
+carry an approval field (`Requirement.status`, `SpecDocument.status` and
+`approved_by`). The mirror is derived, never authoritative — it is rewritten
+from the decisions whenever they or their subject documents change, so an
+edit that makes an approval stale also takes the "Approved" badge away.
+"""
+
+from __future__ import annotations
+
+from typing import cast
+
+from app.db.repository import Repository
+from app.delivery.decisions import (
+    STAGE_OF,
+    ApprovalState,
+    approval_state,
+    content_hash,
+    latest_decision,
+)
+from app.models.schemas import Decision, GraphUpsertRequest, RequirementStatus, SpecStatus
+
+
+def document_hash(content: str | None) -> str | None:
+    """The hash an approval binds for a stage document's text; None for a
+    missing or blank document, which there is nothing to approve in."""
+    if content is None or not content.strip():
+        return None
+    return content_hash(content)
+
+
+def current_hash(repo: Repository, project_id: str, stage: str) -> str | None:
+    doc = repo.get_stage_document(project_id, stage)
+    return document_hash(doc.content if doc else None)
+
+
+def stage_hashes(
+    repo: Repository, project_id: str, known: dict[str, str | None] | None = None
+) -> dict[str, str | None]:
+    """The current hash of every approval subject stage, keyed by stage.
+    `known` carries hashes the caller already read in this request; the rest
+    come from one repository read (each read is a database round trip)."""
+    hashes = dict(known or {})
+    missing = [stage for stage in STAGE_OF.values() if stage not in hashes]
+    if missing:
+        docs = repo.list_stage_documents(project_id, missing)
+        for stage in missing:
+            doc = docs.get(stage)
+            hashes[stage] = document_hash(doc.content if doc else None)
+    return hashes
+
+
+def states_of(
+    decisions: list[Decision], hashes: dict[str, str | None]
+) -> dict[str, ApprovalState]:
+    """The approval states from decisions and stage hashes already in hand."""
+    intent, plan = "intent_approval", "plan_approval"
+    return {
+        "intent": approval_state(decisions, intent, hashes[STAGE_OF[intent]]),
+        "plan": approval_state(decisions, plan, hashes[STAGE_OF[plan]]),
+    }
+
+
+_UNREAD = object()  # plan_state's "the caller has not read the tasks document"
+
+
+def plan_state(
+    repo: Repository, project_id: str, tasks_content: str | None | object = _UNREAD
+) -> ApprovalState:
+    """The plan approval alone: reads only the `tasks` document, not both, and
+    not even that when the caller passes what it already read: the text, or
+    None for a document that does not exist."""
+    if tasks_content is _UNREAD:
+        tasks_hash = current_hash(repo, project_id, STAGE_OF["plan_approval"])
+    else:
+        tasks_hash = document_hash(cast("str | None", tasks_content))
+    return approval_state(repo.list_decisions(project_id), "plan_approval", tasks_hash)
+
+
+def sync_approval_mirrors(
+    repo: Repository,
+    project_id: str,
+    *,
+    decisions: list[Decision] | None = None,
+    hashes: dict[str, str | None] | None = None,
+) -> None:
+    """Write the current approval states onto the latest Requirement (intent)
+    and SpecDocument (plan). Writes only a value that differs. A caller that
+    already holds the project's decisions (as they stand after its write) and
+    stage hashes passes them in instead of having them read again."""
+    if decisions is None:
+        decisions = repo.list_decisions(project_id)
+    states = states_of(decisions, stage_hashes(repo, project_id, hashes))
+
+    requirement = repo.get_latest_requirement(project_id)
+    if requirement is not None:
+        status = (
+            RequirementStatus.approved if states["intent"] == "approved"
+            else RequirementStatus.draft
+        )
+        if requirement.status != status:
+            repo.upsert_graph(
+                project_id,
+                GraphUpsertRequest(
+                    requirements=[requirement.model_copy(update={"status": status})]
+                ),
+                source="pz",
+            )
+
+    spec = repo.get_latest_spec_document(project_id)
+    if spec is not None:
+        if states["plan"] == "approved":
+            latest = latest_decision(decisions, "plan_approval")
+            update = {
+                "status": SpecStatus.approved,
+                "approved_by": latest.resolved_by if latest is not None else None,
+            }
+        else:
+            update = {"status": SpecStatus.draft, "approved_by": None}
+        if spec.status != update["status"] or spec.approved_by != update["approved_by"]:
+            repo.upsert_graph(
+                project_id,
+                GraphUpsertRequest(spec_documents=[spec.model_copy(update=update)]),
+                source="pz",
+            )

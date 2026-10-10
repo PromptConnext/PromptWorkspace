@@ -15,9 +15,11 @@ functions only sequence reads — `build_snapshot` one file at a time,
 
 **Nothing secret-shaped is ever fetched.** `.env*`, private keys, certificates
 and credential files are dropped from the path list before anything else looks
-at it, so they are not listed, not summarised, not excerpted and not stored —
-the model reading the snapshot never sees one, and neither does
-`pw_repo_analyses`. Repository content is still untrusted prompt input after
+at it, so they are not summarised, not excerpted and their content is not
+stored — the model reading the snapshot never sees one. Two names do survive:
+env templates (`.env.example` and family) are listed by name so a task can
+extend one, and the `skipped` list names what was left out, shown to admins
+only. Repository content is still untrusted prompt input after
 that filter; the prompt that reads it treats it as data (app/generation/
 prompts.py::codebase_baseline_prompt), which is a separate defence against a
 separate problem. And a file that passes the filter can still quote a key
@@ -32,9 +34,10 @@ import fnmatch
 import posixpath
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 from app.integrations.github import GithubWriteError
-from app.models.schemas import RepoExcerpt, RepoSnapshot, RepoStack
+from app.models.schemas import RepoExcerpt, RepoSkippedFile, RepoSnapshot, RepoStack
 
 # Any path with one of these as a directory segment is vendored, generated or
 # tool state — never the code a plan should be written against.
@@ -231,6 +234,8 @@ _EXCERPT_GLOBS = (
 )
 
 MAX_PATHS = 2_000
+# Entries in a snapshot's `skipped` list; `skipped_count` stays exact.
+MAX_SKIPPED = 50
 MAX_SUMMARY_DIRS = 200
 EXCERPT_FILE_CHARS = 8_000
 EXCERPT_TOTAL_CHARS = 30_000
@@ -316,6 +321,64 @@ def is_excluded_path(path: str) -> bool:
 
 def filter_paths(paths: list[str]) -> list[str]:
     return sorted(p for p in paths if p and not is_excluded_path(p))
+
+
+# Templates for an environment file (finding #56). The secret filter drops
+# every `.env*`, so a task added `.env.example` to a repository that had one.
+# Their *names* are listed; their content is never fetched, excerpted,
+# outlined, grepped or embedded — a template is one typo away from a real key.
+_ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
+
+
+def is_env_template_path(path: str) -> bool:
+    parts = path.split("/")
+    return parts[-1].lower() in _ENV_TEMPLATE_NAMES and not any(
+        part in _EXCLUDED_DIRS for part in parts[:-1]
+    )
+
+
+def listed_paths(paths: list[str]) -> list[str]:
+    """The snapshot's file list: `filter_paths`, plus env template names."""
+    return sorted({*filter_paths(paths), *(p for p in paths if p and is_env_template_path(p))})
+
+
+def skipped_files(
+    paths: list[str], limit: int = MAX_SKIPPED
+) -> tuple[list[RepoSkippedFile], int]:
+    """What the filter above left out of the analysis and why (finding #6),
+    as (entries sorted by path, total files skipped). Secret-shaped and other
+    entries are each capped at `limit`; the API caps what it shows.
+
+    A vendored or build directory is one entry (`node_modules/`), not one per
+    file inside it. Naming a secret-shaped file here is not reading it (its
+    content is never fetched), but the name alone says where a repository
+    keeps its keys, so only admins are shown these entries
+    (app/api/repo_analysis.py::_out). An env template is listed in the
+    snapshot's paths and still counted here: its name is shown, never read."""
+    entries: dict[str, str] = {}
+    count = 0
+    for path in paths:
+        if not path or not is_excluded_path(path):
+            continue
+        count += 1
+        parts = path.split("/")
+        vendored = next(
+            (i for i, part in enumerate(parts[:-1]) if part in _EXCLUDED_DIRS), None
+        )
+        if vendored is not None:
+            entries["/".join(parts[: vendored + 1]) + "/"] = "vendored"
+        elif is_secret_path(path):
+            entries[path] = "secret"
+        else:
+            entries[path] = "binary"
+    # Secret-shaped entries are capped apart from the rest: members are shown
+    # the list without them (app/api/repo_analysis.py::_out), and one cap over
+    # both could leave them nothing when the first `limit` paths are secrets.
+    ordered = sorted(entries)
+    secret = [p for p in ordered if entries[p] == "secret"][:limit]
+    other = [p for p in ordered if entries[p] != "secret"][:limit]
+    listed = [RepoSkippedFile(path=p, reason=entries[p]) for p in sorted([*secret, *other])]
+    return listed, count
 
 
 def summarize_tree(paths: list[str], max_dirs: int = MAX_SUMMARY_DIRS) -> str:
@@ -503,11 +566,15 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
     """
     head_sha = await github_client.get_branch_head(token, repo, branch)
     raw_paths, truncated = await github_client.get_tree(token, repo, head_sha)
-    paths = filter_paths(raw_paths)
+    # `paths` is what is listed; `readable` is what may be fetched, and never
+    # includes an env template.
+    paths = listed_paths(raw_paths)
+    readable = filter_paths(raw_paths)
+    skipped, skipped_count = skipped_files(raw_paths)
 
     excerpts: list[RepoExcerpt] = []
     remaining = EXCERPT_TOTAL_CHARS
-    for path in excerpt_paths(paths):
+    for path in excerpt_paths(readable):
         if remaining <= 0:
             break
         try:
@@ -522,12 +589,13 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
             RepoExcerpt(path=path, content=clipped, truncated=len(clipped) < len(content))
         )
 
-    source_outlines = await _outline_sources(github_client, token, repo, head_sha, paths)
+    source_outlines = await _outline_sources(github_client, token, repo, head_sha, readable)
 
     return RepoSnapshot(
         commit_sha=head_sha,
         default_branch=branch,
-        file_count=len(paths),
+        # Files read; an env template's name is listed but counted as skipped.
+        file_count=len(readable),
         tree_truncated=truncated,
         tree_summary=summarize_tree(paths),
         stack=detect_stack(paths),
@@ -535,6 +603,8 @@ async def build_snapshot(github_client, token: str, repo: str, branch: str) -> R
         paths=paths[:MAX_PATHS],
         source_outlines=source_outlines,
         test_summary=summarize_tests(paths),
+        skipped=skipped,
+        skipped_count=skipped_count,
     )
 
 
@@ -551,3 +621,182 @@ def indexable_code_paths(paths: list[str], limit: int) -> list[str]:
     ]
     selected.sort(key=lambda p: posixpath.splitext(p)[1].lower() not in _LANGUAGE_BY_EXTENSION)
     return selected[:limit]
+
+
+# --------------------------------------------------------------------------- #
+# Where the specification's strings live (task 4.2, finding #54)
+# --------------------------------------------------------------------------- #
+# The model sees file names and outlines, not where a string is written, so a
+# rebrand task named plausible-but-wrong files. At `tasks` time the strings the
+# specification quotes are counted, file by file, in the snapshot commit's own
+# files: fetched again (contents are never stored), through the same filter as
+# the code index, so a secret-shaped file or an env template is never read.
+# GitHub code search was measured first (2026-10-09) and found 0 of the 14
+# files on the test repository: private repositories were not in its index.
+# Reading the files found all 14 in about 4 s for a 53-file repository.
+OCCURRENCE_CANDIDATES = 12
+OCCURRENCE_MAX_TOKENS = 5
+OCCURRENCE_MAX_FILES = 200
+OCCURRENCE_FILES_PER_TOKEN = 20
+OCCURRENCE_FETCH_CONCURRENCY = 8
+# The whole lookup runs before the model starts, so it is time the user spends
+# watching nothing (and, in a deploy, time against the server's drain). Past
+# this the files counted so far are used.
+OCCURRENCE_BUDGET_SECONDS = 8.0
+
+
+def _ends_the_search(exc: GithubWriteError) -> bool:
+    """Whether a failed fetch means the next one would fail the same way: a 429,
+    or a 403 whose body says the token is rate limited (GitHub's primary and
+    secondary limits both do) or is out of scope. Any other 403 (an oversize
+    file, a blocked path) is about that one file and the search carries on."""
+    if exc.status_code == 429:
+        return True
+    if exc.status_code == 403:
+        message = str(exc).lower()
+        return "rate limit" in message or "resource not accessible" in message
+    return False
+
+# "double", “curly”, `backticked` or 'single' quoted, 3-64 characters on one
+# line. A single quote must stand outside a word, so an apostrophe in "the
+# user's data" does not open a string.
+_QUOTED = re.compile(
+    r"\"([^\"\n]{3,64})\"|\u201c([^\u201d\n]{3,64})\u201d|`([^`\n]{3,64})`"
+    r"|(?<!\w)'([^'\n]{3,64})'(?!\w)"
+)
+
+
+def quoted_strings(text: str, limit: int = OCCURRENCE_CANDIDATES) -> list[str]:
+    """The distinct strings `text` quotes, in order, up to `limit`. A quoted
+    path (anything with a `/`) is skipped: the file list already answers
+    where a path is."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _QUOTED.finditer(text):
+        value = next(group for group in match.groups() if group is not None).strip()
+        key = value.lower()
+        if len(value) < 3 or "/" in value or key in seen:
+            continue
+        seen.add(key)
+        found.append(value)
+        if len(found) >= limit:
+            break
+    return found
+
+
+@dataclass(frozen=True)
+class RepoOccurrences:
+    """`found` is (string, [(path, count), ...]) per string with a hit, files
+    by count then path; `searched` of `searchable` files were read, `selected`
+    being the share of `searchable` that was meant to be (OCCURRENCE_MAX_FILES
+    at most). `stopped` is why the search ended early — "timeout" or
+    "rate_limit" — or None."""
+
+    found: list[tuple[str, list[tuple[str, int]]]]
+    searched: int
+    searchable: int
+    stopped: str | None = None
+    selected: int = 0
+
+
+def _counts_in(content: str, needles: list[str]) -> dict[str, int]:
+    """Case-insensitive count of each needle in one file, zeros left out — a
+    rename of "ASSET GROW" also has to find "Asset Grow"."""
+    text = content.lower()
+    return {needle: n for needle in needles if (n := text.count(needle))}
+
+
+async def repo_occurrences(
+    github_client,
+    token: str,
+    repo: str,
+    sha: str,
+    paths: list[str],
+    strings: list[str],
+    budget_seconds: float | None = None,
+) -> RepoOccurrences:
+    """Fetch the code-index selection of `paths` at `sha` and count `strings`
+    in it; at most OCCURRENCE_MAX_TOKENS strings with a hit are returned.
+    Each file is counted as it arrives and its content dropped, so at most
+    OCCURRENCE_FETCH_CONCURRENCY files are held at once. A file that fails to
+    fetch is left out, and counts against `searched`.
+
+    The search is best effort: when `budget_seconds` (OCCURRENCE_BUDGET_SECONDS)
+    runs out the fetches still pending are cancelled, and at the first
+    403/429 from GitHub no further file is requested; either way the counts
+    already made are returned, with `stopped` saying why."""
+    if not strings:
+        return RepoOccurrences(found=[], searched=0, searchable=0)
+    needles = [s.lower() for s in strings]
+    semaphore = asyncio.Semaphore(OCCURRENCE_FETCH_CONCURRENCY)
+    counted: dict[str, dict[str, int] | None] = {}
+    stopped: str | None = None
+
+    async def count(path: str) -> None:
+        nonlocal stopped
+        async with semaphore:
+            if stopped == "rate_limit":
+                return
+            try:
+                content = await github_client.fetch_file_content(token, repo, path, sha)
+            except GithubWriteError as exc:
+                counted[path] = None
+                if _ends_the_search(exc):
+                    stopped = "rate_limit"
+                return
+            counted[path] = _counts_in(content, needles)
+
+    searchable = indexable_code_paths(paths, len(paths))
+    selected = searchable[:OCCURRENCE_MAX_FILES]
+    if not selected:
+        return RepoOccurrences(found=[], searched=0, searchable=0)
+    tasks = [asyncio.create_task(count(p)) for p in selected]
+    budget = OCCURRENCE_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=budget)
+    finally:
+        # Also on the caller's own cancellation: no fetch outlives the lookup.
+        for task in tasks:
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    if pending and stopped is None:
+        stopped = "timeout"
+    for task in tasks:
+        # An error that is not a GitHub answer is a bug or a dead network: it
+        # surfaces to the caller, which logs it and goes without the segment.
+        if task.cancelled():
+            continue
+        if (error := task.exception()) is not None:
+            raise error
+
+    found: list[tuple[str, list[tuple[str, int]]]] = []
+    for string, needle in zip(strings, needles, strict=True):
+        hits = [(path, c[needle]) for path, c in counted.items() if c and needle in c]
+        if hits:
+            found.append((string, sorted(hits, key=lambda hit: (-hit[1], hit[0]))))
+    return RepoOccurrences(
+        found=found[:OCCURRENCE_MAX_TOKENS],
+        searched=sum(1 for c in counted.values() if c is not None),
+        searchable=len(searchable),
+        stopped=stopped,
+        selected=len(selected),
+    )
+
+
+def occurrences_text(occurrences: RepoOccurrences) -> str:
+    """One line per string: the files that contain it, each with its count,
+    capped at OCCURRENCE_FILES_PER_TOKEN files; then, when not every file
+    could be read, a line saying how many were."""
+    lines = []
+    for token, hits in occurrences.found:
+        shown = [(p, n) for p, n in hits if p.isprintable()][:OCCURRENCE_FILES_PER_TOKEN]
+        listed = ", ".join(f"{path} ({count})" for path, count in shown)
+        more = len(hits) - len(shown)
+        suffix = f", and {more} more files" if more > 0 else ""
+        lines.append(f'"{token}" is in {len(hits)} files: {listed}{suffix}')
+    if occurrences.searched < occurrences.searchable:
+        lines.append(
+            f"(searched {occurrences.searched} of {occurrences.searchable} files; "
+            "others may contain these strings too)"
+        )
+    return "\n".join(lines)

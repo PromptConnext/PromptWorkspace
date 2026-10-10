@@ -7,6 +7,8 @@ const replace = vi.fn();
 let search = "";
 let refreshError: string | null = null;
 let graphLoaded = true;
+// A reload of a graph already on screen (after a save in the Planner).
+let graphReloading = false;
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace }),
   usePathname: () => "/w/w1/p/p1",
@@ -30,7 +32,26 @@ vi.mock("@/components/project/GraphBrowser", () => ({
   GraphBrowser: () => <div>graph-view</div>,
 }));
 vi.mock("@/components/project/Planner", () => ({
-  Planner: () => <div>planner-view</div>,
+  Planner: ({
+    step,
+    onStepChange,
+  }: {
+    step?: string | null;
+    onStepChange?: (key: string) => void;
+  }) => (
+    <div>
+      planner-view step={step ?? "none"}
+      <button type="button" onClick={() => onStepChange?.("plan")}>
+        open plan step
+      </button>
+    </div>
+  ),
+}));
+vi.mock("@/components/project/DecisionsPanel", () => ({
+  DecisionsPanel: () => <div>decisions-view</div>,
+}));
+vi.mock("@/components/project/DeliveryPlan", () => ({
+  DeliveryPlan: () => <div>delivery-view</div>,
 }));
 vi.mock("@/components/project/PreviewPanel", () => ({
   PreviewPanel: () => null,
@@ -48,7 +69,7 @@ vi.mock("@/lib/hooks", () => ({
   useCloudGet: () => ({
     data: graphLoaded ? { project: { name: "P" } } : null,
     error: null,
-    loading: !graphLoaded,
+    loading: !graphLoaded || graphReloading,
     refetch: vi.fn(),
     refreshing: false,
     refreshError,
@@ -62,6 +83,7 @@ beforeEach(() => {
   search = "";
   refreshError = null;
   graphLoaded = true;
+  graphReloading = false;
 });
 afterEach(cleanup);
 
@@ -77,7 +99,7 @@ describe("project page tab URL sync", () => {
       "aria-selected",
       "true",
     );
-    expect(screen.getByText("planner-view")).toBeInTheDocument();
+    expect(screen.getByText(/planner-view/)).toBeInTheDocument();
   });
 
   it("reads the tab from the URL and widens main on Tasks", () => {
@@ -115,7 +137,7 @@ describe("project page tab URL sync", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "Planner" }), {
       key: "ArrowRight",
     });
-    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=graph", {
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=delivery", {
       scroll: false,
     });
     fireEvent.keyDown(screen.getByRole("tab", { name: "Planner" }), {
@@ -147,6 +169,70 @@ describe("project page tab URL sync", () => {
     expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=tasks&task=t1", {
       scroll: false,
     });
+  });
+});
+
+describe("planner step URL sync", () => {
+  it("hands the Planner the step in the URL and keeps the step it opens there", () => {
+    search = "tab=planner&step=tasks";
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    expect(screen.getByText("planner-view step=tasks", { exact: false })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "open plan step" }));
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=planner&step=plan", {
+      scroll: false,
+    });
+  });
+
+  it("drops the step when leaving the Planner", () => {
+    search = "tab=planner&step=tasks";
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(replace).toHaveBeenLastCalledWith("/w/w1/p/p1?tab=graph", { scroll: false });
+  });
+});
+
+describe("a graph reload after a change", () => {
+  function renderTab(tab: string) {
+    graphReloading = true;
+    search = `tab=${tab}`;
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+  }
+
+  it("says Updating… over the old tasks instead of showing them silently", () => {
+    // Finding #27: pre-edit task titles painted as if current.
+    renderTab("delivery");
+    expect(screen.getByRole("status")).toHaveTextContent("Updating…");
+    expect(screen.getByText("delivery-view")).toBeInTheDocument();
+  });
+
+  it("says Updating… in the board's freshness line on Tasks", () => {
+    renderTab("tasks");
+    expect(screen.getByText("Updating…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    expect(screen.getByText("board-view")).toBeInTheDocument();
+  });
+
+  it("says nothing once the reload is done", () => {
+    search = "tab=delivery";
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    expect(screen.queryByText("Updating…")).not.toBeInTheDocument();
   });
 });
 
@@ -202,6 +288,17 @@ describe("first load", () => {
     renderLoading("planner");
     expect(screen.getByRole("status")).toHaveTextContent("Loading project…");
     expect(screen.queryByText("In Progress")).not.toBeInTheDocument();
+  });
+
+  it("opens Delivery and Decisions without waiting for the graph", () => {
+    // Waiting chained the tab's own requests behind the graph's (finding #26).
+    renderLoading("delivery");
+    expect(screen.getByText("delivery-view")).toBeInTheDocument();
+    expect(screen.queryByText("Loading project…")).not.toBeInTheDocument();
+    cleanup();
+    renderLoading("decisions");
+    expect(screen.getByText("decisions-view")).toBeInTheDocument();
+    expect(screen.queryByText("Loading project…")).not.toBeInTheDocument();
   });
 
   it("holds the breadcrumb's place with a skeleton until the name arrives", () => {

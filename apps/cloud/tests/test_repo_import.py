@@ -64,9 +64,13 @@ def _seed_repo(
     archived: bool = False,
     empty: bool = False,
     pushed_at: str | None = "2026-09-15T00:00:00Z",
+    created_at: str | None = None,
+    size: int | None = None,
 ) -> None:
     """Populate FakeGithubClient.existing_repos with the raw shape _repo_row
-    normalizes, so list_repos and get_repo both see it."""
+    normalizes, so list_repos and get_repo both see it. `empty=True` also makes
+    the fake's branch-head read answer 409, as GitHub does for a repository
+    with no commits (including one whose every branch was deleted)."""
     client.app.state.github_client.existing_repos[full_name] = {
         "id": next(_next_test_repo_id),
         "full_name": full_name,
@@ -74,9 +78,12 @@ def _seed_repo(
         "default_branch": default_branch,
         "private": private,
         "archived": archived,
-        "size": 0 if empty else 100,
+        "size": size if size is not None else (0 if empty else 100),
         "pushed_at": pushed_at,
+        "created_at": created_at,
     }
+    if empty:
+        client.app.state.github_client.empty_repos.add(full_name)
 
 
 # --------------------------------------------------------------------------- #
@@ -97,6 +104,120 @@ def test_listing_filters_out_a_repo_under_a_different_owner(client: TestClient):
     assert res.status_code == 200, res.text
     full_names = [r["full_name"] for r in res.json()["repositories"]]
     assert full_names == ["acme/storyapp"]
+
+
+def _import(client: TestClient, ws_id: str, full_name: str, name: str, headers=ALICE):
+    res = client.post(
+        "/projects",
+        json={"name": name, "workspace_id": ws_id, "import_repo_full_name": full_name},
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _listing(client: TestClient, ws_id: str, headers=ALICE) -> dict[str, dict]:
+    res = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=headers)
+    assert res.status_code == 200, res.text
+    return {r["full_name"]: r for r in res.json()["repositories"]}
+
+
+def test_an_imported_repo_is_listed_with_imported_by(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    _seed_repo(client, "acme/fresh")
+    project = _import(client, ws_id, "acme/storyapp", "Story App")
+    client.app.state.repository.add_member(ws_id, "bob", Role.member, invited_by="alice")
+
+    for headers in (ALICE, BOB):
+        repos = _listing(client, ws_id, headers)
+        assert repos["acme/storyapp"]["imported_by"] == {
+            "project_id": project["id"],
+            "name": "Story App",
+        }
+        assert repos["acme/fresh"]["imported_by"] is None
+
+
+def test_a_repo_imported_in_another_workspace_is_marked_without_naming_it(client: TestClient):
+    """The 409 on a second import deliberately says nothing about the other
+    workspace (test_import_duplicate_repo_cross_workspace...), so the listing
+    must not name its project either."""
+    ws_a = _workspace(client)
+    _connect(client, ws_a, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    first = _import(client, ws_a, "acme/storyapp", "Secret Name")
+
+    ws_b = client.post("/workspaces", json={"name": "Bobco"}, headers=BOB).json()["id"]
+    client.put(
+        f"/workspaces/{ws_b}/integrations/github",
+        json={"owner": "acme", "token": TOKEN},
+        headers=BOB,
+    )
+    res = client.get(f"/workspaces/{ws_b}/integrations/github/repos", headers=BOB)
+    assert res.status_code == 200, res.text
+
+    marked = {r["full_name"]: r for r in res.json()["repositories"]}["acme/storyapp"]
+    assert marked["imported_by"] == {"project_id": None, "name": None}
+    assert first["id"] not in res.text and "Secret Name" not in res.text and ws_a not in res.text
+
+
+def test_listing_resolves_imports_with_one_lookup_not_one_per_repo(
+    client: TestClient, monkeypatch
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    for name in ("a", "b", "c", "d"):
+        _seed_repo(client, f"acme/{name}")
+    _import(client, ws_id, "acme/a", "A")
+
+    from app.db.repository import InMemoryRepository
+
+    batch_calls: list[list[int]] = []
+    original = InMemoryRepository.list_projects_by_repo_ids
+
+    def spy(self, repo_ids):
+        batch_calls.append(list(repo_ids))
+        return original(self, repo_ids)
+
+    def forbidden(self, repo_id):
+        raise AssertionError("one lookup per repository")
+
+    monkeypatch.setattr(InMemoryRepository, "list_projects_by_repo_ids", spy)
+    monkeypatch.setattr(InMemoryRepository, "find_project_by_repo_id", forbidden)
+
+    repos = _listing(client, ws_id)
+
+    assert len(batch_calls) == 1 and len(batch_calls[0]) == 4
+    assert repos["acme/a"]["imported_by"]["name"] == "A"
+
+
+@pytest.mark.parametrize(
+    ("created_at", "pushed_at", "empty"),
+    [
+        # Pushed 18 s after creation (the marketing-studio case): a commit
+        # exists even though GitHub's size is still 0.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:42Z", False),
+        # Never pushed after creation: GitHub sets pushed_at to created_at.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:24Z", True),
+        # Exactly the 2 s grace: still flagged empty (advisory hint only).
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:26Z", True),
+        # One second past the grace: a real push.
+        ("2026-10-04T14:55:24Z", "2026-10-04T14:55:27Z", False),
+        # No timestamps to compare: fall back to size.
+        (None, None, True),
+    ],
+)
+def test_listing_overrides_a_lagging_zero_size_with_a_later_push(
+    client: TestClient, created_at, pushed_at, empty
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp", size=0, created_at=created_at, pushed_at=pushed_at)
+
+    res = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=ALICE)
+    assert res.status_code == 200, res.text
+    assert res.json()["repositories"][0]["empty"] is empty
 
 
 def test_listing_reports_owner_even_when_empty(client: TestClient):
@@ -362,6 +483,80 @@ def test_import_empty_repo_refused(client: TestClient):
     )
     assert res.status_code == 400, res.text
     assert res.json()["detail"] == "repo_is_empty"
+
+
+def test_import_of_a_fresh_push_whose_size_github_has_not_recomputed(client: TestClient):
+    """GitHub's `size` can stay 0 for hours after the first push; the branch
+    head is the authority, so the import goes through."""
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    # created_at == pushed_at: the listing heuristic still says empty.
+    _seed_repo(client, "acme/storyapp", size=0,
+               created_at="2026-10-04T14:55:24Z", pushed_at="2026-10-04T14:55:24Z")
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 201, res.text
+
+
+def test_import_refuses_a_pushed_repo_whose_branches_were_all_deleted(client: TestClient):
+    """pushed_at > created_at defeats the listing heuristic, so the listing
+    says not-empty; the branch head is still the authority at import."""
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp", empty=True, size=100,
+               created_at="2026-10-04T14:55:24Z", pushed_at="2026-10-04T15:55:24Z")
+
+    listing = client.get(f"/workspaces/{ws_id}/integrations/github/repos", headers=ALICE)
+    assert listing.json()["repositories"][0]["empty"] is False
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "repo_is_empty"
+
+
+def test_import_refuses_when_the_default_branch_is_missing(client: TestClient):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    client.app.state.github_client.get_tree_failure_status = 404
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "repo_is_empty"
+
+
+@pytest.mark.parametrize(
+    ("status", "detail"),
+    [(403, "github_repo_not_in_token_scope"), (401, "github_repo_not_in_token_scope"),
+     (500, "github_unreachable")],
+)
+def test_import_refuses_when_github_cannot_say_whether_the_repo_is_empty(
+    client: TestClient, status: int, detail: str
+):
+    ws_id = _workspace(client)
+    _connect(client, ws_id, owner="acme")
+    _seed_repo(client, "acme/storyapp")
+    client.app.state.github_client.get_tree_failure_status = status
+
+    res = client.post(
+        "/projects",
+        json={"name": "Story App", "workspace_id": ws_id, "import_repo_full_name": "acme/storyapp"},
+        headers=ALICE,
+    )
+    assert res.status_code == (400 if status in (401, 403) else 502), res.text
+    assert res.json()["detail"] == detail
 
 
 def test_import_without_github_connected(client: TestClient):

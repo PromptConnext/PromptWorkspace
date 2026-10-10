@@ -3,13 +3,20 @@
 // ADR 0019 calls vscode.git the least stable dependency in the stack: absent
 // from the published API reference, distributed by "copy this .d.ts", and it
 // has changed inside getAPI(1) without deprecation. Feature code therefore
-// sees the four-method interface below and nothing else, so a breaking change
+// sees the small interface below and nothing else, so a breaking change
 // upstream lands in one file with a typecheck failure rather than everywhere
 // at runtime.
 
 import * as vscode from "vscode";
-import type { API, GitExtension, Repository } from "./git";
+import type { API, GitExtension, Ref, Repository } from "./git";
 import type { LoggerLike } from "@promptworkspace/cloud-client";
+import { KeyedDebounce, REMOTE_REF_GLOBS } from "./remoteRefs.ts";
+import type { BranchLocation } from "../tasks/taskBranch.ts";
+
+/** How long a burst of remote-ref writes is allowed to settle before one
+ *  `status()`. Short: the whole point is to beat the Git extension's own
+ *  refresh, and gitWatcher.ts debounces its scan again after the event. */
+const REMOTE_REF_SETTLE_MS = 1_000;
 
 export interface RemoteRef {
   name: string;
@@ -50,6 +57,16 @@ export interface GitBridge {
    *  gone or git refuses (a name already taken, an unborn HEAD); the caller
    *  reports it, because only the caller knows what the user asked for. */
   createBranch(root: vscode.Uri, name: string): Promise<boolean>;
+  /** `git merge-base ref1 ref2`, or undefined when there is none, a ref is
+   *  unknown, or this Git API has no `getMergeBase` (an older fork). */
+  mergeBase(root: vscode.Uri, ref1: string, ref2: string): Promise<string | undefined>;
+  /** Whether `name` is a local branch, only a remote-tracking branch, or no
+   *  ref at all — read before a checkout, which would otherwise treat a
+   *  missing branch name as a file path. */
+  findBranch(root: vscode.Uri, name: string): Promise<BranchLocation>;
+  /** Check out an existing branch. Resolves false when git refuses (no such
+   *  branch, local changes in the way); the caller reports it. */
+  checkout(root: vscode.Uri, name: string): Promise<boolean>;
   /** Pre-fill the Source Control commit message box. Best-effort and silent:
    *  a message the user cannot see us fail to write is not worth a dialog. */
   setCommitMessage(root: vscode.Uri, message: string): void;
@@ -111,6 +128,7 @@ class VscodeGitBridge implements GitBridge {
   // made `extension.ts` invoke `applyPendingClone()` twice concurrently with
   // the same pending record (see projectLink.ts's reentrancy guard).
   private readonly watched = new Set<string>();
+  private readonly statusRefresh = new KeyedDebounce(REMOTE_REF_SETTLE_MS);
 
   constructor(logger: LoggerLike) {
     this.logger = logger;
@@ -185,6 +203,50 @@ class VscodeGitBridge implements GitBridge {
     }
   }
 
+  async mergeBase(root: vscode.Uri, ref1: string, ref2: string): Promise<string | undefined> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return undefined;
+    try {
+      return (await repo.getMergeBase(ref1, ref2)) || undefined;
+    } catch {
+      // Unknown ref (no `origin/main` in this clone) is the common case: the
+      // caller tries the next candidate and logs once if none resolves.
+      return undefined;
+    }
+  }
+
+  async findBranch(root: vscode.Uri, name: string): Promise<BranchLocation> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return "unknown";
+    let refs: readonly Ref[];
+    try {
+      // getRefs is the current API; older hosts only populate state.refs.
+      refs = await repo.getRefs({});
+    } catch {
+      refs = repo.state.refs ?? [];
+      if (refs.length === 0) return "unknown";
+    }
+    // RefType is a const enum in the vendored git.d.ts, which esbuild cannot
+    // inline across files: 0 = Head (local branch), 1 = RemoteHead.
+    if (refs.some((ref) => ref.type === 0 && ref.name === name)) return "local";
+    const remote = refs.some(
+      (ref) => ref.type === 1 && ref.remote !== undefined && ref.name === `${ref.remote}/${name}`,
+    );
+    return remote ? "remote" : "none";
+  }
+
+  async checkout(root: vscode.Uri, name: string): Promise<boolean> {
+    const repo = this.api?.getRepository(root);
+    if (!repo) return false;
+    try {
+      await repo.checkout(name);
+      return true;
+    } catch (err) {
+      this.logger.info(`checkout(${name}) refused: ${String(err)}`);
+      return false;
+    }
+  }
+
   setCommitMessage(root: vscode.Uri, message: string): void {
     const repo = this.api?.getRepository(root);
     if (!repo) return;
@@ -209,6 +271,7 @@ class VscodeGitBridge implements GitBridge {
     this.stateListeners.clear();
     this.openListeners.clear();
     this.watched.clear();
+    this.statusRefresh.dispose();
   }
 
   private watch(repo: Repository): void {
@@ -230,6 +293,35 @@ class VscodeGitBridge implements GitBridge {
         for (const listener of this.stateListeners) listener(changed);
       }),
     );
+    this.watchRemoteRefs(repo, key);
+  }
+
+  /** Finding #44: a push or fetch made in a terminal rewrites these files;
+   *  asking for a fresh status recomputes `ahead`, and the resulting state
+   *  event reaches gitWatcher.ts like any other. Best-effort: a watcher the
+   *  host refuses costs us only the speed-up. */
+  private watchRemoteRefs(repo: Repository, key: string): void {
+    const refresh = () =>
+      this.statusRefresh.trigger(key, () => {
+        repo.status().catch((err: unknown) => {
+          this.logger.info(`status refresh after a remote-ref change failed: ${String(err)}`);
+        });
+      });
+    for (const glob of REMOTE_REF_GLOBS) {
+      try {
+        const watcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(repo.rootUri, glob),
+        );
+        this.disposables.push(
+          watcher,
+          watcher.onDidCreate(refresh),
+          watcher.onDidChange(refresh),
+          watcher.onDidDelete(refresh),
+        );
+      } catch (err) {
+        this.logger.info(`cannot watch ${glob} in ${repo.rootUri.fsPath}: ${String(err)}`);
+      }
+    }
   }
 }
 
@@ -247,6 +339,15 @@ class NoopGitBridge implements GitBridge {
     return [];
   }
   async createBranch(): Promise<boolean> {
+    return false;
+  }
+  async mergeBase(): Promise<string | undefined> {
+    return undefined;
+  }
+  async findBranch(): Promise<BranchLocation> {
+    return "unknown";
+  }
+  async checkout(): Promise<boolean> {
     return false;
   }
   setCommitMessage(): void {

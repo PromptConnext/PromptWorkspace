@@ -131,6 +131,7 @@ export interface Task {
   assignee: string | null;
   sprint: string | null;
   assigned_user_id: string | null;
+  change_id: string | null;
   updated_at: string | null;
   deleted_at: string | null;
   field_versions: Record<string, unknown>;
@@ -213,6 +214,32 @@ export interface PendingInvitation {
   expires_at: string;
 }
 
+// Repository document sync (GET/POST /projects/{id}/repository/docs-status and
+// /sync-docs). A planning document edited after the repository exists leaves the
+// repository's seeded copy behind; the sync brings it up to date through a pull
+// request a person merges.
+export interface RepositoryDocFile {
+  path: string;
+  // `in_pull_request`: differs from the default branch but already matches the
+  // open sync pull request's branch, so it is waiting on a merge, not on a sync.
+  state: "current" | "out_of_date" | "missing" | "in_pull_request";
+}
+
+export interface RepositoryDocsStatus {
+  files: RepositoryDocFile[];
+  /** `foreign_changes`: the pull request's branch changes more than the
+   *  planning documents (or someone else opened it on the sync's branch), so
+   *  the sync refuses it with `sync_branch_has_foreign_changes`. */
+  open_sync_pr: { number: number; url: string; foreign_changes?: boolean } | null;
+}
+
+export interface SyncDocsResult {
+  pr_number: number;
+  pr_url: string;
+  branch: string;
+  files: string[];
+}
+
 // Non-secret view of a workspace's GitHub credential
 // (GET/PUT /workspaces/{id}/integrations/github). Never carries the token.
 export interface GithubConnection {
@@ -239,6 +266,9 @@ export interface GithubRepo {
   // exit.
   empty: boolean;
   pushed_at: string | null;
+  // The project that already imported this repository. Both fields are null
+  // when it belongs to a workspace the caller is not in: taken, but not named.
+  imported_by: { project_id: string | null; name: string | null } | null;
 }
 
 // owner/owner_type/account_login are present even when repositories is
@@ -356,6 +386,13 @@ export interface DocumentOut {
  *  reserved for a stage that grows an explicit apply step. */
 export type ProjectionState = "current" | "pending" | "failed" | "not_applicable";
 
+/** `tasks` for an imported repository named files that are not in it and not
+ *  marked `(new)` (apps/cloud/app/generation/path_check.py). */
+export interface GenerationWarning {
+  code: "unmarked_new_paths";
+  items: { ref: string; path: string }[];
+}
+
 export interface GenerateDoneEvent {
   stage: StageKind;
   title: string;
@@ -368,6 +405,9 @@ export interface GenerateDoneEvent {
   retired_count?: number;
   // The model stopped at its output limit — the document is real but cut off.
   truncated?: boolean;
+  // Notices on a generation that succeeded (an imported project's `tasks` only
+  // today). Absent when there is nothing to say.
+  warnings?: GenerationWarning[];
   // Whether the raw markdown was written to the stage-document side store,
   // i.e. whether it will still be there on the next visit to the project.
   saved?: boolean;
@@ -439,6 +479,13 @@ export interface RepoExcerpt {
   truncated: boolean;
 }
 
+// A path the analysis left out: a vendored or build directory (one entry,
+// ending in "/"), a binary file, or a secret-shaped file it never fetched.
+export interface RepoSkippedFile {
+  path: string;
+  reason: "vendored" | "binary" | "secret";
+}
+
 export interface RepoSnapshot {
   commit_sha: string;
   default_branch: string;
@@ -450,6 +497,10 @@ export interface RepoSnapshot {
   stack: RepoStack;
   excerpts: RepoExcerpt[];
   paths: string[];
+  // What the filter left out, capped; skipped_count counts every file. Absent
+  // from an API older than the trust-test fixes.
+  skipped?: RepoSkippedFile[];
+  skipped_count?: number;
 }
 
 export type RepoAnalysisStatus = "none" | "snapshot_ready" | "baseline_ready" | "failed";
@@ -639,4 +690,94 @@ export interface WorkspaceReindexResult {
   enqueued: number;
   projects_swept: number;
   projects: { project_id: string; enqueued: number }[];
+}
+
+// --- Plan 0029 delivery (apps/cloud/app/api/delivery.py) -------------------
+
+export type ApprovalState = "none" | "pending" | "approved" | "stale" | "changes_requested";
+export type DecisionKind = "intent_approval" | "plan_approval";
+export type ProjectHat = "business_owner" | "tech_steward";
+
+export interface DeliveryChange {
+  id: string;
+  ref: string;
+  key: string;
+  title: string;
+  kind: "setup" | "foundational" | "story" | "other" | "polish" | "unphased";
+  story: number | null;
+  priority: string | null;
+  position: number;
+  wave: number;
+  depends_on: string[];
+  task_ids: string[];
+  /** Live tasks of this Change that are implemented or verified. */
+  done: number;
+  /** Live tasks of this Change (`task_ids.length`). */
+  total: number;
+}
+
+export interface DeliveryPlan {
+  changes: DeliveryChange[];
+  plan_approval: ApprovalState;
+}
+
+export interface Decision {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  kind: DecisionKind;
+  title: string;
+  subject_stage: "specify" | "tasks";
+  subject_hash: string;
+  /** The document text when the approval was requested. Null for a decision
+   *  made before the API stored it, and for older decisions the listing leaves
+   *  out: it sends the text only for open decisions and the newest approved
+   *  one per kind. */
+  subject_content: string | null;
+  routed_hat: ProjectHat;
+  status: "open" | "approved" | "rejected" | "withdrawn";
+  rationale: string | null;
+  requested_by: string;
+  resolved_by: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  can_resolve: boolean;
+  /** False once the stage document was edited after this decision was made. */
+  is_current: boolean;
+}
+
+export interface DecisionsOut {
+  decisions: Decision[];
+  states: { intent: ApprovalState; plan: ApprovalState };
+}
+
+/** A request or resolve's response: the decision, plus the project's
+ *  `GET /decisions` as it stands after the write, to apply instead of refetching.
+ *  `null` when the API could not read the stage documents after the write
+ *  (absent from an API older than the snapshot): refetch then. */
+export interface DecisionMutationOut extends Decision {
+  snapshot?: DecisionsOut | null;
+}
+
+export interface ProjectRoleOut {
+  hat: ProjectHat;
+  user_id: string | null;
+}
+
+/** `GET /projects/{id}/delivery-overview`: what the Delivery and Decisions
+ *  tabs show, in one request. `decisions` and `states` are `GET /decisions`,
+ *  `plan` is `GET /delivery-plan`, `roles` is `GET /roles`. */
+export interface DeliveryOverview extends DecisionsOut {
+  plan: DeliveryPlan;
+  roles: ProjectRoleOut[];
+}
+
+export interface InboxItem {
+  /** An open decision without the document text and `is_current`, which the
+   *  inbox never reads and its API leaves out. */
+  decision: Omit<Decision, "subject_content" | "is_current">;
+  project_id: string;
+  project_name: string;
+  workspace_id: string;
+  workspace_name: string;
 }

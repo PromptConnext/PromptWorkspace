@@ -15,10 +15,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { applyBoardFilters, groupBoardTasks, specLabel, sprintOf } from "@/lib/boardFilters";
+import { useCloudGet } from "@/lib/hooks";
 import { plainInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
-import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
+import type {
+  Artifact,
+  DeliveryPlan,
+  ProjectGraph,
+  Task,
+  TaskStatus,
+  WorkspaceMember,
+} from "@/lib/types";
 import { BOARD_ROW, BoardColumn, BoardSkeleton } from "./BoardColumn";
 import { BoardToolbar } from "./BoardToolbar";
 import { memberShortName } from "./MemberChip";
@@ -89,6 +97,13 @@ export function TaskBoard({
   const searchRef = useRef<HTMLInputElement>(null);
   const { filters, setFilters, clearFilters, openTaskId, openTask, closeTask } = useBoardUrlState();
   const board = useOptimisticTasks(graph.tasks);
+  // Change labels only when grouping by change; a null path fetches nothing.
+  const { data: deliveryPlan } = useCloudGet<DeliveryPlan>(
+    filters.group === "change" ? `/projects/${projectId}/delivery-plan` : null,
+  );
+  const changeTitle = new Map(
+    (deliveryPlan?.changes ?? []).map((c) => [c.id, `${c.ref} · ${c.title}`]),
+  );
   // Undo, Retry and the drag announcer run after later renders; they read the
   // current rows and writes rather than the ones captured when they were made.
   const tasksRef = useRef(board.tasks);
@@ -401,6 +416,7 @@ export function TaskBoard({
       : groupBoardTasks(visibleTasks, filters.group, {
           memberLabel: (id) => memberName(id ?? ""),
           specLabel: (id) => (id ? (specLabel(graph, id) ?? "Unknown spec") : "No spec"),
+          changeLabel: (id) => (id ? (changeTitle.get(id) ?? "Unknown change") : "No change"),
         });
 
   return (

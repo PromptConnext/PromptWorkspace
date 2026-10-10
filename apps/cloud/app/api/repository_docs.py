@@ -1,0 +1,454 @@
+"""Keep a created repository's seeded planning documents in step with the
+project's stage documents.
+
+`docs-status` rebuilds the seed (`build_seed_files`) and compares each
+document view with the default branch's tree by git blob sha, so nothing is
+fetched and nothing is stored. `sync-docs` commits the views that differ to a
+`pw/sync-docs-<default-branch head sha[:12]>` branch and opens one pull
+request, or adds to the open one. It never writes to the default branch,
+never force-pushes and never merges: a person reviews and merges the pull
+request.
+
+Anyone with push access can create a branch under the `pw/sync-docs-` prefix,
+and the sync writes under the admin's token. So a branch is only reused (an
+open pull request's, or one left without a pull request) when its comparison
+with the default branch touches only the views this project's sync writes
+(both names of a rename count), and a pull request is only reused when the
+connected GitHub account opened it. Anything else answers 409
+`sync_branch_has_foreign_changes` and writes nothing. The branch head is read
+once, and the comparison, the tree read and the commit's pin all use that
+sha, so a push in between makes the commit refuse.
+
+While that pull request is open, both routes compare every document against
+its branch as well (`classify_with_pull_request`): a view the branch already
+carries reads `in_pull_request` and is not committed again, and a view the
+branch holds differently (including one edited back to the default branch's
+content) reads `out_of_date` and is committed onto it. Every write is pinned
+to the branch head the comparison read, so a branch that moved in between
+refuses instead of being written over.
+
+Imported repositories are out of scope (plan Ruling 2): their seed was
+relocated around the user's own files by `fit_to_existing_repo`, and
+re-deriving that against a tree that now contains the seed would misread the
+seeded files as conflicts.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import NamedTuple
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.api._guards import require_project, require_stage_access
+
+# The shared seed-input read: the same stage documents create_repository seeds from.
+from app.api.sync import _seed_stage_docs
+from app.db.repository import Repository
+from app.dependencies import User, get_current_user, get_repository
+from app.deployments.preview_url import repo_full_name_from_url
+from app.integrations.github import (
+    GithubBranchMovedError,
+    GithubCompareTooLargeError,
+    GithubPullRequestExistsError,
+    GithubRefUpdateRejectedError,
+    GithubWriteError,
+)
+from app.integrations.github_auth import resolve_token
+from app.integrations.repo_docs import (
+    DOC_PATHS,
+    DocState,
+    changed_files,
+    classify_docs,
+    classify_with_pull_request,
+    files_differing_from,
+    reverting_files,
+)
+from app.integrations.repo_seed import SeedFile, build_seed_files
+from app.models.schemas import (
+    OpenSyncPr,
+    Project,
+    RepositoryDocFile,
+    RepositoryDocsStatus,
+    SyncDocsOut,
+)
+
+router = APIRouter(tags=["repository-docs"])
+logger = logging.getLogger("promptworkspace.repository_docs")
+
+SYNC_BRANCH_PREFIX = "pw/sync-docs-"
+_SYNC_BRANCH_RE = re.compile(r"^pw/sync-docs-[0-9A-Za-z-]{1,12}$")
+SYNC_TITLE = "docs: sync planning documents from PromptWorkspace"
+
+
+class _Status(NamedTuple):
+    states: list[DocState]
+    seed_files: list[SeedFile]
+    token: str
+    full_name: str
+    default_branch: str
+    head_sha: str
+    main_blobs: dict[str, str]
+    # The connected account (`account_login` in the workspace's GitHub
+    # config); None for a connection stored before the login was recorded.
+    account_login: str | None
+
+
+def _blobs(entries: list[dict]) -> dict[str, str]:
+    return {e["path"]: e["sha"] for e in entries if e["type"] == "blob" and e.get("sha")}
+
+
+def _read_failure(exc: GithubWriteError) -> HTTPException:
+    """A read GitHub refused (a token that cannot see the repository answers
+    401/403, or 404 for a private one) is the admin's to fix; anything else
+    is transient."""
+    if getattr(exc, "status_code", None) in (401, 403, 404):
+        return HTTPException(status_code=400, detail="github_read_forbidden")
+    return HTTPException(status_code=502, detail="github_unreachable")
+
+
+async def _load_status(request: Request, repo: Repository, project: Project) -> _Status:
+    if project.lifecycle_status != "repo_created" or not project.repo_url:
+        raise HTTPException(status_code=409, detail="repository_not_created")
+    # A repository-created project with no recorded origin predates
+    # `repo_origin` and may be an import; the migration's rule reads NULL as
+    # imported, and `is_imported` alone answers False once `repo_created`.
+    if project.is_imported or project.repo_origin != "created":
+        raise HTTPException(status_code=409, detail="sync_not_supported_for_imported_repository")
+
+    workspace = repo.get_workspace(project.workspace_id)
+    resolved = resolve_token(request.app, workspace)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="github_not_configured")
+    token, config = resolved
+    full_name = repo_full_name_from_url(project.repo_url)
+    if full_name is None:
+        raise HTTPException(status_code=409, detail="repo_url_unrecognized")
+
+    seed_files = build_seed_files(project, _seed_stage_docs(repo, project.id))
+
+    gh = request.app.state.github_client
+    default_branch = project.repo_default_branch or "main"
+    try:
+        head_sha = await gh.get_branch_head(token, full_name, default_branch)
+        entries, truncated = await gh.get_tree_entries(token, full_name, head_sha)
+    except GithubWriteError as exc:
+        logger.warning("docs-status read for %s failed: %s", full_name, exc)
+        raise _read_failure(exc) from exc
+    if truncated:
+        raise HTTPException(status_code=409, detail="repo_tree_too_large")
+    main_blobs = _blobs(entries)
+    return _Status(
+        classify_docs(seed_files, main_blobs),
+        seed_files,
+        token,
+        full_name,
+        default_branch,
+        head_sha,
+        main_blobs,
+        config.get("account_login"),
+    )
+
+
+def _is_ours(pr: dict, status: _Status) -> bool:
+    """Whether `pr` is one this feature opened: its head has the exact shape the
+    sync creates (so a head name with URL-special characters can never be
+    reused) and, when a login is recorded, the connected account opened it.
+    Without a recorded login only the shape is checked."""
+    login = status.account_login
+    if not _SYNC_BRANCH_RE.fullmatch(pr.get("head") or ""):
+        return False
+    return not login or (pr.get("author") or "").lower() == login.lower()
+
+
+def _new_branch(status: _Status) -> str:
+    """The branch a sync from the current default-branch head creates."""
+    return SYNC_BRANCH_PREFIX + status.head_sha[:12]
+
+
+async def _foreign_paths(gh, status: _Status, branch_head: str) -> list[str]:
+    """The paths the commit `branch_head` changes, relative to the default
+    branch, that this project's sync never writes. Only the rebuilt document
+    views are allowed: a document path the project has no view for (a policy
+    scope it never chose) is as foreign as a workflow. Raises
+    `GithubCompareTooLargeError` when GitHub cannot list the comparison."""
+    allowed = {f.path for f in status.seed_files if f.path in DOC_PATHS}
+    files = await gh.compare_files(
+        status.token, status.full_name, status.default_branch, branch_head
+    )
+    return sorted({path for path in files if path not in allowed})
+
+
+async def _branch_blobs(gh, status: _Status, branch_head: str) -> dict[str, str]:
+    """path -> blob sha at a sync branch's head: the open pull request's, or
+    one an earlier sync left without an open pull request."""
+    entries, truncated = await gh.get_tree_entries(status.token, status.full_name, branch_head)
+    if truncated:
+        raise HTTPException(status_code=409, detail="repo_tree_too_large")
+    return _blobs(entries)
+
+
+def _pr_body(differing: list[SeedFile], reverted: list[SeedFile]) -> str:
+    parts = [
+        "These files were regenerated from the project's planning documents in "
+        "PromptWorkspace.\n"
+    ]
+    if differing:
+        parts.append("\n".join(f"- `{f.path}`" for f in differing) + "\n")
+    else:
+        parts.append("No file differs from the default branch any more.\n")
+    if reverted:
+        parts.append(
+            "Changed back to the default branch's content, because the planning "
+            "document was edited back after an earlier sync:\n\n"
+            + "\n".join(f"- `{f.path}`" for f in reverted)
+            + "\n"
+        )
+    parts.append(
+        "A file that was edited by hand in the repository also appears in this diff, "
+        "so review each change rather than assuming the old content was meant to be "
+        "overwritten.\n"
+    )
+    return "\n".join(parts)
+
+
+@router.get(
+    "/projects/{project_id}/repository/docs-status", response_model=RepositoryDocsStatus
+)
+async def docs_status(
+    project_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> RepositoryDocsStatus:
+    """Which seeded planning documents differ from the default branch, and
+    from the open sync pull request's branch. Any project member may read it."""
+    project = require_project(repo, project_id, user)
+    status = await _load_status(request, repo, project)
+    gh = request.app.state.github_client
+
+    states = status.states
+    open_sync_pr: OpenSyncPr | None = None
+    try:
+        pr = await gh.find_open_pull_request(
+            status.token,
+            status.full_name,
+            SYNC_BRANCH_PREFIX,
+            status.default_branch,
+            author=status.account_login,
+        )
+    except GithubWriteError as exc:
+        # The open pull request is decoration on the status, never an error.
+        logger.warning("docs-status pull request lookup for %s failed: %s", status.full_name, exc)
+        pr = None
+    if pr is not None and not _is_ours(pr, status):
+        # Someone else's pull request is not the sync's, unless it sits on
+        # the branch the next sync would create, which then refuses.
+        if pr["head"] == _new_branch(status):
+            open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"], foreign_changes=True)
+        pr = None
+    if pr is not None:
+        # Everything about the branch is best-effort decoration: without it
+        # the default-branch comparison stands, and the sync checks again.
+        foreign = False
+        try:
+            branch_head = await gh.get_branch_head(status.token, status.full_name, pr["head"])
+            try:
+                foreign = bool(await _foreign_paths(gh, status, branch_head))
+            except GithubCompareTooLargeError:
+                foreign = True
+            except GithubWriteError as exc:
+                logger.warning(
+                    "comparing sync branch %s of %s failed: %s", pr["head"], status.full_name, exc
+                )
+            pr_blobs = await _branch_blobs(gh, status, branch_head)
+            states = classify_with_pull_request(status.seed_files, status.main_blobs, pr_blobs)
+        except (GithubWriteError, HTTPException) as exc:
+            logger.warning(
+                "reading sync branch %s of %s failed: %s", pr["head"], status.full_name, exc
+            )
+        open_sync_pr = OpenSyncPr(number=pr["number"], url=pr["html_url"], foreign_changes=foreign)
+
+    return RepositoryDocsStatus(
+        files=[RepositoryDocFile(path=s.path, state=s.state) for s in states],
+        open_sync_pr=open_sync_pr,
+    )
+
+
+@router.post("/projects/{project_id}/repository/sync-docs", response_model=SyncDocsOut)
+async def sync_docs(
+    project_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> SyncDocsOut:
+    """Commit the out-of-date document views to a sync branch and open (or
+    update) the one sync pull request. Admin-only, like authoring the plan."""
+    project = require_project(repo, project_id, user)
+    require_stage_access(repo, project, "plan", user)
+    status = await _load_status(request, repo, project)
+    gh = request.app.state.github_client
+    token, full_name = status.token, status.full_name
+
+    async def find_pr() -> dict | None:
+        """The open sync pull request; every lookup fails the same way."""
+        try:
+            return await gh.find_open_pull_request(
+                token,
+                full_name,
+                SYNC_BRANCH_PREFIX,
+                status.default_branch,
+                author=status.account_login,
+            )
+        except GithubWriteError as exc:
+            logger.warning("sync-docs pull request lookup for %s failed: %s", full_name, exc)
+            if getattr(exc, "status_code", None) in (401, 403, 404):
+                raise HTTPException(
+                    status_code=400, detail="github_pr_permission_denied"
+                ) from exc
+            raise HTTPException(status_code=502, detail="github_sync_failed") from exc
+
+    def own(pr: dict | None, branch_name: str) -> dict | None:
+        """`pr` if the connected account opened it. Someone else's pull
+        request is not adopted: ignored when it is on another branch, and
+        refused when it is on `branch_name`, the one this sync would write."""
+        if pr is None or _is_ours(pr, status):
+            return pr
+        if pr["head"] == branch_name:
+            logger.warning(
+                "sync-docs refused %s of %s: pull request #%s was opened by %s",
+                branch_name,
+                full_name,
+                pr["number"],
+                pr.get("author"),
+            )
+            raise HTTPException(status_code=409, detail="sync_branch_has_foreign_changes")
+        return None
+
+    async def against(branch_name: str) -> tuple[str, list[DocState]]:
+        """(head sha, states) of an existing sync branch, refusing one that
+        changes anything the sync does not write: committing onto it and
+        opening or describing its pull request would put the admin's name on
+        someone else's change. The head is read once and the comparison, the
+        tree and the commit's pin all use it, so a push after the check makes
+        the commit refuse instead of landing on what was never checked."""
+        refused = HTTPException(status_code=409, detail="sync_branch_has_foreign_changes")
+        try:
+            branch_head = await gh.get_branch_head(token, full_name, branch_name)
+            foreign = await _foreign_paths(gh, status, branch_head)
+            if foreign:
+                logger.warning(
+                    "sync-docs refused %s of %s: it changes %s", branch_name, full_name, foreign
+                )
+                raise refused
+            branch_blobs = await _branch_blobs(gh, status, branch_head)
+        except GithubCompareTooLargeError as exc:
+            logger.warning("sync-docs refused %s of %s: %s", branch_name, full_name, exc)
+            raise refused from exc
+        except GithubWriteError as exc:
+            logger.warning("reading sync branch %s of %s failed: %s", branch_name, full_name, exc)
+            raise _read_failure(exc) from exc
+        return branch_head, classify_with_pull_request(
+            status.seed_files, status.main_blobs, branch_blobs
+        )
+
+    # Named after the default-branch head, so two syncs racing from the
+    # same head collide on the name instead of opening two pull requests.
+    new_branch = _new_branch(status)
+    pr = own(await find_pr(), new_branch)
+    if pr is None:
+        branch = new_branch
+        base_sha, states = status.head_sha, status.states
+    else:
+        branch = pr["head"]
+        base_sha, states = await against(branch)
+    changed = changed_files(status.seed_files, states)
+    if not changed:
+        raise HTTPException(status_code=409, detail="repository_docs_current")
+
+    try:
+        if pr is None:
+            try:
+                await gh.create_branch(token, full_name, branch, status.head_sha)
+            except GithubBranchMovedError:
+                # The name is taken: another sync's open pull request is the
+                # one to add to. With none open, the branch belongs to a sync
+                # still uploading or to a pull request closed without merging;
+                # either way it is adopted once it shows planning documents
+                # only, compared like an open pull request's branch and
+                # written pinned to the head just read, so a lost race
+                # refuses and a retry converges.
+                pr = own(await find_pr(), branch)
+                if pr is not None:
+                    branch = pr["head"]
+                base_sha, states = await against(branch)
+                changed = changed_files(status.seed_files, states)
+                if not changed and pr is not None:
+                    raise HTTPException(
+                        status_code=409, detail="repository_docs_current"
+                    ) from None
+            except GithubWriteError as exc:
+                # A rule that forbids creating the branch answers 422 with
+                # anything but "Reference already exists".
+                if exc.status_code == 422:
+                    raise GithubRefUpdateRejectedError(str(exc), status_code=422) from exc
+                raise
+        # An adopted branch may already hold every change; its pull request
+        # still has to be opened below.
+        if changed:
+            await gh.create_commit_with_files(
+                token, full_name, branch, changed, SYNC_TITLE, expected_base_sha=base_sha
+            )
+    except GithubBranchMovedError as exc:
+        logger.warning("sync-docs onto %s of %s refused: %s", branch, full_name, exc)
+        raise HTTPException(status_code=409, detail="github_branch_conflict") from exc
+    except GithubRefUpdateRejectedError as exc:
+        logger.warning("sync-docs onto %s of %s rejected by a rule: %s", branch, full_name, exc)
+        raise HTTPException(status_code=409, detail="github_branch_protected") from exc
+    except GithubWriteError as exc:
+        logger.warning("sync-docs write for %s failed: %s", full_name, exc)
+        if getattr(exc, "status_code", None) in (401, 403, 404):
+            raise HTTPException(status_code=400, detail="github_write_forbidden") from exc
+        raise HTTPException(status_code=502, detail="github_sync_failed") from exc
+
+    # The description lists every view that will differ from the default
+    # branch once this commit lands, including those an earlier sync already
+    # put on the branch, and names any view this commit changes back.
+    body = _pr_body(
+        files_differing_from(status.seed_files, status.main_blobs),
+        reverting_files(changed, status.main_blobs),
+    )
+    try:
+        if pr is None:
+            try:
+                pr = await gh.create_pull_request(
+                    token, full_name, branch, status.default_branch, SYNC_TITLE, body
+                )
+            except GithubPullRequestExistsError:
+                # Another sync on the same branch opened it first: add to it.
+                pr = own(await find_pr(), branch)
+                if pr is None or pr["head"] != branch:
+                    raise
+                await gh.update_pull_request(token, full_name, pr["number"], body)
+        else:
+            await gh.update_pull_request(token, full_name, pr["number"], body)
+    except GithubWriteError as exc:
+        # The sync branch already holds the commit; naming it lets an operator
+        # find it. The next sync adopts it.
+        logger.warning(
+            "sync-docs pull request for %s failed, branch %s left without one: %s",
+            full_name,
+            branch,
+            exc,
+        )
+        if getattr(exc, "status_code", None) in (401, 403, 404):
+            raise HTTPException(status_code=400, detail="github_pr_permission_denied") from exc
+        raise HTTPException(status_code=502, detail="github_sync_failed") from exc
+
+    return SyncDocsOut(
+        pr_number=pr["number"],
+        pr_url=pr["html_url"],
+        branch=branch,
+        files=[f.path for f in changed],
+    )

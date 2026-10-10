@@ -187,6 +187,13 @@ class Settings(BaseSettings):
     typesafe_base_url: str = "https://api.typesafe.ai/v1"
     typesafe_model: str = "jev-latest"
 
+    # Plan 0029 delivery gates: when true, create-repository refuses until the
+    # project has its project rules, a tasks document and an *approved, current*
+    # delivery-plan decision (409 constitution_required / tasks_required /
+    # plan_approval_required). Off by default so develop and main keep today's
+    # behaviour; the trust environment turns it on.
+    require_plan_approval: bool = False
+
     # Managed embeddings for the assistant (plan 0008 M1): Typhoon is
     # generation-only, so a keyless (no BYO) workspace needs a separate
     # platform-hosted embedding model to ground content questions. Any
