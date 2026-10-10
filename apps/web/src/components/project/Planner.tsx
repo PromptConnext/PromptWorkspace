@@ -773,13 +773,15 @@ export function Planner({
   // sync_not_supported_for_imported_repository for them), so they never ask.
   const docsSyncApplies = readOnly && project.repo_origin !== "imported";
   const docsStatusPath = `/projects/${projectId}/repository/docs-status`;
-  // A status that cannot be read leaves `data` null, which hides the banner;
+  // A status that cannot be read is said so in the banner (with no button);
   // the stages work without it.
-  const { data: docsStatus, refetch: refetchDocsStatus } = useCloudGet<RepositoryDocsStatus>(
-    docsStatusPath,
-    docsSyncApplies,
-    { refreshOnFocus: true },
-  );
+  const {
+    data: docsStatus,
+    error: docsStatusError,
+    refetch: refetchDocsStatus,
+  } = useCloudGet<RepositoryDocsStatus>(docsStatusPath, docsSyncApplies, {
+    refreshOnFocus: true,
+  });
   const syncDocs = useCallback(async () => {
     const out = await apiFetch<SyncDocsResult>(
       `/projects/${projectId}/repository/sync-docs`,
@@ -1101,7 +1103,12 @@ export function Planner({
       )}
 
       {docsSyncApplies && (
-        <RepositoryDocsBanner status={docsStatus} canSync={isTechLead} onSync={syncDocs} />
+        <RepositoryDocsBanner
+          status={docsStatus}
+          statusError={docsStatusError}
+          canSync={isTechLead}
+          onSync={syncDocs}
+        />
       )}
 
       {/* Every stage stays mounted so a half-typed intake form survives
@@ -1153,11 +1160,14 @@ export function Planner({
             const authorGated = ADMIN_ONLY_STAGES.includes(stage) && !isTechLead;
             // After the repository exists the planning documents stay editable:
             // their repository copies are synced through a pull request, so
-            // only the author gate (rules and plan belong to the Tech Lead)
-            // makes a stage read-only. Tasks are graph rows the board works
-            // from, not part of the seeded repository, so replacing them never
-            // needs a confirmation.
-            const stageReadOnly = authorGated;
+            // the author gate (rules and plan belong to the Tech Lead) is what
+            // makes a stage read-only. An imported repository stays frozen as
+            // before: its seed was relocated around the team's own files and
+            // cannot be re-derived safely (the sync is not supported for it).
+            // Tasks are graph rows the board works from, not part of the
+            // seeded repository, so they are never frozen.
+            const stageReadOnly =
+              authorGated || (readOnly && project.repo_origin === "imported" && stage !== "tasks");
             return (
               <StageSection
                 key={stage}

@@ -3,91 +3,128 @@
 import { useState } from "react";
 import type { RepositoryDocsStatus, SyncDocsResult } from "@/lib/types";
 
-// The cloud's refusals from POST /projects/{id}/repository/sync-docs
+// The cloud's refusals from GET docs-status and POST sync-docs
 // (apps/cloud/app/api/repository_docs.py), as text a person can act on.
 // `github_repo_not_in_token_scope` is deliberately not mapped here: a token
 // without Pull requests write answers github_pr_permission_denied, so a scope
 // message would send the admin to the wrong setting.
-const SYNC_ERROR_TEXT: Record<string, string> = {
+const ERROR_TEXT: Record<string, string> = {
   github_pr_permission_denied:
     "The workspace's GitHub token needs the Pull requests permission (Read and write).",
   github_branch_conflict: "The default branch changed while syncing. Try again.",
   github_sync_failed: "GitHub couldn't take the changes. Try again in a moment.",
+  github_read_forbidden: "The workspace's GitHub token can't read this repository.",
+  github_unreachable: "GitHub is unreachable. Try again.",
+  github_not_configured: "GitHub is not connected for this workspace.",
+  repository_not_created: "The repository hasn't been created yet.",
   repo_tree_too_large:
     "A directory in this repository is too large for GitHub to list, so PromptWorkspace can't " +
     "tell which documents are out of date. Nothing was written.",
   sync_not_supported_for_imported_repository:
     "Syncing documents isn't available for an imported repository yet.",
-  repository_docs_current: "The repository documents are already up to date.",
+  repository_docs_current: "Repository documents are already up to date.",
 };
+
+const textFor = (code: string) => ERROR_TEXT[code] ?? code;
 
 const BOX = "rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900";
 const LINK = "font-medium underline hover:text-amber-950";
 const BUTTON =
-  "rounded border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 " +
+  "mt-2 rounded border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 " +
   "hover:border-amber-400 disabled:opacity-50";
+const MERGE_HINT = ". Merge it on GitHub to bring the repository documents up to date.";
 
 /** Tells whoever edits a planning document after the repository exists that the
- *  repository's seeded copy is behind, and (for an admin) opens the pull request
- *  that catches it up. Renders nothing when every document is current and no sync
- *  pull request is open. */
+ *  repository's seeded copy is behind, and (for an admin) opens or updates the
+ *  pull request that catches it up. Renders nothing when every document is
+ *  current and no sync pull request is open.
+ *
+ *  What it shows follows the latest `status`. The result of a sync this banner
+ *  ran is shown only until the status is next replaced (the Planner refetches
+ *  after a sync), so a pull request that was merged or closed since can't leave
+ *  a stale "opened" line behind. */
 export function RepositoryDocsBanner({
   status,
+  statusError,
   canSync,
   onSync,
 }: {
   status: RepositoryDocsStatus | null;
+  /** The code or message the status read failed with, when it did. */
+  statusError?: string | null;
   canSync: boolean;
   onSync: () => Promise<SyncDocsResult>;
 }) {
   const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<SyncDocsResult | null>(null);
+  const [done, setDone] = useState<{
+    result: SyncDocsResult;
+    updated: boolean;
+    forStatus: RepositoryDocsStatus | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // A malformed body (anything without a file list) is treated as no status
+  // A malformed body (anything without a file list) counts as no status
   // rather than crashing the Planner around it.
-  if (!status || !Array.isArray(status.files)) return null;
+  const valid = status && Array.isArray(status.files) ? status : null;
 
-  const stale = status.files.filter((f) => f.state !== "current").length;
-  const openPr = status.open_sync_pr;
-  if (stale === 0 && !openPr && !result) return null;
+  if (!valid) {
+    if (!statusError) return null;
+    return (
+      <p className="text-xs text-slate-500">
+        Could not check repository documents: {textFor(statusError)}
+      </p>
+    );
+  }
+
+  const stale = valid.files.filter((f) => f.state !== "current").length;
+  const openPr = valid.open_sync_pr;
+  const shown = done && done.forStatus === valid ? done : null;
+  if (stale === 0 && !openPr && !shown) return null;
 
   async function handleSync() {
     setError(null);
     setPending(true);
+    const forStatus = valid;
+    const updated = Boolean(forStatus?.open_sync_pr);
     try {
-      setResult(await onSync());
+      setDone({ result: await onSync(), updated, forStatus });
     } catch (err) {
-      const code = err instanceof Error ? err.message : String(err);
-      setError(SYNC_ERROR_TEXT[code] ?? code);
+      setError(textFor(err instanceof Error ? err.message : String(err)));
     } finally {
       setPending(false);
     }
   }
 
+  const files = `${stale} ${stale === 1 ? "file" : "files"}`;
+
   return (
     <div role="status" className={BOX}>
-      {result ? (
+      {shown ? (
         <p aria-live="polite">
-          <a href={result.pr_url} target="_blank" rel="noreferrer" className={LINK}>
-            Pull request #{result.pr_number} opened
+          <a href={shown.result.pr_url} target="_blank" rel="noreferrer" className={LINK}>
+            Pull request #{shown.result.pr_number} {shown.updated ? "updated" : "opened"}
           </a>
-          . Merge it on GitHub to bring the repository documents up to date.
+          {MERGE_HINT}
         </p>
       ) : openPr ? (
-        <p>
-          <a href={openPr.url} target="_blank" rel="noreferrer" className={LINK}>
-            Pull request #{openPr.number} is open
-          </a>
-          . Merge it on GitHub to bring the repository documents up to date.
-        </p>
-      ) : (
         <>
           <p>
-            Repository documents are out of date: {stale} {stale === 1 ? "file" : "files"}
+            <a href={openPr.url} target="_blank" rel="noreferrer" className={LINK}>
+              Pull request #{openPr.number} is open
+            </a>
+            {stale > 0 ? ` and ${files} changed since` : MERGE_HINT}
           </p>
+          {stale > 0 && canSync && (
+            <button type="button" onClick={handleSync} disabled={pending} className={BUTTON}>
+              {pending ? "Updating…" : "Update the pull request"}
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <p>Repository documents are out of date: {files}</p>
           {canSync && (
-            <button type="button" onClick={handleSync} disabled={pending} className={`mt-2 ${BUTTON}`}>
+            <button type="button" onClick={handleSync} disabled={pending} className={BUTTON}>
               {pending ? "Opening…" : "Review and open a pull request"}
             </button>
           )}

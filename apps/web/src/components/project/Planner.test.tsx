@@ -705,25 +705,132 @@ describe("Planner", () => {
       expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(false);
     });
 
-    it("hides the banner, and keeps working, when the status cannot be read", async () => {
+    it("says the status could not be read, with no button, and keeps the stages working", async () => {
       global.fetch = vi.fn((url: RequestInfo | URL) => {
         const href = url.toString();
         if (href.includes("/repository/docs-status")) {
           return Promise.resolve({
             ok: false,
             status: 409,
-            json: async () => ({ detail: "repo_tree_too_large" }),
+            json: async () => ({ detail: "github_read_forbidden" }),
           });
         }
         return Promise.resolve(route(href));
       }) as unknown as typeof fetch;
       render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
 
+      expect(
+        await screen.findByText(
+          "Could not check repository documents: The workspace's GitHub token can't read this repository.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /open a pull request|update the pull request/i }),
+      ).not.toBeInTheDocument();
       await screen.findByRole("tab", { name: /plan/i });
-      await waitFor(() =>
-        expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(true),
+      openTab(/plan/i);
+      expect(screen.getByRole("button", { name: /generate plan/i })).toBeInTheDocument();
+    });
+
+    it("keeps an imported repository's planning documents frozen", async () => {
+      mockWithDocsStatus(STALE_STATUS, { specify: "# Spec", plan: "# Plan" });
+      render(
+        <Planner
+          project={makeProject({ ...CREATED, repo_origin: "imported" })}
+          projectId="p1"
+          onChange={vi.fn()}
+        />,
       );
-      expect(screen.queryByText(/repository documents are out of date/i)).not.toBeInTheDocument();
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/specify/i);
+      expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+      openTab(/plan/i);
+      expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /generate rules/i })).not.toBeInTheDocument();
+    });
+
+    function mockGenerate(generate: Response | Record<string, unknown>) {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/generate/")) return Promise.resolve(generate);
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+    }
+
+    function generateCalls() {
+      return fetchedPaths().filter((href) => href.includes("/generate/")).length;
+    }
+
+    it("asks again before Retry regenerates", async () => {
+      mockGenerate({ ok: false, status: 429, body: null, json: async () => ({}) });
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+      const retry = await screen.findByRole("button", { name: "Retry" });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(false);
+      fireEvent.click(retry);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(confirm.mock.calls[1][0]).toMatch(/replace/i);
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(true);
+      fireEvent.click(retry);
+      await waitFor(() => expect(generateCalls()).toBe(2));
+      confirm.mockRestore();
+    });
+
+    it("asks again before Generate again replaces a truncated document", async () => {
+      const lines = [
+        "event: done",
+        `data: ${JSON.stringify({ content: "# Partial", truncated: true, updated_at: null })}`,
+        "",
+      ].join("\n");
+      const bytes = new TextEncoder().encode(lines);
+      const body = () => {
+        let sent = false;
+        return {
+          getReader: () => ({
+            read: async () =>
+              sent ? { done: true, value: undefined } : ((sent = true), { done: false, value: bytes }),
+          }),
+        };
+      };
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/generate/")) return Promise.resolve({ ok: true, status: 200, body: body() });
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+      const again = await screen.findByRole("button", { name: "Generate again" });
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(false);
+      fireEvent.click(again);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(generateCalls()).toBe(1);
+      confirm.mockRestore();
     });
 
     it("does not crash at repo_created when the project has no plan document", async () => {

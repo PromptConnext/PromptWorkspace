@@ -95,10 +95,10 @@ describe("RepositoryDocsBanner", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows an open pull request with its link and no button", () => {
+  it("shows an open pull request with nothing stale as a link only, with no button", () => {
     render(
       <RepositoryDocsBanner
-        status={{ ...STALE, open_sync_pr: { number: 3, url: "https://github.com/acme/widget/pull/3" } }}
+        status={{ ...CURRENT, open_sync_pr: { number: 3, url: "https://github.com/acme/widget/pull/3" } }}
         canSync
         onSync={vi.fn()}
       />,
@@ -109,6 +109,115 @@ describe("RepositoryDocsBanner", () => {
       "https://github.com/acme/widget/pull/3",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers to update an open pull request when documents changed since", async () => {
+    const onSync = vi.fn().mockResolvedValue({ ...RESULT, pr_number: 3, pr_url: "https://github.com/acme/widget/pull/3" });
+    render(
+      <RepositoryDocsBanner
+        status={{ ...STALE, open_sync_pr: { number: 3, url: "https://github.com/acme/widget/pull/3" } }}
+        canSync
+        onSync={onSync}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Pull request #3 is open and 2 files changed since",
+    );
+    expect(screen.queryByRole("button", { name: "Review and open a pull request" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update the pull request" }));
+    expect(await screen.findByText(/Pull request #3 updated/)).toBeInTheDocument();
+    expect(onSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no update button to someone who cannot sync", () => {
+    render(
+      <RepositoryDocsBanner
+        status={{ ...STALE, open_sync_pr: { number: 3, url: "https://github.com/acme/widget/pull/3" } }}
+        canSync={false}
+        onSync={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Pull request #3 is open and 2 files changed since");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("stops showing the opened result once the status is refetched", async () => {
+    const onSync = vi.fn().mockResolvedValue(RESULT);
+    const { rerender } = render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+    await screen.findByRole("link", { name: /pull request #7 opened/i });
+
+    // The refetch lands: the documents are stale again and no PR is open.
+    rerender(
+      <RepositoryDocsBanner status={{ ...STALE, files: [...STALE.files] }} canSync onSync={onSync} />,
+    );
+    expect(screen.queryByText(/Pull request #7 opened/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Review and open a pull request" }),
+    ).toBeInTheDocument();
+  });
+
+  it("follows the refetched status to an open pull request", async () => {
+    const onSync = vi.fn().mockResolvedValue(RESULT);
+    const { rerender } = render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+    await screen.findByRole("link", { name: /pull request #7 opened/i });
+
+    rerender(
+      <RepositoryDocsBanner
+        status={{
+          files: STALE.files.map((f) => ({ ...f, state: "current" as const })),
+          open_sync_pr: { number: 7, url: RESULT.pr_url },
+        }}
+        canSync
+        onSync={onSync}
+      />,
+    );
+    expect(screen.getByText(/Pull request #7 is open/)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("explains a status that could not be read, without a button", () => {
+    render(
+      <RepositoryDocsBanner status={null} statusError="github_read_forbidden" canSync onSync={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(
+        "Could not check repository documents: The workspace's GitHub token can't read this repository.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["github_unreachable", "GitHub is unreachable. Try again."],
+    ["github_not_configured", "GitHub is not connected for this workspace."],
+    ["repository_not_created", "The repository hasn't been created yet."],
+    ["something_new", "something_new"],
+  ])("maps the status error %s for a member too", (code, text) => {
+    render(<RepositoryDocsBanner status={null} statusError={code} canSync={false} onSync={vi.fn()} />);
+    expect(
+      screen.getByText(`Could not check repository documents: ${text}`),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("lets a failed sync be retried", async () => {
+    const onSync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("github_pr_permission_denied"))
+      .mockResolvedValueOnce(RESULT);
+    render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+    await screen.findByText(/needs the Pull requests permission/);
+    fireEvent.click(screen.getByRole("button", { name: "Review and open a pull request" }));
+
+    expect(await screen.findByRole("link", { name: /pull request #7 opened/i })).toBeInTheDocument();
+    expect(onSync).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/needs the Pull requests permission/)).not.toBeInTheDocument();
   });
 
   it("shows an open pull request even when every document is current", () => {
@@ -128,6 +237,11 @@ describe("RepositoryDocsBanner", () => {
       "The workspace's GitHub token needs the Pull requests permission (Read and write).",
     ],
     ["github_branch_conflict", "The default branch changed while syncing. Try again."],
+    ["github_read_forbidden", "The workspace's GitHub token can't read this repository."],
+    ["github_unreachable", "GitHub is unreachable. Try again."],
+    ["github_not_configured", "GitHub is not connected for this workspace."],
+    ["repository_not_created", "The repository hasn't been created yet."],
+    ["repository_docs_current", "Repository documents are already up to date."],
   ])("maps the %s rejection to its text and keeps the button", async (code, text) => {
     const onSync = vi.fn().mockRejectedValue(new Error(code));
     render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
