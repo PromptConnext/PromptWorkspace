@@ -323,7 +323,7 @@ describe("RepositoryDocsBanner", () => {
       />,
     );
     const line = screen.getByRole("status");
-    expect(line).toHaveTextContent("The pull request branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing.");
+    expect(line).toHaveTextContent("The sync branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing.");
     expect(line).toHaveClass("text-slate-500");
     expect(screen.getByRole("link", { name: /pull request #3/i })).toHaveAttribute(
       "href",
@@ -362,7 +362,7 @@ describe("RepositoryDocsBanner", () => {
     ["github_not_configured", "GitHub is not connected for this workspace."],
     ["repository_not_created", "The repository hasn't been created yet."],
     ["repository_docs_current", "Repository documents are already up to date."],
-    ["sync_branch_has_foreign_changes", "The pull request branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing."],
+    ["sync_branch_has_foreign_changes", "The sync branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing."],
   ])("maps the %s rejection to its text and keeps the button", async (code, text) => {
     const onSync = vi.fn().mockRejectedValue(new Error(code));
     render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);

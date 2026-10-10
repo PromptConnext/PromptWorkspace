@@ -6,7 +6,7 @@ import type { RepositoryDocsStatus, SyncDocsResult } from "@/lib/types";
 // A sync branch that changes more than the planning documents (a collaborator
 // can push to any pw/sync-docs-* branch) is never written to; a person clears it.
 const FOREIGN_CHANGES =
-  "The pull request branch contains changes that are not planning documents. Review or " +
+  "The sync branch contains changes that are not planning documents. Review or " +
   "delete the branch on GitHub before syncing.";
 
 // The cloud's refusals from GET docs-status and POST sync-docs
