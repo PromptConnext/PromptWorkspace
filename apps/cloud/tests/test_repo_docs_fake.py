@@ -103,6 +103,7 @@ def test_pull_requests_are_numbered_and_found_by_prefix():
         "number": 2,
         "html_url": f"https://github.com/{REPO}/pull/2",
         "head": "pw/sync-docs-1",
+        "author": fake.token_login,
     }
     assert found == second
     assert missing is None
@@ -166,3 +167,56 @@ def test_a_second_open_pull_request_for_the_same_head_is_refused():
     with pytest.raises(GithubPullRequestExistsError):
         asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
     assert len(fake.pull_requests) == 1
+
+
+def test_compare_files_lists_paths_committed_on_the_branch_and_foreign_pushes():
+    fake = FakeGithubClient()
+
+    async def run():
+        await fake.create_branch("tok", REPO, "pw/sync-docs-1", "fake-head-0")
+        await fake.create_commit_with_files(
+            "tok", REPO, "pw/sync-docs-1", [SeedFile("docs/scope.md", "s")], "sync"
+        )
+        await fake.create_commit_with_files(
+            "tok", REPO, "pw/sync-docs-1", [SeedFile("AGENTS.md", "a")], "sync"
+        )
+        fake.branch_extra_files[(REPO, "pw/sync-docs-1")] = [".github/workflows/deploy.yml"]
+        return await fake.compare_files("tok", REPO, "main", "pw/sync-docs-1")
+
+    assert sorted(asyncio.run(run())) == [
+        ".github/workflows/deploy.yml",
+        "AGENTS.md",
+        "docs/scope.md",
+    ]
+    assert asyncio.run(fake.compare_files("tok", REPO, "main", "pw/sync-docs-2")) == []
+
+
+def test_a_pull_request_carries_its_author_and_ours_is_preferred():
+    fake = FakeGithubClient()
+
+    async def run():
+        await fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b")
+        await fake.create_pull_request("tok", REPO, "pw/sync-docs-2", "main", "t", "b")
+        fake.pull_requests[0]["author"] = "mallory"
+        any_author = await fake.find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+        ours = await fake.find_open_pull_request(
+            "tok", REPO, "pw/sync-docs-", "main", author="Fake-User"
+        )
+        return any_author, ours
+
+    any_author, ours = asyncio.run(run())
+
+    assert any_author["number"] == 1 and any_author["author"] == "mallory"
+    assert ours["number"] == 2 and ours["author"] == fake.token_login
+
+
+def test_a_foreign_pull_request_is_returned_when_none_is_ours():
+    fake = FakeGithubClient()
+    asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
+    fake.pull_requests[0]["author"] = "mallory"
+
+    found = asyncio.run(
+        fake.find_open_pull_request("tok", REPO, "pw/sync-docs-", "main", author="fake-user")
+    )
+
+    assert found is not None and found["author"] == "mallory"

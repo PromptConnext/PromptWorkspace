@@ -310,6 +310,12 @@ class GithubPullRequestExistsError(GithubWriteError):
     to that pull request instead of failing."""
 
 
+class GithubCompareTooLargeError(GithubWriteError):
+    """`compare_files` got a comparison GitHub could not list in full (its
+    300-file cap, or no file list at all). A path beyond the cap could be
+    anything, so the caller treats the branch as carrying foreign changes."""
+
+
 class GithubAuthError(GithubWriteError):
     """The supplied PAT was rejected (401/403). Distinguished from a generic
     write failure so the settings endpoint can answer 400 "bad token" rather
@@ -475,8 +481,10 @@ class GithubClient(Protocol):
     async def create_branch(self, token: str, repo: str, branch: str, from_sha: str) -> None: ...
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str, base: str
+        self, token: str, repo: str, head_prefix: str, base: str, author: str | None = None
     ) -> dict | None: ...
+
+    async def compare_files(self, token: str, repo: str, base: str, head: str) -> list[str]: ...
 
     async def create_pull_request(
         self, token: str, repo: str, head: str, base: str, title: str, body: str
@@ -486,13 +494,19 @@ class GithubClient(Protocol):
 
 
 def _pull_request_row(data: dict) -> dict:
-    """The three fields the docs sync needs from a GitHub pull request; `head`
-    is the branch name, not GitHub's nested head object."""
+    """The fields the docs sync needs from a GitHub pull request; `head` is
+    the branch name, not GitHub's nested head object, and `author` the login
+    that opened it."""
     return {
         "number": data["number"],
         "html_url": data["html_url"],
         "head": (data.get("head") or {}).get("ref", ""),
+        "author": (data.get("user") or {}).get("login", ""),
     }
+
+
+# GitHub's compare endpoint lists at most this many changed files.
+_COMPARE_FILE_CAP = 300
 
 
 _PULL_REQUEST_PAGES = 5
@@ -1178,13 +1192,19 @@ class HttpGithubClient:
             )
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str, base: str
+        self, token: str, repo: str, head_prefix: str, base: str, author: str | None = None
     ) -> dict | None:
         """The first open pull request into `base` whose head branch starts
         with `head_prefix` and lives in `repo` itself. A fork's pull request
         can carry the same branch name, and committing onto that name here
-        would write to a different branch than the one the PR shows. Pages
-        through at most `_PULL_REQUEST_PAGES` pages of 100, stopping early."""
+        would write to a different branch than the one the PR shows.
+
+        With `author`, the first one that login opened (case-insensitively)
+        is preferred, so a collaborator's same-prefix pull request cannot
+        hide ours; failing that, the first by anyone, so the caller can see
+        a foreign one. Pages through at most `_PULL_REQUEST_PAGES` pages of
+        100, stopping at the first preferred match."""
+        fallback: dict | None = None
         for page in range(1, _PULL_REQUEST_PAGES + 1):
             resp = await _send(
                 "GET",
@@ -1207,10 +1227,35 @@ class HttpGithubClient:
                     and head_repo == repo.lower()
                     and (pull.get("base") or {}).get("ref") == base
                 ):
-                    return _pull_request_row(pull)
+                    row = _pull_request_row(pull)
+                    if author is None or row["author"].lower() == author.lower():
+                        return row
+                    fallback = fallback or row
             if len(pulls) < 100:
-                return None
-        return None
+                return fallback
+        return fallback
+
+    async def compare_files(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        """The paths `head` changes relative to its merge base with `base`.
+        A comparison GitHub cannot list in full raises
+        `GithubCompareTooLargeError` rather than answering a partial list."""
+        resp = await _send(
+            "GET",
+            f"{GITHUB_API}/repos/{repo}/compare/{base}...{head}",
+            token=token,
+            what=f"compare_files for {repo}",
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"compare_files failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        files = (resp.json() or {}).get("files")
+        if files is None or len(files) >= _COMPARE_FILE_CAP:
+            raise GithubCompareTooLargeError(
+                f"compare_files: {repo} {base}...{head} lists too many files to check"
+            )
+        return [f["filename"] for f in files if f.get("filename")]
 
     async def create_pull_request(
         self, token: str, repo: str, head: str, base: str, title: str, body: str
@@ -1547,6 +1592,9 @@ class FakeGithubClient:
         self.sha_files: dict[str, dict[str, str]] = {}
         self.pull_requests: list[dict] = []
         self.fail_pr_status: int | None = None
+        # Paths someone else pushed onto a branch, keyed (repo, branch):
+        # `compare_files` lists them with the paths this fake committed there.
+        self.branch_extra_files: dict[tuple[str, str], list[str]] = {}
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
@@ -1846,22 +1894,41 @@ class FakeGithubClient:
         self.branch_refs[(repo, branch)] = from_sha
 
     def _pull_request_row(self, pull: dict) -> dict:
-        return {"number": pull["number"], "html_url": pull["html_url"], "head": pull["head"]}
+        return {
+            "number": pull["number"],
+            "html_url": pull["html_url"],
+            "head": pull["head"],
+            "author": pull["author"],
+        }
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str, base: str
+        self, token: str, repo: str, head_prefix: str, base: str, author: str | None = None
     ) -> dict | None:
         self.call_log.append(f"find_pull_request:{repo}")
-        for pull in self.pull_requests:
-            if (
-                pull["repo"] == repo
-                and pull["head_repo"].lower() == repo.lower()
-                and pull["base"] == base
-                and pull["state"] == "open"
-                and pull["head"].startswith(head_prefix)
-            ):
-                return self._pull_request_row(pull)
-        return None
+        matches = [
+            self._pull_request_row(pull)
+            for pull in self.pull_requests
+            if pull["repo"] == repo
+            and pull["head_repo"].lower() == repo.lower()
+            and pull["base"] == base
+            and pull["state"] == "open"
+            and pull["head"].startswith(head_prefix)
+        ]
+        if author is not None:
+            ours = [m for m in matches if m["author"].lower() == author.lower()]
+            if ours:
+                return ours[0]
+        return matches[0] if matches else None
+
+    async def compare_files(self, token: str, repo: str, base: str, head: str) -> list[str]:
+        self.call_log.append(f"compare_files:{repo}:{base}...{head}")
+        committed = {
+            path
+            for commit in self.commits
+            if commit["repo"] == repo and commit["branch"] == head
+            for path in commit["paths"]
+        }
+        return sorted(committed | set(self.branch_extra_files.get((repo, head), [])))
 
     async def create_pull_request(
         self, token: str, repo: str, head: str, base: str, title: str, body: str
@@ -1883,6 +1950,8 @@ class FakeGithubClient:
             "repo": repo,
             # Where the head branch lives; a test sets another repo for a fork.
             "head_repo": repo,
+            # Who opened it; a test sets another login for a collaborator's.
+            "author": self.token_login,
             "number": number,
             "head": head,
             "base": base,
