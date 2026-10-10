@@ -3,6 +3,12 @@
 import { useRef, useState } from "react";
 import type { RepositoryDocsStatus, SyncDocsResult } from "@/lib/types";
 
+// A sync branch that changes more than the planning documents (a collaborator
+// can push to any pw/sync-docs-* branch) is never written to; a person clears it.
+const FOREIGN_CHANGES =
+  "The pull request branch contains changes that are not planning documents. Review or " +
+  "delete the branch on GitHub before syncing.";
+
 // The cloud's refusals from GET docs-status and POST sync-docs
 // (apps/cloud/app/api/repository_docs.py), as text a person can act on.
 // `github_repo_not_in_token_scope` is deliberately not mapped here: a token
@@ -29,10 +35,13 @@ const ERROR_TEXT: Record<string, string> = {
   sync_not_supported_for_imported_repository:
     "Syncing documents isn't available for an imported repository yet.",
   repository_docs_current: "Repository documents are already up to date.",
+  repo_url_unrecognized: "The repository address on this project is not recognised.",
+  sync_branch_has_foreign_changes: FOREIGN_CHANGES,
 };
 
 const textFor = (code: string) => ERROR_TEXT[code] ?? code;
 
+const MUTED = "text-xs text-slate-500";
 const BOX = "rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900";
 const LINK = "font-medium underline hover:text-amber-950";
 const BUTTON =
@@ -78,8 +87,20 @@ export function RepositoryDocsBanner({
   if (!valid) {
     if (!statusError) return null;
     return (
-      <p role="status" className="text-xs text-slate-500">
+      <p role="status" className={MUTED}>
         Could not check repository documents: {textFor(statusError)}
+      </p>
+    );
+  }
+
+  // Nothing to offer until the branch is cleared on GitHub: the sync refuses it.
+  if (valid.open_sync_pr?.foreign_changes) {
+    return (
+      <p role="status" className={MUTED}>
+        <a href={valid.open_sync_pr.url} target="_blank" rel="noreferrer" className="underline">
+          Pull request #{valid.open_sync_pr.number}
+        </a>
+        : {FOREIGN_CHANGES}
       </p>
     );
   }

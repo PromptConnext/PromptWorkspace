@@ -853,6 +853,48 @@ describe("Planner", () => {
       confirm.mockRestore();
     });
 
+    it("refreshes the banner after a document is saved, not on load", async () => {
+      global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const href = url.toString();
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        const match = href.match(/\/stage-documents\/(\w+)/);
+        if (match) {
+          const saved = init?.method === "PATCH";
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              stage: match[1],
+              content: saved ? JSON.parse(String(init?.body)).content : `# ${match[1]}`,
+              updated_at: saved ? "2026-10-10T12:00:00Z" : "2026-10-01T00:00:00Z",
+            }),
+          });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      const statusFetches = () =>
+        fetchedPaths().filter((href) => href.includes("/repository/docs-status")).length;
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByText("Repository documents are out of date: 2 files");
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const plan = within(
+        screen.getByRole("heading", { name: "Implementation plan" }).closest("div") as HTMLElement,
+      );
+      fireEvent.click(await plan.findByRole("button", { name: "Raw" }));
+      // Loading each stage's document is not a save: the one status read stands.
+      expect(statusFetches()).toBe(1);
+
+      fireEvent.change(plan.getByRole("textbox", { name: /plan document/i }), {
+        target: { value: "# Plan\n\nNow with a queue worker." },
+      });
+      fireEvent.click(plan.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(statusFetches()).toBe(2));
+    });
+
     it("does not crash at repo_created when the project has no plan document", async () => {
       mockWithDocsStatus({ files: [], open_sync_pr: null });
       render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);

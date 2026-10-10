@@ -281,6 +281,7 @@ describe("RepositoryDocsBanner", () => {
     ["github_unreachable", "GitHub is unreachable. Try again."],
     ["github_not_configured", "GitHub is not connected for this workspace."],
     ["repository_not_created", "The repository hasn't been created yet."],
+    ["repo_url_unrecognized", "The repository address on this project is not recognised."],
     ["something_new", "something_new"],
   ])("maps the status error %s for a member too", (code, text) => {
     render(<RepositoryDocsBanner status={null} statusError={code} canSync={false} onSync={vi.fn()} />);
@@ -304,6 +305,31 @@ describe("RepositoryDocsBanner", () => {
     expect(await screen.findByRole("link", { name: /pull request #7 opened/i })).toBeInTheDocument();
     expect(onSync).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/needs the Pull requests permission/)).not.toBeInTheDocument();
+  });
+
+  it("warns, muted and with no button, when the pull request branch carries other changes", () => {
+    render(
+      <RepositoryDocsBanner
+        status={{
+          ...STALE,
+          open_sync_pr: {
+            number: 3,
+            url: "https://github.com/acme/widget/pull/3",
+            foreign_changes: true,
+          },
+        }}
+        canSync
+        onSync={vi.fn()}
+      />,
+    );
+    const line = screen.getByRole("status");
+    expect(line).toHaveTextContent("The pull request branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing.");
+    expect(line).toHaveClass("text-slate-500");
+    expect(screen.getByRole("link", { name: /pull request #3/i })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widget/pull/3",
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("shows an open pull request even when every document is current", () => {
@@ -336,6 +362,7 @@ describe("RepositoryDocsBanner", () => {
     ["github_not_configured", "GitHub is not connected for this workspace."],
     ["repository_not_created", "The repository hasn't been created yet."],
     ["repository_docs_current", "Repository documents are already up to date."],
+    ["sync_branch_has_foreign_changes", "The pull request branch contains changes that are not planning documents. Review or delete the branch on GitHub before syncing."],
   ])("maps the %s rejection to its text and keeps the button", async (code, text) => {
     const onSync = vi.fn().mockRejectedValue(new Error(code));
     render(<RepositoryDocsBanner status={STALE} canSync onSync={onSync} />);
