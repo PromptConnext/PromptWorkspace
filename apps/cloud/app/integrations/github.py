@@ -469,7 +469,7 @@ class GithubClient(Protocol):
     async def create_branch(self, token: str, repo: str, branch: str, from_sha: str) -> None: ...
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str
+        self, token: str, repo: str, head_prefix: str, base: str
     ) -> dict | None: ...
 
     async def create_pull_request(
@@ -494,6 +494,8 @@ def _pull_request_row(data: dict) -> dict:
 # trade-off: a repository created and pushed within the grace stays flagged
 # `empty` while `size` lags. That is acceptable because the flag is only a
 # picker hint; the import route checks the branch head.
+_PULL_REQUEST_PAGES = 5
+
 _FIRST_PUSH_GRACE = timedelta(seconds=2)
 
 
@@ -1169,25 +1171,38 @@ class HttpGithubClient:
             )
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str
+        self, token: str, repo: str, head_prefix: str, base: str
     ) -> dict | None:
-        """The first open pull request whose head branch starts with
-        `head_prefix`, from the first page of 100 open pull requests."""
-        resp = await _send(
-            "GET",
-            f"{GITHUB_API}/repos/{repo}/pulls",
-            token=token,
-            what=f"list_pull_requests for {repo}",
-            params={"state": "open", "per_page": "100"},
-        )
-        if resp.is_error:
-            raise GithubWriteError(
-                f"list_pull_requests failed for {repo}: {resp.status_code} {resp.text}",
-                status_code=resp.status_code,
+        """The first open pull request into `base` whose head branch starts
+        with `head_prefix` and lives in `repo` itself. A fork's pull request
+        can carry the same branch name, and committing onto that name here
+        would write to a different branch than the one the PR shows. Pages
+        through at most `_PULL_REQUEST_PAGES` pages of 100, stopping early."""
+        for page in range(1, _PULL_REQUEST_PAGES + 1):
+            resp = await _send(
+                "GET",
+                f"{GITHUB_API}/repos/{repo}/pulls",
+                token=token,
+                what=f"list_pull_requests for {repo}",
+                params={"state": "open", "per_page": "100", "page": str(page)},
             )
-        for pull in resp.json():
-            if ((pull.get("head") or {}).get("ref") or "").startswith(head_prefix):
-                return _pull_request_row(pull)
+            if resp.is_error:
+                raise GithubWriteError(
+                    f"list_pull_requests failed for {repo}: {resp.status_code} {resp.text}",
+                    status_code=resp.status_code,
+                )
+            pulls = resp.json()
+            for pull in pulls:
+                head = pull.get("head") or {}
+                head_repo = ((head.get("repo") or {}).get("full_name") or "").lower()
+                if (
+                    (head.get("ref") or "").startswith(head_prefix)
+                    and head_repo == repo.lower()
+                    and (pull.get("base") or {}).get("ref") == base
+                ):
+                    return _pull_request_row(pull)
+            if len(pulls) < 100:
+                return None
         return None
 
     async def create_pull_request(
@@ -1742,12 +1757,17 @@ class FakeGithubClient:
         if repo in self.branch_head_on_commit:
             self.branch_heads[repo] = self.branch_head_on_commit.pop(repo)
         on_branch_ref = (repo, branch) in self.branch_refs
+        default_branch = self.existing_repos.get(repo, {}).get("default_branch", "main")
+        if not on_branch_ref and branch != default_branch:
+            # GitHub answers a ref read on a branch that does not exist with 404.
+            raise GithubWriteError(f"fake branch {branch} missing in {repo}", status_code=404)
         parent = self.branch_refs.get((repo, branch)) or self.branch_heads.get(
             repo, "fake-head-0"
         )
         if expected_base_sha is not None and parent != expected_base_sha:
             raise GithubBranchMovedError(f"fake branch moved for {repo}", status_code=409)
-        if repo in self.protected_branches:
+        # `protected_branches` names repos whose *default* branch is protected.
+        if not on_branch_ref and repo in self.protected_branches:
             raise GithubRefUpdateRejectedError(
                 f"fake protected branch {branch} in {repo}", status_code=422
             )
@@ -1817,11 +1837,14 @@ class FakeGithubClient:
         return {"number": pull["number"], "html_url": pull["html_url"], "head": pull["head"]}
 
     async def find_open_pull_request(
-        self, token: str, repo: str, head_prefix: str
+        self, token: str, repo: str, head_prefix: str, base: str
     ) -> dict | None:
+        self.call_log.append(f"find_pull_request:{repo}")
         for pull in self.pull_requests:
             if (
                 pull["repo"] == repo
+                and pull["head_repo"].lower() == repo.lower()
+                and pull["base"] == base
                 and pull["state"] == "open"
                 and pull["head"].startswith(head_prefix)
             ):
@@ -1839,6 +1862,8 @@ class FakeGithubClient:
         number = len(self.pull_requests) + 1
         pull = {
             "repo": repo,
+            # Where the head branch lives; a test sets another repo for a fork.
+            "head_repo": repo,
             "number": number,
             "head": head,
             "base": base,

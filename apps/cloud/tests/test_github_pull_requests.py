@@ -24,7 +24,8 @@ def github(monkeypatch):
     """Routes every httpx.AsyncClient at a handler the test configures.
     Returns (responses, recorded) where `responses` maps (method, path) to an
     httpx.Response and `recorded` lists each request as a dict."""
-    responses: dict[tuple[str, str], httpx.Response] = {}
+    # A value is a response, or a callable taking the request (for paging).
+    responses: dict[tuple[str, str], object] = {}
     recorded: list[dict] = []
     real_client = httpx.AsyncClient
 
@@ -37,9 +38,10 @@ def github(monkeypatch):
                 "json": json.loads(request.content) if request.content else None,
             }
         )
-        return responses.get(
-            (request.method, request.url.path), httpx.Response(404, json={"message": "Not Found"})
-        )
+        found = responses.get((request.method, request.url.path))
+        if callable(found):
+            return found(request)
+        return found or httpx.Response(404, json={"message": "Not Found"})
 
     def factory(**kwargs):
         kwargs.pop("transport", None)
@@ -89,12 +91,12 @@ def test_create_branch_other_failure_carries_the_status(github):
     assert excinfo.value.status_code == 403
 
 
-def _pull(number: int, ref: str) -> dict:
+def _pull(number: int, ref: str, head_repo: str = REPO, base: str = "main") -> dict:
     return {
         "number": number,
         "html_url": f"https://github.com/{REPO}/pull/{number}",
-        "head": {"ref": ref, "sha": f"sha-{number}"},
-        "base": {"ref": "main"},
+        "head": {"ref": ref, "sha": f"sha-{number}", "repo": {"full_name": head_repo}},
+        "base": {"ref": base},
     }
 
 
@@ -104,14 +106,17 @@ def test_find_open_pull_request_matches_the_head_prefix(github):
         200, json=[_pull(3, "feature/login"), _pull(7, "pw/sync-docs-20261010120000")]
     )
 
-    found = asyncio.run(HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-"))
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
 
     assert found == {
         "number": 7,
         "html_url": f"https://github.com/{REPO}/pull/7",
         "head": "pw/sync-docs-20261010120000",
     }
-    assert recorded[0]["params"] == {"state": "open", "per_page": "100"}
+    # A match on the first page stops the paging.
+    assert [r["params"] for r in recorded] == [{"state": "open", "per_page": "100", "page": "1"}]
 
 
 def test_find_open_pull_request_returns_none_without_a_match(github):
@@ -120,9 +125,76 @@ def test_find_open_pull_request_returns_none_without_a_match(github):
         200, json=[_pull(3, "feature/login")]
     )
 
-    found = asyncio.run(HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-"))
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
 
     assert found is None
+
+
+def test_find_open_pull_request_ignores_forks_and_other_bases(github):
+    """A fork can open a PR from its own `pw/sync-docs-*` branch; committing
+    onto that name in this repository would write somewhere else entirely."""
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/pulls")] = httpx.Response(
+        200,
+        json=[
+            _pull(4, "pw/sync-docs-x", head_repo="mallory/make-story-time"),
+            _pull(5, "pw/sync-docs-y", base="develop"),
+        ],
+    )
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
+
+    assert found is None
+
+
+def test_find_open_pull_request_matches_the_repo_case_insensitively(github):
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/pulls")] = httpx.Response(
+        200, json=[_pull(6, "pw/sync-docs-x", head_repo="Acme/Make-Story-Time")]
+    )
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
+
+    assert found is not None and found["number"] == 6
+
+
+def test_find_open_pull_request_pages_until_a_match(github):
+    responses, recorded = github
+
+    def paged(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        if page == 1:
+            return httpx.Response(200, json=[_pull(n, f"feature/{n}") for n in range(100)])
+        return httpx.Response(200, json=[_pull(300, "pw/sync-docs-x")])
+
+    responses[("GET", f"/repos/{REPO}/pulls")] = paged
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
+
+    assert found is not None and found["number"] == 300
+    assert [r["params"]["page"] for r in recorded] == ["1", "2"]
+
+
+def test_find_open_pull_request_stops_after_five_pages(github):
+    responses, recorded = github
+    responses[("GET", f"/repos/{REPO}/pulls")] = lambda request: httpx.Response(
+        200, json=[_pull(n, f"feature/{n}") for n in range(100)]
+    )
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+    )
+
+    assert found is None
+    assert [r["params"]["page"] for r in recorded] == ["1", "2", "3", "4", "5"]
 
 
 def test_create_pull_request_returns_number_url_and_head(github):

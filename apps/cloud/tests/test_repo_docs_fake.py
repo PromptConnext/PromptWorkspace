@@ -8,7 +8,12 @@ import asyncio
 
 import pytest
 
-from app.integrations.github import FakeGithubClient, GithubBranchMovedError, GithubWriteError
+from app.integrations.github import (
+    FakeGithubClient,
+    GithubBranchMovedError,
+    GithubRefUpdateRejectedError,
+    GithubWriteError,
+)
 from app.integrations.repo_docs import git_blob_sha
 from app.integrations.repo_seed import SeedFile
 
@@ -83,9 +88,11 @@ def test_pull_requests_are_numbered_and_found_by_prefix():
     async def run():
         first = await fake.create_pull_request("tok", REPO, "feature/x", "main", "t1", "b1")
         second = await fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t2", "b2")
-        found = await fake.find_open_pull_request("tok", REPO, "pw/sync-docs-")
-        missing = await fake.find_open_pull_request("tok", REPO, "release/")
+        found = await fake.find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")
+        missing = await fake.find_open_pull_request("tok", REPO, "release/", "main")
+        other_base = await fake.find_open_pull_request("tok", REPO, "pw/sync-docs-", "develop")
         await fake.update_pull_request("tok", REPO, 2, "b2 updated")
+        assert other_base is None
         return first, second, found, missing
 
     first, second, found, missing = asyncio.run(run())
@@ -111,3 +118,41 @@ def test_fail_pr_status_raises_with_that_status():
         asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
     assert excinfo.value.status_code == 403
     assert fake.pull_requests == []
+
+
+def test_a_fork_pull_request_is_not_found():
+    fake = FakeGithubClient()
+    asyncio.run(fake.create_pull_request("tok", REPO, "pw/sync-docs-1", "main", "t", "b"))
+    fake.pull_requests[0]["head_repo"] = "mallory/app"
+
+    assert asyncio.run(fake.find_open_pull_request("tok", REPO, "pw/sync-docs-", "main")) is None
+
+
+def test_a_commit_to_an_unknown_branch_is_404():
+    fake = FakeGithubClient()
+
+    with pytest.raises(GithubWriteError) as excinfo:
+        asyncio.run(
+            fake.create_commit_with_files(
+                "tok", REPO, "pw/sync-docs-1", [SeedFile("AGENTS.md", "a")], "sync"
+            )
+        )
+    assert excinfo.value.status_code == 404
+    assert fake.commits == []
+
+
+def test_branch_protection_applies_to_the_default_branch_only():
+    fake = FakeGithubClient()
+    fake.protected_branches.add(REPO)
+
+    async def run():
+        await fake.create_branch("tok", REPO, "pw/sync-docs-1", "fake-head-0")
+        return await fake.create_commit_with_files(
+            "tok", REPO, "pw/sync-docs-1", [SeedFile("AGENTS.md", "a")], "sync"
+        )
+
+    assert asyncio.run(run()) == fake.branch_refs[(REPO, "pw/sync-docs-1")]
+    with pytest.raises(GithubRefUpdateRejectedError):
+        asyncio.run(
+            fake.create_commit_with_files("tok", REPO, "main", [SeedFile("AGENTS.md", "a")], "s")
+        )

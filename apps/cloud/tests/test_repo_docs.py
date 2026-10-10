@@ -2,8 +2,10 @@ from app.integrations.repo_docs import (
     DOC_PATHS,
     changed_files,
     classify_docs,
+    classify_with_pull_request,
+    files_differing_from,
     git_blob_sha,
-    mark_in_pull_request,
+    reverting_files,
 )
 from app.integrations.repo_seed import SeedFile
 
@@ -50,26 +52,43 @@ def test_changed_files_returns_only_what_differs():
     assert [f.path for f in changed_files(files, states)] == ["docs/scope.md"]
 
 
-def test_a_doc_already_in_the_sync_branch_reads_in_pull_request():
+def test_with_an_open_pull_request_both_trees_decide_the_state():
     files = [
         SeedFile("AGENTS.md", "a"),
         SeedFile("docs/scope.md", "b"),
         SeedFile("docs/architecture.md", "c"),
         SeedFile("docs/tasks.md", "d"),
+        SeedFile("README.md", "r"),
+        SeedFile("docs/conventions.md", "k"),
     ]
-    default = {"AGENTS.md": git_blob_sha("a"), "docs/scope.md": git_blob_sha("OLD")}
+    main = {
+        "AGENTS.md": git_blob_sha("a"),
+        "docs/scope.md": git_blob_sha("OLD"),
+        "README.md": git_blob_sha("r"),
+    }
     pr_branch = {
         "AGENTS.md": git_blob_sha("a"),
         "docs/scope.md": git_blob_sha("b"),
         "docs/architecture.md": git_blob_sha("c"),
         "docs/tasks.md": git_blob_sha("stale in the branch"),
+        # Matches main, but the branch holds an older sync: a revert.
+        "README.md": git_blob_sha("synced earlier"),
     }
-    states = mark_in_pull_request(files, classify_docs(files, default), pr_branch)
+    states = classify_with_pull_request(files, main, pr_branch)
     assert {s.path: s.state for s in states} == {
         "AGENTS.md": "current",
         "docs/scope.md": "in_pull_request",
         "docs/architecture.md": "in_pull_request",
-        "docs/tasks.md": "missing",
+        "docs/tasks.md": "out_of_date",
+        "README.md": "out_of_date",
+        "docs/conventions.md": "missing",
     }
-    # Only what the branch does not already carry is committed again.
-    assert [f.path for f in changed_files(files, states)] == ["docs/tasks.md"]
+    changed = changed_files(files, states)
+    assert [f.path for f in changed] == ["docs/tasks.md", "README.md", "docs/conventions.md"]
+    assert [f.path for f in reverting_files(changed, main)] == ["README.md"]
+    assert [f.path for f in files_differing_from(files, main)] == [
+        "docs/scope.md",
+        "docs/architecture.md",
+        "docs/tasks.md",
+        "docs/conventions.md",
+    ]

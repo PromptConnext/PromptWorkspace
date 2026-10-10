@@ -7,9 +7,11 @@ without fetching any file: GitHub's tree listing already carries each blob's
 git sha, and a git blob sha is a pure function of the content, so it can be
 computed locally from the rebuilt seed file and compared.
 
-While a sync pull request is open, a document whose rebuilt view is already
-on that pull request's branch reads `in_pull_request`: it differs from the
-default branch, but syncing it again would add nothing.
+While a sync pull request is open, every document is compared with that
+pull request's branch as well (`classify_with_pull_request`): a view the
+branch already carries reads `in_pull_request`, and a view the default branch
+matches but the branch does not (a document edited back after a sync) reads
+`out_of_date`, so the next sync reverts it in the pull request.
 
 Only document views are ever in scope. The deployment template's files
 (`.github/workflows/*`, `site/`, `docs/deployment.md`) are owned by the
@@ -71,19 +73,31 @@ def classify_docs(seed_files: list[SeedFile], tree_blobs: dict[str, str]) -> lis
     return states
 
 
-def mark_in_pull_request(
-    seed_files: list[SeedFile], states: list[DocState], pr_blobs: dict[str, str]
+def classify_with_pull_request(
+    seed_files: list[SeedFile], main_blobs: dict[str, str], pr_blobs: dict[str, str]
 ) -> list[DocState]:
-    """Re-read every document that differs from the default branch against the
-    open sync pull request's branch (`pr_blobs`, path -> blob sha): one whose
-    rebuilt view is already there is `in_pull_request`."""
-    content = {f.path: f.content for f in seed_files}
-    return [
-        DocState(s.path, "in_pull_request")
-        if s.state != "current" and pr_blobs.get(s.path) == git_blob_sha(content[s.path])
-        else s
-        for s in states
-    ]
+    """One entry per rebuilt document view while a sync pull request is open.
+    `main_blobs` and `pr_blobs` map paths to blob shas on the default branch
+    and on the pull request's branch. `current` needs both to match, since
+    merging the pull request must leave the view right; `in_pull_request` is a
+    match on the branch only; `missing` means the file is on neither."""
+    states: list[DocState] = []
+    for seed_file in seed_files:
+        if seed_file.path not in DOC_PATHS:
+            continue
+        sha = git_blob_sha(seed_file.content)
+        matches_main = main_blobs.get(seed_file.path) == sha
+        matches_pr = pr_blobs.get(seed_file.path) == sha
+        if matches_main and matches_pr:
+            state = "current"
+        elif matches_pr:
+            state = "in_pull_request"
+        elif seed_file.path not in main_blobs and seed_file.path not in pr_blobs:
+            state = "missing"
+        else:
+            state = "out_of_date"
+        states.append(DocState(seed_file.path, state))
+    return states
 
 
 def changed_files(seed_files: list[SeedFile], states: list[DocState]) -> list[SeedFile]:
@@ -93,9 +107,18 @@ def changed_files(seed_files: list[SeedFile], states: list[DocState]) -> list[Se
     return [f for f in seed_files if f.path in wanted]
 
 
-def differing_files(seed_files: list[SeedFile], states: list[DocState]) -> list[SeedFile]:
-    """Every view that differs from the default branch, whether or not the
-    open sync pull request already carries it: what that pull request's
+def files_differing_from(seed_files: list[SeedFile], blobs: dict[str, str]) -> list[SeedFile]:
+    """Every document view whose content differs from the tree `blobs`
+    describes: for the default branch, what the sync pull request's
     description lists."""
-    wanted = {s.path for s in states if s.state != "current"}
-    return [f for f in seed_files if f.path in wanted]
+    return [
+        f
+        for f in seed_files
+        if f.path in DOC_PATHS and blobs.get(f.path) != git_blob_sha(f.content)
+    ]
+
+
+def reverting_files(changed: list[SeedFile], main_blobs: dict[str, str]) -> list[SeedFile]:
+    """The views among `changed` that equal the default branch: committing
+    them takes a change back out of the open sync pull request."""
+    return [f for f in changed if main_blobs.get(f.path) == git_blob_sha(f.content)]
