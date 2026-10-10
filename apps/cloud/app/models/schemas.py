@@ -1485,3 +1485,35 @@ class SeedPreviewOut(BaseModel):
     relocated: list[RelocatedFile] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
+
+
+class RepositoryDocFile(BaseModel):
+    """One seeded planning document, compared with the repository's default
+    branch by git blob sha (app/integrations/repo_docs.py)."""
+
+    path: str
+    # `in_pull_request`: differs from the default branch, and the open sync
+    # pull request's branch already carries the rebuilt view.
+    state: Literal["current", "out_of_date", "missing", "in_pull_request"]
+
+
+class OpenSyncPr(BaseModel):
+    number: int
+    url: str
+
+
+class RepositoryDocsStatus(BaseModel):
+    """GET /projects/{id}/repository/docs-status."""
+
+    files: list[RepositoryDocFile]
+    open_sync_pr: OpenSyncPr | None = None
+
+
+class SyncDocsOut(BaseModel):
+    """POST /projects/{id}/repository/sync-docs: the pull request the changed
+    documents went to, and which paths were committed."""
+
+    pr_number: int
+    pr_url: str
+    branch: str
+    files: list[str]

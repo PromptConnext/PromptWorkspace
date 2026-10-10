@@ -304,6 +304,12 @@ class GithubRefUpdateRejectedError(GithubWriteError):
     the protection changes."""
 
 
+class GithubPullRequestExistsError(GithubWriteError):
+    """`create_pull_request` got GitHub's 422 "A pull request already exists"
+    for this head and base: another sync opened it first, and the caller adds
+    to that pull request instead of failing."""
+
+
 class GithubAuthError(GithubWriteError):
     """The supplied PAT was rejected (401/403). Distinguished from a generic
     write failure so the settings endpoint can answer 400 "bad token" rather
@@ -465,6 +471,31 @@ class GithubClient(Protocol):
     async def list_commits(
         self, token: str, repo: str, sha: str, limit: int = 100
     ) -> list[str]: ...
+
+    async def create_branch(self, token: str, repo: str, branch: str, from_sha: str) -> None: ...
+
+    async def find_open_pull_request(
+        self, token: str, repo: str, head_prefix: str, base: str
+    ) -> dict | None: ...
+
+    async def create_pull_request(
+        self, token: str, repo: str, head: str, base: str, title: str, body: str
+    ) -> dict: ...
+
+    async def update_pull_request(self, token: str, repo: str, number: int, body: str) -> None: ...
+
+
+def _pull_request_row(data: dict) -> dict:
+    """The three fields the docs sync needs from a GitHub pull request; `head`
+    is the branch name, not GitHub's nested head object."""
+    return {
+        "number": data["number"],
+        "html_url": data["html_url"],
+        "head": (data.get("head") or {}).get("ref", ""),
+    }
+
+
+_PULL_REQUEST_PAGES = 5
 
 
 # GitHub can stamp an empty repository's pushed_at a moment after created_at,
@@ -1125,6 +1156,98 @@ class HttpGithubClient:
             )
         return base_sha, commit_resp.json()["tree"]["sha"]
 
+    async def create_branch(self, token: str, repo: str, branch: str, from_sha: str) -> None:
+        """A new branch at `from_sha`. A 422 "Reference already exists" is a
+        lost race with another sync, so it is `GithubBranchMovedError`; the
+        branch is never reset over."""
+        resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/git/refs",
+            token=token,
+            what=f"create_branch for {repo}",
+            json={"ref": f"refs/heads/{branch}", "sha": from_sha},
+        )
+        if resp.status_code == 422 and "reference already exists" in resp.text.lower():
+            raise GithubBranchMovedError(
+                f"create_branch: {repo}@{branch} already exists", status_code=409
+            )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"create_branch failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+
+    async def find_open_pull_request(
+        self, token: str, repo: str, head_prefix: str, base: str
+    ) -> dict | None:
+        """The first open pull request into `base` whose head branch starts
+        with `head_prefix` and lives in `repo` itself. A fork's pull request
+        can carry the same branch name, and committing onto that name here
+        would write to a different branch than the one the PR shows. Pages
+        through at most `_PULL_REQUEST_PAGES` pages of 100, stopping early."""
+        for page in range(1, _PULL_REQUEST_PAGES + 1):
+            resp = await _send(
+                "GET",
+                f"{GITHUB_API}/repos/{repo}/pulls",
+                token=token,
+                what=f"list_pull_requests for {repo}",
+                params={"state": "open", "per_page": "100", "page": str(page)},
+            )
+            if resp.is_error:
+                raise GithubWriteError(
+                    f"list_pull_requests failed for {repo}: {resp.status_code} {resp.text}",
+                    status_code=resp.status_code,
+                )
+            pulls = resp.json()
+            for pull in pulls:
+                head = pull.get("head") or {}
+                head_repo = ((head.get("repo") or {}).get("full_name") or "").lower()
+                if (
+                    (head.get("ref") or "").startswith(head_prefix)
+                    and head_repo == repo.lower()
+                    and (pull.get("base") or {}).get("ref") == base
+                ):
+                    return _pull_request_row(pull)
+            if len(pulls) < 100:
+                return None
+        return None
+
+    async def create_pull_request(
+        self, token: str, repo: str, head: str, base: str, title: str, body: str
+    ) -> dict:
+        resp = await _send(
+            "POST",
+            f"{GITHUB_API}/repos/{repo}/pulls",
+            token=token,
+            what=f"create_pull_request for {repo}",
+            json={"head": head, "base": base, "title": title, "body": body},
+        )
+        if resp.status_code == 422 and "pull request already exists" in resp.text.lower():
+            raise GithubPullRequestExistsError(
+                f"create_pull_request: {repo} already has a pull request from {head}",
+                status_code=422,
+            )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"create_pull_request failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+        return _pull_request_row(resp.json())
+
+    async def update_pull_request(self, token: str, repo: str, number: int, body: str) -> None:
+        resp = await _send(
+            "PATCH",
+            f"{GITHUB_API}/repos/{repo}/pulls/{number}",
+            token=token,
+            what=f"update_pull_request for {repo}",
+            json={"body": body},
+        )
+        if resp.is_error:
+            raise GithubWriteError(
+                f"update_pull_request failed for {repo}: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+            )
+
     async def _create_blob(self, token: str, repo: str, content: str) -> str:
         """base64 rather than utf-8 encoding: a scaffold may carry a binary
         asset or a file with a lone CR, and base64 is the only encoding the
@@ -1412,6 +1535,18 @@ class FakeGithubClient:
         # listing GitHub reports as truncated — a single directory too large
         # to list at all.
         self.truncated_directories: dict[str, set[str]] = {}
+        # Docs sync. `branch_refs` holds every branch other than a repo's
+        # default one, keyed (repo, branch); a commit onto one of these moves
+        # it and leaves `branch_heads` alone. `sha_files` is the full file
+        # snapshot at each commit this fake made (commit sha -> path ->
+        # content), which `get_tree_entries` lists with real git blob shas.
+        # `pull_requests` entries carry number, head, base, title, body,
+        # html_url and state; `fail_pr_status` makes the pull request calls
+        # fail with that status (403 is a token without Pull requests write).
+        self.branch_refs: dict[tuple[str, str], str] = {}
+        self.sha_files: dict[str, dict[str, str]] = {}
+        self.pull_requests: list[dict] = []
+        self.fail_pr_status: int | None = None
 
     def set_file(self, repo: str, path: str, sha: str, content: str) -> None:
         self.files[(repo, path, sha)] = content
@@ -1518,6 +1653,8 @@ class FakeGithubClient:
         if repo in self.empty_repos:
             # What GitHub answers for a ref read on a repository with no commits.
             raise GithubWriteError(f"Git Repository is empty: {repo}", status_code=409)
+        if (repo, branch) in self.branch_refs:
+            return self.branch_refs[(repo, branch)]
         return self.branch_heads.get(repo, "fake-head-0")
 
     async def get_tree(self, token: str, repo: str, sha: str) -> tuple[list[str], bool]:
@@ -1544,8 +1681,23 @@ class FakeGithubClient:
                 for depth in range(1, len(parts)):
                     types.setdefault("/".join(parts[:depth]), "tree")
                 types[path] = kind
+        # A commit this fake made lists its snapshot with real blob shas, so
+        # a staleness check can compare content without fetching it.
+        from app.integrations.repo_docs import git_blob_sha
+
+        blob_shas: dict[str, str] = {}
+        for path, content in self.sha_files.get(sha, {}).items():
+            parts = path.split("/")
+            for depth in range(1, len(parts)):
+                types.setdefault("/".join(parts[:depth]), "tree")
+            types[path] = "blob"
+            blob_shas[path] = git_blob_sha(content)
         entries = [
-            {"path": path, "type": kind, "sha": f"fake-tree:{path}" if kind == "tree" else None}
+            {
+                "path": path,
+                "type": kind,
+                "sha": f"fake-tree:{path}" if kind == "tree" else blob_shas.get(path),
+            }
             for path, kind in sorted(types.items())
         ]
         if recursive:
@@ -1616,11 +1768,18 @@ class FakeGithubClient:
     ) -> str:
         if repo in self.branch_head_on_commit:
             self.branch_heads[repo] = self.branch_head_on_commit.pop(repo)
-        if expected_base_sha is not None and (
-            self.branch_heads.get(repo, "fake-head-0") != expected_base_sha
-        ):
+        on_branch_ref = (repo, branch) in self.branch_refs
+        default_branch = self.existing_repos.get(repo, {}).get("default_branch", "main")
+        if not on_branch_ref and branch != default_branch:
+            # GitHub answers a ref read on a branch that does not exist with 404.
+            raise GithubWriteError(f"fake branch {branch} missing in {repo}", status_code=404)
+        parent = self.branch_refs.get((repo, branch)) or self.branch_heads.get(
+            repo, "fake-head-0"
+        )
+        if expected_base_sha is not None and parent != expected_base_sha:
             raise GithubBranchMovedError(f"fake branch moved for {repo}", status_code=409)
-        if repo in self.protected_branches:
+        # `protected_branches` names repos whose *default* branch is protected.
+        if not on_branch_ref and repo in self.protected_branches:
             raise GithubRefUpdateRejectedError(
                 f"fake protected branch {branch} in {repo}", status_code=422
             )
@@ -1654,7 +1813,14 @@ class FakeGithubClient:
         assert not overwritten, f"seed commit overwrites existing files in {repo}: {overwritten}"
         self.call_log.append(f"commit:{repo}")
         commit_sha = f"fake-commit-{len(self.commits) + 1}"
-        self.branch_heads[repo] = commit_sha
+        self.sha_files[commit_sha] = {
+            **self.sha_files.get(parent, {}),
+            **{f.path: f.content for f in files},
+        }
+        if on_branch_ref:
+            self.branch_refs[(repo, branch)] = commit_sha
+        else:
+            self.branch_heads[repo] = commit_sha
         self.commits.append(
             {
                 "repo": repo,
@@ -1670,6 +1836,75 @@ class FakeGithubClient:
             self.written_files[(repo, seed_file.path)] = seed_file.content
             self.files[(repo, seed_file.path, commit_sha)] = seed_file.content
         return commit_sha
+
+    async def create_branch(self, token: str, repo: str, branch: str, from_sha: str) -> None:
+        self.call_log.append(f"create_branch:{repo}:{branch}")
+        if (repo, branch) in self.branch_refs:
+            raise GithubBranchMovedError(
+                f"fake branch {branch} already exists in {repo}", status_code=409
+            )
+        self.branch_refs[(repo, branch)] = from_sha
+
+    def _pull_request_row(self, pull: dict) -> dict:
+        return {"number": pull["number"], "html_url": pull["html_url"], "head": pull["head"]}
+
+    async def find_open_pull_request(
+        self, token: str, repo: str, head_prefix: str, base: str
+    ) -> dict | None:
+        self.call_log.append(f"find_pull_request:{repo}")
+        for pull in self.pull_requests:
+            if (
+                pull["repo"] == repo
+                and pull["head_repo"].lower() == repo.lower()
+                and pull["base"] == base
+                and pull["state"] == "open"
+                and pull["head"].startswith(head_prefix)
+            ):
+                return self._pull_request_row(pull)
+        return None
+
+    async def create_pull_request(
+        self, token: str, repo: str, head: str, base: str, title: str, body: str
+    ) -> dict:
+        self.call_log.append(f"create_pull_request:{repo}:{head}")
+        if self.fail_pr_status is not None:
+            raise GithubWriteError(
+                f"fake create_pull_request failure for {repo}", status_code=self.fail_pr_status
+            )
+        if any(
+            p["repo"] == repo and p["head"] == head and p["base"] == base and p["state"] == "open"
+            for p in self.pull_requests
+        ):
+            raise GithubPullRequestExistsError(
+                f"fake pull request from {head} already exists in {repo}", status_code=422
+            )
+        number = len(self.pull_requests) + 1
+        pull = {
+            "repo": repo,
+            # Where the head branch lives; a test sets another repo for a fork.
+            "head_repo": repo,
+            "number": number,
+            "head": head,
+            "base": base,
+            "title": title,
+            "body": body,
+            "html_url": f"https://github.com/{repo}/pull/{number}",
+            "state": "open",
+        }
+        self.pull_requests.append(pull)
+        return self._pull_request_row(pull)
+
+    async def update_pull_request(self, token: str, repo: str, number: int, body: str) -> None:
+        self.call_log.append(f"update_pull_request:{repo}:{number}")
+        if self.fail_pr_status is not None:
+            raise GithubWriteError(
+                f"fake update_pull_request failure for {repo}", status_code=self.fail_pr_status
+            )
+        for pull in self.pull_requests:
+            if pull["repo"] == repo and pull["number"] == number:
+                pull["body"] = body
+                return
+        raise GithubWriteError(f"fake pull request {number} missing for {repo}", status_code=404)
 
     async def put_actions_secret(self, token: str, repo: str, name: str, value: str) -> None:
         if self.fail_on_secret_write is not None and name == self.fail_on_secret_write:
