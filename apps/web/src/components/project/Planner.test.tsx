@@ -488,6 +488,7 @@ describe("Planner", () => {
           lifecycle_status: "repo_created",
           repo_url: "https://github.com/acme/widget",
           repo_default_branch: "main",
+          repo_origin: "created",
         })}
         projectId="p1"
         onChange={vi.fn()}
@@ -748,6 +749,25 @@ describe("Planner", () => {
       openTab(/plan/i);
       expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /generate rules/i })).not.toBeInTheDocument();
+    });
+
+    it("treats a legacy repository with no recorded origin as imported: frozen, no banner, no status fetch", async () => {
+      mockWithDocsStatus(STALE_STATUS, { specify: "# Spec", plan: "# Plan" });
+      render(
+        <Planner
+          project={makeProject({ ...CREATED, repo_origin: null })}
+          projectId="p1"
+          onChange={vi.fn()}
+        />,
+      );
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/specify/i);
+      expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+      openTab(/plan/i);
+      expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/repository documents are out of date/i)).not.toBeInTheDocument();
+      expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(false);
     });
 
     function mockGenerate(generate: Response | Record<string, unknown>) {

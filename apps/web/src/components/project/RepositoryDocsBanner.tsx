@@ -11,7 +11,13 @@ import type { RepositoryDocsStatus, SyncDocsResult } from "@/lib/types";
 const ERROR_TEXT: Record<string, string> = {
   github_pr_permission_denied:
     "The workspace's GitHub token needs the Pull requests permission (Read and write).",
-  github_branch_conflict: "The default branch changed while syncing. Try again.",
+  github_branch_conflict: "Another sync is in progress or the branch changed. Try again.",
+  github_write_forbidden:
+    "The workspace's GitHub token can't write to this repository. It needs Contents and Pull " +
+    "requests (Read and write).",
+  github_branch_protected:
+    "The repository refuses direct pushes to a new branch (a branch protection or ruleset). " +
+    "Ask an owner to allow branches named pw/sync-docs-*.",
   github_sync_failed: "GitHub couldn't take the changes. Try again in a moment.",
   github_read_forbidden: "The workspace's GitHub token can't read this repository.",
   github_unreachable: "GitHub is unreachable. Try again.",
@@ -120,7 +126,7 @@ export function RepositoryDocsBanner({
             <a href={openPr.url} target="_blank" rel="noreferrer" className={LINK}>
               Pull request #{openPr.number} is open
             </a>
-            {stale > 0 ? ` and ${files} changed since` : MERGE_HINT}
+            {stale > 0 ? ` and ${files} ${stale === 1 ? "needs" : "need"} updating` : MERGE_HINT}
           </p>
           {stale > 0 && canSync && (
             <button type="button" onClick={handleSync} disabled={pending} className={BUTTON}>

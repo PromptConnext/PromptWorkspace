@@ -70,6 +70,9 @@ describe("RepositoryDocsBanner", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Repository documents are out of date: 1 file",
     );
+    expect(
+      screen.getByRole("button", { name: "Review and open a pull request" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the text only, with no button, to someone who cannot sync", () => {
@@ -111,7 +114,7 @@ describe("RepositoryDocsBanner", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("offers to update an open pull request when documents changed since", async () => {
+  it("offers to update an open pull request when documents need updating", async () => {
     const onSync = vi.fn().mockResolvedValue({ ...RESULT, pr_number: 3, pr_url: "https://github.com/acme/widget/pull/3" });
     render(
       <RepositoryDocsBanner
@@ -121,7 +124,7 @@ describe("RepositoryDocsBanner", () => {
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Pull request #3 is open and 2 files changed since",
+      "Pull request #3 is open and 2 files need updating",
     );
     expect(screen.queryByRole("button", { name: "Review and open a pull request" })).not.toBeInTheDocument();
 
@@ -146,7 +149,7 @@ describe("RepositoryDocsBanner", () => {
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("Pull request #7 is open");
-    expect(screen.getByRole("status")).not.toHaveTextContent("changed since");
+    expect(screen.getByRole("status")).not.toHaveTextContent("need updating");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -166,7 +169,7 @@ describe("RepositoryDocsBanner", () => {
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Pull request #7 is open and 1 file changed since",
+      "Pull request #7 is open and 1 file needs updating",
     );
     expect(screen.getByRole("button", { name: "Update the pull request" })).toBeInTheDocument();
   });
@@ -211,7 +214,7 @@ describe("RepositoryDocsBanner", () => {
     };
     rerender(<RepositoryDocsBanner status={next} canSync onSync={onSync} />);
     fireEvent.click(screen.getByRole("button", { name: "Update the pull request" }));
-    expect(await screen.findByText(/default branch changed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Another sync is in progress/)).toBeInTheDocument();
     expect(screen.queryByText(/Pull request #7 opened/)).not.toBeInTheDocument();
   });
 
@@ -223,7 +226,7 @@ describe("RepositoryDocsBanner", () => {
         onSync={vi.fn()}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Pull request #3 is open and 2 files changed since");
+    expect(screen.getByRole("status")).toHaveTextContent("Pull request #3 is open and 2 files need updating");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -319,7 +322,15 @@ describe("RepositoryDocsBanner", () => {
       "github_pr_permission_denied",
       "The workspace's GitHub token needs the Pull requests permission (Read and write).",
     ],
-    ["github_branch_conflict", "The default branch changed while syncing. Try again."],
+    ["github_branch_conflict", "Another sync is in progress or the branch changed. Try again."],
+    [
+      "github_write_forbidden",
+      "The workspace's GitHub token can't write to this repository. It needs Contents and Pull requests (Read and write).",
+    ],
+    [
+      "github_branch_protected",
+      "The repository refuses direct pushes to a new branch (a branch protection or ruleset). Ask an owner to allow branches named pw/sync-docs-*.",
+    ],
     ["github_read_forbidden", "The workspace's GitHub token can't read this repository."],
     ["github_unreachable", "GitHub is unreachable. Try again."],
     ["github_not_configured", "GitHub is not connected for this workspace."],

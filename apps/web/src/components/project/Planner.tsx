@@ -771,7 +771,9 @@ export function Planner({
   // Whether the repository's seeded documents have fallen behind the planning
   // documents. Imported repositories are out of scope (the cloud answers 409
   // sync_not_supported_for_imported_repository for them), so they never ask.
-  const docsSyncApplies = readOnly && project.repo_origin !== "imported";
+  // Only a repository this project created has a seed to re-derive; a legacy
+  // row with no recorded origin is treated as imported, as the cloud does.
+  const docsSyncApplies = readOnly && project.repo_origin === "created";
   const docsStatusPath = `/projects/${projectId}/repository/docs-status`;
   // A status that cannot be read is said so in the banner (with no button);
   // the stages work without it.
@@ -1161,13 +1163,14 @@ export function Planner({
             // After the repository exists the planning documents stay editable:
             // their repository copies are synced through a pull request, so
             // the author gate (rules and plan belong to the Tech Lead) is what
-            // makes a stage read-only. An imported repository stays frozen as
-            // before: its seed was relocated around the team's own files and
+            // makes a stage read-only. An imported repository (or a legacy one
+            // with no recorded origin, which the cloud treats as imported) stays
+            // frozen as before: its seed was relocated around the team's own files and
             // cannot be re-derived safely (the sync is not supported for it).
             // Tasks are graph rows the board works from, not part of the
             // seeded repository, so they are never frozen.
             const stageReadOnly =
-              authorGated || (readOnly && project.repo_origin === "imported" && stage !== "tasks");
+              authorGated || (readOnly && project.repo_origin !== "created" && stage !== "tasks");
             return (
               <StageSection
                 key={stage}
