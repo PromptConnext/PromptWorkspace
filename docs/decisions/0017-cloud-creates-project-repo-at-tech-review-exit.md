@@ -184,3 +184,11 @@ The check reads the repository's live tree at the moment of seeding rather than 
 A repository this project created — including the crash-window retry §5 describes — is unaffected and seeds exactly as §2 says. Which of the two a repository is comes from `pz_projects.repo_origin` (`imported` or `created`), which only the server writes — migration 0036 took `pz_projects` writes away from members' own JWTs for that reason; the repository's GitHub description, which anyone with admin on the repository can set to the platform's own string, is a secondary check and never sufficient alone. A project that predates that column and names a repository before `repo_created` is treated as imported, the reading that cannot overwrite anything.
 
 **What this costs.** An imported project's AI context is less discoverable than a created one's: an agent that reads only the root `AGENTS.md` sees the team's rules and not the platform's when both exist. That is the correct precedence — the team's instructions are authoritative in their own repository — and the relocated file says where it came from, but it does mean the constitution's reach into an imported repository depends on the team pointing their own `AGENTS.md` at it.
+
+---
+
+## Amendment — 2026-10-10: the token also needs Workflows and Pull requests
+
+**Status:** Accepted · implemented by the plan in `docs/superpowers/plans/2026-10-10-editable-plan-after-repository.md` · extends the token requirements of this ADR and of ADR 0021.
+
+Once the repository exists, the Specify, project-rules and Plan documents stay editable in the Planner, and the repository's seeded copies catch up through a pull request that a person merges; the cloud never writes to the default branch for this. The workspace's fine-grained token therefore needs two more permissions, both Read and write: **Workflows**, because a seed that carries a deployment template writes `.github/workflows/deploy.yml`, and **Pull requests**, because the sync opens (or updates) the pull request. As with Secrets and Variables, GitHub offers no way to read a fine-grained token's own permissions, so neither can be checked when the token is connected; a missing Pull requests permission surfaces as `github_pr_permission_denied` when a sync is attempted. The design is in `docs/superpowers/specs/2026-10-10-editable-plan-after-repository-design.md`.

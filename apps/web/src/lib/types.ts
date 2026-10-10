@@ -214,6 +214,29 @@ export interface PendingInvitation {
   expires_at: string;
 }
 
+// Repository document sync (GET/POST /projects/{id}/repository/docs-status and
+// /sync-docs). A planning document edited after the repository exists leaves the
+// repository's seeded copy behind; the sync brings it up to date through a pull
+// request a person merges.
+export interface RepositoryDocFile {
+  path: string;
+  // `in_pull_request`: differs from the default branch but already matches the
+  // open sync pull request's branch, so it is waiting on a merge, not on a sync.
+  state: "current" | "out_of_date" | "missing" | "in_pull_request";
+}
+
+export interface RepositoryDocsStatus {
+  files: RepositoryDocFile[];
+  open_sync_pr: { number: number; url: string } | null;
+}
+
+export interface SyncDocsResult {
+  pr_number: number;
+  pr_url: string;
+  branch: string;
+  files: string[];
+}
+
 // Non-secret view of a workspace's GitHub credential
 // (GET/PUT /workspaces/{id}/integrations/github). Never carries the token.
 export interface GithubConnection {

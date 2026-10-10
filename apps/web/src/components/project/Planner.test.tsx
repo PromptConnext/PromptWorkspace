@@ -189,6 +189,8 @@ describe("Planner", () => {
         onChange={vi.fn()}
       />,
     );
+    // The Planner opens on the first step not done; the PRD lives in Foundation.
+    fireEvent.click(await screen.findByRole("tab", { name: /foundation/i }));
     expect(await screen.findByRole("button", { name: /^preview prd\.(md|pdf)$/i })).toBeInTheDocument();
     expect(screen.queryByText(/upload a prd/i)).not.toBeInTheDocument();
   });
@@ -479,13 +481,14 @@ describe("Planner", () => {
     await waitFor(() => expect(create).toBeEnabled());
   });
 
-  it("shows the success card and read-only docs when repo_created", () => {
+  it("shows the success card, with the planning documents still editable, when repo_created", async () => {
     render(
       <Planner
         project={makeProject({
           lifecycle_status: "repo_created",
           repo_url: "https://github.com/acme/widget",
           repo_default_branch: "main",
+          repo_origin: "created",
         })}
         projectId="p1"
         onChange={vi.fn()}
@@ -494,7 +497,371 @@ describe("Planner", () => {
     expect(screen.getByText(/repository created/i)).toBeInTheDocument();
     expect(screen.getByText("https://github.com/acme/widget")).toBeInTheDocument();
     expect(screen.getByText(/clone this repo and open it in the promptworkspace vs code extension/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+    // The planning documents are not frozen with the repository: their
+    // repository copies catch up through a pull request instead.
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
+  });
+
+  describe("after the repository exists", () => {
+    const CREATED = {
+      lifecycle_status: "repo_created",
+      repo_url: "https://github.com/acme/widget",
+      repo_default_branch: "main",
+      repo_origin: "created",
+    } as const;
+
+    const STALE_STATUS = {
+      files: [
+        { path: "docs/architecture.md", state: "out_of_date" },
+        { path: "docs/conventions.md", state: "out_of_date" },
+        { path: "docs/tasks.md", state: "current" },
+      ],
+      open_sync_pr: null,
+    };
+
+    function mockWithDocsStatus(status: unknown, docs: Record<string, string> = {}) {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => status });
+        }
+        const match = href.match(/\/stage-documents\/(\w+)/);
+        if (match) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ stage: match[1], content: docs[match[1]] ?? "", updated_at: null }),
+          });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+    }
+
+    function fetchedPaths() {
+      return (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+        String(call[0]),
+      );
+    }
+
+    it("keeps the project rules and the plan editable for a Tech Lead", async () => {
+      mockWithDocsStatus(STALE_STATUS, { constitution: "# Rules", plan: "# Plan" });
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      expect(screen.getByRole("button", { name: /generate rules/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /generate plan/i })).toBeInTheDocument();
+      const plan = within(
+        screen.getByRole("heading", { name: "Implementation plan" }).closest("div") as HTMLElement,
+      );
+      fireEvent.click(await plan.findByRole("button", { name: "Raw" }));
+      for (const box of plan.getAllByRole("textbox")) {
+        expect(box).not.toHaveAttribute("readonly");
+      }
+    });
+
+    it("keeps the plan read-only for a member who is not a workspace admin", async () => {
+      members = [{ ...ADMIN_MEMBER, role: "member" }];
+      mockWithDocsStatus(STALE_STATUS, { plan: "# Plan" });
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      expect(screen.getAllByText(/your tech lead writes this step/i)).toHaveLength(2);
+      expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /generate rules/i })).not.toBeInTheDocument();
+    });
+
+    it("asks before Generate replaces a document the repository already has a copy of", async () => {
+      mockWithDocsStatus(STALE_STATUS);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm.mock.calls[0][0]).toMatch(/replace/i);
+      expect(fetchedPaths().some((href) => href.includes("/generate/"))).toBe(false);
+
+      confirm.mockReturnValue(true);
+      fireEvent.click(generate);
+      await waitFor(() =>
+        expect(fetchedPaths().some((href) => href.includes("/generate/constitution"))).toBe(true),
+      );
+      confirm.mockRestore();
+    });
+
+    it("does not ask when generating before the repository exists", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+
+      expect(confirm).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(fetchedPaths().some((href) => href.includes("/generate/constitution"))).toBe(true),
+      );
+      confirm.mockRestore();
+    });
+
+    it("shows the out-of-date banner above the stages, and not the policy scope as editable", async () => {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        if (href.includes("/policy-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [
+              { id: "gdpr", name: "GDPR", description: "EU data protection.", body: "# GDPR" },
+            ],
+          });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      expect(
+        await screen.findByText("Repository documents are out of date: 2 files"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Review and open a pull request" }),
+      ).toBeInTheDocument();
+      expect(await screen.findByRole("checkbox", { name: /gdpr/i })).toBeDisabled();
+    });
+
+    it("opens the sync pull request and links it", async () => {
+      global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const href = url.toString();
+        if (href.includes("/repository/sync-docs") && init?.method === "POST") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              pr_number: 7,
+              pr_url: "https://github.com/acme/widget/pull/7",
+              branch: "pw/sync-docs-20261010120000",
+              files: ["docs/architecture.md"],
+            }),
+          });
+        }
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Review and open a pull request" }),
+      );
+      expect(await screen.findByRole("link", { name: /pull request #7 opened/i })).toHaveAttribute(
+        "href",
+        "https://github.com/acme/widget/pull/7",
+      );
+    });
+
+    it("shows the banner as information only to a member who is not a workspace admin", async () => {
+      members = [{ ...ADMIN_MEMBER, role: "member" }];
+      mockWithDocsStatus(STALE_STATUS);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      expect(
+        await screen.findByText("Repository documents are out of date: 2 files"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Review and open a pull request" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows no banner and asks for no status for an imported repository", async () => {
+      mockWithDocsStatus(STALE_STATUS);
+      render(
+        <Planner
+          project={makeProject({ ...CREATED, repo_origin: "imported" })}
+          projectId="p1"
+          onChange={vi.fn()}
+        />,
+      );
+
+      await screen.findByRole("tab", { name: /plan/i });
+      expect(screen.queryByText(/repository documents are out of date/i)).not.toBeInTheDocument();
+      expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(false);
+    });
+
+    it("asks for no status before the repository exists", async () => {
+      mockWithDocsStatus(STALE_STATUS);
+      render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(false);
+    });
+
+    it("says the status could not be read, with no button, and keeps the stages working", async () => {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({
+            ok: false,
+            status: 409,
+            json: async () => ({ detail: "github_read_forbidden" }),
+          });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      expect(
+        await screen.findByText(
+          "Could not check repository documents: The workspace's GitHub token can't read this repository.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /open a pull request|update the pull request/i }),
+      ).not.toBeInTheDocument();
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      expect(screen.getByRole("button", { name: /generate plan/i })).toBeInTheDocument();
+    });
+
+    it("keeps an imported repository's planning documents frozen", async () => {
+      mockWithDocsStatus(STALE_STATUS, { specify: "# Spec", plan: "# Plan" });
+      render(
+        <Planner
+          project={makeProject({ ...CREATED, repo_origin: "imported" })}
+          projectId="p1"
+          onChange={vi.fn()}
+        />,
+      );
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/specify/i);
+      expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+      openTab(/plan/i);
+      expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /generate rules/i })).not.toBeInTheDocument();
+    });
+
+    it("treats a legacy repository with no recorded origin as imported: frozen, no banner, no status fetch", async () => {
+      mockWithDocsStatus(STALE_STATUS, { specify: "# Spec", plan: "# Plan" });
+      render(
+        <Planner
+          project={makeProject({ ...CREATED, repo_origin: null })}
+          projectId="p1"
+          onChange={vi.fn()}
+        />,
+      );
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/specify/i);
+      expect(screen.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+      openTab(/plan/i);
+      expect(screen.queryByRole("button", { name: /generate plan/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/repository documents are out of date/i)).not.toBeInTheDocument();
+      expect(fetchedPaths().some((href) => href.includes("/docs-status"))).toBe(false);
+    });
+
+    function mockGenerate(generate: Response | Record<string, unknown>) {
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/generate/")) return Promise.resolve(generate);
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+    }
+
+    function generateCalls() {
+      return fetchedPaths().filter((href) => href.includes("/generate/")).length;
+    }
+
+    it("asks again before Retry regenerates", async () => {
+      mockGenerate({ ok: false, status: 429, body: null, json: async () => ({}) });
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+      const retry = await screen.findByRole("button", { name: "Retry" });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(false);
+      fireEvent.click(retry);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(confirm.mock.calls[1][0]).toMatch(/replace/i);
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(true);
+      fireEvent.click(retry);
+      await waitFor(() => expect(generateCalls()).toBe(2));
+      confirm.mockRestore();
+    });
+
+    it("asks again before Generate again replaces a truncated document", async () => {
+      const lines = [
+        "event: done",
+        `data: ${JSON.stringify({ content: "# Partial", truncated: true, updated_at: null })}`,
+        "",
+      ].join("\n");
+      const bytes = new TextEncoder().encode(lines);
+      const body = () => {
+        let sent = false;
+        return {
+          getReader: () => ({
+            read: async () =>
+              sent ? { done: true, value: undefined } : ((sent = true), { done: false, value: bytes }),
+          }),
+        };
+      };
+      global.fetch = vi.fn((url: RequestInfo | URL) => {
+        const href = url.toString();
+        if (href.includes("/generate/")) return Promise.resolve({ ok: true, status: 200, body: body() });
+        if (href.includes("/repository/docs-status")) {
+          return Promise.resolve({ ok: true, json: async () => STALE_STATUS });
+        }
+        return Promise.resolve(route(href));
+      }) as unknown as typeof fetch;
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      const generate = screen.getByRole("button", { name: /generate rules/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+      const again = await screen.findByRole("button", { name: "Generate again" });
+      expect(generateCalls()).toBe(1);
+
+      confirm.mockReturnValue(false);
+      fireEvent.click(again);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(generateCalls()).toBe(1);
+      confirm.mockRestore();
+    });
+
+    it("does not crash at repo_created when the project has no plan document", async () => {
+      mockWithDocsStatus({ files: [], open_sync_pr: null });
+      render(<Planner project={makeProject(CREATED)} projectId="p1" onChange={vi.fn()} />);
+
+      await screen.findByRole("tab", { name: /plan/i });
+      openTab(/plan/i);
+      expect(screen.getByRole("button", { name: /generate plan/i })).toBeInTheDocument();
+      expect(screen.queryByText(/repository documents are out of date/i)).not.toBeInTheDocument();
+    });
   });
 
   it("hydrates the MarkdownEditor from the persisted stage document on mount", async () => {
