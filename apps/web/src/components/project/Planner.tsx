@@ -276,10 +276,12 @@ function StageSection({
   const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
 
+  // Reported once the document has loaded, so every later change of stamp is
+  // a save or a regeneration (the Planner refreshes the docs banner on those).
   useEffect(() => {
-    onDocStamp?.(stage, docUpdatedAt);
+    if (docLoaded) onDocStamp?.(stage, docUpdatedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, docUpdatedAt]);
+  }, [stage, docUpdatedAt, docLoaded]);
 
   // Every previously generated or hand-edited stage document is fetched on
   // mount, so reopening the project shows the work as it was left rather than
@@ -734,9 +736,6 @@ export function Planner({
   // When each stage's document was last written, so the approval chip beside
   // a stage refetches its state after a save or regeneration.
   const [docStamp, setDocStamp] = useState<Partial<Record<StageKind, string | null>>>({});
-  const noteStamp = useCallback((stage: StageKind, stamp: string | null) => {
-    setDocStamp((prev) => (prev[stage] === stamp ? prev : { ...prev, [stage]: stamp }));
-  }, []);
   // Whether an uploaded PRD has text to draft from. Undefined while the
   // document list loads, so neither the draft button nor its "upload one
   // first" hint flashes up before it is known which applies.
@@ -784,6 +783,20 @@ export function Planner({
   } = useCloudGet<RepositoryDocsStatus>(docsStatusPath, docsSyncApplies, {
     refreshOnFocus: true,
   });
+  // The stamps each stage has reported. A stage reports first when its
+  // document loads; a stamp that moves after that is a save or regeneration,
+  // which may put a repository copy out of date (or back in step), so the
+  // banner rereads the status instead of waiting for a focus event.
+  const stamps = useRef<Partial<Record<StageKind, string | null>>>({});
+  const noteStamp = useCallback(
+    (stage: StageKind, stamp: string | null) => {
+      const saved = stage in stamps.current && stamps.current[stage] !== stamp;
+      stamps.current[stage] = stamp;
+      setDocStamp((prev) => (prev[stage] === stamp ? prev : { ...prev, [stage]: stamp }));
+      if (saved && docsSyncApplies) refetchDocsStatus();
+    },
+    [docsSyncApplies, refetchDocsStatus],
+  );
   const syncDocs = useCallback(async () => {
     const out = await apiFetch<SyncDocsResult>(
       `/projects/${projectId}/repository/sync-docs`,

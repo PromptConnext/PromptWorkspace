@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.integrations.github import (
     FakeGithubClient,
+    GithubCompareTooLargeError,
     GithubRefUpdateRejectedError,
     GithubWriteError,
 )
@@ -177,7 +178,11 @@ def test_sync_opens_one_pr_with_only_changed_docs(client: TestClient):
     assert fake.branch_heads[full_name] == main_head
 
     status = _status(client, pid)
-    assert status["open_sync_pr"] == {"number": pr["number"], "url": pr["html_url"]}
+    assert status["open_sync_pr"] == {
+        "number": pr["number"],
+        "url": pr["html_url"],
+        "foreign_changes": False,
+    }
 
 
 def test_second_sync_updates_the_same_pull_request(client: TestClient):
@@ -448,11 +453,11 @@ def test_a_sync_racing_another_ends_with_one_pull_request(client: TestClient):
     real_find = fake.find_open_pull_request
     calls = []
 
-    async def first_misses(token, repo, prefix, base):
+    async def first_misses(token, repo, prefix, base, author=None):
         calls.append(prefix)
         if len(calls) == 1:
             return None
-        return await real_find(token, repo, prefix, base)
+        return await real_find(token, repo, prefix, base, author=author)
 
     fake.find_open_pull_request = first_misses
 
@@ -521,11 +526,11 @@ def test_a_sync_whose_pull_request_was_opened_first_by_another_ends_with_one(
     real_find = fake.find_open_pull_request
     calls = []
 
-    async def misses_twice(token, repo, prefix, base):
+    async def misses_twice(token, repo, prefix, base, author=None):
         calls.append(prefix)
         if len(calls) <= 2:
             return None
-        return await real_find(token, repo, prefix, base)
+        return await real_find(token, repo, prefix, base, author=author)
 
     fake.find_open_pull_request = misses_twice
 
@@ -565,7 +570,7 @@ def test_a_failing_second_pull_request_lookup_maps_like_the_first(client: TestCl
     asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
     calls = []
 
-    async def fails_second(token, repo, prefix, base):
+    async def fails_second(token, repo, prefix, base, author=None):
         calls.append(prefix)
         if len(calls) == 1:
             return None
@@ -657,3 +662,324 @@ def test_a_repository_the_token_cannot_see_is_read_forbidden(client: TestClient)
 
     assert res.status_code == 400
     assert res.json()["detail"] == "github_read_forbidden"
+
+
+# A collaborator can push any branch named pw/sync-docs-*. The sync commits
+# and opens or rewrites pull requests under the admin's token, so it must
+# never adopt a branch that carries anything but planning documents, nor a
+# pull request someone else opened.
+
+
+def test_an_adopted_branch_with_a_foreign_file_is_refused(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    fake.branch_extra_files[(full_name, branch)] = [".github/workflows/deploy.yml"]
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert fake.pull_requests == []
+
+
+def test_an_open_pull_request_branch_with_a_foreign_file_is_refused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    branch = _sync(client, pid).json()["branch"]
+    full_name = _repo_name(client)
+    fake.branch_extra_files[(full_name, branch)] = [".github/workflows/deploy.yml"]
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+    commits = len(fake.commits)
+    body = fake.pull_requests[0]["body"]
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert fake.pull_requests[0]["body"] == body
+    status = _status(client, pid)
+    assert status["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_branch_too_large_to_compare_is_refused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    assert _sync(client, pid).status_code == 200
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+    commits = len(fake.commits)
+
+    async def too_large(token, repo, base, head):
+        raise GithubCompareTooLargeError("fake 300 files")
+
+    fake.compare_files = too_large
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_failing_comparison_does_not_break_the_status(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    assert _sync(client, pid).status_code == 200
+
+    async def failing(token, repo, base, head):
+        raise GithubWriteError("fake compare 500", status_code=500)
+
+    fake.compare_files = failing
+
+    status = _status(client, pid)
+    assert status["open_sync_pr"]["foreign_changes"] is False
+    assert _states(status)["docs/architecture.md"] == "in_pull_request"
+
+
+def test_a_pull_request_by_another_login_is_not_reused(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, ours = _race_branch(client)
+    theirs = "pw/sync-docs-mallory"
+    asyncio.run(fake.create_branch(TOKEN, full_name, theirs, fake.branch_heads[full_name]))
+    asyncio.run(fake.create_pull_request(TOKEN, full_name, theirs, "main", "t", "their body"))
+    fake.pull_requests[0]["author"] = "mallory"
+
+    assert _status(client, pid)["open_sync_pr"] is None
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == ours
+    assert res.json()["pr_number"] == 2
+    assert fake.pull_requests[0]["body"] == "their body"
+    assert not any(c["branch"] == theirs for c in fake.commits)
+    assert f"update_pull_request:{full_name}:1" not in fake.call_log
+
+
+def test_a_pull_request_by_another_login_on_our_branch_name_is_refused(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    asyncio.run(fake.create_pull_request(TOKEN, full_name, branch, "main", "t", "their body"))
+    fake.pull_requests[0]["author"] = "mallory"
+    commits = len(fake.commits)
+
+    status = _status(client, pid)
+    res = _sync(client, pid)
+
+    assert status["open_sync_pr"]["foreign_changes"] is True
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert fake.pull_requests[0]["body"] == "their body"
+
+
+@pytest.mark.parametrize("call", ["find", "create", "update"])
+def test_a_401_from_any_pull_request_call_is_permission_denied(client: TestClient, call):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake = _fake(client)
+    if call == "update":
+        assert _sync(client, pid).status_code == 200
+        _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+
+    async def unauthorized(*args, **kwargs):
+        raise GithubWriteError("fake 401", status_code=401)
+
+    target = {
+        "find": "find_open_pull_request",
+        "create": "create_pull_request",
+        "update": "update_pull_request",
+    }[call]
+    setattr(fake, target, unauthorized)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "github_pr_permission_denied"
+
+
+def test_a_branch_a_rule_refuses_to_create_is_branch_protected(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake = _fake(client)
+
+    async def rule_violation(token, repo, branch, from_sha):
+        raise GithubWriteError("fake create_branch 422 rule violations", status_code=422)
+
+    fake.create_branch = rule_violation
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "github_branch_protected"
+    assert fake.pull_requests == []
+
+
+def _adopt_with(client: TestClient, pid: str, *, extra=(), renames=()):
+    """A leftover branch at the name the next sync takes, carrying `extra`
+    paths and `renames` (previous, new) someone else pushed."""
+    fake, full_name, branch = _race_branch(client)
+    asyncio.run(fake.create_branch(TOKEN, full_name, branch, fake.branch_heads[full_name]))
+    fake.branch_extra_files[(full_name, branch)] = list(extra)
+    fake.branch_renames[(full_name, branch)] = list(renames)
+    return fake, full_name, branch
+
+
+def test_a_rename_from_a_foreign_path_is_refused(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, _, _ = _adopt_with(
+        client, pid, renames=[(".github/workflows/ci.yml", "docs/scope.md")]
+    )
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert fake.pull_requests == []
+
+
+def test_a_rename_from_a_foreign_path_shows_on_the_open_pull_request(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    branch = _sync(client, pid).json()["branch"]
+    fake.branch_renames[(_repo_name(client), branch)] = [
+        (".github/workflows/ci.yml", "docs/scope.md")
+    ]
+
+    assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_rename_between_two_document_views_is_allowed(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    _, _, branch = _adopt_with(client, pid, renames=[("docs/scope.md", "docs/architecture.md")])
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+
+
+def test_a_planted_view_the_project_does_not_have_is_foreign(client: TestClient):
+    """docs/policy-scope.md is a document path, but this project has no policy
+    scope, so the sync never writes it: a branch carrying it is someone
+    else's change."""
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    project = client.app.state.repository.get_project(pid)
+    assert "docs/policy-scope.md" not in {
+        f.path for f in build_seed_files(project, STAGE_DOCS)
+    }
+    fake, _, _ = _adopt_with(client, pid, extra=["docs/policy-scope.md"])
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+
+
+def test_an_adopted_branch_holding_only_seeded_views_is_used(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _adopt_with(client, pid, extra=["AGENTS.md", "docs/scope.md"])
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["branch"] == branch
+    assert fake.commits[-1]["branch"] == branch
+    assert len(fake.pull_requests) == 1
+
+
+def test_a_push_between_the_check_and_the_commit_is_a_conflict(client: TestClient):
+    pid = _created_project(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    fake, full_name, branch = _adopt_with(client, pid)
+    fake.push_after_compare[(full_name, branch)] = "someone-elses-commit"
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "github_branch_conflict"
+    assert len(fake.commits) == commits
+    assert fake.branch_refs[(full_name, branch)] == "someone-elses-commit"
+    assert fake.pull_requests == []
+
+
+def _forget_account_login(client: TestClient, pid: str) -> None:
+    """A connection stored before the login was recorded."""
+    repository = client.app.state.repository
+    ws_id = repository.get_project(pid).workspace_id
+    config = dict(repository.get_workspace(ws_id).integration_config)
+    config["github"] = {k: v for k, v in config["github"].items() if k != "account_login"}
+    repository.update_workspace(ws_id, integration_config=config)
+
+
+def test_without_a_recorded_login_any_authors_pull_request_is_reused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    first = _sync(client, pid).json()
+    fake.pull_requests[0]["author"] = "mallory"
+    _forget_account_login(client, pid)
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["pr_number"] == first["pr_number"]
+    assert res.json()["branch"] == first["branch"]
+    assert len(fake.pull_requests) == 1
+
+
+def test_without_a_recorded_login_foreign_paths_are_still_refused(client: TestClient):
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    branch = _sync(client, pid).json()["branch"]
+    fake.pull_requests[0]["author"] = "mallory"
+    fake.branch_extra_files[(_repo_name(client), branch)] = [".github/workflows/deploy.yml"]
+    _forget_account_login(client, pid)
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
+    commits = len(fake.commits)
+
+    res = _sync(client, pid)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "sync_branch_has_foreign_changes"
+    assert len(fake.commits) == commits
+    assert _status(client, pid)["open_sync_pr"]["foreign_changes"] is True
+
+
+def test_a_pull_request_head_with_url_special_characters_is_never_reused(client: TestClient):
+    """Without a recorded login only the head's shape guards reuse. A head name
+    with a `#` would make an HTTP client cut the ref URL there and read or write
+    a different branch than the one compared, so such a PR is not the sync PR."""
+    pid = _created_project(client)
+    fake = _fake(client)
+    _write_stage(client, pid, "plan", V2_PLAN)
+    first = _sync(client, pid).json()
+    fake.pull_requests[0]["head"] = first["branch"] + "#evil"
+    fake.pull_requests[0]["author"] = "mallory"
+    _forget_account_login(client, pid)
+
+    status = client.get(f"/projects/{pid}/repository/docs-status", headers=ALICE).json()
+
+    assert status["open_sync_pr"] is None

@@ -1500,6 +1500,10 @@ class RepositoryDocFile(BaseModel):
 class OpenSyncPr(BaseModel):
     number: int
     url: str
+    # The pull request's branch changes more than the planning documents (or
+    # someone else opened it on the branch the next sync would use): the
+    # sync refuses with `sync_branch_has_foreign_changes` until it is cleared.
+    foreign_changes: bool = False
 
 
 class RepositoryDocsStatus(BaseModel):

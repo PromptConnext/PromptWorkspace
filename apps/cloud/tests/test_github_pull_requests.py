@@ -16,6 +16,7 @@ import pytest
 
 from app.integrations.github import (
     GithubBranchMovedError,
+    GithubCompareTooLargeError,
     GithubPullRequestExistsError,
     GithubWriteError,
     HttpGithubClient,
@@ -96,12 +97,19 @@ def test_create_branch_other_failure_carries_the_status(github):
     assert excinfo.value.status_code == 403
 
 
-def _pull(number: int, ref: str, head_repo: str = REPO, base: str = "main") -> dict:
+def _pull(
+    number: int,
+    ref: str,
+    head_repo: str = REPO,
+    base: str = "main",
+    login: str = "pw-bot",
+) -> dict:
     return {
         "number": number,
         "html_url": f"https://github.com/{REPO}/pull/{number}",
         "head": {"ref": ref, "sha": f"sha-{number}", "repo": {"full_name": head_repo}},
         "base": {"ref": base},
+        "user": {"login": login},
     }
 
 
@@ -119,6 +127,7 @@ def test_find_open_pull_request_matches_the_head_prefix(github):
         "number": 7,
         "html_url": f"https://github.com/{REPO}/pull/7",
         "head": "pw/sync-docs-20261010120000",
+        "author": "pw-bot",
     }
     # A match on the first page stops the paging.
     assert [r["params"] for r in recorded] == [{"state": "open", "per_page": "100", "page": "1"}]
@@ -218,6 +227,7 @@ def test_create_pull_request_returns_number_url_and_head(github):
         "number": 12,
         "html_url": f"https://github.com/{REPO}/pull/12",
         "head": "pw/sync-docs-x",
+        "author": "pw-bot",
     }
     assert recorded[0]["json"] == {
         "head": "pw/sync-docs-x",
@@ -295,4 +305,135 @@ def test_update_pull_request_patches_the_body(github):
             "params": {},
             "json": {"body": "new body"},
         }
+    ]
+
+
+def test_find_open_pull_request_prefers_the_given_author(github):
+    """A collaborator's `pw/sync-docs-*` pull request listed first must not
+    hide ours."""
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/pulls")] = httpx.Response(
+        200,
+        json=[
+            _pull(8, "pw/sync-docs-b", login="mallory"),
+            _pull(5, "pw/sync-docs-a", login="PW-Bot"),
+        ],
+    )
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request(
+            "tok", REPO, "pw/sync-docs-", "main", author="pw-bot"
+        )
+    )
+
+    assert found is not None and found["number"] == 5 and found["author"] == "PW-Bot"
+
+
+def test_find_open_pull_request_falls_back_to_another_author(github):
+    responses, recorded = github
+
+    def paged(request: httpx.Request) -> httpx.Response:
+        if request.url.params["page"] == "1":
+            return httpx.Response(
+                200,
+                json=[_pull(8, "pw/sync-docs-b", login="mallory")]
+                + [_pull(n, f"feature/{n}") for n in range(99)],
+            )
+        return httpx.Response(200, json=[])
+
+    responses[("GET", f"/repos/{REPO}/pulls")] = paged
+
+    found = asyncio.run(
+        HttpGithubClient().find_open_pull_request(
+            "tok", REPO, "pw/sync-docs-", "main", author="pw-bot"
+        )
+    )
+
+    assert found is not None and found["number"] == 8 and found["author"] == "mallory"
+    # The search for our own pull request reads past the first foreign match.
+    assert [r["params"]["page"] for r in recorded] == ["1", "2"]
+
+
+def test_compare_files_lists_the_changed_paths(github):
+    responses, recorded = github
+    path = f"/repos/{REPO}/compare/main...pw/sync-docs-x"
+    responses[("GET", path)] = httpx.Response(
+        200,
+        json={
+            "total_commits": 2,
+            "commits": [{"sha": "a"}, {"sha": "b"}],
+            "files": [{"filename": "AGENTS.md"}, {"filename": ".github/workflows/deploy.yml"}],
+        },
+    )
+
+    files = asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "pw/sync-docs-x"))
+
+    assert files == ["AGENTS.md", ".github/workflows/deploy.yml"]
+    assert [(r["method"], r["path"]) for r in recorded] == [("GET", path)]
+
+
+def test_compare_files_at_githubs_file_cap_is_refused(github):
+    """GitHub lists at most 300 files; a comparison at the cap may hide any
+    path, so it cannot be shown to touch planning documents only."""
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/compare/main...pw/sync-docs-x")] = httpx.Response(
+        200,
+        json={"total_commits": 1, "files": [{"filename": f"f{n}.md"} for n in range(300)]},
+    )
+
+    with pytest.raises(GithubCompareTooLargeError):
+        asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "pw/sync-docs-x"))
+
+
+def test_compare_files_without_a_file_list_is_refused(github):
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/compare/main...pw/sync-docs-x")] = httpx.Response(
+        200, json={"total_commits": 400}
+    )
+
+    with pytest.raises(GithubCompareTooLargeError):
+        asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "pw/sync-docs-x"))
+
+
+def test_compare_files_failure_carries_the_status(github):
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/compare/main...pw/sync-docs-x")] = httpx.Response(
+        404, json={"message": "Not Found"}
+    )
+
+    with pytest.raises(GithubWriteError) as excinfo:
+        asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "pw/sync-docs-x"))
+    assert not isinstance(excinfo.value, GithubCompareTooLargeError)
+    assert excinfo.value.status_code == 404
+
+
+def test_compare_files_lists_both_names_of_a_renamed_or_copied_file(github):
+    """A rename moves a file away from its old path as much as it writes the
+    new one: a branch renaming a workflow onto a document path changes the
+    workflow too."""
+    responses, _ = github
+    responses[("GET", f"/repos/{REPO}/compare/main...abc123")] = httpx.Response(
+        200,
+        json={
+            "total_commits": 1,
+            "files": [
+                {
+                    "filename": "docs/scope.md",
+                    "previous_filename": ".github/workflows/ci.yml",
+                    "status": "renamed",
+                },
+                {"filename": "AGENTS.md", "previous_filename": "README.md", "status": "copied"},
+                {"filename": "docs/tasks.md", "status": "removed"},
+            ],
+        },
+    )
+
+    files = asyncio.run(HttpGithubClient().compare_files("tok", REPO, "main", "abc123"))
+
+    assert files == [
+        "docs/scope.md",
+        ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "README.md",
+        "docs/tasks.md",
     ]

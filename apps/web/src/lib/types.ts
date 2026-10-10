@@ -227,7 +227,10 @@ export interface RepositoryDocFile {
 
 export interface RepositoryDocsStatus {
   files: RepositoryDocFile[];
-  open_sync_pr: { number: number; url: string } | null;
+  /** `foreign_changes`: the pull request's branch changes more than the
+   *  planning documents (or someone else opened it on the sync's branch), so
+   *  the sync refuses it with `sync_branch_has_foreign_changes`. */
+  open_sync_pr: { number: number; url: string; foreign_changes?: boolean } | null;
 }
 
 export interface SyncDocsResult {
