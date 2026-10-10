@@ -10,6 +10,8 @@ updates) one pull request. It never writes to the default branch.
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -106,6 +108,23 @@ def test_status_is_current_right_after_creation(client: TestClient):
     assert body["open_sync_pr"] is None
 
 
+def test_status_stays_current_on_a_later_day(client: TestClient, monkeypatch):
+    """The seed footer carries no date: a status read the day after creation
+    must not report every document as changed."""
+    pid = _created_project(client)
+
+    class _Tomorrow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(days=1)
+
+    # raising=False: the seed module no longer needs `datetime` at all.
+    monkeypatch.setattr("app.integrations.repo_seed.datetime", _Tomorrow, raising=False)
+
+    states = _states(_status(client, pid))
+    assert states and set(states.values()) == {"current"}
+
+
 def test_editing_the_plan_marks_docs_architecture_out_of_date(client: TestClient):
     pid = _created_project(client)
 
@@ -177,7 +196,10 @@ def test_second_sync_updates_the_same_pull_request(client: TestClient):
     _write_stage(client, pid, "plan", "# Architecture\n\nNow with a queue worker.\n")
     first = _sync(client, pid)
     assert first.status_code == 200, first.text
+    first_body = fake.pull_requests[0]["body"]
+    assert "docs/scope.md" not in first_body
     _write_stage(client, pid, "plan", "# Architecture\n\nQueue worker and a cache.\n")
+    _write_stage(client, pid, "specify", "# Scope\n\nStory time for schools too.\n")
 
     second = _sync(client, pid)
 
@@ -189,6 +211,10 @@ def test_second_sync_updates_the_same_pull_request(client: TestClient):
     assert len(sync_commits) == 2
     full_name = _repo_name(client)
     assert f"update_pull_request:{full_name}:1" in fake.call_log
+    assert "docs/scope.md" in second.json()["files"]
+    updated_body = fake.pull_requests[0]["body"]
+    assert "docs/scope.md" in updated_body
+    assert updated_body != first_body
     branch_head = fake.branch_refs[(full_name, first.json()["branch"])]
     assert fake.sha_files[branch_head]["docs/architecture.md"].startswith(
         "# Architecture\n\nQueue worker and a cache."
@@ -228,15 +254,21 @@ def test_deployment_files_are_never_in_the_pr(client: TestClient):
     assert not any(p.startswith(".github/") or p.startswith("site/") for p in paths)
 
 
-def test_token_without_pull_request_permission(client: TestClient):
+def test_token_without_pull_request_permission(client: TestClient, caplog):
     pid = _created_project(client)
     _write_stage(client, pid, "plan", "# Architecture\n\nNow with a queue worker.\n")
-    _fake(client).fail_pr_status = 403
+    fake = _fake(client)
+    fake.fail_pr_status = 403
 
-    res = _sync(client, pid)
+    with caplog.at_level(logging.WARNING, logger="promptworkspace.repository_docs"):
+        res = _sync(client, pid)
 
     assert res.status_code == 400
     assert res.json()["detail"] == "github_pr_permission_denied"
+    # The branch and its commit stay behind (accepted); the warning names it so
+    # an operator can find it.
+    (orphan,) = [b for (_, b) in fake.branch_refs if b.startswith("pw/sync-docs-")]
+    assert any(orphan in r.getMessage() for r in caplog.records)
 
 
 def test_sync_is_admin_only_and_status_is_member_readable(client: TestClient):
@@ -277,6 +309,28 @@ def test_not_created_and_imported_projects_are_refused(client: TestClient):
     for res in (
         client.get(f"/projects/{imported}/repository/docs-status", headers=ALICE),
         _sync(client, imported),
+    ):
+        assert res.status_code == 409
+        assert res.json()["detail"] == "sync_not_supported_for_imported_repository"
+
+
+def test_legacy_imported_project_without_an_origin_is_refused(client: TestClient):
+    """A project imported before `repo_origin` existed reaches `repo_created`
+    with no recorded origin. Nothing tells it apart from a legacy scratch
+    project, so it reads as imported (the migration's NULL-as-imported rule)."""
+    ws_id = _workspace(client)
+    _connect(client, ws_id)
+    legacy = client.post(
+        "/projects", json={"name": "Old import", "workspace_id": ws_id}, headers=ALICE
+    ).json()["id"]
+    repository = client.app.state.repository
+    repository.update_project_repo(legacy, "https://github.com/acme/old-import", 4343, "main")
+    repository.update_project_lifecycle_status(legacy, "repo_created")
+    assert repository.get_project(legacy).repo_origin is None
+
+    for res in (
+        client.get(f"/projects/{legacy}/repository/docs-status", headers=ALICE),
+        _sync(client, legacy),
     ):
         assert res.status_code == 409
         assert res.json()["detail"] == "sync_not_supported_for_imported_repository"

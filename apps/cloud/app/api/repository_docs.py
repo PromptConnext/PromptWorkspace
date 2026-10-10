@@ -60,7 +60,10 @@ class _Status(NamedTuple):
 async def _load_status(request: Request, repo: Repository, project: Project) -> _Status:
     if project.lifecycle_status != "repo_created" or not project.repo_url:
         raise HTTPException(status_code=409, detail="repository_not_created")
-    if project.repo_origin == "imported":
+    # A repository-created project with no recorded origin predates
+    # `repo_origin` and may be an import; the migration's rule reads NULL as
+    # imported, and `is_imported` alone answers False once `repo_created`.
+    if project.is_imported or project.repo_origin != "created":
         raise HTTPException(status_code=409, detail="sync_not_supported_for_imported_repository")
 
     workspace = repo.get_workspace(project.workspace_id)
@@ -190,7 +193,14 @@ async def sync_docs(
         else:
             await gh.update_pull_request(token, full_name, pr["number"], body)
     except GithubWriteError as exc:
-        logger.warning("sync-docs pull request for %s failed: %s", full_name, exc)
+        # The sync branch already holds the commit; naming it lets an operator
+        # find (or delete) a branch left without a pull request.
+        logger.warning(
+            "sync-docs pull request for %s failed, branch %s left without one: %s",
+            full_name,
+            branch,
+            exc,
+        )
         if getattr(exc, "status_code", None) in (403, 404):
             raise HTTPException(status_code=400, detail="github_pr_permission_denied") from exc
         raise HTTPException(status_code=502, detail="github_sync_failed") from exc
