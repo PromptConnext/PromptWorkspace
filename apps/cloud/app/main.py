@@ -29,6 +29,7 @@ from app.api import (
     me,
     policies,
     presence,
+    receipts,
     repo_analysis,
     repository_docs,
     stage_documents,
@@ -296,6 +297,7 @@ def create_app() -> FastAPI:
     app.include_router(stage_documents.router)
     app.include_router(stage_inputs.router)
     app.include_router(delivery.router)
+    app.include_router(receipts.router)
     app.include_router(repo_analysis.router)
     app.include_router(policies.router)
     app.include_router(deployments.router)
