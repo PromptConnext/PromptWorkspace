@@ -359,6 +359,22 @@ Three architectural commitments keep this consistent with decisions already made
 2. **No model writes the pipeline.** ADR 0024 becomes a hard guardrail: agent workflows are hand-written templates seeded by the cloud, and any agent diff touching `.github/workflows/**` or deployment scaffolds fails the gate.
 3. **The gate lives in GitHub, not in our UI.** A required `promptworkspace/gate` status check plus branch protection means a Change cannot merge without its decisions, even if someone bypasses PromptWorkspace. A client-only gate (§1.5) is not a gate.
 
+### 2.4 v2.1 vocabulary (customer-facing names)
+
+Added 2026-10-14. The CEO's v2.1 View 2 names the workflow stages differently. Customer-facing material uses the v2.1 names; engineering keeps this plan's names.
+
+| v2.1 (customer-facing) | This plan (engineering) |
+|---|---|
+| 1 Inception: Project Constitution, Spec, agents draft, Commander + product owner approve | ① Intent and ② Plan |
+| 2 Construction: spec items → tasks → agent team, sandbox, hash-anchored edits | ③ Execute |
+| 3 Validation: four checks, independent reviewer, Commander signs where the tier requires | ④ Verify |
+| 4 Operation: staged release, release needs a person at T2, incident rule | ⑤ Release |
+| Pass / Escalate / Keep out | gate lanes (unchanged) |
+| Handoff (to a human agent) | **Take over** |
+| AI Commander L1–L3 | a person's certification level; caps the project's autonomy level (D3) |
+
+Status tags for anything shown outside the company follow the v2.1 plan §3: **Production** (on `main`), **Trust env** (on the trust environment, not merged), **Designed**, **Proposed**.
+
 ---
 
 ## 3. As-Is vs. To-Be
@@ -607,15 +623,33 @@ The cloud has only `admin` and `member` today (`schemas.py:75`). The To-Be model
 
 The project concierge (the evolved assistant) is a side panel on every screen. It answers "why did C3 get blocked?" or "what's left for the booking outcome?", and drafts intent or questions. It never writes authoritative state directly.
 
-### 5.4 Autonomy levels (per project)
+### 5.4 Autonomy levels and the lane matrix (per project)
 
-| Level | Name | Behaviour | Who it is for |
-|---|---|---|---|
-| **L0** | Assisted | Agents draft PRs. Every Change needs steward approval. Humans may still execute Changes themselves | First project, sceptical teams, migration Phase 1 |
-| **L1** | Supervised (default) | Risk policy applies as written. T0/T1 auto-merge to `develop` | Most teams |
-| **L2** | Autonomous | Wider T1 band, agents may self-propose sub-Changes inside outcomes, release still human | Mature projects with strong `verify.yml` |
+Amended 2026-10-14 to the CEO's Enterprise AI Architecture v2.1, View 1 (umbrella `docs/plans/2026-10-11-enterprise-ai-architecture-v2-1-plan.md` §1.3, decision 1). The earlier text let L1 auto-merge T1; View 1 is stricter and is now the rule.
 
-The level is a guardrail decision and is shown on Mission Control, so nobody is surprised by how much the agents are allowed to do.
+| Level | Name | Who it is for |
+|---|---|---|
+| **A0** | Observe | Agents read and propose; no actions at all |
+| **L0** | Assisted | First project, sceptical teams, migration Phase 1 |
+| **L1** | Supervised (default) | Most teams |
+| **L2** | Autonomous | Projects that earned it through the promotion rule |
+
+| | T0 routine | T1 standard | T2 elevated | T3 critical |
+|---|---|---|---|---|
+| **L2** | Pass | Pass* | Escalate to steward | Escalate to steward + named approver |
+| **L1** | Pass | Escalate | Escalate to steward | Escalate to steward + named approver |
+| **L0** | Escalate | Escalate | Escalate to steward | Escalate to steward + named approver |
+| **A0** | no actions | no actions | no actions | no actions |
+
+\* Only with strong evidence and within budget; otherwise Escalate.
+
+Rules that hold at every level, in this order, before the matrix is read:
+
+1. Any policy violation → **Keep out**.
+2. Over budget → **Escalate**.
+3. The tier is the maximum of the action's floor (merge ≥ T1, release ≥ T2, production data = T3) and the Change's predicted tier. A merge touching auth, money or personal data is T3.
+
+Promotion (L1 → L2) is itself a Decision with a receipt; an incident demotes. The level is a guardrail decision shown on Mission Control.
 
 ---
 
@@ -858,4 +892,7 @@ An audit of every earlier plan against `develop` on 2026-10-04 updated their Sta
 | 15 | Legacy `repo_created` projects with a NULL `repo_origin` (pre-migration 0035, from scratch or imported) get no document edit and no sync: backfill the origin or let an admin declare it | Editable plan after the repository (2026-10-10) | Low priority. Any later migration |
 | 16 | Sync PR for imported repositories: re-derive the relocated seed (`fit_to_existing_repo`) against a tree that already holds it | Editable plan after the repository (2026-10-10) | **Phase 2**, with the other PRs into existing repos |
 | 17 | The docs banner cannot be dismissed, so a hand-maintained `AGENTS.md` (or any seeded document a team edits on GitHub) keeps it showing "out of date" | Editable plan after the repository (2026-10-10) | Low priority. Any later release |
+| 18 | D1b: four-eyes for T3 decisions, step-up MFA (AAL2) for T3 approvals, delegation records | Enterprise AI v2.1 plan §4 D1 | With D3, when T3 decisions exist |
+| 19 | Drop `pw_decisions.subject_content` once every environment has run migration 0008 and the fallback read is removed | D1 core (2026-10-14 plan) | Any later migration |
+| 20 | v2.1 delivery milestones D2–D6 (agents act, gate on every change, platform extraction, second product, Commanders) | Umbrella `docs/plans/2026-10-11-enterprise-ai-architecture-v2-1-plan.md` §4 | One plan per milestone, after D1 |
 
