@@ -190,7 +190,7 @@ def test_decisions_still_answer_without_the_content_column():
     saved = repo.save_decision(DECISION.model_copy(update={"subject_content": "# Spec"}))
 
     assert saved.subject_content == "# Spec"  # the caller still sees what it asked to save
-    assert client.refused == 1
+    assert client.refused == 2  # the row write, then the legacy re-write after the snapshot miss
     decision_upserts = [p for t, p in client.upserts if t == "pw_decisions"]
     assert decision_upserts[-1]["id"] == DECISION.id
     assert "subject_content" not in decision_upserts[-1]
