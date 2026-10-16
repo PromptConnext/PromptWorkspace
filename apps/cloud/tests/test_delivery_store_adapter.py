@@ -162,6 +162,12 @@ class _ColumnlessClient(_Client):
                     client.error = None
                 return super().upsert(payload, **kw)
 
+            def execute(self):
+                res = super().execute()
+                if name == "pw_decision_snapshots":  # 0008 not applied: no snapshot rows
+                    res.data = []
+                return res
+
         return _Q(self, name)
 
     refused = 0
@@ -181,7 +187,7 @@ def test_decisions_still_answer_without_the_content_column():
 
     assert saved.subject_content == "# Spec"  # the caller still sees what it asked to save
     assert client.refused == 1
-    (_, payload) = client.upserts[-1]
+    (_, payload) = next(u for u in client.upserts if u[0] == "pw_decisions" and "id" in u[1])
     assert "subject_content" not in payload and payload["id"] == DECISION.id
 
 

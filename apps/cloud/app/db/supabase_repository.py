@@ -120,6 +120,7 @@ _STAGE_DOCUMENTS = "pw_stage_documents"
 _STAGE_INPUTS = "pw_stage_inputs"
 _DELIVERY_CHANGES = "pw_delivery_changes"
 _DECISIONS = "pw_decisions"
+_SNAPSHOTS = "pw_decision_snapshots"
 _PROJECT_ROLES = "pw_project_roles"
 _RECEIPTS = "pw_receipts"
 # PostgREST caps a response at max_rows (1000); a chain is read page by page.
@@ -174,6 +175,7 @@ _FREEZE_DEPLOYMENT_TASKS_RPC = "pw_freeze_deployment_tasks"
 _SERVICE_ONLY_TABLES = frozenset(
     {
         "pw_receipts",
+        "pw_decision_snapshots",
         "pw_requirements",
         "pw_spec_documents",
         "pw_tasks",
@@ -1686,6 +1688,30 @@ class SupabaseRepository(Repository):
                 raise DeliveryStoreUnavailable() from exc
             raise
 
+    def _snapshot_contents(self, decision_ids: list[str]) -> dict[str, str | None]:
+        """decision_id -> stored text (None when erased). Ids with no row are
+        absent, so the caller falls back to the pre-0008 column."""
+        if not decision_ids:
+            return {}
+        try:
+            res = (
+                self._table(_SNAPSHOTS)
+                .select("decision_id,content")
+                .in_("decision_id", decision_ids)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return {}
+            raise
+        return {row["decision_id"]: row["content"] for row in res.data or []}
+
+    @staticmethod
+    def _decision_of(row: dict, snapshots: dict[str, str | None]) -> Decision:
+        if row["id"] in snapshots:
+            row = {**row, "subject_content": snapshots[row["id"]]}
+        return Decision(**row)
+
     def list_decisions(self, project_id: str) -> list[Decision]:
         try:
             res = (
@@ -1699,7 +1725,9 @@ class SupabaseRepository(Repository):
             if self._missing_table(exc):
                 return []
             raise
-        return [Decision(**row) for row in res.data or []]
+        rows = res.data or []
+        snapshots = self._snapshot_contents([r["id"] for r in rows])
+        return [self._decision_of(r, snapshots) for r in rows]
 
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
         try:
@@ -1716,10 +1744,13 @@ class SupabaseRepository(Repository):
                 return None
             raise
         rows = res.data or []
-        return Decision(**rows[0]) if rows else None
+        if not rows:
+            return None
+        return self._decision_of(rows[0], self._snapshot_contents([rows[0]["id"]]))
 
     def save_decision(self, decision: Decision) -> Decision:
-        row = _dump(decision)
+        content = decision.subject_content
+        row = _dump(decision.model_copy(update={"subject_content": None}))
         try:
             try:
                 self._table(_DECISIONS).upsert(row, on_conflict="id").execute()
@@ -1734,7 +1765,38 @@ class SupabaseRepository(Repository):
             if self._missing_table(exc):
                 raise DeliveryStoreUnavailable() from exc
             raise
+        if content is not None:
+            try:
+                self._table(_SNAPSHOTS).upsert(
+                    {"decision_id": decision.id, "project_id": decision.project_id,
+                     "workspace_id": decision.workspace_id, "content": content},
+                    on_conflict="decision_id",
+                    ignore_duplicates=True,  # written once; never replaced or revived
+                ).execute()
+            except Exception as exc:
+                if self._missing_table(exc):
+                    raise DeliveryStoreUnavailable() from exc
+                raise
         return decision
+
+    def erase_decision_snapshot(self, project_id: str, decision_id: str, erased_by: str) -> bool:
+        try:
+            res = (
+                self._table(_SNAPSHOTS)
+                .update({"content": None, "erased_at": utcnow().isoformat(),
+                         "erased_by": erased_by})
+                .eq("decision_id", decision_id)
+                .eq("project_id", project_id)
+                .is_("erased_at", "null")
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            raise
+        # A pre-0008 copy on the decision row goes too.
+        self._table(_DECISIONS).update({"subject_content": None}).eq("id", decision_id).execute()
+        return bool(res.data)
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
         receipts: list[Receipt] = []

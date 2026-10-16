@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from app.api._guards import require_admin, require_project, require_project_members
-from app.db.repository import DeliveryStoreUnavailable, Repository
+from app.db.repository import DeliveryStoreUnavailable, ReceiptConflict, Repository
 from app.delivery.approvals import (
     current_hash,
     plan_state,
@@ -39,6 +39,7 @@ from app.delivery.decisions import (
     latest_decision,
 )
 from app.delivery.ledger import append_receipt, sync_decision_receipts
+from app.delivery.receipts import sha256_text
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     Decision,
@@ -515,3 +516,56 @@ def resolve_decision(
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     return _mutation_out(resolved, after, hashes, out)
+
+
+class SnapshotErase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str
+
+
+class SnapshotEraseOut(BaseModel):
+    erased: bool
+
+
+@router.post(
+    "/projects/{project_id}/decisions/{decision_id}/erase-snapshot",
+    response_model=SnapshotEraseOut,
+)
+def erase_decision_snapshot(
+    project_id: str,
+    decision_id: str,
+    body: SnapshotErase,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> SnapshotEraseOut:
+    """Erase the document text a decision stored (PDPA erasure). The decision,
+    its hash and every receipt stay; one `decision.snapshot_erased` receipt
+    records who erased it, with only a hash of the reason. Safe to retry."""
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+    reason = body.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="reason_required")
+    if repo.get_decision(project_id, decision_id) is None:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    try:
+        erased = repo.erase_decision_snapshot(project_id, decision_id, user.id)
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    recorded = any(
+        r.subject_id == decision_id and r.event == "decision.snapshot_erased"
+        for r in repo.list_receipts(project_id)
+    )
+    if not recorded and (
+        erased or repo.get_decision(project_id, decision_id).subject_content is None
+    ):
+        try:
+            append_receipt(repo, ReceiptDraft(
+                project_id=project_id, workspace_id=project.workspace_id,
+                event="decision.snapshot_erased", subject_type="decision",
+                subject_id=decision_id, actor=user.id,
+                body={"reason_sha256": sha256_text(reason)},
+            ))
+        except (ReceiptConflict, DeliveryStoreUnavailable):
+            raise HTTPException(status_code=503, detail="receipt_write_failed") from None
+    return SnapshotEraseOut(erased=erased)

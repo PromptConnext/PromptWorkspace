@@ -806,6 +806,11 @@ class Repository(abc.ABC):
         """Insert or replace by id. Raises DeliveryStoreUnavailable."""
 
     @abc.abstractmethod
+    def erase_decision_snapshot(self, project_id: str, decision_id: str, erased_by: str) -> bool:
+        """Null the stored document text of one decision. True when this call
+        erased it; False when it was already erased or never stored."""
+
+    @abc.abstractmethod
     def list_receipts(self, project_id: str) -> list[Receipt]:
         """The project's receipt chain, oldest first. Empty when the table is
         missing (migration 0007 not applied)."""
@@ -885,6 +890,7 @@ class InMemoryRepository(Repository):
         # Plan 0029 delivery store
         self._delivery_changes: dict[str, DeliveryChange] = {}
         self._decisions: dict[str, Decision] = {}
+        self._snapshots: dict[str, dict] = {}  # decision_id -> content, erased_at, erased_by
         self._project_roles: dict[tuple[str, str], ProjectRole] = {}
         # project_id -> receipt chain, oldest first (enterprise AI v2.1 D1)
         self._receipts: dict[str, list[Receipt]] = {}
@@ -1906,20 +1912,37 @@ class InMemoryRepository(Repository):
         for change in changes:
             self._delivery_changes[change.id] = copy.deepcopy(change)
 
+    def _with_snapshot(self, decision: Decision) -> Decision:
+        snap = self._snapshots.get(decision.id)
+        content = snap["content"] if snap is not None else decision.subject_content
+        return decision.model_copy(update={"subject_content": content}, deep=True)
+
     def list_decisions(self, project_id: str) -> list[Decision]:
         rows = [d for d in self._decisions.values() if d.project_id == project_id]
         rows.sort(key=lambda d: (d.created_at, d.id), reverse=True)
-        return [copy.deepcopy(d) for d in rows]
+        return [self._with_snapshot(d) for d in rows]
 
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
         row = self._decisions.get(decision_id)
         if row is None or row.project_id != project_id:
             return None
-        return copy.deepcopy(row)
+        return self._with_snapshot(row)
 
     def save_decision(self, decision: Decision) -> Decision:
-        self._decisions[decision.id] = copy.deepcopy(decision)
+        if decision.subject_content is not None and decision.id not in self._snapshots:
+            self._snapshots[decision.id] = {
+                "content": decision.subject_content, "erased_at": None, "erased_by": None}
+        self._decisions[decision.id] = decision.model_copy(
+            update={"subject_content": None}, deep=True)
         return copy.deepcopy(decision)
+
+    def erase_decision_snapshot(self, project_id: str, decision_id: str, erased_by: str) -> bool:
+        row = self._decisions.get(decision_id)
+        snap = self._snapshots.get(decision_id)
+        if row is None or row.project_id != project_id or snap is None or snap["content"] is None:
+            return False
+        snap.update(content=None, erased_at=utcnow(), erased_by=erased_by)
+        return True
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
         return [copy.deepcopy(r) for r in self._receipts.get(project_id, [])]

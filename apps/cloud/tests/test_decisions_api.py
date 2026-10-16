@@ -767,3 +767,42 @@ def test_the_requester_is_told_it_is_their_own_request(client, project):
     listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
     assert listing["decisions"][0]["blocked"] is None
     assert listing["decisions"][0]["can_resolve"] is True
+
+
+def _erase(client, pid, did, reason="PDPA request 2026-10-14", headers=ALICE):
+    return client.post(f"/projects/{pid}/decisions/{did}/erase-snapshot",
+                       json={"reason": reason}, headers=headers)
+
+
+def test_an_admin_erases_a_snapshot_and_the_chain_still_verifies(client, project):
+    from app.delivery.receipts import verify_chain
+
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did)
+    state_before = client.get(f"/projects/{project}/decisions", headers=ALICE).json()["states"]
+
+    res = _erase(client, project, did)
+
+    assert res.status_code == 200 and res.json() == {"erased": True}
+    listing = client.get(f"/projects/{project}/decisions", headers=ALICE).json()
+    assert listing["decisions"][0]["subject_content"] is None
+    assert listing["states"] == state_before
+    chain = client.app.state.repository.list_receipts(project)
+    assert chain[-1].event == "decision.snapshot_erased"
+    assert "PDPA" not in str(chain[-1].body)
+    assert verify_chain(chain).ok
+
+
+def test_erasing_twice_records_one_receipt(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _erase(client, project, did)
+    assert _erase(client, project, did).json() == {"erased": False}
+    events = [e for _, e, _ in _events(client, project)]
+    assert events.count("decision.snapshot_erased") == 1
+
+
+def test_only_admins_erase_and_a_reason_is_required(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    assert _erase(client, project, did, headers=BOB).status_code == 403
+    assert _erase(client, project, did, reason="  ").json()["detail"] == "reason_required"
+    assert _erase(client, project, "nope").status_code == 404

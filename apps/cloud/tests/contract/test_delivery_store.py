@@ -146,3 +146,44 @@ def test_task_change_status_is_the_live_tasks_in_pull_order(repo: Repository) ->
     after = repo.list_task_change_status(project.id)
     assert (second.id, change_b, "implemented") in after
     assert [r for r in after if r[0] != second.id] == [r for r in rows if r[0] != second.id]
+
+
+def _snap_decision(project, ws, content="# Spec\n\nPatient: Somchai, 081-234-5678"):
+    return Decision(
+        project_id=project.id, workspace_id=ws.id, kind="intent_approval", title="t",
+        subject_stage="specify", subject_hash="h" * 64, subject_content=content,
+        routed_hat="business_owner", requested_by="bob",
+    )
+
+
+def test_snapshot_content_round_trips_through_its_own_store(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    d = repo.save_decision(_snap_decision(project, ws))
+
+    assert repo.get_decision(project.id, d.id).subject_content.startswith("# Spec")
+    assert repo.list_decisions(project.id)[0].subject_content.startswith("# Spec")
+
+
+def test_resaving_a_decision_does_not_replace_its_snapshot(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    d = repo.save_decision(_snap_decision(project, ws))
+    repo.save_decision(d.model_copy(update={"status": "approved", "subject_content": "other"}))
+
+    assert repo.get_decision(project.id, d.id).subject_content.startswith("# Spec")
+
+
+def test_erasing_a_snapshot_keeps_the_decision_and_its_hash(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    d = repo.save_decision(_snap_decision(project, ws))
+
+    assert repo.erase_decision_snapshot(project.id, d.id, admin) is True
+    assert repo.erase_decision_snapshot(project.id, d.id, admin) is False
+
+    stored = repo.get_decision(project.id, d.id)
+    assert stored.subject_content is None and stored.subject_hash == "h" * 64
+    # A later save of the decision must not bring the content back.
+    repo.save_decision(stored.model_copy(update={"status": "approved"}))
+    assert repo.get_decision(project.id, d.id).subject_content is None
