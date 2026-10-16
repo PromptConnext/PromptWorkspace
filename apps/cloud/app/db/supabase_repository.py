@@ -31,10 +31,12 @@ from app.db.merge import unwritten_fields as _unwritten_fields
 from app.db.repository import (
     CrossProjectWrite,
     DeliveryStoreUnavailable,
+    ReceiptConflict,
     Repository,
     StageInputsUnavailable,
     TrackerAccountConflict,
 )
+from app.delivery.receipts import stamp
 from app.models.schemas import (
     ENTITY_TYPES,
     FIELD_AUTHORITY,
@@ -61,6 +63,7 @@ from app.models.schemas import (
     ProjectRole,
     PullRequest,
     RagChunkHit,
+    Receipt,
     RepoAnalysis,
     RepoWebhook,
     Requirement,
@@ -118,6 +121,7 @@ _STAGE_INPUTS = "pw_stage_inputs"
 _DELIVERY_CHANGES = "pw_delivery_changes"
 _DECISIONS = "pw_decisions"
 _PROJECT_ROLES = "pw_project_roles"
+_RECEIPTS = "pw_receipts"
 # PostgREST's "table not in the schema cache" and Postgres' undefined_table:
 # what a read of pw_stage_inputs returns on a database migration 0003 hasn't
 # reached yet. Matched on the error's `code` attribute rather than by
@@ -128,6 +132,8 @@ _MISSING_TABLE_CODES = frozenset({"PGRST205", "42P01"})
 # Postgres' undefined_column, what a write naming pw_decisions.subject_content
 # returns on a database migration 0006 hasn't reached yet.
 _MISSING_COLUMN_CODES = frozenset({"PGRST204", "42703"})
+# Postgres unique_violation: a receipt insert that lost a seq / decision-event race.
+_UNIQUE_VIOLATION = "23505"
 _REPO_ANALYSES = "pw_repo_analyses"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
 _WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
@@ -165,6 +171,7 @@ _FREEZE_DEPLOYMENT_TASKS_RPC = "pw_freeze_deployment_tasks"
 # client without knowing this rule exists.
 _SERVICE_ONLY_TABLES = frozenset(
     {
+        "pw_receipts",
         "pw_requirements",
         "pw_spec_documents",
         "pw_tasks",
@@ -1726,6 +1733,35 @@ class SupabaseRepository(Repository):
                 raise DeliveryStoreUnavailable() from exc
             raise
         return decision
+
+    def list_receipts(self, project_id: str) -> list[Receipt]:
+        try:
+            res = (
+                self._table(_RECEIPTS)
+                .select("*")
+                .eq("project_id", project_id)
+                .order("seq")
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return []
+            raise
+        return [Receipt(**row) for row in res.data or []]
+
+    def insert_receipt(self, receipt: Receipt) -> Receipt:
+        row = _dump(receipt)
+        # `created_at` must be stored exactly as hashed (review focus 2).
+        row["created_at"] = stamp(receipt.created_at)
+        try:
+            self._table(_RECEIPTS).insert(row).execute()
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            if getattr(exc, "code", None) == _UNIQUE_VIOLATION:
+                raise ReceiptConflict(str(exc)) from exc
+            raise
+        return receipt
 
     @staticmethod
     def _missing_content_column(exc: Exception) -> bool:

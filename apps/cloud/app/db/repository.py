@@ -47,6 +47,7 @@ from app.models.schemas import (
     PullRequest,
     RagChunk,
     RagChunkHit,
+    Receipt,
     RepoAnalysis,
     RepoWebhook,
     Requirement,
@@ -115,6 +116,12 @@ class DeliveryStoreUnavailable(RuntimeError):
     """The plan 0029 delivery tables aren't there: migration 0004 not yet
     applied to this database. Writes map to 503 `delivery_store_unavailable`
     (app/api/delivery.py); reads return nothing."""
+
+
+class ReceiptConflict(RuntimeError):
+    """A receipt insert lost a race: its `seq` is taken in the project's chain,
+    or its decision event is already recorded. The caller re-reads the chain
+    and seals again (app/delivery/ledger.py)."""
 
 
 class Repository(abc.ABC):
@@ -799,6 +806,17 @@ class Repository(abc.ABC):
         """Insert or replace by id. Raises DeliveryStoreUnavailable."""
 
     @abc.abstractmethod
+    def list_receipts(self, project_id: str) -> list[Receipt]:
+        """The project's receipt chain, oldest first. Empty when the table is
+        missing (migration 0007 not applied)."""
+
+    @abc.abstractmethod
+    def insert_receipt(self, receipt: Receipt) -> Receipt:
+        """Insert only. Raises ReceiptConflict when (project_id, seq) is taken
+        or a decision receipt with the same (subject_id, event) exists;
+        DeliveryStoreUnavailable when the table is missing."""
+
+    @abc.abstractmethod
     def list_project_roles(self, project_id: str) -> list[ProjectRole]: ...
 
     @abc.abstractmethod
@@ -868,6 +886,8 @@ class InMemoryRepository(Repository):
         self._delivery_changes: dict[str, DeliveryChange] = {}
         self._decisions: dict[str, Decision] = {}
         self._project_roles: dict[tuple[str, str], ProjectRole] = {}
+        # project_id -> receipt chain, oldest first (enterprise AI v2.1 D1)
+        self._receipts: dict[str, list[Receipt]] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
 
@@ -1900,6 +1920,24 @@ class InMemoryRepository(Repository):
     def save_decision(self, decision: Decision) -> Decision:
         self._decisions[decision.id] = copy.deepcopy(decision)
         return copy.deepcopy(decision)
+
+    def list_receipts(self, project_id: str) -> list[Receipt]:
+        return [copy.deepcopy(r) for r in self._receipts.get(project_id, [])]
+
+    def insert_receipt(self, receipt: Receipt) -> Receipt:
+        chain = self._receipts.setdefault(receipt.project_id, [])
+        if any(r.seq == receipt.seq for r in chain):
+            raise ReceiptConflict(f"seq {receipt.seq} taken")
+        if receipt.subject_type == "decision" and any(
+            r.subject_type == "decision"
+            and r.subject_id == receipt.subject_id
+            and r.event == receipt.event
+            for r in chain
+        ):
+            raise ReceiptConflict(f"{receipt.event} already recorded for {receipt.subject_id}")
+        chain.append(copy.deepcopy(receipt))
+        chain.sort(key=lambda r: r.seq)
+        return copy.deepcopy(receipt)
 
     def list_project_roles(self, project_id: str) -> list[ProjectRole]:
         rows = [r for (pid, _), r in self._project_roles.items() if pid == project_id]
