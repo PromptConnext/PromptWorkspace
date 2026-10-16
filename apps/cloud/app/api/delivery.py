@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Collection
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from typing import Literal
 
@@ -38,6 +38,7 @@ from app.delivery.decisions import (
     can_resolve,
     content_hash,
     eligible_resolvers,
+    is_overdue,
     latest_decision,
 )
 from app.delivery.ledger import append_receipt, sync_decision_receipts
@@ -458,6 +459,10 @@ def request_decision(
         for i, existing in enumerate(decisions):
             if existing.kind != body.kind or existing.status != "open":
                 continue
+            if is_overdue(existing, utcnow()):
+                after[i] = repo.save_decision(existing.model_copy(
+                    update={"status": "expired", "resolved_at": utcnow()}))
+                continue
             if existing.subject_hash == current:
                 return _mutation_out(existing, after, _hashes_after_write(repo, project_id), out)
             after[i] = repo.save_decision(existing.model_copy(
@@ -473,6 +478,8 @@ def request_decision(
                 subject_content=document.content,
                 routed_hat=HAT_OF[body.kind],
                 requested_by=user.id,
+                expires_at=utcnow()
+                + timedelta(days=request.app.state.settings.decision_ttl_days),
             )
         )
     except DeliveryStoreUnavailable:
@@ -506,6 +513,8 @@ def resolve_decision(
         raise HTTPException(status_code=404, detail="decision_not_found")
     if decision.status != "open":
         raise HTTPException(status_code=409, detail="decision_not_open")
+    if is_overdue(decision, utcnow()):
+        raise HTTPException(status_code=409, detail="decision_expired")
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     if decision.requested_by == user.id:
         raise HTTPException(status_code=403, detail="self_approval_not_allowed")

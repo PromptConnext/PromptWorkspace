@@ -187,3 +187,22 @@ def test_erasing_a_snapshot_keeps_the_decision_and_its_hash(repo: Repository) ->
     # A later save of the decision must not bring the content back.
     repo.save_decision(stored.model_copy(update={"status": "approved"}))
     assert repo.get_decision(project.id, d.id).subject_content is None
+
+
+def test_due_decisions_are_open_ones_expiring_by_the_cutoff(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    now = utcnow()
+
+    def save(status, hours):
+        return repo.save_decision(Decision(
+            project_id=project.id, workspace_id=ws.id, kind="plan_approval", title="t",
+            subject_stage="tasks", subject_hash="h", routed_hat="tech_steward",
+            requested_by="bob", status=status, expires_at=now + timedelta(hours=hours)))
+
+    soon, later = save("open", 1), save("open", 100)
+    save("approved", 1)
+
+    due = [d.id for d in repo.list_due_decisions(now + timedelta(hours=48))
+           if d.project_id == project.id]
+    assert due == [soon.id] and later.id not in due

@@ -1732,6 +1732,23 @@ class SupabaseRepository(Repository):
         snapshots = self._snapshot_contents([r["id"] for r in rows])
         return [self._decision_of(r, snapshots) for r in rows]
 
+    def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
+        try:
+            res = (
+                self._table(_DECISIONS)
+                .select("*")
+                .eq("status", "open")
+                .lte("expires_at", until.isoformat())
+                .order("expires_at")
+                .limit(limit)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc) or getattr(exc, "code", None) in _MISSING_COLUMN_CODES:
+                return []
+            raise
+        return [Decision(**row) for row in res.data or []]
+
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
         try:
             res = (

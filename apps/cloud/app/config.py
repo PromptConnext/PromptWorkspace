@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
 
+    # Decision timeouts (enterprise AI v2.1 D1).
+    decision_ttl_days: int = 7
+    decision_reminder_hours: int = 48
+    decision_sweep_interval_seconds: int = 900  # 0 disables the sweep loop
+
     # External-tracker credentials (M5). Kept in the server env / secret manager,
     # never in a workspace row (ADR 0010 §5). Outbound Jira uses Basic auth
     # (email + API token).

@@ -11,6 +11,7 @@ from app.delivery.decisions import (
     can_resolve,
     content_hash,
     eligible_resolvers,
+    is_overdue,
 )
 from app.models.schemas import Decision, ProjectRole, utcnow
 
@@ -108,3 +109,19 @@ def test_the_requester_sees_own_request_when_someone_else_can_approve():
 
 def test_a_resolved_decision_is_never_blocked():
     assert blocked_reason(_decision("approved"), "u", [], {"u"}, {"u"}) is None
+
+
+def test_an_expired_decision_reads_like_no_decision():
+    assert approval_state([_decision("expired")], "plan_approval", "h1") == "none"
+    older = _decision("rejected", minutes_ago=5)
+    assert approval_state([older, _decision("expired")], "plan_approval", "h1") == \
+        "changes_requested"
+
+
+def test_overdue_means_open_and_past_expiry():
+    now = utcnow()
+    assert is_overdue(_decision().model_copy(update={"expires_at": now}), now)
+    assert not is_overdue(_decision().model_copy(
+        update={"expires_at": now + timedelta(seconds=1)}), now)
+    assert not is_overdue(_decision("approved").model_copy(update={"expires_at": now}), now)
+    assert not is_overdue(_decision(), now)  # no expiry recorded (pre-0009)

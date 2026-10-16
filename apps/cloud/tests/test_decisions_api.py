@@ -15,6 +15,7 @@ from app.models.schemas import (
     Requirement,
     RequirementStatus,
     SpecDocument,
+    utcnow,
 )
 
 ALICE = {"X-User-Id": "alice"}  # admin
@@ -843,3 +844,33 @@ def test_a_repeated_request_for_the_same_document_does_not_email_again(client, p
     _request(client, project, "intent_approval")
     _request(client, project, "intent_approval")
     assert len(mailer.sent) == 1
+
+
+def test_a_request_expires_after_the_configured_term(client, project):
+    body = _request(client, project, "intent_approval").json()
+    d = client.app.state.repository.get_decision(project, body["id"])
+    days = client.app.state.settings.decision_ttl_days
+    assert timedelta(days=days) - timedelta(minutes=1) < d.expires_at - d.created_at \
+        <= timedelta(days=days)
+
+
+def test_an_overdue_decision_cannot_be_resolved_before_the_sweep_runs(client, project):
+    repo = client.app.state.repository
+    did = _request(client, project, "intent_approval").json()["id"]
+    d = repo.get_decision(project, did)
+    repo.save_decision(d.model_copy(update={"expires_at": utcnow() - timedelta(minutes=1)}))
+
+    res = _resolve(client, project, did)
+    assert res.status_code == 409 and res.json()["detail"] == "decision_expired"
+
+
+def test_asking_again_replaces_an_overdue_request(client, project):
+    repo = client.app.state.repository
+    old = _request(client, project, "intent_approval").json()["id"]
+    d = repo.get_decision(project, old)
+    repo.save_decision(d.model_copy(update={"expires_at": utcnow() - timedelta(minutes=1)}))
+
+    new = _request(client, project, "intent_approval").json()["id"]
+
+    assert new != old
+    assert repo.get_decision(project, old).status == "expired"

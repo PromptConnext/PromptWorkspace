@@ -802,6 +802,12 @@ class Repository(abc.ABC):
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None: ...
 
     @abc.abstractmethod
+    def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
+        """Open decisions with expires_at <= until, in every project, soonest
+        first. Service-level read for the sweep; empty when the column or
+        table is missing."""
+
+    @abc.abstractmethod
     def save_decision(self, decision: Decision) -> Decision:
         """Insert or replace by id. Raises DeliveryStoreUnavailable."""
 
@@ -1916,6 +1922,12 @@ class InMemoryRepository(Repository):
         snap = self._snapshots.get(decision.id)
         content = snap["content"] if snap is not None else decision.subject_content
         return decision.model_copy(update={"subject_content": content}, deep=True)
+
+    def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
+        rows = [d for d in self._decisions.values()
+                if d.status == "open" and d.expires_at is not None and d.expires_at <= until]
+        rows.sort(key=lambda d: d.expires_at)
+        return [self._with_snapshot(d) for d in rows[:limit]]
 
     def list_decisions(self, project_id: str) -> list[Decision]:
         rows = [d for d in self._decisions.values() if d.project_id == project_id]

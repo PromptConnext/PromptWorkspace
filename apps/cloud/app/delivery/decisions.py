@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Collection
+from datetime import datetime
 from typing import Literal
 
 from app.models.schemas import Decision, ProjectRole
@@ -32,11 +33,20 @@ def content_hash(content: str) -> str:
 
 
 def latest_decision(decisions: list[Decision], kind: str) -> Decision | None:
-    """The newest non-withdrawn decision of `kind` — the one a state reads."""
+    """The newest decision of `kind` that was answered or still can be: the
+    one a state reads. Withdrawn and expired decisions are skipped."""
     return max(
-        (d for d in decisions if d.kind == kind and d.status != "withdrawn"),
+        (d for d in decisions if d.kind == kind and d.status not in ("withdrawn", "expired")),
         key=lambda d: (d.created_at, d.id),
         default=None,
+    )
+
+
+def is_overdue(decision: Decision, now: datetime) -> bool:
+    return (
+        decision.status == "open"
+        and decision.expires_at is not None
+        and decision.expires_at <= now
     )
 
 

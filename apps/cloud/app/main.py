@@ -44,6 +44,7 @@ from app.generation.managed import build_managed_connection, build_managed_embed
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
 from app.integrations.typesafe import HttpTypeSafeClient
+from app.models.schemas import utcnow
 from app.observability import init_sentry
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
@@ -101,6 +102,25 @@ async def _tombstone_gc_loop(app: FastAPI, settings: Settings) -> None:
                 logger.info("Tombstone GC purged %s", purged)
         except Exception:  # noqa: BLE001 - GC must never crash the app
             logger.exception("Tombstone GC pass failed")
+
+
+async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
+    """Expire unanswered decisions and send reminders (enterprise AI v2.1 D1).
+    Runs the sweep off the event loop: it sends SMTP mail."""
+    if settings.decision_sweep_interval_seconds <= 0:
+        return
+    from app.delivery.sweep import sweep_decisions
+
+    while True:
+        await asyncio.sleep(settings.decision_sweep_interval_seconds)
+        try:
+            result = await asyncio.to_thread(
+                sweep_decisions, app.state.repository, app.state.decision_mailer,
+                settings, utcnow())
+            if result.expired or result.reminded:
+                logger.info("Decision sweep: %s expired, %s reminded", *result)
+        except Exception:  # noqa: BLE001 - the sweep must never crash the app
+            logger.exception("Decision sweep pass failed")
 
 
 @asynccontextmanager
@@ -232,16 +252,20 @@ async def lifespan(app: FastAPI):
     from app.deployments.reconcile import reconcile_loop
 
     gc_task = asyncio.create_task(_tombstone_gc_loop(app, settings))
+    sweep_task = asyncio.create_task(_decision_sweep_loop(app, settings))
     embed_task = asyncio.create_task(embed_worker_loop(app))
     reconcile_task = asyncio.create_task(reconcile_loop(app, settings))
     try:
         yield
     finally:
         gc_task.cancel()
+        sweep_task.cancel()
         embed_task.cancel()
         reconcile_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await gc_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
         with contextlib.suppress(asyncio.CancelledError):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):

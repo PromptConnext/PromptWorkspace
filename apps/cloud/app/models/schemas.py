@@ -1304,7 +1304,7 @@ class ProjectRole(BaseModel):
 
 
 DecisionKind = Literal["intent_approval", "plan_approval"]
-DecisionStatus = Literal["open", "approved", "rejected", "withdrawn"]
+DecisionStatus = Literal["open", "approved", "rejected", "withdrawn", "expired"]
 
 
 class Decision(BaseModel):
@@ -1330,6 +1330,11 @@ class Decision(BaseModel):
     resolved_by: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     resolved_at: datetime | None = None
+    # When an unanswered decision counts as no (v2.1 View 1: timeouts).
+    # None for a decision made before migration 0009.
+    expires_at: datetime | None = None
+    # When the "expires soon" email went out; at most one per decision.
+    reminded_at: datetime | None = None
 
 
 ReceiptEvent = Literal[
