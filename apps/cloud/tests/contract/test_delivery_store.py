@@ -206,3 +206,40 @@ def test_due_decisions_are_open_ones_expiring_by_the_cutoff(repo: Repository) ->
     due = [d.id for d in repo.list_due_decisions(now + timedelta(hours=48))
            if d.project_id == project.id]
     assert due == [soon.id] and later.id not in due
+
+
+def _open_decision(repo: Repository, project, ws, status="open"):
+    return repo.save_decision(Decision(
+        project_id=project.id, workspace_id=ws.id, kind="plan_approval", title="t",
+        subject_stage="tasks", subject_hash="h", routed_hat="tech_steward",
+        requested_by="bob", status=status))
+
+
+def test_update_open_decision_applies_to_an_open_decision(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    d = _open_decision(repo, project, ws)
+    now = utcnow()
+
+    out = repo.update_open_decision(project.id, d.id, {"reminded_at": now})
+
+    assert out is not None and out.status == "open" and out.reminded_at is not None
+    assert repo.get_decision(project.id, d.id).reminded_at is not None
+
+
+def test_update_open_decision_leaves_a_resolved_decision_alone(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    d = _open_decision(repo, project, ws, status="approved")
+
+    out = repo.update_open_decision(
+        project.id, d.id, {"status": "expired", "resolved_at": utcnow()})
+
+    assert out is None
+    assert repo.get_decision(project.id, d.id).status == "approved"
+
+
+def test_update_open_decision_unknown_id_is_none(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    assert repo.update_open_decision(project.id, new_id(), {"reminded_at": utcnow()}) is None

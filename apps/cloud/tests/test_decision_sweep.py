@@ -60,3 +60,39 @@ def test_an_overdue_decision_expires_tells_the_requester_and_leaves_a_receipt():
         "decision.requested", "decision.expired"]
     ((to, subject, _),) = mailer.sent
     assert to == ["bob@x.com"] and subject.startswith("[PromptWorkspace] Expired")
+
+
+def test_a_decision_resolved_after_the_read_is_not_reverted(monkeypatch):
+    repo, project, d, now = _setup(hours_left=-1)
+    stale = repo.get_decision(project.id, d.id)
+    repo.save_decision(d.model_copy(update={"status": "approved", "resolved_by": "alice"}))
+    monkeypatch.setattr(repo, "list_due_decisions", lambda *a, **k: [stale])
+    mailer = RecordingDecisionMailer()
+
+    assert sweep_decisions(repo, mailer, SETTINGS, now) == (0, 0)
+
+    stored = repo.get_decision(project.id, d.id)
+    assert stored.status == "approved" and stored.resolved_by == "alice"
+    assert mailer.sent == []
+
+
+def test_one_failing_decision_does_not_stop_the_pass(monkeypatch):
+    repo, project, d, now = _setup(hours_left=-1)
+    bad_project = repo.create_project(project.workspace_id, "alice", "Other")
+    bad = repo.save_decision(Decision(
+        project_id=bad_project.id, workspace_id=project.workspace_id, kind="intent_approval",
+        title="t", subject_stage="specify", subject_hash="h", routed_hat="business_owner",
+        requested_by="bob", expires_at=now - timedelta(hours=5)))
+    real = repo.get_project
+
+    def get_project(pid):
+        if pid == bad_project.id:
+            raise RuntimeError("boom")
+        return real(pid)
+
+    monkeypatch.setattr(repo, "get_project", get_project)
+    assert repo.list_due_decisions(now)[0].id == bad.id  # the failing one goes first
+
+    assert sweep_decisions(repo, RecordingDecisionMailer(), SETTINGS, now) == (1, 0)
+    assert repo.get_decision(project.id, d.id).status == "expired"
+    assert "decision.expired" in [r.event for r in repo.list_receipts(project.id)]

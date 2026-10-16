@@ -1732,6 +1732,29 @@ class SupabaseRepository(Repository):
         snapshots = self._snapshot_contents([r["id"] for r in rows])
         return [self._decision_of(r, snapshots) for r in rows]
 
+    def update_open_decision(
+        self, project_id: str, decision_id: str, changes: dict
+    ) -> Decision | None:
+        payload = {k: v.isoformat() if isinstance(v, datetime) else v
+                   for k, v in changes.items()}
+        try:
+            res = (
+                self._table(_DECISIONS)
+                .update(payload)
+                .eq("id", decision_id)
+                .eq("project_id", project_id)
+                .eq("status", "open")
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                raise DeliveryStoreUnavailable() from exc
+            raise
+        rows = res.data or []
+        if not rows:
+            return None
+        return self._decision_of(rows[0], self._snapshot_contents([rows[0]["id"]]))
+
     def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
         try:
             res = (

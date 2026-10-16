@@ -802,6 +802,15 @@ class Repository(abc.ABC):
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None: ...
 
     @abc.abstractmethod
+    def update_open_decision(
+        self, project_id: str, decision_id: str, changes: dict
+    ) -> Decision | None:
+        """Apply `changes` (a subset of Decision fields: status, resolved_at,
+        reminded_at) only while the decision is still open; return the updated
+        decision, or None when it is no longer open or does not exist. Raises
+        DeliveryStoreUnavailable when the table is missing."""
+
+    @abc.abstractmethod
     def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
         """Open decisions with expires_at <= until, in every project, soonest
         first. Service-level read for the sweep; empty when the column or
@@ -1922,6 +1931,16 @@ class InMemoryRepository(Repository):
         snap = self._snapshots.get(decision.id)
         content = snap["content"] if snap is not None else decision.subject_content
         return decision.model_copy(update={"subject_content": content}, deep=True)
+
+    def update_open_decision(
+        self, project_id: str, decision_id: str, changes: dict
+    ) -> Decision | None:
+        row = self._decisions.get(decision_id)
+        if row is None or row.project_id != project_id or row.status != "open":
+            return None
+        updated = row.model_copy(update=changes)
+        self._decisions[decision_id] = updated
+        return self._with_snapshot(updated)
 
     def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
         rows = [d for d in self._decisions.values()
