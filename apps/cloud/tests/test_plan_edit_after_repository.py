@@ -27,7 +27,7 @@ from app.main import create_app
 from app.models.schemas import GraphUpsertRequest, ModelConnection, TaskStatus
 from app.rag.chat import FakeChatProvider
 from app.rag.embedder import FakeEmbeddingProvider
-from tests._repo_docs_helpers import ALICE, _created_project, _write_stage
+from tests._repo_docs_helpers import ALICE, BOB, _created_project, _write_stage
 
 TASKS_AT_APPROVAL = """# Tasks
 
@@ -75,7 +75,15 @@ def _states(client: TestClient, pid: str) -> dict[str, str]:
 
 
 def _decide(client: TestClient, pid: str, kind: str) -> None:
-    requested = client.post(f"/projects/{pid}/decisions", json={"kind": kind}, headers=ALICE)
+    # Nobody approves their own request: Bob asks, Alice (the admin) resolves.
+    repo = client.app.state.repository
+    ws_id = repo.get_project(pid).workspace_id
+    if repo.get_membership(ws_id, "bob") is None:
+        invitation = client.post(
+            f"/workspaces/{ws_id}/invitations", json={"email": "bob@x.com"}, headers=ALICE
+        ).json()
+        client.post(f"/invitations/{invitation['invitation']['token']}/accept", headers=BOB)
+    requested = client.post(f"/projects/{pid}/decisions", json={"kind": kind}, headers=BOB)
     assert requested.status_code == 200, requested.text
     resolved = client.post(
         f"/projects/{pid}/decisions/{requested.json()['id']}/resolve",

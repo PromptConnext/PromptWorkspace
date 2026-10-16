@@ -5,11 +5,14 @@ A decision approves one stage document as it was when requested
 non-withdrawn decision of that kind compared with the document as it is now.
 Routing: the user wearing the decision's hat resolves it; when nobody wears
 the hat, or the wearer has left the workspace, workspace admins do.
+The requester never resolves their own decision (v2.1 View 1: no
+self-approval), even when they are the only person who could.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Collection
 from typing import Literal
 
 from app.models.schemas import Decision, ProjectRole
@@ -52,6 +55,40 @@ def approval_state(
     return "pending" if latest.status == "open" else "approved"
 
 
+Blocked = Literal["own_request", "no_approver"]
+
+
+def eligible_resolvers(
+    decision: Decision,
+    roles: list[ProjectRole],
+    member_ids: Collection[str],
+    admin_ids: Collection[str],
+) -> set[str]:
+    """Everyone who may resolve `decision`: the hat holder while they are a
+    member, otherwise the workspace admins. Never the requester."""
+    holder = next((r.user_id for r in roles if r.hat == decision.routed_hat), None)
+    pool = {holder} if holder is not None and holder in member_ids else set(admin_ids)
+    return pool - {decision.requested_by}
+
+
+def blocked_reason(
+    decision: Decision,
+    user_id: str,
+    roles: list[ProjectRole],
+    member_ids: Collection[str],
+    admin_ids: Collection[str],
+) -> Blocked | None:
+    """Why an open decision is stuck, as `user_id` should be told: nobody but
+    the requester could approve it, or `user_id` is the requester."""
+    if decision.status != "open":
+        return None
+    if not eligible_resolvers(decision, roles, member_ids, admin_ids):
+        return "no_approver"
+    if user_id == decision.requested_by:
+        return "own_request"
+    return None
+
+
 def can_resolve(
     decision: Decision,
     user_id: str,
@@ -59,7 +96,7 @@ def can_resolve(
     member_ids: set[str],
     is_admin: bool,
 ) -> bool:
-    if decision.status != "open":
+    if decision.status != "open" or user_id == decision.requested_by:
         return False
     holder = next((r.user_id for r in roles if r.hat == decision.routed_hat), None)
     if holder is not None and holder in member_ids:

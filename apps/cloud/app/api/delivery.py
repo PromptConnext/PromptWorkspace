@@ -9,7 +9,7 @@ writes answer 503 `delivery_store_unavailable`.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import datetime
 from functools import partial
 from typing import Literal
@@ -32,6 +32,8 @@ from app.delivery.decisions import (
     STAGE_OF,
     TITLE_OF,
     ApprovalState,
+    Blocked,
+    blocked_reason,
     can_resolve,
     content_hash,
     latest_decision,
@@ -204,6 +206,10 @@ class DecisionBase(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     can_resolve: bool
+    # Why an open decision is stuck for this caller: "no_approver" (nobody but
+    # the requester could approve it: assign the hat to someone else) or
+    # "own_request" (the caller asked; someone else approves).
+    blocked: Blocked | None = None
 
 
 class DecisionOut(DecisionBase):
@@ -263,6 +269,7 @@ def decision_out(
     roles,
     member_ids: set[str],
     is_admin: bool,
+    admin_ids: Collection[str] = frozenset(),
     hashes: dict[str, str | None] | None = None,
     with_content: bool = True,
 ) -> DecisionOut:
@@ -274,6 +281,7 @@ def decision_out(
         **decision.model_dump(exclude={"subject_content"}),
         subject_content=decision.subject_content if with_content else None,
         can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
+        blocked=blocked_reason(decision, user_id, roles, member_ids, admin_ids),
         is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
     )
 
@@ -293,6 +301,13 @@ def _routing_context(
     off the page still reads as a non-member."""
     roles = repo.list_project_roles(project.id)
     return roles, {m.user_id for m in members} | {user_id}, role == Role.admin
+
+
+def admin_ids_of(members: list[WorkspaceMember], user_id: str, is_admin: bool) -> set[str]:
+    """The workspace admins on the member page, plus the caller when they are
+    one (see `_routing_context` on the page limit)."""
+    ids = {m.user_id for m in members if m.role == Role.admin}
+    return ids | {user_id} if is_admin else ids
 
 
 def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
@@ -348,7 +363,7 @@ def _read_listing(
     project, role, members = require_project_members(repo, project_id, user)
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
-                  is_admin=is_admin)
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     listing = _listing(repo.list_decisions(project_id), stage_hashes(repo, project_id), out)
     return listing, roles
 
@@ -407,7 +422,7 @@ def request_decision(
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
-                  is_admin=is_admin)
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
 
     try:
         decisions = repo.list_decisions(project_id)
@@ -464,6 +479,8 @@ def resolve_decision(
     if decision.status != "open":
         raise HTTPException(status_code=409, detail="decision_not_open")
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
+    if decision.requested_by == user.id:
+        raise HTTPException(status_code=403, detail="self_approval_not_allowed")
     if not can_resolve(decision, user.id, roles, member_ids, is_admin):
         raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
     current = current_hash(repo, project_id, decision.subject_stage)
@@ -496,5 +513,5 @@ def resolve_decision(
             # committed approval into a 500.
             logger.exception("approval mirror sync failed for project=%s", project_id)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
-                  is_admin=is_admin)
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     return _mutation_out(resolved, after, hashes, out)

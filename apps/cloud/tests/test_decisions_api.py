@@ -154,7 +154,7 @@ def test_plan_approval_marks_the_spec_approved_by_the_steward(client, project):
 def test_only_the_routed_person_resolves(client, project):
     client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
                headers=ALICE)
-    did = _request(client, project, "intent_approval", headers=ALICE).json()["id"]
+    did = _request(client, project, "intent_approval", headers=BOB).json()["id"]
 
     res = _resolve(client, project, did, headers=ALICE)
 
@@ -742,3 +742,28 @@ def test_assigning_and_clearing_a_hat_leaves_receipts(client, project):
 
     assert [(e, a) for _, e, a in _events(client, project)] == [
         ("role.assigned", "alice"), ("role.cleared", "alice")]
+
+
+def test_the_requester_cannot_approve_their_own_request(client, project):
+    did = _request(client, project, "intent_approval", headers=ALICE).json()["id"]
+
+    res = _resolve(client, project, did, headers=ALICE)
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "self_approval_not_allowed"
+
+
+def test_a_request_nobody_else_can_approve_says_so(client, project):
+    # Alice is the only admin and no hat is assigned: only Alice could approve.
+    body = _request(client, project, "intent_approval", headers=ALICE).json()
+    assert body["can_resolve"] is False and body["blocked"] == "no_approver"
+
+
+def test_the_requester_is_told_it_is_their_own_request(client, project):
+    client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+               headers=ALICE)
+    body = _request(client, project, "intent_approval", headers=ALICE).json()
+    assert body["blocked"] == "own_request"
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()
+    assert listing["decisions"][0]["blocked"] is None
+    assert listing["decisions"][0]["can_resolve"] is True

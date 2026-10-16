@@ -5,7 +5,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.delivery.decisions import approval_state, can_resolve, content_hash
+from app.delivery.decisions import (
+    approval_state,
+    blocked_reason,
+    can_resolve,
+    content_hash,
+    eligible_resolvers,
+)
 from app.models.schemas import Decision, ProjectRole, utcnow
 
 
@@ -74,3 +80,31 @@ def test_a_holder_who_left_the_workspace_falls_back_to_admins():
 
 def test_resolved_decisions_cannot_be_resolved_again():
     assert not can_resolve(_decision("approved"), "admin", [], {"admin"}, is_admin=True)
+
+
+def test_the_requester_never_resolves_their_own_decision():
+    d = _decision()  # requested_by="u"
+    assert not can_resolve(d, "u", [], {"u"}, is_admin=True)
+    assert not can_resolve(d, "u", [_role("u")], {"u"}, is_admin=False)
+
+
+def test_eligible_resolvers_exclude_the_requester():
+    d = _decision()
+    assert eligible_resolvers(d, [], {"u", "a1", "a2"}, {"u", "a1", "a2"}) == {"a1", "a2"}
+    assert eligible_resolvers(d, [_role("steve")], {"steve"}, {"a1"}) == {"steve"}
+    assert eligible_resolvers(d, [_role("u")], {"u", "a1"}, {"a1"}) == set()
+
+
+def test_a_solo_admin_request_has_no_approver():
+    d = _decision()
+    assert blocked_reason(d, "u", [], {"u"}, {"u"}) == "no_approver"
+
+
+def test_the_requester_sees_own_request_when_someone_else_can_approve():
+    d = _decision()
+    assert blocked_reason(d, "u", [], {"u", "a1"}, {"a1"}) == "own_request"
+    assert blocked_reason(d, "a1", [], {"u", "a1"}, {"a1"}) is None
+
+
+def test_a_resolved_decision_is_never_blocked():
+    assert blocked_reason(_decision("approved"), "u", [], {"u"}, {"u"}) is None

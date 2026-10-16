@@ -105,7 +105,7 @@ def test_gate_on_requires_rules_tasks_and_an_approved_current_plan(monkeypatch):
         assert client.app.state.github_client.created_repos == []
 
         did = client.post(f"/projects/{pid}/decisions", json={"kind": "plan_approval"},
-                          headers=ALICE).json()["id"]
+                          headers=BOB).json()["id"]
         client.post(f"/projects/{pid}/decisions/{did}/resolve",
                     json={"outcome": "approved"}, headers=ALICE)
 
