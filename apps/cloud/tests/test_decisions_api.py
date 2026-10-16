@@ -806,3 +806,40 @@ def test_only_admins_erase_and_a_reason_is_required(client, project):
     assert _erase(client, project, did, headers=BOB).status_code == 403
     assert _erase(client, project, did, reason="  ").json()["detail"] == "reason_required"
     assert _erase(client, project, "nope").status_code == 404
+
+
+@pytest.fixture
+def mailer(client):
+    from app.decision_email import RecordingDecisionMailer
+
+    client.app.state.decision_mailer = RecordingDecisionMailer()
+    return client.app.state.decision_mailer
+
+
+def test_a_request_emails_the_people_who_can_decide(client, project, mailer):
+    _request(client, project, "intent_approval")  # Bob asks; admin Alice decides
+
+    ((to, subject, _),) = mailer.sent
+    assert to == ["alice@promptworkspace.local"]
+    assert subject.startswith("[PromptWorkspace] Approve the intent")
+
+
+def test_a_request_nobody_else_can_approve_sends_no_email(client, project, mailer):
+    _request(client, project, "intent_approval", headers=ALICE)
+    assert mailer.sent == []
+
+
+def test_assigning_the_hat_emails_the_new_holder_their_open_decisions(client, project, mailer):
+    _request(client, project, "intent_approval", headers=ALICE)  # blocked: no approver
+    client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+               headers=ALICE)
+
+    ((to, subject, text),) = mailer.sent
+    assert to == ["bob@x.com"]
+    assert "business owner" in subject and "Approve the intent" in text
+
+
+def test_a_repeated_request_for_the_same_document_does_not_email_again(client, project, mailer):
+    _request(client, project, "intent_approval")
+    _request(client, project, "intent_approval")
+    assert len(mailer.sent) == 1

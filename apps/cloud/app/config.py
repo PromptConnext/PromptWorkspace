@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     # accept URL emailed to invitees; also the Supabase invite redirect target.
     web_app_url: str = "http://localhost:3000"
 
+    # Decision notification email (enterprise AI v2.1 D1). The same SMTP relay
+    # Supabase Auth uses (docs/DEPLOYMENT.md "Auth email"); Supabase itself
+    # only sends auth email. Empty host or sender: notifications are off.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+
     # External-tracker credentials (M5). Kept in the server env / secret manager,
     # never in a workspace row (ADR 0010 §5). Outbound Jira uses Basic auth
     # (email + API token).

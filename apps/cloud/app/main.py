@@ -219,6 +219,9 @@ async def lifespan(app: FastAPI):
     from app.invitations_email import build_invitation_mailer
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
+    from app.decision_email import build_decision_mailer
+
+    app.state.decision_mailer = build_decision_mailer(settings)
     logger.info(
         "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,

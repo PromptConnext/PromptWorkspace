@@ -14,11 +14,12 @@ from datetime import datetime
 from functools import partial
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from app.api._guards import require_admin, require_project, require_project_members
 from app.db.repository import DeliveryStoreUnavailable, ReceiptConflict, Repository
+from app.delivery import notices
 from app.delivery.approvals import (
     current_hash,
     plan_state,
@@ -36,6 +37,7 @@ from app.delivery.decisions import (
     blocked_reason,
     can_resolve,
     content_hash,
+    eligible_resolvers,
     latest_decision,
 )
 from app.delivery.ledger import append_receipt, sync_decision_receipts
@@ -156,11 +158,20 @@ def get_project_roles(
     return _roles_out(repo.list_project_roles(project_id))
 
 
+def _email(request: Request, background: BackgroundTasks,
+           to: list[str], message: tuple[str, str]) -> None:
+    """Queue one notification after the response; never fails the request."""
+    if to:
+        background.add_task(request.app.state.decision_mailer.send, to, *message)
+
+
 @router.put("/projects/{project_id}/roles/{hat}", response_model=list[ProjectRoleOut])
 def put_project_role(
     project_id: str,
     hat: Hat,
     body: ProjectRoleUpdate,
+    request: Request,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[ProjectRoleOut]:
@@ -182,6 +193,15 @@ def put_project_role(
     except Exception:
         # The hat is set; a lost receipt is logged, not a failed request.
         logger.exception("role receipt failed, project=%s hat=%s", project_id, hat)
+    if body.user_id is not None:
+        waiting = [d for d in repo.list_decisions(project_id)
+                   if d.status == "open" and d.routed_hat == hat
+                   and d.requested_by != body.user_id]
+        if waiting:
+            members = repo.list_members(project.workspace_id)
+            link = notices.decision_link(request.app.state.settings.web_app_url, waiting[0])
+            _email(request, background, notices.recipients({body.user_id}, members),
+                   notices.assigned(waiting, project.name, link, hat))
     return _roles_out(repo.list_project_roles(project_id))
 
 
@@ -408,6 +428,8 @@ def get_delivery_overview(
 def request_decision(
     project_id: str,
     body: DecisionRequest,
+    request: Request,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
@@ -456,6 +478,11 @@ def request_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     sync_decision_receipts(repo, project_id, [decision, *after])
+    resolvers = eligible_resolvers(decision, roles, member_ids,
+                                   admin_ids_of(members, user.id, is_admin))
+    link = notices.decision_link(request.app.state.settings.web_app_url, decision)
+    _email(request, background, notices.recipients(resolvers, members),
+           notices.requested(decision, project.name, link))
     return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
 
 
