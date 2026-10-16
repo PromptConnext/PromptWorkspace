@@ -10,6 +10,12 @@ HAT_LABEL = {"business_owner": "business owner", "tech_steward": "tech steward"}
 _PREFIX = "[PromptWorkspace]"
 
 
+def _line(text: str) -> str:
+    """One header-safe line: CR/LF in a name would make EmailMessage refuse
+    every subject."""
+    return text.replace("\r", " ").replace("\n", " ")
+
+
 def decision_link(web_app_url: str, decision: Decision) -> str:
     base = web_app_url.rstrip("/")
     return f"{base}/w/{decision.workspace_id}/p/{decision.project_id}?tab=decisions"
@@ -20,6 +26,8 @@ def recipients(user_ids: set[str], members: list[WorkspaceMember]) -> list[str]:
 
 
 def requested(decision: Decision, project_name: str, link: str) -> tuple[str, str]:
+    project_name = _line(project_name)
+    decision = decision.model_copy(update={"title": _line(decision.title)})
     return (
         f"{_PREFIX} {decision.title} — {project_name}",
         f"A decision in {project_name} is waiting for you as "
@@ -30,7 +38,8 @@ def requested(decision: Decision, project_name: str, link: str) -> tuple[str, st
 
 
 def assigned(decisions: list[Decision], project_name: str, link: str, hat: str) -> tuple[str, str]:
-    titles = "\n".join(f"- {d.title}" for d in decisions)
+    project_name = _line(project_name)
+    titles = "\n".join(f"- {_line(d.title)}" for d in decisions)
     return (
         f"{_PREFIX} You are now {HAT_LABEL[hat]} — {project_name}",
         f"You were made {HAT_LABEL[hat]} of {project_name}. "
@@ -39,6 +48,8 @@ def assigned(decisions: list[Decision], project_name: str, link: str, hat: str) 
 
 
 def reminder(decision: Decision, project_name: str, link: str) -> tuple[str, str]:
+    project_name = _line(project_name)
+    decision = decision.model_copy(update={"title": _line(decision.title)})
     return (
         f"{_PREFIX} Reminder: {decision.title} — {project_name}",
         f"This decision in {project_name} expires soon: {decision.title}.\n\n"
@@ -47,6 +58,8 @@ def reminder(decision: Decision, project_name: str, link: str) -> tuple[str, str
 
 
 def expired(decision: Decision, project_name: str, link: str) -> tuple[str, str]:
+    project_name = _line(project_name)
+    decision = decision.model_copy(update={"title": _line(decision.title)})
     return (
         f"{_PREFIX} Expired: {decision.title} — {project_name}",
         f"Nobody answered your request in {project_name} in time: {decision.title}. "

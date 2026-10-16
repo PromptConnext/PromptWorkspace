@@ -74,3 +74,15 @@ def test_starttls_verifies_the_relay_certificate(monkeypatch):
     assert SmtpDecisionMailer(s).send(["a@x.com"], "s", "t") is True
     assert seen["context"].verify_mode == ssl.CERT_REQUIRED
     assert seen["context"].check_hostname is True
+
+
+def test_line_breaks_in_a_project_or_decision_name_cannot_reach_a_subject():
+    d = _decision().model_copy(update={"title": "Plan\r\nBcc: x@y.com"})
+    for subject, _ in (
+        notices.requested(d, "Clinic\nbooking", "https://l"),
+        notices.reminder(d, "Clinic\nbooking", "https://l"),
+        notices.expired(d, "Clinic\nbooking", "https://l"),
+        notices.assigned([d], "Clinic\nbooking", "https://l", "tech_steward"),
+    ):
+        assert "\r" not in subject and "\n" not in subject
+    assert "Clinic booking" in notices.requested(d, "Clinic\nbooking", "l")[0]
