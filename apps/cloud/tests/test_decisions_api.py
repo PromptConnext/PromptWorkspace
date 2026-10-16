@@ -883,7 +883,7 @@ def test_asking_again_replaces_an_overdue_request(client, project):
     assert repo.get_decision(project, old).status == "expired"
 
 
-def test_a_second_resolve_of_a_decision_approved_meanwhile_answers_409(client, project, monkeypatch):
+def test_a_second_resolve_of_a_decision_approved_meanwhile_is_409(client, project, monkeypatch):
     repo = client.app.state.repository
     did = _request(client, project, "intent_approval").json()["id"]
     stale = repo.list_decisions(project)  # both resolvers read it open
