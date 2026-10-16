@@ -805,8 +805,10 @@ class Repository(abc.ABC):
     def update_open_decision(
         self, project_id: str, decision_id: str, changes: dict
     ) -> Decision | None:
-        """Apply `changes` (a subset of Decision fields: status, resolved_at,
-        reminded_at) only while the decision is still open; return the updated
+        """Apply `changes` (a subset of Decision fields: status, rationale,
+        resolved_by, resolved_at, reminded_at) only while the decision is
+        still open (compare-and-set: of two concurrent writers one gets
+        None); return the updated
         decision, or None when it is no longer open or does not exist. Raises
         DeliveryStoreUnavailable when the table is missing."""
 

@@ -16,9 +16,9 @@ from pydantic import BaseModel
 from app.api._guards import member_role
 from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
-from app.delivery.decisions import can_resolve
+from app.delivery.decisions import can_resolve, is_overdue
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import AssignedTask, Role, TaskStatus, WorkspaceMember
+from app.models.schemas import AssignedTask, Role, TaskStatus, WorkspaceMember, utcnow
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -68,7 +68,9 @@ def list_my_decisions(
         members: list[WorkspaceMember] | None = None
         role: Role | None = None
         for project in repo.list_projects_by_workspace(workspace.id):
-            decisions = [d for d in repo.list_decisions(project.id) if d.status == "open"]
+            now = utcnow()
+            decisions = [d for d in repo.list_decisions(project.id)
+                         if d.status == "open" and not is_overdue(d, now)]
             if not decisions:
                 continue
             if members is None:

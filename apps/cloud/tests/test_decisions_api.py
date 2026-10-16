@@ -327,13 +327,20 @@ def _after_save_decision(monkeypatch, repo, then):
     """Run `then()` right after the route's decision write commits, to stand
     in for whatever else happens while the request is still running."""
     save = repo.save_decision
+    update = repo.update_open_decision
 
     def save_then(decision):
         saved = save(decision)
         then()
         return saved
 
+    def update_then(*args, **kwargs):
+        updated = update(*args, **kwargs)  # the resolve route's compare-and-set write
+        then()
+        return updated
+
     monkeypatch.setattr(repo, "save_decision", save_then)
+    monkeypatch.setattr(repo, "update_open_decision", update_then)
 
 
 def _break_stage_reads(monkeypatch, repo, boom):
@@ -874,3 +881,35 @@ def test_asking_again_replaces_an_overdue_request(client, project):
 
     assert new != old
     assert repo.get_decision(project, old).status == "expired"
+
+
+def test_a_second_resolve_of_a_decision_approved_meanwhile_answers_409(client, project, monkeypatch):
+    repo = client.app.state.repository
+    did = _request(client, project, "intent_approval").json()["id"]
+    stale = repo.list_decisions(project)  # both resolvers read it open
+    assert _resolve(client, project, did).status_code == 200
+    monkeypatch.setattr(repo, "list_decisions", lambda _pid: stale)
+
+    res = _resolve(client, project, did, outcome="rejected", rationale="No")
+
+    assert res.status_code == 409 and res.json()["detail"] == "decision_not_open"
+    monkeypatch.undo()
+    assert repo.get_decision(project, did).status == "approved"
+
+
+def test_a_decision_carries_its_deadline_and_reminder(client, project):
+    body = _request(client, project, "intent_approval").json()
+    assert body["expires_at"] is not None
+    assert "reminded_at" in body and body["reminded_at"] is None
+
+
+def test_an_overdue_open_decision_lists_unresolvable_and_is_not_in_the_inbox(client, project):
+    repo = client.app.state.repository
+    did = _request(client, project, "intent_approval").json()["id"]
+    assert client.get("/me/decisions", headers=ALICE).json() != []
+    d = repo.get_decision(project, did)
+    repo.save_decision(d.model_copy(update={"expires_at": utcnow() - timedelta(minutes=1)}))
+
+    listed = client.get(f"/projects/{project}/decisions", headers=ALICE).json()["decisions"]
+    assert [x["can_resolve"] for x in listed if x["id"] == did] == [False]
+    assert client.get("/me/decisions", headers=ALICE).json() == []

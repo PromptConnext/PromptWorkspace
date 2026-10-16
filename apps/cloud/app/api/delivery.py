@@ -195,14 +195,18 @@ def put_project_role(
         # The hat is set; a lost receipt is logged, not a failed request.
         logger.exception("role receipt failed, project=%s hat=%s", project_id, hat)
     if body.user_id is not None:
-        waiting = [d for d in repo.list_decisions(project_id)
-                   if d.status == "open" and d.routed_hat == hat
-                   and d.requested_by != body.user_id]
-        if waiting:
-            members = repo.list_members(project.workspace_id)
-            link = notices.decision_link(request.app.state.settings.web_app_url, waiting[0])
-            _email(request, background, notices.recipients({body.user_id}, members),
-                   notices.assigned(waiting, project.name, link, hat))
+        try:
+            waiting = [d for d in repo.list_decisions(project_id)
+                       if d.status == "open" and d.routed_hat == hat
+                       and d.requested_by != body.user_id]
+            if waiting:
+                members = repo.list_members(project.workspace_id)
+                link = notices.decision_link(request.app.state.settings.web_app_url, waiting[0])
+                _email(request, background, notices.recipients({body.user_id}, members),
+                       notices.assigned(waiting, project.name, link, hat))
+        except Exception:
+            # The hat is set; a failed notice is logged, not a failed request.
+            logger.exception("hat assignment email failed, project=%s hat=%s", project_id, hat)
     return _roles_out(repo.list_project_roles(project_id))
 
 
@@ -227,6 +231,8 @@ class DecisionBase(BaseModel):
     resolved_by: str | None
     created_at: datetime
     resolved_at: datetime | None
+    expires_at: datetime | None = None
+    reminded_at: datetime | None = None
     can_resolve: bool
     # Why an open decision is stuck for this caller: "no_approver" (nobody but
     # the requester could approve it: assign the hat to someone else) or
@@ -291,7 +297,7 @@ def decision_out(
     roles,
     member_ids: set[str],
     is_admin: bool,
-    admin_ids: Collection[str] = frozenset(),
+    admin_ids: Collection[str],
     hashes: dict[str, str | None] | None = None,
     with_content: bool = True,
 ) -> DecisionOut:
@@ -302,7 +308,9 @@ def decision_out(
     return DecisionOut(
         **decision.model_dump(exclude={"subject_content"}),
         subject_content=decision.subject_content if with_content else None,
-        can_resolve=can_resolve(decision, user_id, roles, member_ids, is_admin),
+        # An overdue decision the sweep has not closed yet cannot be answered.
+        can_resolve=not is_overdue(decision, utcnow())
+        and can_resolve(decision, user_id, roles, member_ids, is_admin),
         blocked=blocked_reason(decision, user_id, roles, member_ids, admin_ids),
         is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
     )
@@ -460,13 +468,18 @@ def request_decision(
             if existing.kind != body.kind or existing.status != "open":
                 continue
             if is_overdue(existing, utcnow()):
-                after[i] = repo.save_decision(existing.model_copy(
-                    update={"status": "expired", "resolved_at": utcnow()}))
+                closed = repo.update_open_decision(
+                    project_id, existing.id, {"status": "expired", "resolved_at": utcnow()})
+                if closed is not None:  # None: resolved since the read
+                    after[i] = closed
                 continue
             if existing.subject_hash == current:
                 return _mutation_out(existing, after, _hashes_after_write(repo, project_id), out)
-            after[i] = repo.save_decision(existing.model_copy(
-                update={"status": "withdrawn", "resolved_by": user.id, "resolved_at": utcnow()}))
+            closed = repo.update_open_decision(
+                project_id, existing.id,
+                {"status": "withdrawn", "resolved_by": user.id, "resolved_at": utcnow()})
+            if closed is not None:
+                after[i] = closed
         decision = repo.save_decision(
             Decision(
                 project_id=project_id,
@@ -485,11 +498,15 @@ def request_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     sync_decision_receipts(repo, project_id, [decision, *after])
-    resolvers = eligible_resolvers(decision, roles, member_ids,
-                                   admin_ids_of(members, user.id, is_admin))
-    link = notices.decision_link(request.app.state.settings.web_app_url, decision)
-    _email(request, background, notices.recipients(resolvers, members),
-           notices.requested(decision, project.name, link))
+    try:
+        resolvers = eligible_resolvers(decision, roles, member_ids,
+                                       admin_ids_of(members, user.id, is_admin))
+        link = notices.decision_link(request.app.state.settings.web_app_url, decision)
+        _email(request, background, notices.recipients(resolvers, members),
+               notices.requested(decision, project.name, link))
+    except Exception:
+        # The decision is saved; a failed notice is logged, not a failed request.
+        logger.exception("decision email failed, project=%s decision=%s", project_id, decision.id)
     return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
 
 
@@ -526,18 +543,21 @@ def resolve_decision(
     rationale = (body.rationale or "").strip() or None
     if body.outcome == "rejected" and rationale is None:
         raise HTTPException(status_code=422, detail="rationale_required")
-    resolved = decision.model_copy(
-        update={
-            "status": body.outcome,
-            "rationale": rationale,
-            "resolved_by": user.id,
-            "resolved_at": utcnow(),
-        }
-    )
     try:
-        repo.save_decision(resolved)
+        # Compare-and-set: of two concurrent resolves only one finds it open.
+        resolved = repo.update_open_decision(
+            project_id, decision_id,
+            {
+                "status": body.outcome,
+                "rationale": rationale,
+                "resolved_by": user.id,
+                "resolved_at": utcnow(),
+            },
+        )
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    if resolved is None:
+        raise HTTPException(status_code=409, detail="decision_not_open")
     after = [resolved if d.id == resolved.id else d for d in decisions]
     sync_decision_receipts(repo, project_id, after)
     hashes = _hashes_after_write(repo, project_id)
