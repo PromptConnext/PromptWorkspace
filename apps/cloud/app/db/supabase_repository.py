@@ -122,6 +122,8 @@ _DELIVERY_CHANGES = "pw_delivery_changes"
 _DECISIONS = "pw_decisions"
 _PROJECT_ROLES = "pw_project_roles"
 _RECEIPTS = "pw_receipts"
+# PostgREST caps a response at max_rows (1000); a chain is read page by page.
+_RECEIPT_PAGE = 1000
 # PostgREST's "table not in the schema cache" and Postgres' undefined_table:
 # what a read of pw_stage_inputs returns on a database migration 0003 hasn't
 # reached yet. Matched on the error's `code` attribute rather than by
@@ -1735,19 +1737,27 @@ class SupabaseRepository(Repository):
         return decision
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
-        try:
-            res = (
-                self._table(_RECEIPTS)
-                .select("*")
-                .eq("project_id", project_id)
-                .order("seq")
-                .execute()
-            )
-        except Exception as exc:
-            if self._missing_table(exc):
-                return []
-            raise
-        return [Receipt(**row) for row in res.data or []]
+        receipts: list[Receipt] = []
+        start = 0
+        while True:
+            try:
+                res = (
+                    self._table(_RECEIPTS)
+                    .select("*")
+                    .eq("project_id", project_id)
+                    .order("seq")
+                    .range(start, start + _RECEIPT_PAGE - 1)
+                    .execute()
+                )
+            except Exception as exc:
+                if self._missing_table(exc):
+                    return []
+                raise
+            rows = res.data or []
+            receipts.extend(Receipt(**row) for row in rows)
+            if len(rows) < _RECEIPT_PAGE:
+                return receipts
+            start += _RECEIPT_PAGE
 
     def insert_receipt(self, receipt: Receipt) -> Receipt:
         row = _dump(receipt)

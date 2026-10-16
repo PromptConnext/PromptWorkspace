@@ -48,10 +48,13 @@ def test_a_taken_seq_is_a_conflict(repo: Repository) -> None:
 def test_a_decision_event_is_recorded_once(repo: Repository) -> None:
     ws, admin = h.workspace(repo)
     project = h.project(repo, ws, admin)
-    first = repo.insert_receipt(seal(_draft(project, ws, subject_id="d-1"), None))
+    sid = new_id()
+    first = repo.insert_receipt(seal(_draft(project, ws, subject_id=sid), None))
 
     with pytest.raises(ReceiptConflict):
-        repo.insert_receipt(seal(_draft(project, ws, subject_id="d-1"), first))
+        repo.insert_receipt(seal(_draft(project, ws, subject_id=sid), first))
+
+    assert [r.id for r in repo.list_receipts(project.id)] == [first.id]
 
 
 def test_role_events_may_repeat(repo: Repository) -> None:

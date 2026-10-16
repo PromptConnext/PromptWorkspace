@@ -14,9 +14,10 @@
 -- A decision event is recorded once per decision (partial unique index);
 -- role events repeat.
 --
--- APPEND-ONLY
--- service_role gets SELECT and INSERT only, and a trigger refuses UPDATE and
--- DELETE for every role, including the table owner.
+-- GRANTS
+-- service_role gets SELECT and INSERT only (the default privileges from 0005
+-- are revoked first). Triggers refuse UPDATE, DELETE and TRUNCATE for every
+-- role; the table owner can still disable triggers.
 --
 -- DEPLOY ORDER
 -- Either order. Reads tolerate a missing table (empty chain); writes are
@@ -38,7 +39,7 @@ create table if not exists pw_receipts (
     unique (project_id, seq)
 );
 create unique index if not exists uq_pw_receipts_decision_event
-    on pw_receipts (subject_id, event) where subject_type = 'decision';
+    on pw_receipts (project_id, subject_id, event) where subject_type = 'decision';
 create index if not exists idx_pw_receipts_subject on pw_receipts (subject_id);
 
 create or replace function pw_receipts_append_only() returns trigger
@@ -53,7 +54,13 @@ create trigger pw_receipts_no_update
     before update or delete on pw_receipts
     for each row execute function pw_receipts_append_only();
 
+drop trigger if exists pw_receipts_no_truncate on pw_receipts;
+create trigger pw_receipts_no_truncate
+    before truncate on pw_receipts
+    for each statement execute function pw_receipts_append_only();
+
 alter table pw_receipts enable row level security;
 revoke all on pw_receipts from authenticated;
 revoke all on pw_receipts from anon;
+revoke all on pw_receipts from service_role;
 grant select, insert on pw_receipts to service_role;
