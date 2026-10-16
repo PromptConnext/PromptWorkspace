@@ -735,7 +735,7 @@ export interface Decision {
    *  one per kind. */
   subject_content: string | null;
   routed_hat: ProjectHat;
-  status: "open" | "approved" | "rejected" | "withdrawn";
+  status: "open" | "approved" | "rejected" | "withdrawn" | "expired";
   rationale: string | null;
   requested_by: string;
   resolved_by: string | null;
@@ -744,6 +744,12 @@ export interface Decision {
   can_resolve: boolean;
   /** False once the stage document was edited after this decision was made. */
   is_current: boolean;
+  /** Why an open decision is stuck for me: "own_request" (I asked; someone
+   *  else approves) or "no_approver" (nobody but the requester could). */
+  blocked: "own_request" | "no_approver" | null;
+  /** When an unanswered decision counts as no. Null before the API set it. */
+  expires_at: string | null;
+  reminded_at: string | null;
 }
 
 export interface DecisionsOut {

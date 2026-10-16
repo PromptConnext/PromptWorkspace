@@ -58,7 +58,8 @@ const decision = (o: Partial<Decision>): Decision => ({
   subject_content: "# Tasks\n\nBuild it.",
   routed_hat: "tech_steward", status: "open", rationale: null, requested_by: "u1",
   resolved_by: null, created_at: "2026-10-04T08:00:00Z", resolved_at: null,
-  can_resolve: true, is_current: true, ...o,
+  can_resolve: true, is_current: true,
+  blocked: null, expires_at: null, reminded_at: null, ...o,
 });
 
 describe("DecisionsPanel", () => {
@@ -241,5 +242,39 @@ describe("DecisionsPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the requester someone else approves their request", () => {
+    decisions = {
+      decisions: [decision({ can_resolve: false, blocked: "own_request" })],
+      states: { intent: "none", plan: "pending" },
+    };
+    render(<DecisionsPanel workspaceId="w1" />);
+    expect(
+      screen.getByText("You asked for this. The tech steward approves it, not you."),
+    ).toBeInTheDocument();
+  });
+
+  it("says when nobody else can approve and what to do", () => {
+    decisions = {
+      decisions: [decision({ can_resolve: false, blocked: "no_approver" })],
+      states: { intent: "none", plan: "pending" },
+    };
+    render(<DecisionsPanel workspaceId="w1" />);
+    expect(
+      screen.getByText(
+        "Nobody else can approve this yet. An admin can give the tech steward hat to another member.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("labels an expired decision and offers no actions", () => {
+    decisions = {
+      decisions: [decision({ status: "expired", can_resolve: false })],
+      states: { intent: "none", plan: "none" },
+    };
+    render(<DecisionsPanel workspaceId="w1" />);
+    expect(screen.getByText("Expired, not approved")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 });

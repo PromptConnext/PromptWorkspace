@@ -26,7 +26,8 @@ const decision = (o: Partial<Decision>): Decision => ({
   subject_content: "# Spec", routed_hat: "business_owner", status: "approved",
   rationale: null, requested_by: "u1", resolved_by: "u1",
   created_at: "2026-10-04T08:00:00Z", resolved_at: "2026-10-04T09:00:00Z",
-  can_resolve: false, is_current: true, ...o,
+  can_resolve: false, is_current: true,
+  blocked: null, expires_at: null, reminded_at: null, ...o,
 });
 
 const overview = (): DeliveryOverview => ({

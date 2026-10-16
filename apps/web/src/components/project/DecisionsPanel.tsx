@@ -21,6 +21,7 @@ const STATUS_LABEL: Record<Decision["status"], string> = {
   approved: "Approved",
   rejected: "Changes requested",
   withdrawn: "Withdrawn",
+  expired: "Expired, not approved",
 };
 
 /** The newest approved decision of the same kind made before `decision`:
@@ -100,7 +101,13 @@ function DecisionRow({
       <DecisionSubject decision={decision} previous={previous} />
       {decision.rationale && <p className="mt-2 text-sm text-slate-700">{decision.rationale}</p>}
       {decision.status === "open" && !decision.can_resolve && (
-        <p className="mt-2 text-xs text-slate-500">Waiting on the {HAT_LABEL[decision.routed_hat]}.</p>
+        <p className="mt-2 text-xs text-slate-500">
+          {decision.blocked === "no_approver"
+            ? `Nobody else can approve this yet. An admin can give the ${HAT_LABEL[decision.routed_hat]} hat to another member.`
+            : decision.blocked === "own_request"
+              ? `You asked for this. The ${HAT_LABEL[decision.routed_hat]} approves it, not you.`
+              : `Waiting on the ${HAT_LABEL[decision.routed_hat]}.`}
+        </p>
       )}
       {decision.status === "open" && decision.can_resolve && (
         <div className="mt-3 flex flex-col gap-2">
