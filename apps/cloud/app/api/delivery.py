@@ -36,11 +36,13 @@ from app.delivery.decisions import (
     content_hash,
     latest_decision,
 )
+from app.delivery.ledger import append_receipt, sync_decision_receipts
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
     Decision,
     Project,
     ProjectRole,
+    ReceiptDraft,
     Role,
     WorkspaceMember,
     utcnow,
@@ -167,6 +169,16 @@ def put_project_role(
         repo.set_project_role(project_id, project.workspace_id, hat, body.user_id, user.id)
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    try:
+        append_receipt(repo, ReceiptDraft(
+            project_id=project_id, workspace_id=project.workspace_id,
+            event="role.assigned" if body.user_id else "role.cleared",
+            subject_type="project_role", subject_id=f"{project_id}:{hat}",
+            actor=user.id, body={"hat": hat, "user_id": body.user_id},
+        ))
+    except Exception:
+        # The hat is set; a lost receipt is logged, not a failed request.
+        logger.exception("role receipt failed, project=%s hat=%s", project_id, hat)
     return _roles_out(repo.list_project_roles(project_id))
 
 
@@ -410,7 +422,8 @@ def request_decision(
                 continue
             if existing.subject_hash == current:
                 return _mutation_out(existing, after, _hashes_after_write(repo, project_id), out)
-            after[i] = repo.save_decision(existing.model_copy(update={"status": "withdrawn"}))
+            after[i] = repo.save_decision(existing.model_copy(
+                update={"status": "withdrawn", "resolved_by": user.id, "resolved_at": utcnow()}))
         decision = repo.save_decision(
             Decision(
                 project_id=project_id,
@@ -426,6 +439,7 @@ def request_decision(
         )
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    sync_decision_receipts(repo, project_id, [decision, *after])
     return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
 
 
@@ -471,6 +485,7 @@ def resolve_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     after = [resolved if d.id == resolved.id else d for d in decisions]
+    sync_decision_receipts(repo, project_id, after)
     hashes = _hashes_after_write(repo, project_id)
     if hashes is not None:
         try:

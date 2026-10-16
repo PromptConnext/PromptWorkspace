@@ -110,7 +110,7 @@ def test_requesting_a_decision(client, project):
                           headers=BOB)
     assert res.status_code == 200, res.text
     print("POST /decisions:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 7, repo.calls
+    assert len(repo.calls) <= 9, repo.calls  # 7 + the receipt chain read and write (D1)
     assert membership_reads(repo.calls) == 1, repo.calls
 
 
@@ -122,7 +122,7 @@ def test_approving_a_decision(client, project):
                           json={"outcome": "approved"}, headers=ALICE)
     assert res.status_code == 200, res.text
     print("POST /decisions/{id}/resolve:", len(repo.calls), repo.calls)
-    assert len(repo.calls) <= 10, repo.calls
+    assert len(repo.calls) <= 12, repo.calls  # 10 + the receipt chain read and write (D1)
     assert membership_reads(repo.calls) == 1, repo.calls
     assert repo.calls.count("list_decisions") + repo.calls.count("get_decision") == 1
 

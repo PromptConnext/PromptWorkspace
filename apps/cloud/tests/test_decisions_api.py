@@ -705,3 +705,40 @@ def test_a_caller_neither_read_finds_is_refused(client, project, monkeypatch):
     res = client.get(f"/projects/{project}/decisions", headers=BOB)
     assert res.status_code == 403
     assert res.json()["detail"] == "not_a_member"
+
+
+def _events(client, pid):
+    return [(r.subject_id, r.event, r.actor)
+            for r in client.app.state.repository.list_receipts(pid)]
+
+
+def test_request_and_approval_each_leave_a_receipt(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did)
+
+    assert _events(client, project) == [
+        (did, "decision.requested", "bob"),
+        (did, "decision.approved", "alice"),
+    ]
+
+
+def test_a_new_request_records_the_withdrawal_of_the_old_one_by_its_requester(client, project):
+    repo = client.app.state.repository
+    old = _request(client, project, "intent_approval").json()["id"]
+    repo.upsert_stage_document(project, repo.get_project(project).workspace_id,
+                               "specify", "# Spec\n\nBook two slots.", "alice")
+    new = _request(client, project, "intent_approval").json()["id"]
+
+    assert _events(client, project) == [
+        (old, "decision.requested", "bob"),
+        (old, "decision.withdrawn", "bob"),
+        (new, "decision.requested", "bob"),
+    ]
+
+
+def test_assigning_and_clearing_a_hat_leaves_receipts(client, project):
+    client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": "bob"}, headers=ALICE)
+    client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": None}, headers=ALICE)
+
+    assert [(e, a) for _, e, a in _events(client, project)] == [
+        ("role.assigned", "alice"), ("role.cleared", "alice")]
