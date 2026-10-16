@@ -24,6 +24,12 @@ const STATUS_LABEL: Record<Decision["status"], string> = {
   expired: "Expired, not approved",
 };
 
+/** Words for the resolve errors a person can reach; anything else shows as sent. */
+const RESOLVE_ERROR: Record<string, string> = {
+  decision_expired: "This decision expired before it was answered.",
+  self_approval_not_allowed: "You asked for this decision, so someone else must approve it.",
+};
+
 /** The newest approved decision of the same kind made before `decision`:
  * what its subject is compared against. `all` is newest first. */
 function previousApproved(all: Decision[], decision: Decision): Decision | null {
@@ -71,7 +77,8 @@ function DecisionRow({
       );
       onResolved(snapshot);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not resolve");
+      const message = e instanceof Error ? e.message : "";
+      setError(RESOLVE_ERROR[message] ?? (message || "Could not resolve"));
     } finally {
       setBusy(false);
     }

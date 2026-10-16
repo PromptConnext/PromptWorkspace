@@ -277,4 +277,20 @@ describe("DecisionsPanel", () => {
     expect(screen.getByText("Expired, not approved")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["decision_expired", "This decision expired before it was answered."],
+    [
+      "self_approval_not_allowed",
+      "You asked for this decision, so someone else must approve it.",
+    ],
+  ])("words the %s rejection for a person", async (code, copy) => {
+    decisions = { decisions: [decision({})], states: { intent: "none", plan: "pending" } };
+    resolveDecision.mockRejectedValue(new Error(code));
+    render(<DecisionsPanel workspaceId="w1" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+  });
 });
