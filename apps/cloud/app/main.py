@@ -219,9 +219,11 @@ async def lifespan(app: FastAPI):
     from app.invitations_email import build_invitation_mailer
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
-    from app.decision_email import build_decision_mailer
+    from app.decision_email import NullDecisionMailer, build_decision_mailer
 
     app.state.decision_mailer = build_decision_mailer(settings)
+    if isinstance(app.state.decision_mailer, NullDecisionMailer):
+        logger.info("Decision email disabled: SMTP_HOST or SMTP_FROM not set")
     logger.info(
         "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,

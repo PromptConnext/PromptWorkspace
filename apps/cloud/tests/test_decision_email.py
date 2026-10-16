@@ -53,3 +53,24 @@ def test_an_smtp_failure_is_reported_not_raised(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", boom)
     s = Settings(smtp_host="h", smtp_from="f@x.com")
     assert SmtpDecisionMailer(s).send(["a@x.com"], "s", "t") is False
+
+
+def test_starttls_verifies_the_relay_certificate(monkeypatch):
+    import smtplib
+    import ssl
+
+    seen = {}
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): ...
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self, context=None): seen["context"] = context
+        def login(self, *a): ...
+        def send_message(self, msg): ...
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    s = Settings(smtp_host="h", smtp_from="f@x.com")
+    assert SmtpDecisionMailer(s).send(["a@x.com"], "s", "t") is True
+    assert seen["context"].verify_mode == ssl.CERT_REQUIRED
+    assert seen["context"].check_hostname is True

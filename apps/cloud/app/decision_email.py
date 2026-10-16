@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import ssl
 from email.message import EmailMessage
 from typing import Protocol
 
@@ -49,7 +50,7 @@ class SmtpDecisionMailer:
             return False
         try:
             with smtplib.SMTP(self._s.smtp_host, self._s.smtp_port, timeout=10) as smtp:
-                smtp.starttls()
+                smtp.starttls(context=ssl.create_default_context())
                 if self._s.smtp_user:
                     smtp.login(self._s.smtp_user, self._s.smtp_password)
                 for address in to:
@@ -60,8 +61,8 @@ class SmtpDecisionMailer:
                     msg.set_content(text)
                     smtp.send_message(msg)
             return True
-        except Exception as exc:  # noqa: BLE001 - email must never break a decision
-            logger.warning("decision email not sent (%s recipients): %s", len(to), exc)
+        except Exception:  # noqa: BLE001 - email must never break a decision
+            logger.exception("decision email not sent (%s recipients)", len(to))
             return False
 
 
