@@ -1332,6 +1332,43 @@ class Decision(BaseModel):
     resolved_at: datetime | None = None
 
 
+ReceiptEvent = Literal[
+    "decision.requested",
+    "decision.approved",
+    "decision.rejected",
+    "decision.withdrawn",
+    "decision.expired",
+    "decision.snapshot_erased",
+    "role.assigned",
+    "role.cleared",
+]
+
+
+class ReceiptDraft(BaseModel):
+    """What a receipt records, before it is sealed into a project's chain
+    (enterprise AI v2.1 D1). `body` holds ids, hashes, kinds and statuses
+    only: never document text or free text, which may be personal data."""
+
+    project_id: str
+    workspace_id: str
+    event: ReceiptEvent
+    subject_type: Literal["decision", "project_role"]
+    subject_id: str
+    actor: str
+    body: dict[str, str | int | bool | None] = Field(default_factory=dict)
+
+
+class Receipt(ReceiptDraft):
+    """One link of a project's append-only hash chain (`pw_receipts`).
+    `hash` covers every other field (app/delivery/receipts.py)."""
+
+    id: str = Field(default_factory=new_id)
+    seq: int
+    prev_hash: str
+    hash: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 # --------------------------------------------------------------------------- #
 # Generation (M1, plan 0007) — stage-prompt generation endpoints, still BYO.
 # `generation_runs` is an audit/cost-accounting record, not itself part of
