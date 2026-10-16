@@ -140,6 +140,11 @@ def test_delivery_tables_are_service_only():
     assert {"pw_delivery_changes", "pw_decisions", "pw_project_roles"} <= _SERVICE_ONLY_TABLES
 
 
+MISSING_SNAPSHOTS = {
+    "code": "PGRST205",
+    "message": "Could not find the table 'public.pw_decision_snapshots'",
+}
+
 NO_CONTENT_COLUMN = {
     "code": "PGRST204",
     "message": "Could not find the 'subject_content' column of 'pw_decisions' in the schema cache",
@@ -163,10 +168,9 @@ class _ColumnlessClient(_Client):
                 return super().upsert(payload, **kw)
 
             def execute(self):
-                res = super().execute()
-                if name == "pw_decision_snapshots":  # 0008 not applied: no snapshot rows
-                    res.data = []
-                return res
+                if name == "pw_decision_snapshots":  # pre-0006: no 0008 table either
+                    raise APIError(MISSING_SNAPSHOTS)
+                return super().execute()
 
         return _Q(self, name)
 
@@ -187,8 +191,9 @@ def test_decisions_still_answer_without_the_content_column():
 
     assert saved.subject_content == "# Spec"  # the caller still sees what it asked to save
     assert client.refused == 1
-    (_, payload) = next(u for u in client.upserts if u[0] == "pw_decisions" and "id" in u[1])
-    assert "subject_content" not in payload and payload["id"] == DECISION.id
+    decision_upserts = [p for t, p in client.upserts if t == "pw_decisions"]
+    assert decision_upserts[-1]["id"] == DECISION.id
+    assert "subject_content" not in decision_upserts[-1]
 
 
 def test_a_failure_unrelated_to_the_content_column_still_raises_on_save():
@@ -219,3 +224,39 @@ def test_no_stages_asked_for_is_no_request():
     client = _Client()
     assert _repo(client).list_stage_documents("p", []) == {}
     assert client.executes == 0
+
+
+class _SnapshotWriteClient(_Client):
+    """pw_decisions is fine; writes to pw_decision_snapshots fail with `error`."""
+
+    def table(self, name: str):
+        client = self
+
+        class _Q(_Query):
+            def execute(self):
+                if name == "pw_decision_snapshots":
+                    raise APIError(client.snapshot_error)
+                return super().execute()
+
+        return _Q(self, name)
+
+    snapshot_error: dict = MISSING_SNAPSHOTS
+
+
+def test_a_missing_snapshot_table_keeps_the_text_on_the_decision_row():
+    client = _SnapshotWriteClient()
+    saved = _repo(client).save_decision(DECISION.model_copy(update={"subject_content": "# Spec"}))
+
+    assert saved.subject_content == "# Spec"
+    contents = [p["subject_content"] for t, p in client.upserts if t == "pw_decisions"]
+    assert contents == [None, "# Spec"]
+
+
+def test_a_failed_snapshot_write_keeps_the_text_and_raises():
+    client = _SnapshotWriteClient()
+    client.snapshot_error = {"code": "57014", "message": "statement timeout"}
+    with pytest.raises(APIError):
+        _repo(client).save_decision(DECISION.model_copy(update={"subject_content": "# Spec"}))
+
+    contents = [p["subject_content"] for t, p in client.upserts if t == "pw_decisions"]
+    assert contents == [None, "# Spec"]

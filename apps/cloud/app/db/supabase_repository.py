@@ -22,6 +22,7 @@ writes take the service-role client.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
@@ -119,6 +120,8 @@ _GENERATION_RUNS = "pw_generation_runs"
 _STAGE_DOCUMENTS = "pw_stage_documents"
 _STAGE_INPUTS = "pw_stage_inputs"
 _DELIVERY_CHANGES = "pw_delivery_changes"
+logger = logging.getLogger("promptworkspace.db")
+
 _DECISIONS = "pw_decisions"
 _SNAPSHOTS = "pw_decision_snapshots"
 _PROJECT_ROLES = "pw_project_roles"
@@ -1748,35 +1751,45 @@ class SupabaseRepository(Repository):
             return None
         return self._decision_of(rows[0], self._snapshot_contents([rows[0]["id"]]))
 
-    def save_decision(self, decision: Decision) -> Decision:
-        content = decision.subject_content
-        row = _dump(decision.model_copy(update={"subject_content": None}))
+    def _upsert_decision_row(self, row: dict) -> None:
+        """Upsert one pw_decisions row. Without migration 0006 the database has
+        no `subject_content` column: the row is saved without it."""
         try:
             try:
                 self._table(_DECISIONS).upsert(row, on_conflict="id").execute()
             except Exception as exc:
                 if not self._missing_content_column(exc):
                     raise
-                # Migration 0006 is not applied: save the decision without the
-                # snapshot. The caller keeps the in-memory copy it passed in.
-                row.pop("subject_content", None)
+                row = {k: v for k, v in row.items() if k != "subject_content"}
                 self._table(_DECISIONS).upsert(row, on_conflict="id").execute()
         except Exception as exc:
             if self._missing_table(exc):
                 raise DeliveryStoreUnavailable() from exc
             raise
-        if content is not None:
-            try:
-                self._table(_SNAPSHOTS).upsert(
-                    {"decision_id": decision.id, "project_id": decision.project_id,
-                     "workspace_id": decision.workspace_id, "content": content},
-                    on_conflict="decision_id",
-                    ignore_duplicates=True,  # written once; never replaced or revived
-                ).execute()
-            except Exception as exc:
-                if self._missing_table(exc):
-                    raise DeliveryStoreUnavailable() from exc
-                raise
+
+    def save_decision(self, decision: Decision) -> Decision:
+        content = decision.subject_content
+        row = _dump(decision)
+        self._upsert_decision_row({**row, "subject_content": None})
+        if content is None:
+            return decision
+        try:
+            self._table(_SNAPSHOTS).upsert(
+                {"decision_id": decision.id, "project_id": decision.project_id,
+                 "workspace_id": decision.workspace_id, "content": content},
+                on_conflict="decision_id",
+                ignore_duplicates=True,  # written once; never replaced or revived
+            ).execute()
+        except Exception as exc:
+            # The decision is already committed without its text. Park the text
+            # on the legacy column so a retry or a later read still finds it
+            # (reads fall back to it when no snapshot row exists).
+            self._upsert_decision_row({**row, "subject_content": content})
+            if self._missing_table(exc):
+                # 0008 not applied yet; its backfill moves the text when it is.
+                logger.warning("pw_decision_snapshots missing; kept snapshot on pw_decisions")
+                return decision
+            raise
         return decision
 
     def erase_decision_snapshot(self, project_id: str, decision_id: str, erased_by: str) -> bool:
