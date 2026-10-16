@@ -276,7 +276,7 @@ flowchart LR
     V1["CI: build, tests,<br/>scans, AC tests"]:::platform
     V2["Reviewer / Security /<br/>Architecture agents<br/>(never the builder)"]:::ai
     V3["Evidence Pack +<br/>Trust Score + risk tier<br/>↺ fail: back to ③ (bounded retry)"]:::platform
-    V4{"Risk gate:<br/>auto (T0/T1) or<br/>human approval (T2/T3)"}:::gate
+    V4{"Risk gate:<br/>lane per §5.4 matrix"}:::gate
     V1 --> V2 --> V3 --> V4
   end
 
@@ -391,7 +391,7 @@ Status tags for anything shown outside the company follow the v2.1 plan §3: **P
 | Uncertainty | Developer asks on chat, or guesses | `raise_question` becomes a typed Decision. The Change pauses, others continue |
 | Conflicts | Developers discover them at merge | Prevented by area leases, caught by merge queue plus full CI, resolved by rebase agent or escalated |
 | Verification | Admin drags to Verified | Evidence Pack: CI + acceptance proof + independent agent reviews + Trust Score |
-| Human approval | Implicit and per task | **Risk-tiered**: none for T0, batched for T1, per Change for T2, two people plus code review for T3 |
+| Human approval | Implicit and per task | **Risk-tiered**: none for T0 (at L1+), steward per Change for T1 at L1 (none at L2 with strong evidence), per Change for T2, two people plus code review for T3 |
 | Status source | Clicks and push detection | Events: agent run, CI, gate, merge, deploy |
 | Progress | Tasks done ÷ total | Scenarios proven on a running build ÷ scenarios in scope |
 | Business user role | Writes PRD, watches | Owns intent, answers business questions, accepts outcomes, decides release |
@@ -551,12 +551,12 @@ The **Trust Score** (0–100) is computed by a published, deterministic formula 
 
 | Tier | Typical triggers | Gate |
 |---|---|---|
-| **T0 Routine** | Docs, tests only, copy, styling, no new dependency | Auto-merge when evidence is complete |
-| **T1 Standard** | Feature code inside approved outcomes and areas, Trust ≥ 80 | Auto-merge to `develop`. The steward sees it in the release review (batch), not per PR |
+| **T0 Routine** | Docs, tests only, copy, styling, no new dependency | Pass at L1/L2 when evidence is complete |
+| **T1 Standard** | Feature code inside approved outcomes and areas, Trust ≥ 80 | Escalate at L1; Pass at L2 only with strong evidence and within budget (§5.4). Where it passes, the steward sees it in the release review (batch), not per PR |
 | **T2 Elevated** | New dependency, schema migration, public API change, Trust < 80, any *high* finding accepted | Steward approves this Change from its evidence |
 | **T3 Critical** | Auth, payments, personal data (PDPA/GDPR scope), infra, secrets, policy-tagged requirement | Steward plus a named second approver (DPO, security or business owner), and a human line-by-line review |
 
-Production release is always a human decision, whatever the tiers. The autonomy level (§5.4) can make the whole project stricter (L0 = every Change T2+) and never looser than the policy scope allows.
+Production release is always a human decision, whatever the tiers. The autonomy level (§5.4) can make the whole project stricter (L0 escalates every Change; see §5.4) and never looser than the policy scope allows.
 
 **Business users without implementation detail.** Business owners see Outcomes, scenarios in plain language, Decisions phrased as business choices with a recommendation, the preview, and outcome progress. They never see branches, diffs or Trust Score maths unless they open them. Notifications deep-link to a single decision card that can be answered on a phone.
 
@@ -647,7 +647,7 @@ Rules that hold at every level, in this order, before the matrix is read:
 
 1. Any policy violation → **Keep out**.
 2. Over budget → **Escalate**.
-3. The tier is the maximum of the action's floor (merge ≥ T1, release ≥ T2, production data = T3) and the Change's predicted tier. A merge touching auth, money or personal data is T3.
+3. The tier is the maximum of the action's floor and the Change's predicted tier. Floors: a merge into the release branch (`main`) ≥ T1, a release ≥ T2, production data = T3; a merge into `develop` has no floor beyond the predicted tier. A merge touching auth, money or personal data is T3.
 
 Promotion (L1 → L2) is itself a Decision with a receipt; an incident demotes. The level is a guardrail decision shown on Mission Control.
 
@@ -695,7 +695,8 @@ R = does it · A = accountable / decides · C = consulted · I = informed
 | Tests from scenarios | (none) | I | C | **R** | (none) |
 | Deterministic verification | (none) | I | (none) | (none) | **R** |
 | Agent reviews (code, security, architecture) | (none) | I | (none) | **R** | (none) |
-| T0/T1 approval | (none) | I (batch) | (none) | (none) | **R** (auto) |
+| T0 approval (auto at L1+) | (none) | I (batch) | (none) | (none) | **R** (auto) |
+| T1 approval (steward at L1, auto at L2) | (none) | **A**, R at L1; I (batch) at L2 | (none) | (none) | **R** (auto, L2 only) |
 | T2 approval | (none) | **A**, R | C | (none) | (none) |
 | T3 approval | C / A (if named) | **A**, R | R (code review) | (none) | (none) |
 | Business questions | **A**, R | I | (none) | R (ask) | (none) |
@@ -735,7 +736,7 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 1. A plan with at least 3 user stories produces Changes automatically, with no extra LLM call.
 2. At least 2 Changes run in parallel in GitHub Actions and open PRs without a person touching code.
 3. Every PR shows an Evidence Pack in the web app, with per-scenario proof.
-4. A T0/T1 Change merges with zero human clicks. A T2 Change cannot merge until the steward approves in the Decision Inbox, and that is enforced by branch protection.
+4. A T0 Change merges into `develop` with zero human clicks at L1; a T1 Change escalates at L1. A T2 Change cannot merge until the steward approves in the Decision Inbox, and that is enforced by branch protection.
 5. An agent question reaches the right person and the answer resumes the run.
 6. Mission Control shows outcome progress based on proven scenarios.
 
@@ -747,7 +748,7 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 | **M2** | **Decisions** | `pw_discussions`, admin/member roles | `pw_decisions` (type, options, recommendation, routed_to, status, rationale). Decision Inbox screen. Project hats (business owner, steward) as a project-member column. Email notification. The existing lifecycle routes gain server-side precondition checks (§1.5) |
 | **M3** | **Runner** | Engine adapters (claude-code, codex), `repo_seed.py`, Actions secrets path from ADR 0021, `apps/mcp` | Hand-written `agent.yml` template seeded at provisioning. One adapter first: Claude Code headless with the customer's `ANTHROPIC_API_KEY` secret. Per-repo runner token (minted like the webhook secret) scoped to the change routes. MCP tools `get_change`, `raise_question`, `report_progress`. Cloud dispatches via `workflow_dispatch`. Branch, commits with `T` refs, PR with trailer. Simple lease: Changes from the same phase group are dispatched only after their dependencies merge. Bounded retries (default 2) |
 | **M4** | **Verification and evidence** | Webhook ingest (`workflow_run`, `pull_request`), `pw_artifacts` | Hand-written `verify.yml` per template (build, typecheck, lint, test, `gitleaks`, `npm audit`/`pip-audit`, semgrep default rules). Test naming convention carries scenario IDs, and `evidence.json` maps them. One **Reviewer agent** run on `pull_request` (same runner, different role profile, read-only). `pw_evidence`, Evidence Pack panel, Trust Score v1 (published formula) |
-| **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. Auto-green for T0/T1, Decision for T2/T3 |
+| **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. lane per §5.4 (T0 Pass at L1, T1 Pass at L2 only), Decision for T2/T3 |
 | **M6** | **Mission Control and outcome progress** | `ProgressRollup.tsx`, `pw_deployment_tasks`, Preview tab | Outcome progress from scenario evidence on the latest `develop` build. "Needs you" strip. Live Change states. Release Candidate is a read-only report on the existing Preview tab |
 
 **Slice 1 notes (2026-10-04).** In code, a Change is `DeliveryChange` (`pw_delivery_changes`, `/projects/{id}/delivery-plan`) because `/sync/projects/{id}/changes` already names the sync head. Three M1/M2 items moved: scenario IDs `O<story>.S<n>` move to M4 (nothing consumes them before evidence exists); decision email moves to after M3 (the cloud has no general email transport yet; in-app Inbox only); separation of duties on self-approval waits for real teams (it would block one-person test projects). The create-repository approval gate ships behind `REQUIRE_PLAN_APPROVAL`, on in the trust environment only.
@@ -834,7 +835,7 @@ A logistics company has imported its existing Django repo (plan 0027). Its busin
 
 The Intent agent drafts one outcome with three scenarios, including "exports only the requester's own shipments". The Planning agent reads the codebase baseline, sees an existing `exports/` module, and plans **one** Change: C14, predicted T1. The tech steward approves the plan in one click from the notification: one Change, one known module, predicted T1.
 
-The Builder reuses the existing export helper, adds a view, and adds three tests named after the scenarios. The Reviewer agent notices the queryset is not filtered by tenant in one branch of the code, and the scenario test for "own shipments only" fails. The Builder fixes it on retry 1. The evidence is complete, Trust 92, tier T1: it merges to `develop` with no human action. The business owner gets a notification: *"O7 'CSV export' is proven on staging; try it."* It ships in the Friday release decision with four other outcomes.
+The Builder reuses the existing export helper, adds a view, and adds three tests named after the scenarios. The Reviewer agent notices the queryset is not filtered by tenant in one branch of the code, and the scenario test for "own shipments only" fails. The Builder fixes it on retry 1. The evidence is complete, Trust 92, tier T1, project at L2: it merges to `develop` with no human action (at L1 it would escalate to the steward). The business owner gets a notification: *"O7 'CSV export' is proven on staging; try it."* It ships in the Friday release decision with four other outcomes.
 
 **Human time:** about five minutes. **Traditional equivalent:** a ticket, a grooming discussion, an assignment, a developer day, a code review round-trip and a manual QA pass.
 
