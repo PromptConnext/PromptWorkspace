@@ -2,8 +2,9 @@
 
 Each project has one append-only chain. A receipt's hash is SHA-256 over the
 canonical JSON of every other field, including the previous receipt's hash,
-so editing, removing or reordering any receipt is detectable from the chain
-alone. Pure functions; the store and the recording rules live elsewhere
+so editing, reordering or removing any receipt but the newest is detectable
+from the chain alone; truncating the tail needs an external anchor of the head.
+Pure functions; the store and the recording rules live elsewhere
 (app/db, app/delivery/ledger.py).
 """
 

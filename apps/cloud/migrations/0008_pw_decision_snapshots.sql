@@ -20,10 +20,11 @@
 -- their decision or project (cascade).
 --
 -- DEPLOY ORDER
--- Apply BEFORE deploying the code that writes snapshots here: that code
--- answers 503 delivery_store_unavailable on a request when the table is
--- missing. Code still running from before reads the cleared column as "no
--- snapshot", which the web already renders.
+-- Apply BEFORE deploying the code that writes snapshots here. Code that runs
+-- before this lands keeps the text on the legacy pw_decisions.subject_content
+-- and requests still succeed (see docs/DEPLOYMENT.md). Code still running
+-- from before reads the cleared column as "no snapshot", which the web
+-- already renders.
 
 create table if not exists pw_decision_snapshots (
     decision_id uuid primary key references pw_decisions (id) on delete cascade,
@@ -35,6 +36,9 @@ create table if not exists pw_decision_snapshots (
     erased_by text,
     check ((content is null) = (erased_at is not null))
 );
+
+create index if not exists idx_pw_decision_snapshots_project
+    on pw_decision_snapshots (project_id);
 
 insert into pw_decision_snapshots (decision_id, project_id, workspace_id, content, created_at)
 select id, project_id, workspace_id, subject_content, created_at

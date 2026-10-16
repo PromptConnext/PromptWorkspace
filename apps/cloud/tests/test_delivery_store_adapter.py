@@ -260,3 +260,12 @@ def test_a_failed_snapshot_write_keeps_the_text_and_raises():
 
     contents = [p["subject_content"] for t, p in client.upserts if t == "pw_decisions"]
     assert contents == [None, "# Spec"]
+
+
+def test_listing_decisions_reads_snapshots_by_project_not_by_every_id():
+    row = {**DECISION.model_dump(mode="json"), "decision_id": DECISION.id, "content": "# Spec"}
+    client = _Client(rows=[row])
+    decisions = _repo(client).list_decisions("p")
+
+    assert client.in_filters == []  # no URL that grows with the history
+    assert decisions[0].subject_content == "# Spec"

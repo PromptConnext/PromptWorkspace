@@ -25,23 +25,28 @@ _RANK = {"decision.requested": 0}
 
 
 def expected_events(decision: Decision) -> list[tuple[datetime, ReceiptDraft]]:
-    def draft(event: str, actor: str, at: datetime, **extra) -> tuple[datetime, ReceiptDraft]:
+    def draft(
+        event: str, actor: str, at: datetime | None, **extra
+    ) -> tuple[datetime, ReceiptDraft]:
+        # `at` None: the event's real time is unknown (a decision closed before
+        # resolved_at was recorded). The body says so rather than inventing a
+        # time; created_at is only the sort key.
         body: dict[str, str | int | bool | None] = {
             "kind": decision.kind,
             "subject_stage": decision.subject_stage,
             "subject_hash": decision.subject_hash,
             "routed_hat": decision.routed_hat,
-            "occurred_at": stamp(at),
+            "occurred_at": stamp(at) if at is not None else None,
             **extra,
         }
-        return at, ReceiptDraft(
+        return at or decision.created_at, ReceiptDraft(
             project_id=decision.project_id, workspace_id=decision.workspace_id,
             event=event, subject_type="decision", subject_id=decision.id,
             actor=actor, body=body,
         )
 
     events = [draft("decision.requested", decision.requested_by, decision.created_at)]
-    resolved_at = decision.resolved_at or decision.created_at
+    resolved_at = decision.resolved_at
     if decision.status in ("approved", "rejected"):
         rationale = (
             {"rationale_sha256": sha256_text(decision.rationale)} if decision.rationale else {}

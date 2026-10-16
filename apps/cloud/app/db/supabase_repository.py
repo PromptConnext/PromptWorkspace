@@ -1691,18 +1691,17 @@ class SupabaseRepository(Repository):
                 raise DeliveryStoreUnavailable() from exc
             raise
 
-    def _snapshot_contents(self, decision_ids: list[str]) -> dict[str, str | None]:
-        """decision_id -> stored text (None when erased). Ids with no row are
-        absent, so the caller falls back to the pre-0008 column."""
-        if not decision_ids:
-            return {}
+    def _snapshot_contents(
+        self, *, project_id: str | None = None, decision_id: str | None = None
+    ) -> dict[str, str | None]:
+        """decision_id -> stored text (None when erased), for a whole project
+        (one filter, however long its history) or one decision. Ids with no row
+        are absent, so the caller falls back to the pre-0008 column."""
         try:
-            res = (
-                self._table(_SNAPSHOTS)
-                .select("decision_id,content")
-                .in_("decision_id", decision_ids)
-                .execute()
-            )
+            query = self._table(_SNAPSHOTS).select("decision_id,content")
+            query = (query.eq("project_id", project_id) if project_id is not None
+                     else query.eq("decision_id", decision_id))
+            res = query.execute()
         except Exception as exc:
             if self._missing_table(exc):
                 return {}
@@ -1729,7 +1728,7 @@ class SupabaseRepository(Repository):
                 return []
             raise
         rows = res.data or []
-        snapshots = self._snapshot_contents([r["id"] for r in rows])
+        snapshots = self._snapshot_contents(project_id=project_id) if rows else {}
         return [self._decision_of(r, snapshots) for r in rows]
 
     def update_open_decision(
@@ -1753,7 +1752,7 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         if not rows:
             return None
-        return self._decision_of(rows[0], self._snapshot_contents([rows[0]["id"]]))
+        return self._decision_of(rows[0], self._snapshot_contents(decision_id=rows[0]["id"]))
 
     def list_due_decisions(self, until: datetime, limit: int = 200) -> list[Decision]:
         try:
@@ -1789,7 +1788,7 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         if not rows:
             return None
-        return self._decision_of(rows[0], self._snapshot_contents([rows[0]["id"]]))
+        return self._decision_of(rows[0], self._snapshot_contents(decision_id=rows[0]["id"]))
 
     def _upsert_decision_row(self, row: dict) -> None:
         """Upsert one pw_decisions row. Without migration 0006 the database has

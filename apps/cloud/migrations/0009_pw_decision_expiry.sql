@@ -9,7 +9,9 @@
 -- reminded_at: when the one "expires soon" email went out.
 -- status gains 'expired', written by the sweep (app/delivery/sweep.py).
 -- Decisions already open get a full term from today, so nothing expires on
--- the first sweep after this migration.
+-- the first sweep after this migration. The column also gets a default of
+-- 7 days, so a decision inserted by old code between this migration and the
+-- new deploy still expires.
 -- Idempotent: every statement can run twice.
 --
 -- GRANTS
@@ -25,6 +27,8 @@ alter table pw_decisions add column if not exists reminded_at timestamptz;
 
 update pw_decisions set expires_at = now() + interval '7 days'
 where status = 'open' and expires_at is null;
+
+alter table pw_decisions alter column expires_at set default now() + interval '7 days';
 
 alter table pw_decisions drop constraint if exists pw_decisions_status_check;
 alter table pw_decisions add constraint pw_decisions_status_check

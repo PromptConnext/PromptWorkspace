@@ -112,3 +112,17 @@ def test_append_receipt_gives_up_after_the_attempts():
                          subject_type="project_role", subject_id="p:tech_steward", actor="a")
     with pytest.raises(ReceiptConflict):
         append_receipt(repo, draft, attempts=2)
+
+
+def test_a_legacy_withdrawal_with_no_resolved_at_records_no_invented_time():
+    repo = InMemoryRepository()
+    d = _decision("withdrawn", resolved_by="bob")  # closed before resolved_at was recorded
+    events = expected_events(d)
+    assert events[0][1].body["occurred_at"] is not None
+    assert events[1][1].event == "decision.withdrawn"
+    assert events[1][1].body["occurred_at"] is None
+
+    sync_decision_receipts(repo, "p", [d])
+    chain = repo.list_receipts("p")
+    assert [r.event for r in chain] == ["decision.requested", "decision.withdrawn"]
+    assert verify_chain(chain).ok
