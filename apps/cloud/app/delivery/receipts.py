@@ -22,7 +22,10 @@ GENESIS = "0" * 64
 def stamp(at: datetime) -> str:
     """The one timestamp form a hash covers: UTC, microseconds, `+00:00`.
     Postgres timestamptz keeps microseconds, so a receipt read back from the
-    store stamps to the same string it was sealed with."""
+    store stamps to the same string it was sealed with. Naive datetimes are
+    refused because their meaning depends on the host's zone."""
+    if at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError("receipt timestamps must be timezone-aware")
     return at.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 

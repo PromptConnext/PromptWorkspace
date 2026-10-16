@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app.delivery.receipts import GENESIS, receipt_hash, seal, stamp, verify_chain
 from app.models.schemas import ReceiptDraft
 
@@ -79,3 +81,8 @@ def test_the_hash_ignores_dict_key_order():
     r = seal(_draft(a="1", b="2"), None)
     reordered = r.model_copy(update={"body": {"b": "2", "a": "1"}})
     assert receipt_hash(reordered) == r.hash
+
+
+def test_a_naive_timestamp_is_refused():
+    with pytest.raises(ValueError):
+        seal(_draft(), None, at=datetime(2026, 10, 14, 19, 0, 0))
