@@ -432,4 +432,34 @@ describe("StageInputForm — answers stored in the cloud", () => {
       users: "Drafted users",
     });
   });
+
+  it("drafts a select field from its options and flattens multi-line answers for inputs", async () => {
+    serverHas({});
+    prefillStage.mockResolvedValue({
+      fields: { project_type: "Web application", testing: "Jest\nPlaywright" },
+      sources: ["spec"],
+    });
+    const fields: StageField[] = [
+      {
+        key: "project_type",
+        label: "Project type",
+        type: "select",
+        options: ["Web application", "CLI tool"],
+      },
+      { key: "testing", label: "Testing", type: "text" },
+    ];
+    render(<Harness withPrefill fields={fields} />);
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    await settle();
+
+    expect(screen.getByLabelText(/Project type/).textContent).toContain("Web application");
+    expect((screen.getByLabelText(/Testing/) as HTMLInputElement).value).toBe("Jest; Playwright");
+    const sent = prefillStage.mock.calls[0][2] as { key: string; options?: string[] }[];
+    expect(sent.find((f) => f.key === "project_type")?.options).toEqual([
+      "Web application",
+      "CLI tool",
+    ]);
+  });
 });

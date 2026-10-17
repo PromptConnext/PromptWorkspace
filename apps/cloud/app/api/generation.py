@@ -405,6 +405,8 @@ class PrefillField(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     label: str = Field(min_length=1, max_length=200)
     hint: str = Field(default="", max_length=400)
+    # A select's choices: the model must answer with one of them.
+    options: list[str] = Field(default_factory=list, max_length=24)
 
 
 class PrefillRequest(BaseModel):

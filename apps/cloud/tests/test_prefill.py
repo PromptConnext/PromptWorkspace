@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.generation.managed import MANAGED_WORKSPACE_MARKER
-from app.generation.prefill import parse_prefill
+from app.generation.prefill import build_prompt, parse_prefill
 from app.generation.prompts import CURRENT_SERVICES_RULE
 from app.generation.service import FakeGenerationProvider
 from app.main import create_app
@@ -224,3 +224,24 @@ def test_parse_prefill_normalises_what_models_actually_return():
 
 def test_parse_prefill_returns_none_when_there_is_no_json_at_all():
     assert parse_prefill("no object here", [{"key": "a", "label": "A"}]) is None
+
+
+SELECT_FIELDS = [
+    {
+        "key": "project_type",
+        "label": "Project type",
+        "options": ["Web application", "CLI tool"],
+    }
+]
+
+
+def test_prefill_select_value_must_be_an_option():
+    matched = parse_prefill('{"project_type": "web application"}', SELECT_FIELDS)
+    assert matched == {"project_type": "Web application"}
+
+    assert parse_prefill('{"project_type": "Website"}', SELECT_FIELDS) == {}
+
+
+def test_prefill_prompt_lists_options():
+    prompt = build_prompt(SELECT_FIELDS, "some source")
+    assert "Web application | CLI tool" in prompt

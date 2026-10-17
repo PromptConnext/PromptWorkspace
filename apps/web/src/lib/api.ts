@@ -221,7 +221,7 @@ export async function fetchDocumentContent(
 export function prefillStage(
   projectId: string,
   stage: StageKind,
-  fields: { key: string; label: string; hint?: string }[],
+  fields: { key: string; label: string; hint?: string; options?: string[] }[],
   authHeaders: Record<string, string>,
 ) {
   return apiFetch<PrefillOut>(`/projects/${projectId}/prefill/${stage}`, authHeaders, {

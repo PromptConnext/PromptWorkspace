@@ -328,15 +328,32 @@ export function StageInputForm({
       const drafted = await prefillStage(
         projectId,
         stage,
-        fields.map((f) => ({ key: f.key, label: f.label, hint: f.hint })),
+        fields.map((f) => ({
+          key: f.key,
+          label: f.label,
+          hint: f.hint,
+          ...(f.type === "select" ? { options: f.options ?? [] } : {}),
+        })),
         authHeaders(),
       );
       const next = { ...answers };
       let filled = 0;
       let kept = 0;
-      for (const [key, value] of Object.entries(drafted.fields)) {
+      const byKey = new Map(fields.map((f) => [f.key, f]));
+      for (const [key, text] of Object.entries(drafted.fields)) {
         if ((next[key] ?? "").trim()) kept += 1;
         else {
+          const def = byKey.get(key);
+          // One-line inputs can't show a line break (the browser drops it), so
+          // a list answer becomes "a; b" rather than "ab".
+          const value =
+            def?.type === "text"
+              ? text
+                  .split(/\r?\n/)
+                  .map((l) => l.trim())
+                  .filter(Boolean)
+                  .join("; ")
+              : text;
           next[key] = value;
           filled += 1;
         }
