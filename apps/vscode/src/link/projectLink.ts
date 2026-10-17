@@ -139,7 +139,7 @@ export class ProjectLink {
     if (!folder) return;
     if (candidates.length === 0) {
       void vscode.window.showInformationMessage(
-        "No PromptWorkspace projects with a repository to link to.",
+        "No PromptWorkspace projects to link to.",
       );
       return;
     }
@@ -209,7 +209,9 @@ export class ProjectLink {
       candidates.map((c) => ({
         label: c.projectName,
         description: c.workspaceName,
-        detail: c.repoUrl ?? undefined,
+        detail:
+          c.repoUrl ??
+          "No repository yet. Tasks work; closing on push starts once the repository exists.",
         candidate: c,
       })),
       { title: `Link "${folder.name}" to a PromptWorkspace project` },

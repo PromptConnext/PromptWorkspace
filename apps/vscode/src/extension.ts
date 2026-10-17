@@ -31,7 +31,7 @@ import { activeProject, type ActiveProject } from "./link/activeProject.ts";
 import { ProjectLink } from "./link/projectLink.ts";
 import { cloneProject } from "./projects/cloneProject.ts";
 import { clearCloneState, readPendingClone } from "./projects/knownClones.ts";
-import { linkCandidatesFrom } from "./projects/roster.ts";
+import { linkCandidatesFrom, pickerCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
@@ -588,7 +588,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand("promptworkspace.linkProject", () =>
-      link.linkInteractively(candidates()),
+      link.linkInteractively(pickerCandidatesFrom(rosterTree.rows())),
     ),
     vscode.commands.registerCommand("promptworkspace.showLog", () => log.show()),
     vscode.commands.registerCommand("promptworkspace.refreshProjects", async () => {
