@@ -406,6 +406,10 @@ The installed Cursor/VS Code build is a hand-patched staging VSIX from 2026-10-0
 - [ ] Re-run the walkthrough on the trust environment after deploying the branch there (plan with inner fences comes back whole; T029-style gaps warn; intent gate; plan approval shows three documents; requester inbox; Start Task notification; link before repository).
 - [ ] Update plan 0029 §13: item 14 done; add a row "Plan 0030 deferred items" pointing to the Deferred list below.
 
+### Deploying this branch
+
+Plan approvals made before Task 6 read stale ("Changed since approval") after this branch is deployed, because the approval hash now covers project rules, plan and tasks rather than the plan alone. While `require_plan_approval` is on, repository creation then refuses with `plan_approval_required` until a plan approval is re-requested and approved. Tell the people who approved plans on the trust and production environments before the deploy. The release PR body (`develop` to `main`) must repeat this note.
+
 ## Deferred (not in this plan, with reason)
 
 | Finding | Why deferred | Where it goes |
