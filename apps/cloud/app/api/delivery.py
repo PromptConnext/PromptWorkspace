@@ -520,6 +520,8 @@ def resolve_decision(
     project_id: str,
     decision_id: str,
     body: DecisionResolve,
+    request: Request,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
@@ -573,6 +575,14 @@ def resolve_decision(
             # next resolve or stage save, so a failed write must not turn a
             # committed approval into a 500.
             logger.exception("approval mirror sync failed for project=%s", project_id)
+    if resolved.status == "rejected":
+        try:
+            link = notices.decision_link(request.app.state.settings.web_app_url, resolved)
+            _email(request, background, notices.recipients({resolved.requested_by}, members),
+                   notices.changes_requested(resolved, project.name, link))
+        except Exception:
+            logger.exception("decision email failed, project=%s decision=%s",
+                             project_id, resolved.id)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     return _mutation_out(resolved, after, hashes, out)

@@ -30,7 +30,7 @@ describe("Inbox", () => {
     items = [
       {
         project_id: "p1", project_name: "Clinic booking", workspace_id: "w1", workspace_name: "WS",
-        decision: { id: "d1", title: "Approve the delivery plan", created_at: "2026-10-04T08:00:00Z" },
+        decision: { id: "d1", status: "open", title: "Approve the delivery plan", created_at: "2026-10-04T08:00:00Z" },
       },
     ];
     render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
@@ -43,7 +43,7 @@ describe("Inbox", () => {
     items = [
       {
         project_id: "p1", project_name: "Clinic booking", workspace_id: "w1", workspace_name: "WS",
-        decision: { id: "d1", title: "Approve the delivery plan", created_at: "2026-10-04T08:00:00Z" },
+        decision: { id: "d1", status: "open", title: "Approve the delivery plan", created_at: "2026-10-04T08:00:00Z" },
       },
     ];
     render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
@@ -53,6 +53,32 @@ describe("Inbox", () => {
     expect(screen.getByText("Clinic booking").closest("a")).toHaveAttribute("href", href);
     expect(screen.getByText(/2026|10/).closest("a")).toHaveAttribute("href", href);
     expect(screen.getByRole("listitem")).toBe(screen.getByRole("link").parentElement);
+  });
+
+  it("lists decisions sent back to the requester with the reason", () => {
+    items = [
+      {
+        project_id: "p1", project_name: "Clinic booking", workspace_id: "w1", workspace_name: "WS",
+        decision: {
+          id: "d2", status: "rejected", title: "Approve the intent", rationale: "Add cancellations.",
+          created_at: "2026-10-04T08:00:00Z",
+        },
+      },
+    ];
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+
+    expect(screen.getByRole("heading", { name: "Sent back to you" })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /Approve the intent/ });
+    expect(link).toHaveAttribute("href", "/w/w1/p/p1?tab=decisions");
+    expect(link).toHaveTextContent("Clinic booking");
+    expect(link).toHaveTextContent("Add cancellations.");
+    expect(screen.getByText(/Nothing is waiting on you/)).toBeInTheDocument();
+  });
+
+  it("has no Sent back section when nothing was sent back", () => {
+    items = [];
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+    expect(screen.queryByText("Sent back to you")).not.toBeInTheDocument();
   });
 
   it("says when nothing is waiting", () => {

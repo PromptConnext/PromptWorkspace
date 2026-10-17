@@ -1035,3 +1035,39 @@ def test_legacy_tasks_only_plan_approval_reads_stale_and_409s(client, project):
     assert _listing(client, project, BOB)["states"]["plan"] == "stale"
     (listed,) = _listing(client, project, BOB)["decisions"]
     assert listed["is_current"] is False
+
+
+def test_me_decisions_include_mine_returns_changes_requested(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    assert client.get("/me/decisions", headers=BOB).json() == []
+    mine = client.get("/me/decisions?include_mine=true", headers=BOB).json()
+    assert [(i["decision"]["id"], i["decision"]["status"], i["decision"]["rationale"])
+            for i in mine] == [(did, "rejected", "Add cancellations.")]
+    # The resolver is not the requester: it is not sent back to them.
+    assert client.get("/me/decisions?include_mine=true", headers=ALICE).json() == []
+
+    # Asking again makes the new request the latest of its kind.
+    _request(client, project, "intent_approval")
+    again = client.get("/me/decisions?include_mine=true", headers=BOB).json()
+    assert [i["decision"]["status"] for i in again] == []
+
+
+def test_resolve_changes_requested_emails_requester(client, project, mailer):
+    did = _request(client, project, "intent_approval").json()["id"]
+    mailer.sent.clear()
+
+    _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    ((to, subject, text),) = mailer.sent
+    assert to == ["bob@x.com"]
+    assert subject.startswith("[PromptWorkspace] Changes requested: ")
+    assert "Add cancellations." in text
+
+
+def test_resolve_approved_sends_no_email(client, project, mailer):
+    did = _request(client, project, "intent_approval").json()["id"]
+    mailer.sent.clear()
+    _resolve(client, project, did)
+    assert mailer.sent == []

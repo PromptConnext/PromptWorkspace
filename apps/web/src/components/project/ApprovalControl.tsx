@@ -105,11 +105,21 @@ export function ApprovalControl({
     savedSinceLoad && serverState === "approved" ? "stale" : (serverState as ApprovalState);
   const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
+  // The state reads the newest answered decision, so the newest rejected one
+  // of this kind is the one whose reason the requester needs.
+  const reason =
+    state === "changes_requested"
+      ? data.decisions
+          .filter((d) => d.kind === kind && d.status === "rejected")
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.rationale
+      : null;
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${TONE[state]}`}>
         {APPROVAL_LABEL[state]}
       </span>
+      {reason && <p className="basis-full text-xs text-slate-600">{reason}</p>}
       {canRequest && (
         <button
           type="button"

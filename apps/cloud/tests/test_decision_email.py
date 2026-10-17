@@ -86,3 +86,16 @@ def test_line_breaks_in_a_project_or_decision_name_cannot_reach_a_subject():
     ):
         assert "\r" not in subject and "\n" not in subject
     assert "Clinic booking" in notices.requested(d, "Clinic\nbooking", "l")[0]
+
+
+def test_changes_requested_notice():
+    d = _decision(rationale="Add cancellations.")
+    subject, text = notices.changes_requested(d, "Clinic booking", "https://l")
+    assert subject == "[PromptWorkspace] Changes requested: delivery plan for Clinic booking"
+    assert "Add cancellations." in text and "https://l" in text
+    assert "Somchai" not in subject + text
+
+
+def test_changes_requested_subject_has_no_line_breaks():
+    subject, _ = notices.changes_requested(_decision(rationale="r"), "A\r\nBcc: x@y.com", "l")
+    assert "\r" not in subject and "\n" not in subject

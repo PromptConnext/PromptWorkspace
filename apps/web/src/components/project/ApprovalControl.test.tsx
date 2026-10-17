@@ -41,6 +41,20 @@ const states = (plan: DecisionsOut["states"]["plan"]): DecisionsOut => ({
 });
 
 describe("ApprovalControl", () => {
+  it("shows the resolver's reason under Changes requested", () => {
+    data = {
+      decisions: [
+        { kind: "plan_approval", status: "rejected", rationale: "Split the booking task.",
+          created_at: "2026-10-04T08:00:00Z" } as DecisionsOut["decisions"][number],
+      ],
+      states: { intent: "none", plan: "changes_requested" },
+    };
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+
+    expect(screen.getByText("Changes requested")).toBeInTheDocument();
+    expect(screen.getByText("Split the booking task.")).toBeInTheDocument();
+  });
+
   it("offers a request when nothing is requested yet", async () => {
     data = states("none");
     const snapshot = states("pending");
