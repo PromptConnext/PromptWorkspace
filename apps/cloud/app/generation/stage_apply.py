@@ -204,10 +204,12 @@ def apply_stage_content(
         for entity_id in entity_ids:
             _enqueue(app, project, node_type, entity_id)
 
-    if node_type is not None and projection == "current":
+    if (node_type is not None and projection == "current") or stage == "constitution":
         # The approval badges on the Requirement and SpecDocument follow the
         # decisions; an edit that makes an approval stale takes the badge with
-        # it (plan 0029 §1.5). Derived data, so never worth failing the save.
+        # it (plan 0029 §1.5), including an edit of the project rules, which
+        # the plan approval covers but nothing is projected from. Derived
+        # data, so never worth failing the save.
         try:
             sync_approval_mirrors(repo, project.id)
         except Exception:

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from app.delivery.decisions import content_hash
 from app.main import create_app
 from app.models.schemas import (
     Decision,
@@ -913,3 +914,121 @@ def test_an_overdue_open_decision_lists_unresolvable_and_is_not_in_the_inbox(cli
     listed = client.get(f"/projects/{project}/decisions", headers=ALICE).json()["decisions"]
     assert [x["can_resolve"] for x in listed if x["id"] == did] == [False]
     assert client.get("/me/decisions", headers=ALICE).json() == []
+
+
+# Plan 0030 Task 6: the delivery plan approval covers the project rules, the
+# plan and the tasks, as one snapshot under one hash.
+
+RULES = "# Constitution\n\nEvery change ships with a test."
+PLAN = "# Implementation Plan\n\nA FastAPI service and a Postgres database."
+
+
+def _save_stage(client, pid, stage, content):
+    res = client.patch(f"/projects/{pid}/stage-documents/{stage}", json={"content": content},
+                       headers=ALICE)
+    assert res.status_code == 200, res.text
+
+
+def _save_plan_documents(client, pid):
+    _save_stage(client, pid, "constitution", RULES)
+    _save_stage(client, pid, "plan", PLAN)
+    _save_tasks(client, pid)
+
+
+def test_plan_approval_snapshot_includes_rules_plan_and_tasks(client, project):
+    _save_plan_documents(client, project)
+
+    body = _request(client, project, "plan_approval").json()
+
+    expected = f"# Project rules\n\n{RULES}\n\n# Plan\n\n{PLAN}\n\n# Tasks\n\n{TASKS.strip()}"
+    assert body["subject_content"] == expected
+    assert body["subject_stage"] == "tasks"  # kept for the web
+    stored = client.app.state.repository.get_decision(project, body["id"])
+    assert stored is not None and stored.subject_content == expected
+    assert stored.subject_hash == content_hash(expected)
+
+
+def test_plan_approval_snapshot_leaves_out_missing_rules_and_plan(client, project):
+    _save_tasks(client, project)
+
+    body = _request(client, project, "plan_approval").json()
+
+    assert body["subject_content"] == f"# Tasks\n\n{TASKS.strip()}"
+
+
+def test_plan_approval_without_tasks_has_nothing_to_approve(client, project):
+    _save_stage(client, project, "constitution", RULES)
+    _save_stage(client, project, "plan", PLAN)
+
+    res = _request(client, project, "plan_approval")
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_missing"
+
+
+def test_editing_plan_stales_plan_approval(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    assert _resolve(client, project, did).status_code == 200
+
+    _save_stage(client, project, "plan", PLAN + "\n\nAdd a Redis cache.")
+
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()
+    assert plan["plan_approval"] == "stale"
+    (old,) = _listing(client, project, BOB)["decisions"]
+    assert old["is_current"] is False
+    spec = client.app.state.repository.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
+def test_editing_project_rules_stales_plan_approval_and_its_badge(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    assert _resolve(client, project, did).status_code == 200
+    repo = client.app.state.repository
+    assert repo.get_latest_spec_document(project).status == "approved"
+
+    _save_stage(client, project, "constitution", RULES + "\n\nNo secrets in the repository.")
+
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    spec = repo.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
+def test_a_plan_edit_before_the_answer_is_409(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _save_stage(client, project, "plan", PLAN + "\n\nAdd a Redis cache.")
+
+    res = _resolve(client, project, did)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_changed"
+
+
+def test_legacy_tasks_only_plan_approval_still_resolves(client, project):
+    _save_tasks(client, project)
+    repo = client.app.state.repository
+    # The pre-change shape: the subject is the tasks document alone.
+    legacy = repo.save_decision(
+        Decision(
+            project_id=project,
+            workspace_id=repo.get_project(project).workspace_id,
+            kind="plan_approval",
+            title="Approve the delivery plan",
+            subject_stage="tasks",
+            subject_hash=content_hash(TASKS),
+            subject_content=TASKS,
+            routed_hat="tech_steward",
+            requested_by="bob",
+        )
+    )
+
+    res = _resolve(client, project, legacy.id)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_changed"
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    (listed,) = _listing(client, project, BOB)["decisions"]
+    assert listed["is_current"] is False

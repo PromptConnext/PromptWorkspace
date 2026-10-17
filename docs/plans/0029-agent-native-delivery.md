@@ -889,7 +889,7 @@ An audit of every earlier plan against `develop` on 2026-10-04 updated their Sta
 | 11 | Business-user desktop follow-up plan | ADR 0028 | Open question 4 in §12 |
 | 12 | Drop `pw_projects.owner_id`; make `workspace_id` NOT NULL | Plans 0001 / 0002 | Low priority. Any later migration |
 | 13 | Pricing rewrite, download page, product copy, contact-webhook loss, locale tests | Plan 0022 | **Not this repo.** `PromptConnext/promptconnext-corp-web` |
-| 14 | Bind `plan_approval` to the Plan document as well as Tasks, so a plan edit after approval stales it | Editable plan after the repository (2026-10-10) | **Phase 1**, with plan approval in the Decision Inbox |
+| 14 | Bind `plan_approval` to the Plan document as well as Tasks, so a plan edit after approval stales it | Editable plan after the repository (2026-10-10) | Done in plan 0030 Task 6 (2026-10-17): the plan approval covers the project rules, the plan and the tasks as one snapshot and one hash, so editing any of the three stales it |
 | 15 | Legacy `repo_created` projects with a NULL `repo_origin` (pre-migration 0035, from scratch or imported) get no document edit and no sync: backfill the origin or let an admin declare it | Editable plan after the repository (2026-10-10) | Low priority. Any later migration |
 | 16 | Sync PR for imported repositories: re-derive the relocated seed (`fit_to_existing_repo`) against a tree that already holds it | Editable plan after the repository (2026-10-10) | **Phase 2**, with the other PRs into existing repos |
 | 17 | The docs banner cannot be dismissed, so a hand-maintained `AGENTS.md` (or any seeded document a team edits on GitHub) keeps it showing "out of date" | Editable plan after the repository (2026-10-10) | Low priority. Any later release |

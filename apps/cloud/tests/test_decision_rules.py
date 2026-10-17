@@ -12,6 +12,7 @@ from app.delivery.decisions import (
     content_hash,
     eligible_resolvers,
     is_overdue,
+    subject_of,
 )
 from app.models.schemas import Decision, ProjectRole, utcnow
 
@@ -125,3 +126,29 @@ def test_overdue_means_open_and_past_expiry():
         update={"expires_at": now + timedelta(seconds=1)}), now)
     assert not is_overdue(_decision("approved").model_copy(update={"expires_at": now}), now)
     assert not is_overdue(_decision(), now)  # no expiry recorded (pre-0009)
+
+
+def test_plan_approval_subject_heads_rules_plan_and_tasks():
+    contents = {"constitution": "Rules.\n", "plan": "  Plan.", "tasks": "Tasks.", "specify": "x"}
+    assert subject_of("plan_approval", contents) == (
+        "# Project rules\n\nRules.\n\n# Plan\n\nPlan.\n\n# Tasks\n\nTasks."
+    )
+
+
+def test_plan_approval_subject_leaves_out_missing_or_blank_documents():
+    assert subject_of("plan_approval", {"plan": "Plan.", "tasks": "Tasks."}) == (
+        "# Plan\n\nPlan.\n\n# Tasks\n\nTasks."
+    )
+    assert subject_of("plan_approval", {"constitution": " \n", "tasks": "Tasks."}) == (
+        "# Tasks\n\nTasks."
+    )
+
+
+def test_a_subject_without_its_last_stage_is_none():
+    assert subject_of("plan_approval", {"constitution": "Rules.", "plan": "Plan."}) is None
+    assert subject_of("plan_approval", {"constitution": "Rules.", "tasks": "  "}) is None
+    assert subject_of("intent_approval", {"tasks": "Tasks."}) is None
+
+
+def test_intent_approval_subject_is_the_specification_unchanged():
+    assert subject_of("intent_approval", {"specify": "# Spec\n\nBook.\n"}) == "# Spec\n\nBook.\n"
