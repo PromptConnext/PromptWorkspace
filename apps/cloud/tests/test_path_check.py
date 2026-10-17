@@ -115,3 +115,8 @@ def test_the_new_marker_forms_models_actually_write():
     for marker in ("(new)", "(new file)", "(NEW)", ", new", " - new"):
         doc = f"- [ ] T001 Add `src/lib/x.ts` {marker}".replace("  ", " ")
         assert check(doc) == [], marker
+
+
+def test_task_line_variants_are_checked_too():
+    for line in ("- [ ] **T029** Edit `src/lib/gone.ts`", "- [ ]  T029: Edit `src/lib/gone.ts`"):
+        assert check(line) == [UnknownPath(ref="T029", path="src/lib/gone.ts")]

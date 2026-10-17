@@ -21,9 +21,9 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from app.generation.parsing import TASK_LINE_RE
 from app.imports.snapshot import is_excluded_path
 
-_TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\b(.*)$")
 # A backticked token, and an immediately following new-file marker:
 # `(new)`, `(new file)`, `, new` or `- new`.
 _TOKEN_RE = re.compile(
@@ -93,10 +93,10 @@ def unknown_task_paths(
 
     mentions: list[tuple[str, str, bool]] = []
     for line in tasks_md.splitlines():
-        task = _TASK_LINE_RE.match(line)
+        task = TASK_LINE_RE.match(line)
         if not task:
             continue
-        for match in _TOKEN_RE.finditer(task.group(2)):
+        for match in _TOKEN_RE.finditer(task.group(3)):
             token = match.group(1)
             if not _is_file_path(_normalise(token)):
                 continue

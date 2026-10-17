@@ -12,13 +12,15 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from itertools import islice
 
 _FILE_OPEN_RE = re.compile(r"^```file:(.+)$")
 _INNER_FENCE_OPEN_RE = re.compile(r"^\s*```\S")
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 # Tolerates the variants models emit: extra spaces after the checkbox, a bolded
-# ref (`**T029**`), and a colon after it (`T029:`).
-_TASK_LINE_RE = re.compile(r"^\s*[-*]\s+\[[ xX]?\]\s+\**(T\d+)\**:?\s+(\[P\]\s+)?(.+)$")
+# ref (`**T029**`), and a colon after it (`T029:`, `**T029:**`). Shared with
+# path_check.
+TASK_LINE_RE = re.compile(r"^\s*[-*]\s+\[[ xX]?\]\s+\**(T\d+)\**:?\**\s+(\[P\]\s+)?(.+)$")
 # An indented `- AC: <criterion>` sub-bullet under a task line.
 _TASK_AC_RE = re.compile(r"^[ \t]+[-*]\s+(?:AC|Acceptance)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->\n?", re.DOTALL)
@@ -265,7 +267,7 @@ def parse_task_lines(doc: str) -> list[dict[str, object]]:
     tasks: list[dict[str, object]] = []
     criteria: list[str] | None = None
     for line in doc.split("\n"):
-        m = _TASK_LINE_RE.match(line)
+        m = TASK_LINE_RE.match(line)
         if m:
             criteria = []
             tasks.append(
@@ -283,14 +285,25 @@ def parse_task_lines(doc: str) -> list[dict[str, object]]:
     return tasks
 
 
+# Refs come from model output: a garbled one (`T20260101`) must not turn into a
+# huge list. A span this wide is not "a few tasks missing", and the report is
+# capped.
+_MAX_REF_SPAN = 1000
+_MAX_REPORTED_GAPS = 50
+
+
 def missing_task_refs(refs: list[str]) -> list[str]:
     """Numbers absent between the lowest and highest ref (`T001`, `T002`, `T004`
     gives `["T003"]`), padded to the widest ref in the input."""
     numbers = {int(r[1:]) for r in refs if re.fullmatch(r"T\d+", r)}
     if not numbers:
         return []
+    low, high = min(numbers), max(numbers)
+    if high - low > _MAX_REF_SPAN:
+        return []
     width = max(len(r) - 1 for r in refs if re.fullmatch(r"T\d+", r))
-    return [f"T{n:0{width}d}" for n in range(min(numbers), max(numbers) + 1) if n not in numbers]
+    gaps = (f"T{n:0{width}d}" for n in range(low, high + 1) if n not in numbers)
+    return list(islice(gaps, _MAX_REPORTED_GAPS))
 
 
 # A `## Phase N: <name>` heading from the tasks template. The separator after the
@@ -369,7 +382,7 @@ def parse_task_phases(doc: str) -> list[TaskPhase]:
         if _H2_RE.match(line):
             current = _UNPHASED
             continue
-        task = _TASK_LINE_RE.match(line)
+        task = TASK_LINE_RE.match(line)
         if not task:
             continue
         key = current[0]

@@ -339,6 +339,7 @@ def test_strip_spec_kit_boilerplate_removes_scaffolding():
         "- [ ] **T029** x",
         "- [ ] T029: x",
         "* [x] T029 [P] [US3] x",
+        "- [ ] **T029:** x",
     ],
 )
 def test_parse_task_lines_accepts_variants(line: str):
@@ -356,3 +357,13 @@ def test_missing_task_refs_pads_like_the_widest_ref():
     assert missing_task_refs(["T1", "T2", "T4"]) == ["T3"]
     refs = [f"T{n:03d}" for n in range(1, 36) if n != 29]
     assert missing_task_refs(refs) == ["T029"]
+
+
+def test_missing_task_refs_is_capped_at_fifty():
+    assert len(missing_task_refs(["T001", "T900"])) == 50
+
+
+def test_missing_task_refs_ignores_a_wildly_sparse_list():
+    assert missing_task_refs(["T1", "T99999999"]) == []
+    assert missing_task_refs(["T0001", "T1002"]) == []
+    assert len(missing_task_refs(["T0001", "T1000"])) == 50
