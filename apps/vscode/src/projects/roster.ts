@@ -217,3 +217,22 @@ export function linkCandidatesFrom(rows: WorkspaceRow[]): ProjectCandidate[] {
   }
   return out;
 }
+
+/** Every project, for the explicit "Link This Folder to a Project" picker. A
+ *  project with no repository yet is still a valid choice: the user is naming
+ *  it, not asking us to match a remote. Auto-matching keeps using
+ *  `linkCandidatesFrom`, which stays repo-only. */
+export function pickerCandidatesFrom(rows: WorkspaceRow[]): ProjectCandidate[] {
+  const out: ProjectCandidate[] = [];
+  for (const workspace of rows) {
+    for (const project of workspace.projects) {
+      out.push({
+        projectId: project.projectId,
+        projectName: project.projectName,
+        workspaceName: project.workspaceName,
+        repoUrl: project.repoUrl ?? null,
+      });
+    }
+  }
+  return out;
+}

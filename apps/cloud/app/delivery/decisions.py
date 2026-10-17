@@ -1,8 +1,10 @@
 """Approval rules for plan 0029 decisions (M2).
 
-A decision approves one stage document as it was when requested
-(`subject_hash`). The state a project shows comes from the latest
-non-withdrawn decision of that kind compared with the document as it is now.
+A decision approves its subject as it was when requested (`subject_hash`):
+the intent approval the `specify` document, the plan approval the project
+rules, the plan and the tasks together (`SUBJECT_STAGES`, `subject_of`).
+The state a project shows comes from the latest non-withdrawn decision of
+that kind compared with its subject as it is now.
 Routing: the user wearing the decision's hat resolves it; when nobody wears
 the hat, or the wearer has left the workspace, workspace admins do.
 The requester never resolves their own decision (v2.1 View 1: no
@@ -12,7 +14,7 @@ self-approval), even when they are the only person who could.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from typing import Literal
 
@@ -20,7 +22,14 @@ from app.models.schemas import Decision, ProjectRole
 
 ApprovalState = Literal["none", "pending", "approved", "stale", "changes_requested"]
 
-STAGE_OF: dict[str, str] = {"intent_approval": "specify", "plan_approval": "tasks"}
+SUBJECT_STAGES: dict[str, tuple[str, ...]] = {
+    "intent_approval": ("specify",),
+    "plan_approval": ("constitution", "plan", "tasks"),
+}
+# The last stage of each subject: the one a decision cannot be asked without,
+# and the `subject_stage` a decision stores (the web reads it).
+STAGE_OF: dict[str, str] = {kind: stages[-1] for kind, stages in SUBJECT_STAGES.items()}
+SECTION_OF: dict[str, str] = {"constitution": "Project rules", "plan": "Plan", "tasks": "Tasks"}
 HAT_OF: dict[str, str] = {"intent_approval": "business_owner", "plan_approval": "tech_steward"}
 TITLE_OF: dict[str, str] = {
     "intent_approval": "Approve the intent",
@@ -30,6 +39,23 @@ TITLE_OF: dict[str, str] = {
 
 def content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def subject_of(kind: str, contents: Mapping[str, str | None]) -> str | None:
+    """What a decision of `kind` approves, from its stage documents' text by
+    stage (absent or None: no document). A one-stage subject is its document
+    unchanged; a longer one joins each present document under a separator
+    line ("===== Project rules =====", "===== Plan =====", "===== Tasks
+    =====") that cannot be mistaken for a document's own heading, leaving out
+    a missing or blank one. None when the last stage has no document: nothing
+    to approve."""
+    stages = SUBJECT_STAGES[kind]
+    present = {s: text for s in stages if (text := contents.get(s)) and text.strip()}
+    if stages[-1] not in present:
+        return None
+    if len(stages) == 1:
+        return present[stages[0]]
+    return "\n\n".join(f"===== {SECTION_OF[s]} =====\n\n{present[s].strip()}" for s in present)
 
 
 def latest_decision(decisions: list[Decision], kind: str) -> Decision | None:

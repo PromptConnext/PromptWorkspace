@@ -11,7 +11,7 @@ import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { useWorkspace, useWorkspaceName } from "@/lib/workspace";
-import type { Project, WorkspaceMember } from "@/lib/types";
+import type { InboxItem, Project, WorkspaceMember } from "@/lib/types";
 
 const AVATAR_STACK_LIMIT = 4;
 
@@ -61,6 +61,13 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
     `/workspaces/${workspaceId}/projects`,
   );
 
+  const { data: decisions } = useCloudGet<InboxItem[]>(
+    `/me/decisions?workspace_id=${encodeURIComponent(workspaceId)}`,
+    true,
+    { refreshOnFocus: true },
+  );
+  const waiting = decisions?.length ?? 0;
+
   const [creating, setCreating] = useState(false);
 
   // Treat visiting /w/{id} as an explicit selection: if it's a real membership,
@@ -107,7 +114,7 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
               href={`/w/${workspaceId}/inbox`}
               className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300"
             >
-              Inbox
+              {waiting > 0 ? `Inbox · ${waiting}` : "Inbox"}
             </Link>
             <Link
               href={`/w/${workspaceId}/settings`}

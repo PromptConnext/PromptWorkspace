@@ -57,12 +57,14 @@ async function renderPage() {
 
 const state: Record<string, { data?: unknown; loading: boolean; error?: string | null }> = {};
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: (path: string) => state[path.endsWith("/members") ? "members" : "projects"],
+  useCloudGet: (path: string) =>
+    state[path.includes("/me/decisions") ? "decisions" : path.endsWith("/members") ? "members" : "projects"],
 }));
 
 beforeEach(() => {
   state.members = { data: undefined, loading: true };
   state.projects = { data: [], loading: false };
+  state.decisions = { data: undefined, loading: true };
 });
 afterEach(cleanup);
 
@@ -98,5 +100,20 @@ describe("workspace home", () => {
     await renderPage();
     expect(await screen.findByText("Failed to load projects")).toBeInTheDocument();
     expect(screen.queryByText("No projects yet. Create your first project to start planning.")).toBeNull();
+  });
+
+  it("shows the number of decisions waiting on the Inbox button", async () => {
+    state.decisions = { data: [{ id: "a" }, { id: "b" }], loading: false };
+    await renderPage();
+    expect(await screen.findByRole("link", { name: "Inbox · 2" })).toHaveAttribute(
+      "href",
+      "/w/w1/inbox",
+    );
+  });
+
+  it("shows plain Inbox when nothing is waiting", async () => {
+    state.decisions = { data: [], loading: false };
+    await renderPage();
+    expect(await screen.findByRole("link", { name: "Inbox" })).toBeInTheDocument();
   });
 });

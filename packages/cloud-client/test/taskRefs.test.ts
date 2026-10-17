@@ -180,6 +180,13 @@ test("the offered branch name is a legal ref and keeps the task number", () => {
   assert.equal(branchNameForTask("T3", "Fix: the  parser... again!"), "T3-fix-the-parser-again");
   // A title that survives none of that still leaves a usable branch.
   assert.equal(branchNameForTask("T7", "！？"), "T7");
+  // A long title is cut at the last word boundary within the limit, not mid-word.
+  assert.equal(
+    branchNameForTask("T1", "Create project structure per implementation plan"),
+    "T1-create-project-structure-per",
+  );
+  // A single word longer than the limit has no boundary to cut at, so it is hard-cut.
+  assert.equal(branchNameForTask("T1", "x".repeat(60)), `T1-${"x".repeat(40)}`);
   // Long titles are cut without leaving a trailing separator.
   const long = branchNameForTask("T1", "a".repeat(80));
   assert.ok(long.length <= 44, long);

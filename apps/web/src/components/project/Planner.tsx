@@ -31,6 +31,7 @@ import {
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { stripStreamFence } from "@/lib/planner-sse";
 import { ApprovalControl } from "./ApprovalControl";
+import { useDecisionsData } from "./DeliveryOverview";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
@@ -138,6 +139,8 @@ const EDITOR_LABEL: Partial<Record<StageKind, string>> = {
   tasks: "Tasks document",
 };
 
+const PLAN_APPROVAL_NOTE =
+  "Plan approval is requested on the Tasks step, once tasks are generated. It covers the project rules, the plan and the tasks.";
 const PLAN_HELPER = "Not technical? Use Suggest from Spec, then review.";
 // Advice, not a lock: generate/plan runs without a constitution
 // (app/api/generation.py only folds one in when it exists).
@@ -159,10 +162,17 @@ const REPLACE_CONFIRM =
 const TECH_LEAD_NOTE =
   "Your Tech Lead writes this step. You can read it here once they generate it.";
 
+// The plan waits for the intent once approval has been asked for.
+const INTENT_WAITING_TEXT =
+  "Waiting for the intent to be approved. The plan is written once the business owner approves it.";
+const INTENT_CHANGES_TEXT =
+  "Changes were requested on the intent. Revise the specification and ask again.";
+
 // The cloud's own ordering errors (app/api/generation.py), which arrive as raw
 // detail codes.
 const STAGE_ERROR_TEXT: Record<string, string> = {
   requirement_required: "Generate the specification first — the plan is written against it.",
+  intent_not_approved: INTENT_WAITING_TEXT,
   spec_document_required: "Save or generate the plan first — the task breakdown is derived from it.",
   model_connection_not_configured:
     "No model is configured for this workspace, so generation is unavailable.",
@@ -724,6 +734,9 @@ export function Planner({
     error: membersError,
     refetch: refetchMembers,
   } = useCloudGet<WorkspaceMember[]>(`/workspaces/${project.workspace_id}/members`);
+  // Role-gated copy must not render until the role is known. The `!user` arm
+  // covers useCloudGet's early return (loading=false) while the session resolves.
+  const rolesPending = membersLoading || (!user && !membersError);
   const isTechLead = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 
   // Which stages already have a saved document. Each stage reports its own
@@ -873,9 +886,22 @@ export function Planner({
     });
   }, [setActive]);
 
+  // Once intent approval is in use (asked for, not yet approved) the plan
+  // waits, and Specify is not finished. Never asked, or approved, gates
+  // nothing; so does a state that has not loaded.
+  const { data: decisions } = useDecisionsData();
+  const intentState = decisions?.states.intent;
+  const intentGate =
+    intentState === "pending"
+      ? INTENT_WAITING_TEXT
+      : intentState === "changes_requested"
+        ? INTENT_CHANGES_TEXT
+        : undefined;
+
   // Undefined means "not loaded yet" — only an explicit false locks, so an
   // in-flight fetch doesn't flash a lock message on a project that has one.
   function blockedBy(meta: StageMeta): string | undefined {
+    if (meta.stage === "plan" && intentGate) return intentGate;
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
     const label = previous?.label ?? meta.requires;
@@ -895,7 +921,7 @@ export function Planner({
         if (analysisRequired && analysis?.status !== "baseline_ready") return false;
         return hasPolicyScope(project) || hasPrd === true;
       case "specify":
-        return docPresent.specify === true;
+        return docPresent.specify === true && !intentGate;
       case "plan":
         return docPresent.plan === true;
       case "tasks":
@@ -1060,12 +1086,12 @@ export function Planner({
         </div>
       )}
 
-      {membersLoading || (!user && !membersError) ? (
+      {rolesPending ? (
         <div
           aria-hidden
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
         />
-      ) : (
+      ) : membersError ? null : (
       <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-slate-200">
         {TABS.map((tab) => {
           const done = tabDone(tab.key);
@@ -1129,13 +1155,19 @@ export function Planner({
       {/* Every stage stays mounted so a half-typed intake form survives
           switching tabs; the inactive ones are hidden rather than unmounted,
           which also keeps them out of the accessibility tree. */}
+      {rolesPending && <div aria-hidden className="h-40 animate-pulse rounded-lg bg-slate-50" />}
+      {!rolesPending && membersError && (
+        <p role="alert" className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+          Could not load your role. Reload to try again.
+        </p>
+      )}
       {TABS.map((tab, index) => (
         <div
           key={tab.key}
           id={`planner-panel-${tab.key}`}
           role="tabpanel"
           aria-labelledby={`planner-tab-${tab.key}`}
-          hidden={active !== tab.key}
+          hidden={rolesPending || !!membersError || active !== tab.key}
           className="space-y-4"
           onClickCapture={() => workIn(tab.key)}
           onKeyDownCapture={() => workIn(tab.key)}
@@ -1213,15 +1245,21 @@ export function Planner({
               />
             );
           })}
+          {tab.key === "plan" && (
+            <p className="rounded bg-slate-50 p-3 text-xs text-slate-600">{PLAN_APPROVAL_NOTE}</p>
+          )}
           {/* The next step, said once this one has produced its document —
               after a generation or a save, and still there on the next visit.
               Generation is where the task graph is born and the board is where
               it is worked, so on Tasks the board comes first. */}
-          {tab.stages.length > 0 && tabDone(tab.key) && TABS[index + 1] && (
+          {tab.stages.length > 0 &&
+            (tabDone(tab.key) || (tab.key === "specify" && docPresent.specify === true)) &&
+            TABS[index + 1] && (
             <div className="flex flex-wrap items-center gap-2">
               {(tab.key === "specify" || tab.key === "tasks") && (
                 <ApprovalControl
                   projectId={projectId}
+                  workspaceId={project.workspace_id}
                   kind={tab.key === "specify" ? "intent_approval" : "plan_approval"}
                   refreshKey={docStamp[tab.key === "specify" ? "specify" : "tasks"]}
                 />
@@ -1231,13 +1269,15 @@ export function Planner({
                   Open the task board
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => goTo(TABS[index + 1].key)}
-                className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
-              >
-                Continue to {TABS[index + 1].title}
-              </button>
+              {tabDone(tab.key) && (
+                <button
+                  type="button"
+                  onClick={() => goTo(TABS[index + 1].key)}
+                  className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
+                >
+                  Continue to {TABS[index + 1].title}
+                </button>
+              )}
             </div>
           )}
           {tab.key === "repository" && !isTechLead && !readOnly && (

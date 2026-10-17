@@ -7,6 +7,7 @@ from __future__ import annotations
 from app.models.schemas import Decision, WorkspaceMember
 
 HAT_LABEL = {"business_owner": "business owner", "tech_steward": "tech steward"}
+KIND_LABEL = {"intent_approval": "intent", "plan_approval": "delivery plan"}
 _PREFIX = "[PromptWorkspace]"
 
 
@@ -64,4 +65,15 @@ def expired(decision: Decision, project_name: str, link: str) -> tuple[str, str]
         f"{_PREFIX} Expired: {decision.title} — {project_name}",
         f"Nobody answered your request in {project_name} in time: {decision.title}. "
         f"It counts as not approved. Ask again when ready: {link}\n",
+    )
+
+
+def changes_requested(decision: Decision, project_name: str, link: str) -> tuple[str, str]:
+    project_name = _line(project_name)
+    label = KIND_LABEL.get(decision.kind, "decision")
+    return (
+        f"{_PREFIX} Changes requested: {label} for {project_name}",
+        f"Changes were requested on the {label} in {project_name}.\n\n"
+        f"Reason: {decision.rationale or 'No reason was given.'}\n\n"
+        f"Review the decision and ask again when ready: {link}\n",
     )

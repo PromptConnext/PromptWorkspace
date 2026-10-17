@@ -13,6 +13,7 @@ import {
   PENDING_CLONE_TTL_MS,
   buildRoster,
   linkCandidatesFrom,
+  pickerCandidatesFrom,
   pendingCloneMatches,
   safeRepoUrl,
   type RosterInput,
@@ -206,4 +207,25 @@ test("link candidates carry every project with a usable repo, not just assigned 
   assert.deepEqual(candidates.map((c) => c.projectId), ["p1"]);
   assert.equal(candidates[0].projectName, "Checkout API");
   assert.equal(candidates[0].workspaceName, "Acme Corp");
+});
+
+test("picker candidates include projects without a repository", () => {
+  const rows = buildRoster(
+    input({
+      entries: [
+        {
+          workspace: WS,
+          projects: [
+            project(),
+            project({ id: "p2", name: "Marketing", repo_url: null, lifecycle_status: "planning" }),
+          ],
+        },
+      ],
+    }),
+  );
+  const candidates = pickerCandidatesFrom(rows);
+  assert.deepEqual(candidates.map((c) => c.projectId), ["p1", "p2"]);
+  assert.equal(candidates[1].repoUrl, null);
+  assert.equal(candidates[1].workspaceName, "Acme Corp");
+  assert.deepEqual(linkCandidatesFrom(rows).map((c) => c.projectId), ["p1"]);
 });

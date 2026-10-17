@@ -1,83 +1,100 @@
 """Approval reads over the repository (plan 0029 M2).
 
 `decisions.py` holds the pure rules; this module applies them to a project:
-the hash of a decision's subject document as it is now, the approval state a
-project shows, and the mirror of that state onto the graph entities that
-carry an approval field (`Requirement.status`, `SpecDocument.status` and
-`approved_by`). The mirror is derived, never authoritative — it is rewritten
-from the decisions whenever they or their subject documents change, so an
-edit that makes an approval stale also takes the "Approved" badge away.
+the hash of a decision's subject (its stage documents) as it is now, the
+approval state a project shows, and the mirror of that state onto the graph
+entities that carry an approval field (`Requirement.status`,
+`SpecDocument.status` and `approved_by`). The mirror is derived, never
+authoritative — it is rewritten from the decisions whenever they or their
+subject documents change, so an edit that makes an approval stale also takes
+the "Approved" badge away.
 """
 
 from __future__ import annotations
 
-from typing import cast
+from collections.abc import Mapping
 
 from app.db.repository import Repository
 from app.delivery.decisions import (
-    STAGE_OF,
+    SUBJECT_STAGES,
     ApprovalState,
     approval_state,
     content_hash,
     latest_decision,
+    subject_of,
 )
-from app.models.schemas import Decision, GraphUpsertRequest, RequirementStatus, SpecStatus
+from app.models.schemas import (
+    Decision,
+    GraphUpsertRequest,
+    RequirementStatus,
+    SpecStatus,
+    StageDocument,
+)
 
 
 def document_hash(content: str | None) -> str | None:
-    """The hash an approval binds for a stage document's text; None for a
-    missing or blank document, which there is nothing to approve in."""
+    """The hash an approval binds for a subject's text; None for a missing or
+    blank one, which there is nothing to approve in."""
     if content is None or not content.strip():
         return None
     return content_hash(content)
 
 
-def current_hash(repo: Repository, project_id: str, stage: str) -> str | None:
-    doc = repo.get_stage_document(project_id, stage)
-    return document_hash(doc.content if doc else None)
+def _contents(docs: Mapping[str, StageDocument]) -> dict[str, str]:
+    return {stage: doc.content for stage, doc in docs.items()}
 
 
-def stage_hashes(
+def approval_subject(repo: Repository, project_id: str, kind: str) -> str | None:
+    """What a decision of `kind` approves as the documents are now, in one
+    read (`subject_of`); None when its last stage has no document."""
+    docs = repo.list_stage_documents(project_id, SUBJECT_STAGES[kind])
+    return subject_of(kind, _contents(docs))
+
+
+def current_hash(repo: Repository, project_id: str, kind: str) -> str | None:
+    return document_hash(approval_subject(repo, project_id, kind))
+
+
+def subject_hashes(
     repo: Repository, project_id: str, known: dict[str, str | None] | None = None
 ) -> dict[str, str | None]:
-    """The current hash of every approval subject stage, keyed by stage.
+    """The current hash of every decision kind's subject, keyed by kind.
     `known` carries hashes the caller already read in this request; the rest
     come from one repository read (each read is a database round trip)."""
     hashes = dict(known or {})
-    missing = [stage for stage in STAGE_OF.values() if stage not in hashes]
+    missing = [kind for kind in SUBJECT_STAGES if kind not in hashes]
     if missing:
-        docs = repo.list_stage_documents(project_id, missing)
-        for stage in missing:
-            doc = docs.get(stage)
-            hashes[stage] = document_hash(doc.content if doc else None)
+        stages = list(dict.fromkeys(s for kind in missing for s in SUBJECT_STAGES[kind]))
+        contents = _contents(repo.list_stage_documents(project_id, stages))
+        for kind in missing:
+            hashes[kind] = document_hash(subject_of(kind, contents))
     return hashes
 
 
 def states_of(
     decisions: list[Decision], hashes: dict[str, str | None]
 ) -> dict[str, ApprovalState]:
-    """The approval states from decisions and stage hashes already in hand."""
+    """The approval states from decisions and subject hashes already in hand."""
     intent, plan = "intent_approval", "plan_approval"
     return {
-        "intent": approval_state(decisions, intent, hashes[STAGE_OF[intent]]),
-        "plan": approval_state(decisions, plan, hashes[STAGE_OF[plan]]),
+        "intent": approval_state(decisions, intent, hashes[intent]),
+        "plan": approval_state(decisions, plan, hashes[plan]),
     }
 
 
-_UNREAD = object()  # plan_state's "the caller has not read the tasks document"
-
-
 def plan_state(
-    repo: Repository, project_id: str, tasks_content: str | None | object = _UNREAD
+    repo: Repository, project_id: str, contents: Mapping[str, str | None] | None = None
 ) -> ApprovalState:
-    """The plan approval alone: reads only the `tasks` document, not both, and
-    not even that when the caller passes what it already read: the text, or
-    None for a document that does not exist."""
-    if tasks_content is _UNREAD:
-        tasks_hash = current_hash(repo, project_id, STAGE_OF["plan_approval"])
+    """The plan approval alone: reads only its own documents, and not even
+    those when the caller passes what it already read: each stage's text, or
+    None for a document that does not exist. Without every plan stage among
+    `contents` the documents are read again rather than guessed missing."""
+    kind = "plan_approval"
+    if contents is None or any(stage not in contents for stage in SUBJECT_STAGES[kind]):
+        plan_hash = current_hash(repo, project_id, kind)
     else:
-        tasks_hash = document_hash(cast("str | None", tasks_content))
-    return approval_state(repo.list_decisions(project_id), "plan_approval", tasks_hash)
+        plan_hash = document_hash(subject_of(kind, contents))
+    return approval_state(repo.list_decisions(project_id), kind, plan_hash)
 
 
 def sync_approval_mirrors(
@@ -90,10 +107,10 @@ def sync_approval_mirrors(
     """Write the current approval states onto the latest Requirement (intent)
     and SpecDocument (plan). Writes only a value that differs. A caller that
     already holds the project's decisions (as they stand after its write) and
-    stage hashes passes them in instead of having them read again."""
+    subject hashes passes them in instead of having them read again."""
     if decisions is None:
         decisions = repo.list_decisions(project_id)
-    states = states_of(decisions, stage_hashes(repo, project_id, hashes))
+    states = states_of(decisions, subject_hashes(repo, project_id, hashes))
 
     requirement = repo.get_latest_requirement(project_id)
     if requirement is not None:

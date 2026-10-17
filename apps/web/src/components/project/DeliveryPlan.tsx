@@ -49,12 +49,15 @@ export function DeliveryPlan({
   graph,
   graphError = null,
   projectId,
+  workspaceId,
 }: {
   graph: ProjectGraph | null;
   /** The page's graph load failed: the graph is not coming, so stop waiting
    *  for it (the page shows the error itself). */
   graphError?: string | null;
   projectId: string;
+  /** For the link to the project's role settings. */
+  workspaceId: string;
 }) {
   const { data: plan, error, retry } = useDeliveryPlanData();
   const taskById = new Map((graph?.tasks ?? []).map((t) => [t.id, t]));
@@ -100,7 +103,7 @@ export function DeliveryPlan({
             {plan.changes.length} changes. Each change is planned to become one pull request.
           </p>
         </div>
-        <ApprovalControl projectId={projectId} kind="plan_approval" />
+        <ApprovalControl projectId={projectId} workspaceId={workspaceId} kind="plan_approval" />
       </div>
       <div className="grid gap-4 md:grid-flow-col md:auto-cols-fr">
         {groupByWave(changes).map((wave, index) => (

@@ -21,10 +21,11 @@ from app.api._guards import require_admin, require_project, require_project_memb
 from app.db.repository import DeliveryStoreUnavailable, ReceiptConflict, Repository
 from app.delivery import notices
 from app.delivery.approvals import (
+    approval_subject,
     current_hash,
     plan_state,
-    stage_hashes,
     states_of,
+    subject_hashes,
     sync_approval_mirrors,
 )
 from app.delivery.changes import wave_of
@@ -143,9 +144,15 @@ def get_delivery_plan(
     return _plan_out(repo, project_id, plan_state(repo, project_id))
 
 
-def _roles_out(roles: list[ProjectRole]) -> list[ProjectRoleOut]:
-    """Every hat, held or not, from the project's roles as read."""
-    holders = {r.hat: r.user_id for r in roles}
+def _member_ids(repo: Repository, project: Project, user: User) -> set[str]:
+    return {m.user_id for m in repo.list_members(project.workspace_id)} | {user.id}
+
+
+def _roles_out(roles: list[ProjectRole], member_ids: Collection[str]) -> list[ProjectRoleOut]:
+    """Every hat, held or not, from the project's roles as read. A holder who
+    has left the workspace reads as unassigned: decisions route to the admins
+    then (`eligible_resolvers`), and the row is left behind by `remove_member`."""
+    holders = {r.hat: r.user_id for r in roles if r.user_id in member_ids}
     return [ProjectRoleOut(hat=hat, user_id=holders.get(hat)) for hat in HATS]
 
 
@@ -155,8 +162,8 @@ def get_project_roles(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[ProjectRoleOut]:
-    require_project(repo, project_id, user)
-    return _roles_out(repo.list_project_roles(project_id))
+    project = require_project(repo, project_id, user)
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
 
 
 def _email(request: Request, background: BackgroundTasks,
@@ -207,7 +214,7 @@ def put_project_role(
         except Exception:
             # The hat is set; a failed notice is logged, not a failed request.
             logger.exception("hat assignment email failed, project=%s hat=%s", project_id, hat)
-    return _roles_out(repo.list_project_roles(project_id))
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
 
 
 DecisionKindIn = Literal["intent_approval", "plan_approval"]
@@ -245,8 +252,9 @@ class DecisionOut(DecisionBase):
     # migration 0006 and for older decisions a listing leaves out
     # (`content_carriers`).
     subject_content: str | None
-    # True while `subject_hash` is the hash of the stage document as it is now;
-    # false once the document was edited after this decision was made.
+    # True while `subject_hash` is the hash of the decision's subject as it is
+    # now (for the plan approval: project rules, plan and tasks); false once
+    # that subject changed after this decision was made.
     is_current: bool
 
 
@@ -277,17 +285,20 @@ class DecisionResolve(BaseModel):
 
 def content_carriers(decisions: list[Decision]) -> set[str]:
     """The ids of the decisions a listing sends `subject_content` for: the open
-    ones (the approver reads and diffs them) and the newest approved decision of
-    each kind (the diff base for the next request). Every older decision would
-    cost its whole document, up to ~12 KB each, on every tab load."""
+    ones (the approver reads and diffs them) and, per kind, the newest approved
+    and the newest sent-back one (stored as `rejected`): the diff bases for the
+    next request. Every older decision would cost its whole document, up to
+    ~12 KB each, on every tab load."""
     keep = {d.id for d in decisions if d.status == "open"}
-    newest: dict[str, Decision] = {}
-    for d in decisions:
-        if d.status == "approved" and (
-            d.kind not in newest or d.created_at > newest[d.kind].created_at
-        ):
-            newest[d.kind] = d
-    return keep | {d.id for d in newest.values()}
+    for status in ("approved", "rejected"):
+        newest: dict[str, Decision] = {}
+        for d in decisions:
+            if d.status == status and (
+                d.kind not in newest or d.created_at > newest[d.kind].created_at
+            ):
+                newest[d.kind] = d
+        keep |= {d.id for d in newest.values()}
+    return keep
 
 
 def decision_out(
@@ -301,9 +312,10 @@ def decision_out(
     hashes: dict[str, str | None] | None = None,
     with_content: bool = True,
 ) -> DecisionOut:
-    """`hashes` are the stage hashes as they are now. Without them (the read
-    after a write failed) a decision reads as current: the request and resolve
-    routes only write against a document whose hash they just matched.
+    """`hashes` are the subject hashes as they are now, by kind. Without them
+    (the read after a write failed) a decision reads as current: the request
+    and resolve routes only write against a subject whose hash they just
+    matched.
     `with_content=False` leaves `subject_content` out (see `content_carriers`)."""
     return DecisionOut(
         **decision.model_dump(exclude={"subject_content"}),
@@ -312,7 +324,7 @@ def decision_out(
         can_resolve=not is_overdue(decision, utcnow())
         and can_resolve(decision, user_id, roles, member_ids, is_admin),
         blocked=blocked_reason(decision, user_id, roles, member_ids, admin_ids),
-        is_current=hashes is None or hashes.get(decision.subject_stage) == decision.subject_hash,
+        is_current=hashes is None or hashes.get(decision.kind) == decision.subject_hash,
     )
 
 
@@ -341,7 +353,7 @@ def admin_ids_of(members: list[WorkspaceMember], user_id: str, is_admin: bool) -
 
 
 def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
-    """The stage hashes read after this request's write, so the mirror and the
+    """The subject hashes read after this request's write, so the mirror and the
     snapshot describe the documents as they are now, including an edit that
     landed while the request ran. `None` when the read fails: the write is
     committed and must not become a 500, so the caller skips the mirror (it
@@ -350,7 +362,7 @@ def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | No
     the mirror write can still be overwritten by a mirror computed from these
     hashes, until that next resolve or stage save corrects it."""
     try:
-        return stage_hashes(repo, project_id)
+        return subject_hashes(repo, project_id)
     except Exception:
         logger.exception("stage hash read failed after a decision write, project=%s",
                          project_id)
@@ -363,7 +375,7 @@ def _listing(
     out: Callable[..., DecisionOut],
 ) -> DecisionsOut:
     """`GET /decisions` from the project's decisions (newest first) and the
-    stage hashes as they are now."""
+    subject hashes as they are now."""
     keep = content_carriers(decisions)
     return DecisionsOut(
         decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
@@ -378,7 +390,7 @@ def _mutation_out(
     out: Callable[..., DecisionOut],
 ) -> DecisionMutationOut:
     """`decision` with the listing after the write: `decisions` are the
-    project's decisions as they now stand (newest first), `hashes` the stage
+    project's decisions as they now stand (newest first), `hashes` the subject
     hashes read after it (no snapshot without them)."""
     snapshot = _listing(decisions, hashes, out) if hashes is not None else None
     return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
@@ -386,7 +398,7 @@ def _mutation_out(
 
 def _read_listing(
     repo: Repository, project_id: str, user: User
-) -> tuple[DecisionsOut, list[ProjectRole]]:
+) -> tuple[DecisionsOut, list[ProjectRoleOut]]:
     """The project's decision listing as `user` sees it, and the project roles
     read on the way. One membership check, and one read each of the roles, the
     decisions and the stage documents."""
@@ -394,8 +406,8 @@ def _read_listing(
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
-    listing = _listing(repo.list_decisions(project_id), stage_hashes(repo, project_id), out)
-    return listing, roles
+    listing = _listing(repo.list_decisions(project_id), subject_hashes(repo, project_id), out)
+    return listing, _roles_out(roles, member_ids)
 
 
 @router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
@@ -429,7 +441,7 @@ def get_delivery_overview(
         plan=_plan_out(repo, project_id, listing.states["plan"]),
         decisions=listing.decisions,
         states=listing.states,
-        roles=_roles_out(roles),
+        roles=roles,
     )
 
 
@@ -443,13 +455,13 @@ def request_decision(
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
     project, role, members = require_project_members(repo, project_id, user)
-    stage = STAGE_OF[body.kind]
     # One read gives the hash and the text it covers, so the stored snapshot
-    # is exactly the document the hash binds.
-    document = repo.get_stage_document(project_id, stage)
-    if document is None or not document.content.strip():
+    # is exactly the subject the hash binds: for the plan approval the project
+    # rules, the plan and the tasks together.
+    subject = approval_subject(repo, project_id, body.kind)
+    if subject is None:
         raise HTTPException(status_code=409, detail="decision_subject_missing")
-    current = content_hash(document.content)
+    current = content_hash(subject)
     if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
         raise HTTPException(status_code=409, detail="delivery_plan_missing")
     roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
@@ -486,9 +498,9 @@ def request_decision(
                 workspace_id=project.workspace_id,
                 kind=body.kind,
                 title=TITLE_OF[body.kind],
-                subject_stage=stage,
+                subject_stage=STAGE_OF[body.kind],
                 subject_hash=current,
-                subject_content=document.content,
+                subject_content=subject,
                 routed_hat=HAT_OF[body.kind],
                 requested_by=user.id,
                 expires_at=utcnow()
@@ -518,6 +530,8 @@ def resolve_decision(
     project_id: str,
     decision_id: str,
     body: DecisionResolve,
+    request: Request,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> DecisionMutationOut:
@@ -537,7 +551,9 @@ def resolve_decision(
         raise HTTPException(status_code=403, detail="self_approval_not_allowed")
     if not can_resolve(decision, user.id, roles, member_ids, is_admin):
         raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
-    current = current_hash(repo, project_id, decision.subject_stage)
+    # A decision stored before its subject grew (a plan approval of the tasks
+    # alone) hashes differently from today's subject, so it reads as changed.
+    current = current_hash(repo, project_id, decision.kind)
     if current != decision.subject_hash:
         raise HTTPException(status_code=409, detail="decision_subject_changed")
     rationale = (body.rationale or "").strip() or None
@@ -569,6 +585,14 @@ def resolve_decision(
             # next resolve or stage save, so a failed write must not turn a
             # committed approval into a 500.
             logger.exception("approval mirror sync failed for project=%s", project_id)
+    if resolved.status == "rejected":
+        try:
+            link = notices.decision_link(request.app.state.settings.web_app_url, resolved)
+            _email(request, background, notices.recipients({resolved.requested_by}, members),
+                   notices.changes_requested(resolved, project.name, link))
+        except Exception:
+            logger.exception("decision email failed, project=%s decision=%s",
+                             project_id, resolved.id)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     return _mutation_out(resolved, after, hashes, out)

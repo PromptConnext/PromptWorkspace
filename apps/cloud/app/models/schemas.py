@@ -1309,8 +1309,9 @@ DecisionStatus = Literal["open", "approved", "rejected", "withdrawn", "expired"]
 
 class Decision(BaseModel):
     """A recorded human judgement (plan 0029 §5.1). This slice has two kinds,
-    both approvals of a stage document, bound to the SHA-256 of the content
-    the requester saw (`subject_hash`)."""
+    both approvals, bound to the SHA-256 of the decision's subject as the
+    requester saw it (a stage document; for the plan approval, project rules,
+    plan and tasks) (`subject_hash`)."""
 
     id: str = Field(default_factory=new_id)
     project_id: str

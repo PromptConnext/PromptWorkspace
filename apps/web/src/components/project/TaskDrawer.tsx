@@ -15,7 +15,8 @@ import type {
 } from "@/lib/types";
 import { memberFullName } from "./MemberChip";
 import { STATUS_LABEL } from "./taskBoardA11y";
-import { InlineCodeText, isHttpUrl } from "./TaskCard";
+import { InlineCodeText } from "./TaskCard";
+import { artifactHref } from "./VerifyConfirmDialog";
 
 /**
  * A task's full record, as a right-side sheet over the board.
@@ -109,8 +110,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function ArtifactRow({ artifact }: { artifact: Artifact }) {
-  const linkable = isHttpUrl(artifact.uri);
+function ArtifactRow({ artifact, repoUrl }: { artifact: Artifact; repoUrl: string | null }) {
+  const href = artifactHref(artifact, repoUrl);
   const label = artifact.commit_sha ? (
     <span translate="no" className="font-mono">
       {artifact.commit_sha.slice(0, 7)}
@@ -123,12 +124,12 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
         {artifact.commit_sha ? "Commit" : KIND_LABEL[artifact.kind]}
       </span>
-      {linkable ? (
+      {href ? (
         <a
-          href={artifact.uri}
+          href={href}
           target="_blank"
           rel="noreferrer"
-          title={artifact.uri}
+          title={href}
           className={`min-w-0 text-blue-700 underline-offset-2 hover:underline ${FOCUS_RING}`}
         >
           {label}
@@ -412,7 +413,7 @@ export function TaskDrawer({
           {artifacts.length > 0 ? (
             <ul className="space-y-1.5">
               {artifacts.map((a) => (
-                <ArtifactRow key={a.id} artifact={a} />
+                <ArtifactRow key={a.id} artifact={a} repoUrl={graph.project.repo_url} />
               ))}
             </ul>
           ) : (

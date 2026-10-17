@@ -77,7 +77,7 @@
       {
         "view": "promptworkspace.tasks",
         "when": "!promptworkspace.signedIn",
-        "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptworkspace.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptworkspace.signInWithCode)"
+        "contents": "Sign in from the Projects view above to see the tasks assigned to you."
       },
       {
         "view": "promptworkspace.tasks",

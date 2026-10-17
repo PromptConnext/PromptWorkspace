@@ -15,6 +15,7 @@ import re
 
 from fastapi.testclient import TestClient
 
+from app.deployments.plan_profile import recommend_template
 from app.deployments.registry import (
     BUILTIN_TEMPLATES,
     DELIVERY_KINDS,
@@ -218,3 +219,66 @@ def test_static_r2_still_presents_as_an_embedded_url():
 def test_delivery_kind_is_on_the_templates_endpoint(client):
     rows = client.get("/deployment-templates", headers={"X-User-Id": "alice"}).json()
     assert {r["id"]: r["delivery_kind"] for r in rows}["static-r2"] == "embedded_url"
+
+
+# --------------------------------------------------------------------------- #
+# Recommendation (plan 0030 task 15)
+# --------------------------------------------------------------------------- #
+EXPRESS_PLAN = "Backend: Express (Node.js) API. React frontend. PostgreSQL for storage."
+
+
+def test_recommend_docker_for_a_server_plan_with_a_database():
+    assert recommend_template(EXPRESS_PLAN) == "docker-compose"
+
+
+def test_recommend_docker_for_a_named_server_runtime_without_services():
+    assert recommend_template("A FastAPI service in Python.") == "docker-compose"
+
+
+def test_recommend_next_vercel_when_the_plan_names_nextjs():
+    assert recommend_template("A Next.js marketing site with a blog.") == "next-vercel"
+
+
+def test_next_js_with_a_backing_service_still_recommends_docker():
+    assert recommend_template("Next.js app backed by PostgreSQL.") == "docker-compose"
+
+
+def test_recommend_static_for_a_plain_html_plan():
+    assert recommend_template("A plain HTML landing page.") == "static-r2"
+    assert recommend_template("A static site with three pages.") == "static-r2"
+
+
+def test_recommend_nothing_for_an_empty_or_unrecognisable_plan():
+    assert recommend_template(None) is None
+    assert recommend_template("") is None
+    assert recommend_template("We will build something nice.") is None
+
+
+def test_recommended_ids_exist_in_the_registry():
+    for plan in (EXPRESS_PLAN, "Next.js site", "plain HTML page"):
+        assert get_template(recommend_template(plan)) is not None
+
+
+def test_list_endpoint_recommends_exactly_one_template_for_the_plan():
+    app = create_app()
+    with TestClient(app) as client:
+        ws = client.post("/workspaces", json={"name": "W"}, headers=ALICE).json()
+        project = client.post(
+            "/projects", json={"name": "P", "workspace_id": ws["id"]}, headers=ALICE
+        ).json()
+        client.app.state.repository.upsert_stage_document(
+            project["id"], ws["id"], "plan", EXPRESS_PLAN, "alice"
+        )
+        res = client.get(
+            f"/deployment-templates?project_id={project['id']}", headers=ALICE
+        )
+        assert res.status_code == 200, res.text
+        flagged = [row["id"] for row in res.json() if row["recommended"]]
+        assert flagged == ["docker-compose"]
+
+
+def test_list_endpoint_recommends_nothing_without_a_project():
+    app = create_app()
+    with TestClient(app) as client:
+        rows = client.get("/deployment-templates", headers=ALICE).json()
+        assert not any(row["recommended"] for row in rows)

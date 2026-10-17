@@ -63,6 +63,11 @@ export class RepoDocs {
       if (text) return text;
     }
     if (key !== "constitution") return null;
+    return this.cloudConstitution(projectId);
+  }
+
+  /** The cloud's constitution text, or null when it has none or is unreachable. */
+  async cloudConstitution(projectId: string): Promise<string | null> {
     try {
       const stage = await this.client.getStageDocument(projectId, "constitution");
       return stage.content || null;

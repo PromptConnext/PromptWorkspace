@@ -7,7 +7,7 @@ import { useCloudGet } from "@/lib/hooks";
 import type { Decision, DecisionsOut, WorkspaceMember } from "@/lib/types";
 import { APPROVAL_LABEL } from "./ApprovalControl";
 import { useDecisionsData } from "./DeliveryOverview";
-import { DecisionSubject } from "./DecisionSubject";
+import { DecisionSubject, type DiffLabel } from "./DecisionSubject";
 import { memberFullName } from "./MemberChip";
 import { RetryButton } from "./RetryButton";
 
@@ -30,29 +30,37 @@ const RESOLVE_ERROR: Record<string, string> = {
   self_approval_not_allowed: "You asked for this decision, so someone else must approve it.",
 };
 
-/** The newest approved decision of the same kind made before `decision`:
- * what its subject is compared against. `all` is newest first. */
-function previousApproved(all: Decision[], decision: Decision): Decision | null {
+/** What an open request's subject is compared against, and how the caption
+ * names it. */
+export type DiffBase = { decision: Decision; label: DiffLabel };
+
+/** The version a decision is diffed against: the newest earlier approved
+ * decision of the same kind, else the newest earlier one sent back for
+ * changes. `all` is newest first. */
+export function diffBase(all: Decision[], decision: Decision): DiffBase | null {
   const at = Date.parse(decision.created_at);
-  return (
+  const earlier = (status: Decision["status"]) =>
     all.find(
       (d) =>
         d.id !== decision.id &&
         d.kind === decision.kind &&
-        d.status === "approved" &&
+        d.status === status &&
         Date.parse(d.created_at) < at,
-    ) ?? null
-  );
+    );
+  const approved = earlier("approved");
+  if (approved) return { decision: approved, label: "approved" };
+  const sentBack = earlier("rejected");
+  return sentBack ? { decision: sentBack, label: "sent_back" } : null;
 }
 
 function DecisionRow({
   decision,
-  previous,
+  base,
   members,
   onResolved,
 }: {
   decision: Decision;
-  previous: Decision | null;
+  base: DiffBase | null;
   members: WorkspaceMember[];
   /** Receives the listing as it stands after the resolve. */
   onResolved: (snapshot: DecisionsOut | null | undefined) => void;
@@ -105,14 +113,14 @@ function DecisionRow({
           {new Date(decision.resolved_at).toLocaleString()}
         </p>
       )}
-      <DecisionSubject decision={decision} previous={previous} />
+      <DecisionSubject decision={decision} previous={base?.decision ?? null} label={base?.label} />
       {decision.rationale && <p className="mt-2 text-sm text-slate-700">{decision.rationale}</p>}
       {decision.status === "open" && !decision.can_resolve && (
         <p className="mt-2 text-xs text-slate-500">
           {decision.blocked === "no_approver"
             ? `Nobody else can approve this yet. An admin can give the ${HAT_LABEL[decision.routed_hat]} hat to another member.`
             : decision.blocked === "own_request"
-              ? `You asked for this. The ${HAT_LABEL[decision.routed_hat]} approves it, not you.`
+              ? `You requested this, so someone else must approve it: the ${HAT_LABEL[decision.routed_hat]}, or another workspace admin if none is set.`
               : `Waiting on the ${HAT_LABEL[decision.routed_hat]}.`}
         </p>
       )}
@@ -198,7 +206,7 @@ export function DecisionsPanel({ workspaceId }: { workspaceId: string }) {
             <DecisionRow
               key={d.id}
               decision={d}
-              previous={previousApproved(data.decisions, d)}
+              base={diffBase(data.decisions, d)}
               members={members ?? []}
               onResolved={onResolved}
             />

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from app.api._guards import member_role
 from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
-from app.delivery.decisions import can_resolve, is_overdue
+from app.delivery.decisions import can_resolve, is_overdue, latest_decision
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import AssignedTask, Role, TaskStatus, WorkspaceMember, utcnow
 
@@ -54,12 +54,15 @@ class InboxItem(BaseModel):
 @router.get("/decisions", response_model=list[InboxItem])
 def list_my_decisions(
     workspace_id: str | None = Query(default=None),
+    include_mine: bool = Query(default=False),
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[InboxItem]:
     """Open decisions routed to the caller (plan 0029 Decision Inbox). One pass
     over the caller's workspaces and projects: fine at today's scale; move to a
-    single indexed query (idx_pw_decisions_open) when it isn't."""
+    single indexed query (idx_pw_decisions_open) when it isn't. With
+    `include_mine`, also the caller's own requests that were sent back for
+    changes and not asked for again since."""
     items: list[InboxItem] = []
     for workspace in repo.list_workspaces(user.id):
         if workspace_id is not None and workspace.id != workspace_id:
@@ -69,8 +72,25 @@ def list_my_decisions(
         role: Role | None = None
         for project in repo.list_projects_by_workspace(workspace.id):
             now = utcnow()
-            decisions = [d for d in repo.list_decisions(project.id)
+            all_decisions = repo.list_decisions(project.id)
+            decisions = [d for d in all_decisions
                          if d.status == "open" and not is_overdue(d, now)]
+            if include_mine:
+                for d in all_decisions:
+                    if (d.status == "rejected" and d.requested_by == user.id
+                            and latest_decision(all_decisions, d.kind) is d):
+                        items.append(
+                            InboxItem(
+                                decision=DecisionBase(
+                                    **d.model_dump(exclude={"subject_content"}),
+                                    can_resolve=False,
+                                ),
+                                project_id=project.id,
+                                project_name=project.name,
+                                workspace_id=workspace.id,
+                                workspace_name=workspace.name,
+                            )
+                        )
             if not decisions:
                 continue
             if members is None:

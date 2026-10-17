@@ -10,7 +10,10 @@ import pytest
 
 from app.generation.parsing import (
     fix_template_placeholders,
+    missing_task_refs,
+    parse_files,
     parse_task_lines,
+    strip_spec_kit_boilerplate,
     strip_template_scaffolding,
     titles_match,
 )
@@ -231,3 +234,152 @@ def test_titles_match(old: str, new: str, expected: bool):
     assert titles_match(old, new) is expected
     # symmetric: which generation came first does not change the answer
     assert titles_match(new, old) is expected
+
+
+def test_parse_files_keeps_inner_fences():
+    raw = (
+        "```file:plan.md\n# Plan\n\n### Documentation\n\n```text\nspecs/\n```\n\n"
+        "## After\nmore\n```\n"
+    )
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("## After\nmore\n")
+    assert "```text\nspecs/\n```" in files[0]["content"]
+
+
+def test_parse_files_two_blocks_each_with_inner_fence():
+    raw = (
+        "```file:a.md\n# A\n```bash\nls\n```\nend A\n```\n"
+        "```file:b.md\n# B\n```text\nx\n```\nend B\n```\n"
+    )
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"].endswith("end A\n")
+    assert files[1]["content"].endswith("end B\n")
+
+
+def test_parse_files_closing_fence_on_content_line():
+    assert parse_files("```file:p.md\n# Plan\nlast line```\n") == [
+        {"path": "p.md", "content": "# Plan\nlast line\n"}
+    ]
+
+
+def test_parse_files_unclosed_inner_fence_is_salvaged():
+    files = parse_files("```file:plan.md\n# Plan\n```text\nx\n\n## After\nmore\n```\n")
+    assert len(files) == 1
+    assert files[0]["content"].startswith("# Plan\n")
+    assert "## After\nmore" in files[0]["content"]
+
+
+def test_parse_files_new_opener_ends_unclosed_block():
+    raw = "```file:a.md\n# A\n```text\nx\n```file:b.md\n# B\nend\n```\n"
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"] == "# A\n```text\nx\n"
+    assert files[1]["content"] == "# B\nend\n"
+
+
+def test_parse_files_unterminated_block_kept_at_eof():
+    assert parse_files("```file:a.md\n# A\nbody") == [
+        {"path": "a.md", "content": "# A\nbody\n"}
+    ]
+
+
+def test_parse_files_drops_unsafe_paths():
+    raw = (
+        "```file:../evil.md\nx\n```\n```file:/abs.md\ny\n```\n"
+        "```file:ok.md\nz\n```\n"
+    )
+    assert [f["path"] for f in parse_files(raw)] == ["ok.md"]
+
+
+def test_parse_files_indented_inner_fence_stays_inside_block():
+    raw = "```file:a.md\n# A\n1. step\n   ```bash\n   ls\n   ```\nafter\n```\n"
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("after\n")
+    assert "   ```bash\n   ls\n   ```\n" in files[0]["content"]
+
+
+def test_strip_spec_kit_boilerplate_removes_scaffolding():
+    doc = (
+        "# Tasks: Ledger\n\n"
+        "**Feature Branch**: `001-ledger`\n"
+        "**Input**: Design documents from `/specs/001-ledger/`\n"
+        "**Prerequisites**: plan.md (required), research.md\n"
+        "**Tests**: Tests are OPTIONAL - only include them if requested.\n\n"
+        "## Requirements\n\n"
+        "- **FR-001**: System MUST record entries\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST authenticate users via "
+        "[NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]\n"
+        "- **FR-007**: System MUST retain user data for "
+        "[NEEDS CLARIFICATION: retention period not specified]\n\n"
+        "Use [GUIDANCE_FILE] for runtime guidance.\n"
+        "Done when it matches `/specs/001-ledger/spec.md` and /specs/001-ledger/plan.md.\n"
+        "See specs/001-ledger/tasks.md.\n\n"
+        "```text\n/specs/x\n```\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert not any(ln.startswith("**Feature Branch**:") for ln in out.split("\n"))
+    assert "Example of marking unclear requirements" not in out
+    assert "FR-006" not in out and "FR-007" not in out
+    assert "**FR-001**" in out
+    assert "[GUIDANCE_FILE]" not in out
+    assert "**Input**:" not in out and "**Prerequisites**:" not in out
+    assert "Tests are OPTIONAL" not in out
+    assert "the specification" in out and "the plan" in out and "the task list" in out
+    out_outside = out.split("```text")[0]
+    assert "/specs/" not in out_outside and "specs/001" not in out_outside
+    assert "```text\n/specs/x\n```" in out
+
+
+def test_strip_spec_kit_boilerplate_keeps_real_requirements_after_the_example_line():
+    doc = (
+        "## Requirements\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]\n"
+        "- **FR-007**: System MUST export reports\n\n"
+        "## Success\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Example of marking" not in out
+    assert "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]" in out
+    assert "- **FR-007**: System MUST export reports\n\n## Success" in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- [ ]  T029 x",
+        "- [ ] **T029** x",
+        "- [ ] T029: x",
+        "* [x] T029 [P] [US3] x",
+        "- [ ] **T029:** x",
+    ],
+)
+def test_parse_task_lines_accepts_variants(line: str):
+    tasks = parse_task_lines(line)
+    assert [t["ref"] for t in tasks] == ["T029"]
+
+
+def test_missing_task_refs():
+    assert missing_task_refs(["T001", "T002", "T004"]) == ["T003"]
+    assert missing_task_refs([]) == []
+    assert missing_task_refs(["T001", "T002", "T003"]) == []
+
+
+def test_missing_task_refs_pads_like_the_widest_ref():
+    assert missing_task_refs(["T1", "T2", "T4"]) == ["T3"]
+    refs = [f"T{n:03d}" for n in range(1, 36) if n != 29]
+    assert missing_task_refs(refs) == ["T029"]
+
+
+def test_missing_task_refs_is_capped_at_fifty():
+    assert len(missing_task_refs(["T001", "T900"])) == 50
+
+
+def test_missing_task_refs_ignores_a_wildly_sparse_list():
+    assert missing_task_refs(["T1", "T99999999"]) == []
+    assert missing_task_refs(["T0001", "T1002"]) == []
+    assert len(missing_task_refs(["T0001", "T1000"])) == 50

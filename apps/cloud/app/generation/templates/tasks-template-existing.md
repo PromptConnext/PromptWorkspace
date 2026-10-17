@@ -5,12 +5,6 @@ description: "Task list template for a change to an existing codebase"
 
 # Tasks: [FEATURE NAME]
 
-**Input**: Design documents from `/specs/[###-feature-name]/`
-
-**Prerequisites**: plan.md (required), spec.md (required for user stories), [codebase_baseline] and [repo_snapshot] in CONTEXT
-
-**Tests**: Tests are OPTIONAL - only include them if the specification or the constitution asks for them.
-
 **Organization**: Tasks are grouped by user story. The project already exists and runs: there is no setup phase, no foundational phase and no polish phase.
 
 ## Format: `[ID] [P?] [Story] Description`

@@ -114,6 +114,33 @@ def test_gate_on_requires_rules_tasks_and_an_approved_current_plan(monkeypatch):
         assert res.json()["lifecycle_status"] == "repo_created"
 
 
+def test_gate_on_refuses_a_plan_edited_after_its_approval(monkeypatch):
+    with TestClient(create_app()) as client:
+        monkeypatch.setattr(client.app.state.settings, "require_plan_approval", True)
+        ws, pid = _project(client)
+        _ready_for_repo(client, ws, pid)
+        repo = client.app.state.repository
+        repo.upsert_stage_document(pid, ws["id"], "constitution", "# Rules\n\nBe kind.", "alice")
+        repo.upsert_stage_document(pid, ws["id"], "plan", "# Plan\n\nA web app.", "alice")
+        client.patch(f"/projects/{pid}/stage-documents/tasks", json={"content": TASKS},
+                     headers=ALICE)
+        did = client.post(f"/projects/{pid}/decisions", json={"kind": "plan_approval"},
+                          headers=BOB).json()["id"]
+        resolved = client.post(f"/projects/{pid}/decisions/{did}/resolve",
+                               json={"outcome": "approved"}, headers=ALICE)
+        assert resolved.status_code == 200, resolved.text
+
+        edited = client.patch(f"/projects/{pid}/stage-documents/plan",
+                              json={"content": "# Plan\n\nA web app and a mobile app."},
+                              headers=ALICE)
+        assert edited.status_code == 200, edited.text
+        res = client.post(f"/projects/{pid}/lifecycle/create-repository", json={},
+                          headers=ALICE)
+
+        assert res.status_code == 409
+        assert res.json()["detail"] == "plan_approval_required"
+        assert client.app.state.github_client.created_repos == []
+
 def test_an_exported_plan_approval_setting_never_reaches_the_tests():
     import os
 

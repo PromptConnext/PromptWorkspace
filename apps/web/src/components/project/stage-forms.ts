@@ -191,6 +191,7 @@ export const PLAN_FIELDS: StageField[] = [
   {
     key: "project_type",
     label: "Project type",
+    hint: "Pick the closest match to what the specification describes.",
     type: "select",
     required: true,
     options: [

@@ -16,9 +16,10 @@ import { TaskBoard } from "@/components/project/TaskBoard";
 import { BoardSkeleton } from "@/components/project/BoardColumn";
 import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
+import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { useWorkspaceName } from "@/lib/workspace";
-import type { ProjectGraph } from "@/lib/types";
+import type { ProjectGraph, WorkspaceMember } from "@/lib/types";
 
 // "Preview" is ungated on purpose (ADR 0021): a business user opening the
 // running application is the reason it exists. It is always present, even
@@ -44,8 +45,8 @@ const OPENS_WITHOUT_GRAPH: ReadonlySet<Tab> = new Set(["Delivery", "Decisions", 
 
 // The tab lives in `?tab=<slug>` so a refresh keeps it and the view is linkable.
 const slugOf = (t: Tab) => t.toLowerCase();
-function tabFromParam(value: string | null): Tab {
-  return TABS.find((t) => slugOf(t) === value) ?? "Planner";
+function tabFromParam(value: string | null, fallback: Tab = "Planner"): Tab {
+  return TABS.find((t) => slugOf(t) === value) ?? fallback;
 }
 
 const FOCUS_RING =
@@ -152,7 +153,12 @@ function ProjectWorkspace({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const tab = tabFromParam(searchParams.get("tab"));
+  const { user } = useAuth();
+  // The landing tab when the URL names none. Chosen once, when the graph and
+  // the members are both known; a tab the user clicks lands in `?tab=` and
+  // wins from then on.
+  const [landing, setLanding] = useState<Tab | null>(null);
+  const tab = tabFromParam(searchParams.get("tab"), landing ?? "Planner");
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   // Preserves every other query param except the board's `task` and the
@@ -209,6 +215,17 @@ function ProjectWorkspace({
     refreshOnFocus: true,
     pollMs: 30000,
   });
+  // Names the presence chips; the page had no members list of its own.
+  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
+
+  // A member who has tasks assigned lands on them; an admin, and a member
+  // with none, land on the Planner (trust test, finding F24).
+  useEffect(() => {
+    if (landing || !graph || !members || !user) return;
+    const me = members.find((m) => m.user_id === user.id);
+    const hasTasks = graph.tasks.some((t) => t.assigned_user_id === user.id);
+    setLanding(me?.role === "member" && hasTasks ? "Tasks" : "Planner");
+  }, [landing, graph, members, user]);
 
   // A reload of a graph already on screen: a change (a save in the Planner)
   // asked for it, so what is shown predates that change. Said, rather than
@@ -271,7 +288,7 @@ function ProjectWorkspace({
             />
           )}
           <div className="flex items-center gap-3">
-            <PresenceBar projectId={projectId} />
+            <PresenceBar projectId={projectId} members={members} />
             <Link
               href={`/w/${workspaceId}/p/${projectId}/settings`}
               className={`rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300 ${FOCUS_RING}`}
@@ -311,7 +328,12 @@ function ProjectWorkspace({
               loads fresh, as each surface's own request used to). */}
           <DeliveryOverviewProvider key={tab} projectId={projectId}>
             {tab === "Delivery" && (
-              <DeliveryPlan graph={graph} graphError={error} projectId={projectId} />
+              <DeliveryPlan
+                graph={graph}
+                graphError={error}
+                projectId={projectId}
+                workspaceId={workspaceId}
+              />
             )}
             {tab === "Decisions" && (
               <DecisionsPanel workspaceId={workspaceId} />

@@ -15,6 +15,8 @@ touches the graph — a draft is a suggestion, not an artifact.
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.generation.parsing import extract_json_object
 
 # A drafted answer is a form field, not a document. The cap is generous for a
@@ -43,16 +45,18 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(fields: list[dict[str, str]], context: str) -> str:
+def build_prompt(fields: list[dict[str, Any]], context: str) -> str:
     lines = ["FIELDS:"]
     for field in fields:
         hint = f" — {field['hint']}" if field.get("hint") else ""
-        lines.append(f"- {field['key']}: {field['label']}{hint}")
+        options = field.get("options") or []
+        choices = f" (options: {' | '.join(options)}; answer with exactly one)" if options else ""
+        lines.append(f"- {field['key']}: {field['label']}{hint}{choices}")
     lines += ["", "SOURCE MATERIAL:", context]
     return "\n".join(lines)
 
 
-def parse_prefill(raw: str, fields: list[dict[str, str]]) -> dict[str, str] | None:
+def parse_prefill(raw: str, fields: list[dict[str, Any]]) -> dict[str, str] | None:
     """Map the completion onto the requested keys. Returns None when there is
     no usable JSON object at all — anything else is normalised: unknown keys
     dropped, non-strings and over-long values coerced, missing keys absent
@@ -62,6 +66,7 @@ def parse_prefill(raw: str, fields: list[dict[str, str]]) -> dict[str, str] | No
         return None
 
     allowed = {field["key"] for field in fields}
+    options = {field["key"]: field["options"] for field in fields if field.get("options")}
     drafted: dict[str, str] = {}
     for key, value in parsed.items():
         if key not in allowed:
@@ -72,6 +77,9 @@ def parse_prefill(raw: str, fields: list[dict[str, str]]) -> dict[str, str] | No
         elif not isinstance(value, str):
             value = str(value)
         value = value.strip()[:MAX_FIELD_CHARS]
+        if key in options:
+            # A select takes only one of its own options; anything else is dropped.
+            value = next((o for o in options[key] if o.casefold() == value.casefold()), "")
         if value:
             drafted[key] = value
     return drafted

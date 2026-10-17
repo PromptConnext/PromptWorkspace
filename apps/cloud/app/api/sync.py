@@ -778,7 +778,8 @@ def _require_delivery_gates(repo: Repository, project_id: str) -> None:
         raise HTTPException(status_code=409, detail="constitution_required")
     if not (docs["tasks"] or "").strip():
         raise HTTPException(status_code=409, detail="tasks_required")
-    if plan_state(repo, project_id, docs["tasks"]) != "approved":
+    # The approval covers the rules, the plan and the tasks; `docs` holds all three.
+    if plan_state(repo, project_id, docs) != "approved":
         raise HTTPException(status_code=409, detail="plan_approval_required")
 
 

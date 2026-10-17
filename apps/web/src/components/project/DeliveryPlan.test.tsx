@@ -47,14 +47,14 @@ describe("DeliveryPlan", () => {
   it("says the plan is loading instead of rendering nothing", () => {
     plan = null;
     loading = true;
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("Loading delivery plan…")).toBeInTheDocument();
   });
 
   it("shows the load error rather than the loading line", () => {
     plan = null;
     loadError = "Network down";
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("Network down")).toBeInTheDocument();
     expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
   });
@@ -62,7 +62,7 @@ describe("DeliveryPlan", () => {
   it("an error state shows Retry and clicking it refetches", async () => {
     plan = null;
     loadError = "Failed to fetch";
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -83,46 +83,46 @@ describe("DeliveryPlan", () => {
         { id: "e", feature_tag: "", title: "No ref two", change_id: "c1" },
       ],
     } as unknown as ProjectGraph;
-    render(<DeliveryPlan graph={g} projectId="p1" />);
+    render(<DeliveryPlan graph={g} projectId="p1" workspaceId="w1" />);
     const titles = screen.getAllByRole("listitem").map((li) => li.textContent);
     expect(titles).toEqual(["T002Two", "T010Ten", "T011Eleven", "No ref one", "No ref two"]);
   });
 
   it("shows the plan before the graph arrives, and the task titles once it does", () => {
     plan = { plan_approval: "none", changes: [change({ id: "c1", ref: "C1", task_ids: ["t1"] })] };
-    const { rerender } = render(<DeliveryPlan graph={null} projectId="p1" />);
+    const { rerender } = render(<DeliveryPlan graph={null} projectId="p1" workspaceId="w1" />);
 
     expect(screen.getByText("C1")).toBeInTheDocument();
     expect(screen.getByText("approval-control")).toBeInTheDocument();
     expect(screen.getByText(/1 task · loading titles/)).toBeInTheDocument();
 
-    rerender(<DeliveryPlan graph={graph} projectId="p1" />);
+    rerender(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("Create the project")).toBeInTheDocument();
     expect(screen.queryByText(/loading titles/)).not.toBeInTheDocument();
   });
 
   it("an empty plan waits for the graph before saying what to do", () => {
     plan = { changes: [], plan_approval: "none" };
-    render(<DeliveryPlan graph={null} projectId="p1" />);
+    render(<DeliveryPlan graph={null} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("Loading delivery plan…")).toBeInTheDocument();
   });
 
   it("an empty plan stops waiting when the graph failed to load", () => {
     plan = { changes: [], plan_approval: "none" };
-    render(<DeliveryPlan graph={null} graphError="Failed to fetch" projectId="p1" />);
+    render(<DeliveryPlan graph={null} graphError="Failed to fetch" projectId="p1" workspaceId="w1" />);
     expect(screen.queryByText("Loading delivery plan…")).not.toBeInTheDocument();
     expect(screen.getByText(/Generate tasks in the Planner/)).toBeInTheDocument();
   });
 
   it("explains what to do when there is no plan yet", () => {
     plan = { changes: [], plan_approval: "none" };
-    render(<DeliveryPlan graph={{ tasks: [] } as unknown as ProjectGraph} projectId="p1" />);
+    render(<DeliveryPlan graph={{ tasks: [] } as unknown as ProjectGraph} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText(/Generate tasks in the Planner/)).toBeInTheDocument();
   });
 
   it("asks for a re-save when tasks exist from before changes were grouped", () => {
     plan = { changes: [], plan_approval: "none" };
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
     expect(
       screen.getByText(
         "Save the tasks document again in the Planner to group these tasks into Changes.",
@@ -140,7 +140,7 @@ describe("DeliveryPlan", () => {
                  priority: "P1", wave: 1, depends_on: ["C1"], task_ids: ["t2"] }),
       ],
     };
-    render(<DeliveryPlan graph={graph} projectId="p1" />);
+    render(<DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />);
 
     const first = screen.getByRole("region", { name: "Wave 1" });
     expect(within(first).getByText("C1")).toBeInTheDocument();
@@ -161,7 +161,7 @@ describe("DeliveryPlan", () => {
                  done: 0, total: 1 }),
       ],
     };
-    render(<DeliveryPlan graph={null} projectId="p1" />);
+    render(<DeliveryPlan graph={null} projectId="p1" workspaceId="w1" />);
 
     expect(screen.getByText("2/3 done")).toBeInTheDocument();
     const bars = screen.getAllByRole("progressbar");
@@ -177,7 +177,7 @@ describe("DeliveryPlan", () => {
 
   it("shows no progress for a change that carries no tasks", () => {
     plan = { plan_approval: "none", changes: [change({ id: "c1", ref: "C1" })] };
-    render(<DeliveryPlan graph={null} projectId="p1" />);
+    render(<DeliveryPlan graph={null} projectId="p1" workspaceId="w1" />);
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.queryByText(/done$/)).not.toBeInTheDocument();
   });
@@ -199,11 +199,11 @@ describe("DeliveryPlan progress follows the polled graph", () => {
       plan_approval: "none",
       changes: [change({ id: "c1", ref: "C1", task_ids: ["a", "b", "c"], done: 1, total: 3 })],
     };
-    const { rerender } = render(<DeliveryPlan graph={withStatuses("in_progress")} projectId="p1" />);
+    const { rerender } = render(<DeliveryPlan graph={withStatuses("in_progress")} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("1/3 done")).toBeInTheDocument();
 
     // A push closes task b; the 30 s poll brings a new graph, the overview is not refetched.
-    rerender(<DeliveryPlan graph={withStatuses("implemented")} projectId="p1" />);
+    rerender(<DeliveryPlan graph={withStatuses("implemented")} projectId="p1" workspaceId="w1" />);
 
     expect(screen.getByText("2/3 done")).toBeInTheDocument();
     const bar = screen.getByRole("progressbar");
@@ -216,7 +216,7 @@ describe("DeliveryPlan progress follows the polled graph", () => {
       plan_approval: "none",
       changes: [change({ id: "c1", ref: "C1", task_ids: ["a", "b", "c"], done: 1, total: 3 })],
     };
-    render(<DeliveryPlan graph={null} projectId="p1" />);
+    render(<DeliveryPlan graph={null} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("1/3 done")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
   });
@@ -232,7 +232,7 @@ describe("DeliveryPlan progress follows the polled graph", () => {
         { id: "b", feature_tag: "T002", title: "Two", change_id: "c1", status: "verified", deleted_at: "2026-10-09T00:00:00Z" },
       ],
     } as unknown as ProjectGraph;
-    render(<DeliveryPlan graph={g} projectId="p1" />);
+    render(<DeliveryPlan graph={g} projectId="p1" workspaceId="w1" />);
     expect(screen.getByText("1/1 done")).toBeInTheDocument();
   });
 });

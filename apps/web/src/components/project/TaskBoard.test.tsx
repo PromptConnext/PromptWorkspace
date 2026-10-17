@@ -506,14 +506,79 @@ describe("TaskBoard status", () => {
     expect(verified).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("lets an admin mark a task verified", async () => {
-    const held = task({ id: "t1", feature_tag: "T001", assigned_user_id: "u2" });
-    setTaskStatus.mockResolvedValue({ ...held, status: "verified" as TaskStatus });
-    board([held]);
+  it("asks to confirm before moving to Verified", async () => {
+    const held = task({
+      id: "t1",
+      feature_tag: "T001",
+      status: "implemented",
+      acceptance_criteria: [{ text: "Shows an error on bad input" }],
+    } as Partial<Task> & { id: string });
+    setTaskStatus.mockResolvedValue({
+      ...held,
+      status: "verified" as TaskStatus,
+    });
+    board([held], {
+      artifacts: [
+        {
+          id: "a1",
+          project_id: "p1",
+          task_id: "t1",
+          kind: "code",
+          uri: "git:abcdef1234567890",
+          commit_sha: "abcdef1234567890",
+          updated_at: null,
+          deleted_at: null,
+          field_versions: {},
+        },
+      ],
+    });
     await screen.findByText("Task t1");
+    const trigger = () => screen.getByRole("combobox", { name: "Move T001 to another column" });
 
-    await pick(screen.getByRole("combobox", { name: "Move T001 to another column" }), "Verified");
+    await pick(trigger(), "Verified");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Mark T001 as verified?",
+    });
+    expect(within(dialog).getByText("Shows an error on bad input")).toBeInTheDocument();
+    expect(within(dialog).getByText("abcdef1")).toBeInTheDocument();
+    expect(setTaskStatus).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(setTaskStatus).not.toHaveBeenCalled();
+    expect(columnOrder("Implemented")).toEqual(["Task t1"]);
+
+    await pick(trigger(), "Verified");
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Mark verified",
+      }),
+    );
+    await waitFor(() =>
+      expect(setTaskStatus).toHaveBeenCalledWith("p1", "t1", "verified", expect.anything()),
+    );
     await waitFor(() => expect(columnOrder("Verified")).toEqual(["Task t1"]));
+  });
+
+  it("says so in the confirmation when no commit is linked", async () => {
+    board([task({ id: "t1", feature_tag: "T001", status: "implemented" })]);
+    await screen.findByText("Task t1");
+    await pick(screen.getByRole("combobox", { name: "Move T001 to another column" }), "Verified");
+    expect(
+      within(await screen.findByRole("dialog")).getByText("No commit is linked to this task yet."),
+    ).toBeInTheDocument();
+  });
+
+  it("moves to other columns without asking", async () => {
+    setTaskStatus.mockResolvedValue(task({ id: "t1", status: "in_progress" }));
+    board([task({ id: "t1", feature_tag: "T001" })]);
+    await screen.findByText("Task t1");
+    await pick(
+      screen.getByRole("combobox", { name: "Move T001 to another column" }),
+      "In Progress",
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(setTaskStatus).toHaveBeenCalled());
   });
 });
 

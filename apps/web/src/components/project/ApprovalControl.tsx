@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { requestDecision } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { ApprovalState, DecisionKind } from "@/lib/types";
+import type { ApprovalState, DecisionKind, ProjectHat } from "@/lib/types";
 import { useDecisionsData } from "./DeliveryOverview";
 import { RetryButton } from "./RetryButton";
 
@@ -28,15 +29,28 @@ const BUTTON_LABEL: Record<DecisionKind, string> = {
   plan_approval: "Request plan approval",
 };
 
+/** The hat that approves each kind, in the words of the roles panel. */
+const APPROVER_HAT: Record<DecisionKind, ProjectHat> = {
+  intent_approval: "business_owner",
+  plan_approval: "tech_steward",
+};
+const HAT_LABEL: Record<ProjectHat, string> = {
+  business_owner: "Business owner",
+  tech_steward: "Tech steward",
+};
+
 /** The approval state of one stage document, and the way to ask for it
  * (plan 0029 M2). Reads the project's shared delivery overview, so the
  * Planner, the Delivery tab and the Decisions tab show the same truth. */
 export function ApprovalControl({
   projectId,
+  workspaceId,
   kind,
   refreshKey,
 }: {
   projectId: string;
+  /** For the link to the project's role settings. */
+  workspaceId: string;
   kind: DecisionKind;
   /** Anything that changes when the approved document does (e.g. its saved-at
    *  stamp). The states are fetched once, so without it a save leaves
@@ -105,11 +119,26 @@ export function ApprovalControl({
     savedSinceLoad && serverState === "approved" ? "stale" : (serverState as ApprovalState);
   const canRequest = state === "none" || state === "stale" || state === "changes_requested";
 
+  // The state reads the newest answered decision, so the newest rejected one
+  // of this kind is the one whose reason the requester needs.
+  const reason =
+    state === "changes_requested"
+      ? data.decisions
+          .filter((d) => d.kind === kind && d.status === "rejected")
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.rationale
+      : null;
+
+  // Roles come with the overview. Only a role known to be unassigned warns;
+  // the line sits beside the request button, so it is for those who can ask.
+  const hat = APPROVER_HAT[kind];
+  const unassigned = data.roles?.some((r) => r.hat === hat && r.user_id === null) ?? false;
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${TONE[state]}`}>
         {APPROVAL_LABEL[state]}
       </span>
+      {reason && <p className="basis-full text-xs text-slate-600">{reason}</p>}
       {canRequest && (
         <button
           type="button"
@@ -117,8 +146,19 @@ export function ApprovalControl({
           disabled={busy}
           className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:border-slate-300 disabled:opacity-50"
         >
-          {BUTTON_LABEL[kind]}
+          {busy ? "Requesting…" : BUTTON_LABEL[kind]}
         </button>
+      )}
+      {canRequest && unassigned && (
+        <p className="basis-full text-xs text-slate-600">
+          No {HAT_LABEL[hat]} is set, so any other workspace admin can approve.{" "}
+          <Link
+            href={`/w/${workspaceId}/p/${projectId}/settings`}
+            className="underline hover:text-slate-900"
+          >
+            Set roles
+          </Link>
+        </p>
       )}
       {(error ?? loadError) && (
         <p role="alert" className="text-xs text-rose-700">

@@ -388,10 +388,10 @@ export type ProjectionState = "current" | "pending" | "failed" | "not_applicable
 
 /** `tasks` for an imported repository named files that are not in it and not
  *  marked `(new)` (apps/cloud/app/generation/path_check.py). */
-export interface GenerationWarning {
-  code: "unmarked_new_paths";
-  items: { ref: string; path: string }[];
-}
+export type GenerationWarning =
+  | { code: "unmarked_new_paths"; items: { ref: string; path: string }[] }
+  // The generated task list skips numbers between its first and last ref.
+  | { code: "missing_task_numbers"; items: string[] };
 
 export interface GenerateDoneEvent {
   stage: StageKind;
@@ -583,6 +583,8 @@ export interface DeploymentTemplateOut {
   // The template's own caveats — what it costs and what it assumes — shown at
   // selection time, not only in the repository it later writes.
   notes: string[];
+  // True for the one template the project's plan fits. At most one is.
+  recommended: boolean;
 }
 
 // A deployment provider a workspace admin connects (ADR 0023). The token is

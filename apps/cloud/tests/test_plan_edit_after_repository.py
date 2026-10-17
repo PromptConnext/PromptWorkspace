@@ -7,10 +7,10 @@ makes it stale), and `generate/tasks` is not refused and reconciles the board
 by the existing rule (update in place, retire the absent, supersede closed
 work whose title no longer matches).
 
-The delivery plan approval (`plan_approval`) binds the `tasks` document
-(`STAGE_OF` in app/delivery/decisions.py), not the `plan` document, so the
-edit that stales it is an edit of the delivery plan itself, by hand or by
-regeneration.
+The delivery plan approval (`plan_approval`) binds the project rules, the
+`plan` and the `tasks` documents together (`SUBJECT_STAGES` in
+app/delivery/decisions.py, plan 0030 Task 6), so an edit of any of the three
+stales it, by hand or by regeneration.
 """
 
 from __future__ import annotations

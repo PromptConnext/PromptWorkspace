@@ -16,6 +16,7 @@ from app.generation.parsing import (
     extract_document,
     fix_template_placeholders,
     parse_files,
+    strip_spec_kit_boilerplate,
     strip_template_scaffolding,
     strip_thinking,
 )
@@ -156,7 +157,9 @@ def parse_stage_output(kind: StageKind, user_input: str, raw: str) -> Generation
             )
         path, content = STAGE_OUTPUT_PATH[kind], doc
 
-    content = fix_template_placeholders(strip_template_scaffolding(content))
+    content = strip_spec_kit_boilerplate(
+        fix_template_placeholders(strip_template_scaffolding(content))
+    )
     first_line = next((line for line in content.split("\n") if line.startswith("# ")), None)
     title = first_line.removeprefix("# ").strip() if first_line else user_input[:80]
     return GenerationResult(stage=kind, title=title, content=content, path=path, raw=raw)

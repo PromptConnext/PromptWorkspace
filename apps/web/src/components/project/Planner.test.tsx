@@ -20,6 +20,14 @@ vi.mock("./ApprovalControl", () => ({
   ),
 }));
 
+// The shared approval states the Planner reads; null until a test sets one.
+let intentState: string | null = null;
+vi.mock("./DeliveryOverview", () => ({
+  useDecisionsData: () => ({
+    data: intentState ? { states: { intent: intentState, plan: "none" } } : null,
+  }),
+}));
+
 const originalFetch = global.fetch;
 
 // The signed-in user is a workspace admin — the "Tech Lead" role, which is
@@ -45,6 +53,12 @@ function route(href: string) {
   return { ok: true, json: async () => [] };
 }
 
+function fetchedHrefs() {
+  return (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+    String(call[0]),
+  );
+}
+
 function openTab(name: RegExp) {
   fireEvent.click(screen.getByRole("tab", { name }));
 }
@@ -66,6 +80,7 @@ describe("Planner", () => {
   beforeEach(() => {
     localStorage.clear();
     members = [ADMIN_MEMBER];
+    intentState = null;
     global.fetch = vi.fn((url: RequestInfo | URL) =>
       Promise.resolve(route(url.toString())),
     ) as unknown as typeof fetch;
@@ -79,8 +94,8 @@ describe("Planner", () => {
 
   it("renders the document upload and stage stepper for a planning-stage project", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
-    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
     await screen.findByRole("tab", { name: /specify/i });
+    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
     openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
   });
@@ -369,6 +384,60 @@ describe("Planner", () => {
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
+  it("does not show the Tech Lead note while members load", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) return new Promise(() => {});
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    // Panels stay mounted (their fetches run) but hidden: the text is in the
+    // DOM yet must not be visible.
+    await waitFor(() =>
+      expect(fetchedHrefs().some((href) => href.includes("/stage-documents/"))).toBe(true),
+    );
+    for (const note of screen.queryAllByText(/your tech lead writes this step/i)) {
+      expect(note).not.toBeVisible();
+    }
+    expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
+  });
+
+  it("starts fetching stage documents before the members list resolves", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) return new Promise(() => {});
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(fetchedHrefs().some((href) => href.includes("/stage-documents/"))).toBe(true),
+    );
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
+  it("says the role could not be loaded instead of treating the viewer as a member", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    expect(await screen.findByText("Could not load your role. Reload to try again.")).toBeInTheDocument();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
+    for (const note of screen.queryAllByText(/your tech lead writes this step/i)) {
+      expect(note).not.toBeVisible();
+    }
+  });
+
   it("shows the Plan tab read-only to a member who is not a workspace admin", async () => {
     // Hiding it made the strip read "0, 1, 3" and left the member with no way
     // to see what the Tech Lead wrote. The cloud gates authoring, not reading.
@@ -430,7 +499,7 @@ describe("Planner", () => {
     );
 
     expect(await screen.findByText(/couldn't load the workspace members/i)).toBeInTheDocument();
-    openTab(/plan/i);
+    // No tabs without visible panels; the reduced surface is never served.
     expect(screen.queryByRole("button", { name: /create repository/i })).not.toBeInTheDocument();
   });
 
@@ -1746,6 +1815,50 @@ describe("Planner", () => {
       "aria-selected",
       "true",
     );
+  });
+
+  it.each([
+    ["pending", "Waiting for the intent to be approved. The plan is written once the business owner approves it."],
+    ["changes_requested", "Changes were requested on the intent. Revise the specification and ask again."],
+  ])("blocks Continue to Plan while the intent is %s", async (state, copy) => {
+    intentState = state;
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    expect(await screen.findByTestId("approval-intent_approval")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue to Plan" })).not.toBeInTheDocument();
+    // Specify is not ticked while the intent waits.
+    expect(screen.getByRole("tab", { name: "1 · Specify" })).toBeInTheDocument();
+
+    openTab(/2 · plan/i);
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /generate plan/i })).toBeDisabled();
+  });
+
+  it("says on the Plan step that plan approval is requested on the Tasks step", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/2 · plan/i);
+
+    expect(
+      await screen.findByText(
+        "Plan approval is requested on the Tasks step, once tasks are generated. It covers the project rules, the plan and the tasks.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("offers Continue to Plan once the intent is approved", async () => {
+    intentState = "approved";
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    expect(await screen.findByRole("button", { name: "Continue to Plan" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "1 · Specify completed" })).toBeInTheDocument();
   });
 
   it("shows no Continue before the stage has a document", async () => {

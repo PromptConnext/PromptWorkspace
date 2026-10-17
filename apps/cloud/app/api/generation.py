@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -38,7 +38,9 @@ from pydantic import BaseModel, Field
 
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
+from app.delivery.decisions import latest_decision
 from app.dependencies import User, get_current_user, get_repository
+from app.generation.parsing import missing_task_refs, parse_task_lines
 from app.generation.path_check import unknown_task_paths
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
@@ -120,6 +122,12 @@ async def generate(
         requirement = repo.get_latest_requirement(project_id)
         if requirement is None:
             raise HTTPException(status_code=409, detail="requirement_required")
+        # Once intent approval is in use, the plan waits for it: a project
+        # that never asked is not gated. `latest_decision` already skips
+        # withdrawn and expired requests.
+        intent = latest_decision(repo.list_decisions(project_id), "intent_approval")
+        if intent is not None and intent.status in ("open", "rejected"):
+            raise HTTPException(status_code=409, detail="intent_not_approved")
     elif stage == "tasks":
         spec = repo.get_latest_spec_document(project_id)
         if spec is None:
@@ -359,6 +367,9 @@ async def generate(
         elif stage == "tasks":
             payload["task_count"] = applied.task_count
             payload["retired_count"] = applied.retired_count
+            gaps = missing_task_refs([t["ref"] for t in parse_task_lines(result.content)])
+            if gaps:
+                payload["warnings"] = [{"code": "missing_task_numbers", "items": gaps}]
             if codebase is not None:
                 snapshot = codebase.snapshot
                 unknown = unknown_task_paths(
@@ -371,12 +382,12 @@ async def generate(
                 if unknown:
                     # Reported, never rewritten: what a path was meant to be is
                     # the author's call.
-                    payload["warnings"] = [
+                    payload.setdefault("warnings", []).append(
                         {
                             "code": "unmarked_new_paths",
                             "items": [{"ref": u.ref, "path": u.path} for u in unknown],
                         }
-                    ]
+                    )
 
         repo.update_generation_run(
             run.id,
@@ -401,6 +412,10 @@ class PrefillField(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     label: str = Field(min_length=1, max_length=200)
     hint: str = Field(default="", max_length=400)
+    # A select's choices: the model must answer with one of them.
+    options: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=24
+    )
 
 
 class PrefillRequest(BaseModel):

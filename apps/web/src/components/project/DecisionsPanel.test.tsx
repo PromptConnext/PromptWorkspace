@@ -159,7 +159,7 @@ describe("DecisionsPanel", () => {
     expect(resolveDecision).toHaveBeenCalledWith("p1", "d1", "approved", "Looks right.", {});
   });
 
-  it("shows an open request's document as a diff against the last approval", () => {
+  it("shows an open request's document as a diff against the approved version", () => {
     decisions = {
       decisions: [
         decision({ id: "d2", created_at: "2026-10-05T08:00:00Z", subject_content: "# Tasks\n\nBuild it twice." }),
@@ -171,12 +171,51 @@ describe("DecisionsPanel", () => {
     };
     render(<DecisionsPanel workspaceId="w1" />);
 
-    expect(screen.getByText("Changes since the last approval")).toBeInTheDocument();
+    expect(screen.getByText("Changes since the approved version")).toBeInTheDocument();
     expect(screen.getByText("Build it twice.")).toBeInTheDocument();
-    const diff = screen.getByText("Changes since the last approval").closest("details") as HTMLElement;
+    const diff = screen.getByText("Changes since the approved version").closest("details") as HTMLElement;
     expect(within(diff).getByText("Build it.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
     // The earlier approval is resolved: its document is offered, not diffed.
     expect(screen.getByText("Document as approved")).toBeInTheDocument();
+  });
+
+  it("diffs a re-request against the version sent back when nothing was approved", () => {
+    decisions = {
+      decisions: [
+        decision({ id: "d2", created_at: "2026-10-05T08:00:00Z", subject_content: "# Tasks\n\nBuild it twice." }),
+        decision({
+          id: "d1", status: "rejected", can_resolve: false, subject_content: "# Tasks\n\nBuild it.",
+        }),
+      ],
+      states: { intent: "none", plan: "pending" },
+    };
+    render(<DecisionsPanel workspaceId="w1" />);
+
+    const diff = screen.getByText("Changes since the version sent back").closest("details") as HTMLElement;
+    expect(within(diff).getByText("Build it.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
+    expect(within(diff).getByText("Build it twice.").closest("[data-diff]")).toHaveAttribute("data-diff", "add");
+    expect(screen.queryByText(/nothing was approved before/)).not.toBeInTheDocument();
+  });
+
+  it("prefers the approved version over a sent-back one as the diff base", () => {
+    decisions = {
+      decisions: [
+        decision({ id: "d3", created_at: "2026-10-06T08:00:00Z", subject_content: "# Tasks\n\nThree." }),
+        decision({
+          id: "d2",
+          status: "rejected",
+          can_resolve: false,
+          created_at: "2026-10-05T08:00:00Z",
+          subject_content: "# Tasks\n\nTwo.",
+        }),
+        decision({ id: "d1", status: "approved", can_resolve: false, subject_content: "# Tasks\n\nOne." }),
+      ],
+      states: { intent: "none", plan: "pending" },
+    };
+    render(<DecisionsPanel workspaceId="w1" />);
+
+    expect(screen.getByText("Changes since the approved version")).toBeInTheDocument();
+    expect(screen.queryByText("Changes since the version sent back")).not.toBeInTheDocument();
   });
 
   it("a resolved decision shows the resolver's name and time", () => {
@@ -251,7 +290,9 @@ describe("DecisionsPanel", () => {
     };
     render(<DecisionsPanel workspaceId="w1" />);
     expect(
-      screen.getByText("You asked for this. The tech steward approves it, not you."),
+      screen.getByText(
+        "You requested this, so someone else must approve it: the tech steward, or another workspace admin if none is set.",
+      ),
     ).toBeInTheDocument();
   });
 

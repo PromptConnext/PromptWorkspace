@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from app.delivery.decisions import content_hash
 from app.main import create_app
 from app.models.schemas import (
     Decision,
@@ -567,7 +568,8 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
         }))
 
     make("old-approved", 1, "approved")
-    make("rejected", 2, "rejected")
+    make("old-rejected", 1.5, "rejected")
+    make("new-rejected", 2, "rejected")  # the diff base for a re-request after changes
     make("new-approved", 3, "approved")
     make("withdrawn", 4, "withdrawn")
     make("open", 5, "open")
@@ -580,12 +582,48 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
         "open": "content of open",
         "new-approved": "content of new-approved",  # the diff base for the next request
         "plan-approved": "content of plan-approved",  # newest approved of its own kind
+        "new-rejected": "content of new-rejected",
         "old-approved": None,
-        "rejected": None,
+        "old-rejected": None,
         "withdrawn": None,
     }
     # The omitted copy still exists; only the listing leaves it out.
     assert repo.get_decision(project, "old-approved").subject_content == "content of old-approved"
+
+
+def test_content_carriers_include_latest_changes_requested(client, project):
+    """The version sent back is the diff base for the re-request, so the newest
+    sent-back (stored as `rejected`) decision of each kind carries its copy."""
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    base = Decision(
+        project_id=project, workspace_id=ws_id, kind="plan_approval", title="Plan",
+        subject_stage="tasks", subject_hash="h", routed_hat="tech_steward",
+        requested_by="bob",
+    )
+    t = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    def make(name, minutes, status, kind="plan_approval"):
+        return repo.save_decision(base.model_copy(update={
+            "id": name, "status": status, "kind": kind,
+            "created_at": t + timedelta(minutes=minutes),
+            "subject_content": f"content of {name}",
+        }))
+
+    make("sent-back-1", 1, "rejected")
+    make("sent-back-2", 2, "rejected")
+    make("intent-sent-back", 3, "rejected", kind="intent_approval")
+    make("open", 4, "open")
+
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()["decisions"]
+    content = {d["id"]: d["subject_content"] for d in listing}
+
+    assert content == {
+        "open": "content of open",
+        "sent-back-2": "content of sent-back-2",
+        "intent-sent-back": "content of intent-sent-back",
+        "sent-back-1": None,
+    }
 
 
 
@@ -913,3 +951,174 @@ def test_an_overdue_open_decision_lists_unresolvable_and_is_not_in_the_inbox(cli
     listed = client.get(f"/projects/{project}/decisions", headers=ALICE).json()["decisions"]
     assert [x["can_resolve"] for x in listed if x["id"] == did] == [False]
     assert client.get("/me/decisions", headers=ALICE).json() == []
+
+
+# Plan 0030 Task 6: the delivery plan approval covers the project rules, the
+# plan and the tasks, as one snapshot under one hash.
+
+RULES = "# Constitution\n\nEvery change ships with a test."
+PLAN = "# Implementation Plan\n\nA FastAPI service and a Postgres database."
+
+
+def _save_stage(client, pid, stage, content):
+    res = client.patch(f"/projects/{pid}/stage-documents/{stage}", json={"content": content},
+                       headers=ALICE)
+    assert res.status_code == 200, res.text
+
+
+def _save_plan_documents(client, pid):
+    _save_stage(client, pid, "constitution", RULES)
+    _save_stage(client, pid, "plan", PLAN)
+    _save_tasks(client, pid)
+
+
+def test_plan_approval_snapshot_includes_rules_plan_and_tasks(client, project):
+    _save_plan_documents(client, project)
+
+    body = _request(client, project, "plan_approval").json()
+
+    expected = (
+        f"===== Project rules =====\n\n{RULES}\n\n===== Plan =====\n\n{PLAN}\n\n"
+        f"===== Tasks =====\n\n{TASKS.strip()}"
+    )
+    assert body["subject_content"] == expected
+    assert body["subject_stage"] == "tasks"  # kept for the web
+    stored = client.app.state.repository.get_decision(project, body["id"])
+    assert stored is not None and stored.subject_content == expected
+    assert stored.subject_hash == content_hash(expected)
+
+
+def test_plan_approval_snapshot_leaves_out_missing_rules_and_plan(client, project):
+    _save_tasks(client, project)
+
+    body = _request(client, project, "plan_approval").json()
+
+    assert body["subject_content"] == f"===== Tasks =====\n\n{TASKS.strip()}"
+
+
+def test_plan_approval_without_tasks_has_nothing_to_approve(client, project):
+    _save_stage(client, project, "constitution", RULES)
+    _save_stage(client, project, "plan", PLAN)
+
+    res = _request(client, project, "plan_approval")
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_missing"
+
+
+def test_editing_plan_stales_plan_approval(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    assert _resolve(client, project, did).status_code == 200
+
+    _save_stage(client, project, "plan", PLAN + "\n\nAdd a Redis cache.")
+
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    plan = client.get(f"/projects/{project}/delivery-plan", headers=BOB).json()
+    assert plan["plan_approval"] == "stale"
+    (old,) = _listing(client, project, BOB)["decisions"]
+    assert old["is_current"] is False
+    spec = client.app.state.repository.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
+def test_editing_project_rules_stales_plan_approval_and_its_badge(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    assert _resolve(client, project, did).status_code == 200
+    repo = client.app.state.repository
+    assert repo.get_latest_spec_document(project).status == "approved"
+
+    _save_stage(client, project, "constitution", RULES + "\n\nNo secrets in the repository.")
+
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    spec = repo.get_latest_spec_document(project)
+    assert spec.status == "draft" and spec.approved_by is None
+
+
+def test_a_plan_edit_before_the_answer_is_409(client, project):
+    _save_plan_documents(client, project)
+    did = _request(client, project, "plan_approval").json()["id"]
+    _save_stage(client, project, "plan", PLAN + "\n\nAdd a Redis cache.")
+
+    res = _resolve(client, project, did)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_changed"
+
+
+def test_legacy_tasks_only_plan_approval_reads_stale_and_409s(client, project):
+    _save_tasks(client, project)
+    repo = client.app.state.repository
+    # The pre-change shape: the subject is the tasks document alone.
+    legacy = repo.save_decision(
+        Decision(
+            project_id=project,
+            workspace_id=repo.get_project(project).workspace_id,
+            kind="plan_approval",
+            title="Approve the delivery plan",
+            subject_stage="tasks",
+            subject_hash=content_hash(TASKS),
+            subject_content=TASKS,
+            routed_hat="tech_steward",
+            requested_by="bob",
+        )
+    )
+
+    res = _resolve(client, project, legacy.id)
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "decision_subject_changed"
+    assert _listing(client, project, BOB)["states"]["plan"] == "stale"
+    (listed,) = _listing(client, project, BOB)["decisions"]
+    assert listed["is_current"] is False
+
+
+def test_me_decisions_include_mine_returns_changes_requested(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    assert client.get("/me/decisions", headers=BOB).json() == []
+    mine = client.get("/me/decisions?include_mine=true", headers=BOB).json()
+    assert [(i["decision"]["id"], i["decision"]["status"], i["decision"]["rationale"])
+            for i in mine] == [(did, "rejected", "Add cancellations.")]
+    # The resolver is not the requester: it is not sent back to them.
+    assert client.get("/me/decisions?include_mine=true", headers=ALICE).json() == []
+
+    # Asking again makes the new request the latest of its kind.
+    _request(client, project, "intent_approval")
+    again = client.get("/me/decisions?include_mine=true", headers=BOB).json()
+    assert [i["decision"]["status"] for i in again] == []
+
+
+def test_resolve_changes_requested_emails_requester(client, project, mailer):
+    did = _request(client, project, "intent_approval").json()["id"]
+    mailer.sent.clear()
+
+    _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    ((to, subject, text),) = mailer.sent
+    assert to == ["bob@x.com"]
+    assert subject.startswith("[PromptWorkspace] Changes requested: ")
+    assert "Add cancellations." in text
+
+
+def test_resolve_approved_sends_no_email(client, project, mailer):
+    did = _request(client, project, "intent_approval").json()["id"]
+    mailer.sent.clear()
+    _resolve(client, project, did)
+    assert mailer.sent == []
+
+
+def test_a_hat_holder_who_left_the_workspace_reads_as_unassigned(client, project):
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    repo.remove_member(repo.get_project(project).workspace_id, "bob")
+
+    overview = client.get(f"/projects/{project}/delivery-overview", headers=ALICE).json()
+    roles = client.get(f"/projects/{project}/roles", headers=ALICE).json()
+
+    for listed in (overview["roles"], roles):
+        assert {r["hat"]: r["user_id"] for r in listed}["tech_steward"] is None

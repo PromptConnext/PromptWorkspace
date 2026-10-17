@@ -146,8 +146,15 @@ export function branchNameForTask(ref: string, title: string): string {
   const slug = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, SLUG_MAX)
-    .replace(/-+$/, "");
-  return slug ? `${ref}-${slug}` : ref;
+    .replace(/^-+|-+$/g, "");
+  const cut = cutAtWordBoundary(slug).replace(/-+$/, "");
+  return cut ? `${ref}-${cut}` : ref;
+}
+
+/** Cut a slug to SLUG_MAX at the last `-` at or before the limit. A single
+ *  word longer than the limit has no boundary, so it is hard-cut. */
+function cutAtWordBoundary(slug: string): string {
+  if (slug.length <= SLUG_MAX) return slug;
+  const boundary = slug.lastIndexOf("-", SLUG_MAX);
+  return boundary > 0 ? slug.slice(0, boundary) : slug.slice(0, SLUG_MAX);
 }
