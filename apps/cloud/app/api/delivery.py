@@ -144,9 +144,15 @@ def get_delivery_plan(
     return _plan_out(repo, project_id, plan_state(repo, project_id))
 
 
-def _roles_out(roles: list[ProjectRole]) -> list[ProjectRoleOut]:
-    """Every hat, held or not, from the project's roles as read."""
-    holders = {r.hat: r.user_id for r in roles}
+def _member_ids(repo: Repository, project: Project, user: User) -> set[str]:
+    return {m.user_id for m in repo.list_members(project.workspace_id)} | {user.id}
+
+
+def _roles_out(roles: list[ProjectRole], member_ids: Collection[str]) -> list[ProjectRoleOut]:
+    """Every hat, held or not, from the project's roles as read. A holder who
+    has left the workspace reads as unassigned: decisions route to the admins
+    then (`eligible_resolvers`), and the row is left behind by `remove_member`."""
+    holders = {r.hat: r.user_id for r in roles if r.user_id in member_ids}
     return [ProjectRoleOut(hat=hat, user_id=holders.get(hat)) for hat in HATS]
 
 
@@ -156,8 +162,8 @@ def get_project_roles(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[ProjectRoleOut]:
-    require_project(repo, project_id, user)
-    return _roles_out(repo.list_project_roles(project_id))
+    project = require_project(repo, project_id, user)
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
 
 
 def _email(request: Request, background: BackgroundTasks,
@@ -208,7 +214,7 @@ def put_project_role(
         except Exception:
             # The hat is set; a failed notice is logged, not a failed request.
             logger.exception("hat assignment email failed, project=%s hat=%s", project_id, hat)
-    return _roles_out(repo.list_project_roles(project_id))
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
 
 
 DecisionKindIn = Literal["intent_approval", "plan_approval"]
@@ -391,7 +397,7 @@ def _mutation_out(
 
 def _read_listing(
     repo: Repository, project_id: str, user: User
-) -> tuple[DecisionsOut, list[ProjectRole]]:
+) -> tuple[DecisionsOut, list[ProjectRoleOut]]:
     """The project's decision listing as `user` sees it, and the project roles
     read on the way. One membership check, and one read each of the roles, the
     decisions and the stage documents."""
@@ -400,7 +406,7 @@ def _read_listing(
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     listing = _listing(repo.list_decisions(project_id), subject_hashes(repo, project_id), out)
-    return listing, roles
+    return listing, _roles_out(roles, member_ids)
 
 
 @router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
@@ -434,7 +440,7 @@ def get_delivery_overview(
         plan=_plan_out(repo, project_id, listing.states["plan"]),
         decisions=listing.decisions,
         states=listing.states,
-        roles=_roles_out(roles),
+        roles=roles,
     )
 
 

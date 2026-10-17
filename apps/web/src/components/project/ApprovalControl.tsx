@@ -50,7 +50,7 @@ export function ApprovalControl({
 }: {
   projectId: string;
   /** For the link to the project's role settings. */
-  workspaceId?: string;
+  workspaceId: string;
   kind: DecisionKind;
   /** Anything that changes when the approved document does (e.g. its saved-at
    *  stamp). The states are fetched once, so without it a save leaves
@@ -152,14 +152,12 @@ export function ApprovalControl({
       {canRequest && unassigned && (
         <p className="basis-full text-xs text-slate-600">
           No {HAT_LABEL[hat]} is set, so any other workspace admin can approve.{" "}
-          {workspaceId && (
-            <Link
-              href={`/w/${workspaceId}/p/${projectId}/settings`}
-              className="underline hover:text-slate-900"
-            >
-              Set roles
-            </Link>
-          )}
+          <Link
+            href={`/w/${workspaceId}/p/${projectId}/settings`}
+            className="underline hover:text-slate-900"
+          >
+            Set roles
+          </Link>
         </p>
       )}
       {(error ?? loadError) && (

@@ -1108,3 +1108,17 @@ def test_resolve_approved_sends_no_email(client, project, mailer):
     mailer.sent.clear()
     _resolve(client, project, did)
     assert mailer.sent == []
+
+
+def test_a_hat_holder_who_left_the_workspace_reads_as_unassigned(client, project):
+    repo = client.app.state.repository
+    res = client.put(f"/projects/{project}/roles/tech_steward", json={"user_id": "bob"},
+                     headers=ALICE)
+    assert res.status_code == 200, res.text
+    repo.remove_member(repo.get_project(project).workspace_id, "bob")
+
+    overview = client.get(f"/projects/{project}/delivery-overview", headers=ALICE).json()
+    roles = client.get(f"/projects/{project}/roles", headers=ALICE).json()
+
+    for listed in (overview["roles"], roles):
+        assert {r["hat"]: r["user_id"] for r in listed}["tech_steward"] is None

@@ -49,7 +49,7 @@ describe("ApprovalControl", () => {
       ],
       states: { intent: "none", plan: "changes_requested" },
     };
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
 
     expect(screen.getByText("Changes requested")).toBeInTheDocument();
     expect(screen.getByText("Split the booking task.")).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe("ApprovalControl", () => {
     data = states("none");
     const snapshot = states("pending");
     requestDecision.mockResolvedValue({ id: "d1", snapshot });
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
 
     expect(screen.getByText("Not requested")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
@@ -77,7 +77,7 @@ describe("ApprovalControl", () => {
     });
     data = states("none");
     requestDecision.mockResolvedValue({ id: "d1", snapshot: states("pending") });
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
 
@@ -87,19 +87,19 @@ describe("ApprovalControl", () => {
 
   it("hides the button while pending or approved", () => {
     data = states("pending");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
 
     data = states("approved");
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(screen.getByText("Approved")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("asks again when the document changed since approval", () => {
     data = states("stale");
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(screen.getByText("Changed since approval")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request plan approval" })).toBeInTheDocument();
   });
@@ -107,7 +107,7 @@ describe("ApprovalControl", () => {
   it("refetches when an older API sends no snapshot", async () => {
     data = states("none");
     requestDecision.mockResolvedValue({ id: "d1" });
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
     expect(refetch).toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe("ApprovalControl", () => {
   it("refetches when the API sends a null snapshot", async () => {
     data = states("none");
     requestDecision.mockResolvedValue({ id: "d1", snapshot: null });
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
     expect(refetch).toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
@@ -125,14 +125,14 @@ describe("ApprovalControl", () => {
   it("shows the server's refusal", async () => {
     data = states("none");
     requestDecision.mockRejectedValue(new Error("delivery_plan_missing"));
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("delivery_plan_missing");
   });
 
   it("offers nothing to click until the states have loaded", () => {
     data = null;
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(screen.getByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
@@ -141,7 +141,7 @@ describe("ApprovalControl", () => {
   it("shows a load error instead of a request button", () => {
     data = null;
     loadError = "Network down";
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(screen.getByRole("alert")).toHaveTextContent("Network down");
     expect(screen.queryByText("Not requested")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Request/ })).not.toBeInTheDocument();
@@ -150,7 +150,7 @@ describe("ApprovalControl", () => {
   it("an error state shows Retry and clicking it refetches", async () => {
     data = null;
     loadError = "Failed to fetch";
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -159,31 +159,31 @@ describe("ApprovalControl", () => {
 
   it("refetches when the refresh key changes, and not on the first render", () => {
     data = states("approved");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t1" />);
     expect(refetch).not.toHaveBeenCalled();
 
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t1" />);
     expect(refetch).not.toHaveBeenCalled();
 
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t2" />);
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   it("never refetches on its own when no refresh key is given", () => {
     data = states("approved");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" />);
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
     expect(refetch).not.toHaveBeenCalled();
   });
 
   it('saving an approved document shows "Changed since approval" before the refetch resolves', () => {
     data = states("approved");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t1" />);
     expect(screen.getByText("Approved")).toBeInTheDocument();
 
     // The save lands: the refetch is out (the mock never answers), yet the
     // chip must already stop claiming approval.
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t2" />);
 
     expect(refetch).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Changed since approval")).toBeInTheDocument();
@@ -193,27 +193,27 @@ describe("ApprovalControl", () => {
 
   it("goes back to the server's answer once the refetch lands", () => {
     data = states("approved");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t1" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t2" />);
     expect(screen.getByText("Changed since approval")).toBeInTheDocument();
 
     data = states("approved"); // a new response: the save did not change what was approved
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t2" />);
 
     expect(screen.getByText("Approved")).toBeInTheDocument();
   });
 
   it("does not invent a stale state for a document that was not approved", () => {
     data = states("pending");
-    const { rerender } = render(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t1" />);
-    rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
+    const { rerender } = render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t1" />);
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" refreshKey="t2" />);
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
   });
 
   it("shows Requesting… while the request is in flight", async () => {
     data = states("none");
     requestDecision.mockReturnValue(new Promise(() => {}));
-    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
 
     await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
 

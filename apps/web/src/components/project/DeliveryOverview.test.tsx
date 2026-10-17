@@ -68,7 +68,7 @@ describe("DeliveryOverviewProvider", () => {
   it("opening Delivery makes one request, not three", async () => {
     render(
       <DeliveryOverviewProvider projectId="p1">
-        <DeliveryPlan graph={graph} projectId="p1" />
+        <DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />
       </DeliveryOverviewProvider>,
     );
 
@@ -116,7 +116,7 @@ describe("DeliveryOverviewProvider", () => {
     });
     render(
       <DeliveryOverviewProvider projectId="p1">
-        <DeliveryPlan graph={graph} projectId="p1" />
+        <DeliveryPlan graph={graph} projectId="p1" workspaceId="w1" />
         <DecisionsPanel workspaceId="w1" />
       </DeliveryOverviewProvider>,
     );

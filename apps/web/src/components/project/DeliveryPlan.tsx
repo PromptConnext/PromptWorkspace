@@ -57,7 +57,7 @@ export function DeliveryPlan({
   graphError?: string | null;
   projectId: string;
   /** For the link to the project's role settings. */
-  workspaceId?: string;
+  workspaceId: string;
 }) {
   const { data: plan, error, retry } = useDeliveryPlanData();
   const taskById = new Map((graph?.tasks ?? []).map((t) => [t.id, t]));
