@@ -19,15 +19,27 @@ import type { RepoDocs } from "../context/repoDocs.ts";
 
 const SPEC_EXCERPT_CHARS = 4000;
 
+/** Facts only the extension host knows; passed in as data so this file never imports vscode. */
+export interface TaskContextExtra {
+  branch?: string;
+  webUrl?: string;
+}
+
 export async function buildTaskContext(
   entry: AssignedTask,
   client: CloudClient,
   docs: RepoDocs,
   log: LoggerLike,
+  extra: TaskContextExtra = {},
 ): Promise<string> {
   const { task } = entry;
   const ref = taskRefFromFeatureTag(task.feature_tag);
-  const lines: string[] = [`# Task ${task.feature_tag ?? task.id}: ${task.title}`, ""];
+  // The heading and "What to do" spell the task the same way (the normalised
+  // ref); the board tag follows in parentheses only when it differs.
+  const tag = task.feature_tag;
+  const label = ref ?? tag ?? task.id;
+  const heading = tag && tag !== label ? `${label} (${tag})` : label;
+  const lines: string[] = [`# Task ${heading}: ${task.title}`, ""];
   if (ref) {
     // Finding #38: an agent given this text committed `T014:` on another
     // task's branch. Name the branch Start Task uses and the subject prefix
@@ -43,6 +55,8 @@ export async function buildTaskContext(
     `- Status: ${TASK_STATUS_LABELS[task.status]}`,
   );
   if (entry.repo_url) lines.push(`- Repository: ${entry.repo_url}`);
+  if (extra.branch) lines.push(`- Branch: ${extra.branch}`);
+  if (extra.webUrl) lines.push(`- Web: ${extra.webUrl}`);
   lines.push("");
 
   if (task.acceptance_criteria.length > 0) {
@@ -53,8 +67,11 @@ export async function buildTaskContext(
     lines.push("");
   }
 
-  const spec = await specExcerpt(entry, client, log);
-  if (spec) lines.push("## Specification", "", spec, "");
+  const spec = await specifyExcerpt(entry, client, log);
+  if (spec) lines.push("## Specification (excerpt)", "", spec, "");
+
+  const plan = await planExcerpt(entry, client, log);
+  if (plan) lines.push("## Implementation plan (excerpt)", "", plan, "");
 
   const constitution = await docs.read(entry.project_id, "constitution");
   if (constitution) {
@@ -68,11 +85,39 @@ export async function buildTaskContext(
       `\`${ref ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
       `closes the task automatically.`,
     "",
+    "The specification, plan and rules above are the whole context. They are not files " +
+      "in this repository, so do not search the disk for spec.md, plan.md or tasks.md.",
+    "",
   );
   return lines.join("\n");
 }
 
-async function specExcerpt(
+/** The task page in the web app; shared by "Open in the web app" and the copied context. */
+export function taskWebUrl(webUrl: string, entry: AssignedTask): string {
+  return `${webUrl}/w/${entry.workspace_id}/p/${entry.project_id}?tab=tasks`;
+}
+
+function capped(text: string): string {
+  return text.length > SPEC_EXCERPT_CHARS
+    ? `${text.slice(0, SPEC_EXCERPT_CHARS)}\n\n…(truncated)`
+    : text;
+}
+
+async function specifyExcerpt(
+  entry: AssignedTask,
+  client: CloudClient,
+  log: LoggerLike,
+): Promise<string | null> {
+  try {
+    const stage = await client.getStageDocument(entry.project_id, "specify");
+    return stage.content ? capped(stage.content) : null;
+  } catch (err) {
+    log.info(`specification unavailable: ${String(err)}`);
+    return null;
+  }
+}
+
+async function planExcerpt(
   entry: AssignedTask,
   client: CloudClient,
   log: LoggerLike,
@@ -82,12 +127,10 @@ async function specExcerpt(
     const graph = await client.getProjectGraph(entry.project_id);
     const spec = graph.spec_documents.find((s) => s.id === entry.task.spec_id);
     if (!spec?.content) return null;
-    return spec.content.length > SPEC_EXCERPT_CHARS
-      ? `${spec.content.slice(0, SPEC_EXCERPT_CHARS)}\n\n…(truncated)`
-      : spec.content;
+    return capped(spec.content);
   } catch (err) {
     // A missing excerpt degrades the copy; it must never fail it.
-    log.info(`spec excerpt unavailable: ${String(err)}`);
+    log.info(`plan excerpt unavailable: ${String(err)}`);
     return null;
   }
 }

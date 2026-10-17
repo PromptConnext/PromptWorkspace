@@ -35,7 +35,7 @@ import { linkCandidatesFrom, pickerCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
-import { buildTaskContext } from "./tasks/copyContext.ts";
+import { buildTaskContext, taskWebUrl } from "./tasks/copyContext.ts";
 import { StatusQueue, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
@@ -502,7 +502,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
-        await vscode.env.clipboard.writeText(await buildTaskContext(entry, client, docs, log));
+        const repo = git
+          .repositories()
+          .find((r) => link.projectIdForRepoRoot(r.root) === entry.project_id);
+        const { webUrl } = readConfig();
+        await vscode.env.clipboard.writeText(
+          await buildTaskContext(entry, client, docs, log, {
+            branch: repo?.head?.name,
+            webUrl: webUrl ? taskWebUrl(webUrl, entry) : undefined,
+          }),
+        );
         void vscode.window.showInformationMessage(
           `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
         );
@@ -553,9 +562,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (!entry) return;
         const { webUrl } = readConfig();
         await vscode.env.openExternal(
-          vscode.Uri.parse(
-            `${webUrl}/w/${entry.workspace_id}/p/${entry.project_id}?tab=tasks`,
-          ),
+          vscode.Uri.parse(taskWebUrl(webUrl, entry)),
         );
       },
     ),
