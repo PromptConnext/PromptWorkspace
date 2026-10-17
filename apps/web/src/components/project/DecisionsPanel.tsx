@@ -120,7 +120,7 @@ function DecisionRow({
           {decision.blocked === "no_approver"
             ? `Nobody else can approve this yet. An admin can give the ${HAT_LABEL[decision.routed_hat]} hat to another member.`
             : decision.blocked === "own_request"
-              ? `You asked for this. The ${HAT_LABEL[decision.routed_hat]} approves it, not you.`
+              ? `You requested this, so someone else must approve it: the ${HAT_LABEL[decision.routed_hat]}, or another workspace admin if none is set.`
               : `Waiting on the ${HAT_LABEL[decision.routed_hat]}.`}
         </p>
       )}

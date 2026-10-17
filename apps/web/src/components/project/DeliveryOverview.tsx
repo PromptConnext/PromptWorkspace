@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useCloudGet } from "@/lib/hooks";
-import type { DecisionsOut, DeliveryOverview, DeliveryPlan } from "@/lib/types";
+import type { DecisionsOut, DeliveryOverview, DeliveryPlan, ProjectRoleOut } from "@/lib/types";
 
 /** What a delivery surface reads from the shared overview: the shape of
  *  `useCloudGet`'s answer, for the part of the overview it shows. */
@@ -108,7 +108,7 @@ export function useDeliveryPlanData(): OverviewSlice<DeliveryPlan> {
 
 /** The decisions and approval states, as `GET /decisions` answers them.
  *  `mutate` applies a decision write's snapshot to every surface at once. */
-export function useDecisionsData(): OverviewSlice<DecisionsOut> & {
+export function useDecisionsData(): OverviewSlice<DecisionsOut & { roles?: ProjectRoleOut[] }> & {
   mutate: (snapshot: DecisionsOut) => void;
 } {
   const { overview, error, loading, refetch, retry, applyDecisions } = useOverview();

@@ -1777,6 +1777,19 @@ describe("Planner", () => {
     expect(screen.getByRole("button", { name: /generate plan/i })).toBeDisabled();
   });
 
+  it("says on the Plan step that plan approval is requested on the Tasks step", async () => {
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/2 · plan/i);
+
+    expect(
+      await screen.findByText(
+        "Plan approval is requested on the Tasks step, once tasks are generated. It covers the project rules, the plan and the tasks.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("offers Continue to Plan once the intent is approved", async () => {
     intentState = "approved";
     mockStageDocuments({ specify: "# Spec" });

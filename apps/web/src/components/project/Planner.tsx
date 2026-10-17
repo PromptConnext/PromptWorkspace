@@ -139,6 +139,8 @@ const EDITOR_LABEL: Partial<Record<StageKind, string>> = {
   tasks: "Tasks document",
 };
 
+const PLAN_APPROVAL_NOTE =
+  "Plan approval is requested on the Tasks step, once tasks are generated. It covers the project rules, the plan and the tasks.";
 const PLAN_HELPER = "Not technical? Use Suggest from Spec, then review.";
 // Advice, not a lock: generate/plan runs without a constitution
 // (app/api/generation.py only folds one in when it exists).
@@ -1234,6 +1236,9 @@ export function Planner({
               />
             );
           })}
+          {tab.key === "plan" && (
+            <p className="rounded bg-slate-50 p-3 text-xs text-slate-600">{PLAN_APPROVAL_NOTE}</p>
+          )}
           {/* The next step, said once this one has produced its document —
               after a generation or a save, and still there on the next visit.
               Generation is where the task graph is born and the board is where
@@ -1245,6 +1250,7 @@ export function Planner({
               {(tab.key === "specify" || tab.key === "tasks") && (
                 <ApprovalControl
                   projectId={projectId}
+                  workspaceId={project.workspace_id}
                   kind={tab.key === "specify" ? "intent_approval" : "plan_approval"}
                   refreshKey={docStamp[tab.key === "specify" ? "specify" : "tasks"]}
                 />

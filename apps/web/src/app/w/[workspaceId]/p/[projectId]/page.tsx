@@ -311,7 +311,12 @@ function ProjectWorkspace({
               loads fresh, as each surface's own request used to). */}
           <DeliveryOverviewProvider key={tab} projectId={projectId}>
             {tab === "Delivery" && (
-              <DeliveryPlan graph={graph} graphError={error} projectId={projectId} />
+              <DeliveryPlan
+                graph={graph}
+                graphError={error}
+                projectId={projectId}
+                workspaceId={workspaceId}
+              />
             )}
             {tab === "Decisions" && (
               <DecisionsPanel workspaceId={workspaceId} />

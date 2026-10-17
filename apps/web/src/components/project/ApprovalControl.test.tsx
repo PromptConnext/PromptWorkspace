@@ -209,4 +209,62 @@ describe("ApprovalControl", () => {
     rerender(<ApprovalControl projectId="p1" kind="plan_approval" refreshKey="t2" />);
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
   });
+
+  it("shows Requesting… while the request is in flight", async () => {
+    data = states("none");
+    requestDecision.mockReturnValue(new Promise(() => {}));
+    render(<ApprovalControl projectId="p1" kind="plan_approval" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Request plan approval" }));
+
+    const button = screen.getByRole("button", { name: "Requesting…" });
+    expect(button).toBeDisabled();
+  });
+
+  it("warns when the approving role is unassigned", () => {
+    data = {
+      ...states("none"),
+      roles: [
+        { hat: "business_owner", user_id: "u1" },
+        { hat: "tech_steward", user_id: null },
+      ],
+    } as DecisionsOut;
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
+
+    expect(
+      screen.getByText(/No Tech steward is set, so any other workspace admin can approve\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Set roles" })).toHaveAttribute(
+      "href",
+      "/w/w1/p/p1/settings",
+    );
+  });
+
+  it("names the Business owner for an intent request", () => {
+    data = {
+      ...states("none"),
+      roles: [{ hat: "business_owner", user_id: null }],
+    } as DecisionsOut;
+    render(<ApprovalControl projectId="p1" workspaceId="w1" kind="intent_approval" />);
+
+    expect(screen.getByText(/No Business owner is set/)).toBeInTheDocument();
+  });
+
+  it("does not warn when the approving role is assigned or after a request", () => {
+    data = {
+      ...states("none"),
+      roles: [{ hat: "tech_steward", user_id: "u2" }],
+    } as DecisionsOut;
+    const { rerender } = render(
+      <ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />,
+    );
+    expect(screen.queryByText(/is set, so any other/)).not.toBeInTheDocument();
+
+    data = {
+      ...states("pending"),
+      roles: [{ hat: "tech_steward", user_id: null }],
+    } as DecisionsOut;
+    rerender(<ApprovalControl projectId="p1" workspaceId="w1" kind="plan_approval" />);
+    expect(screen.queryByText(/is set, so any other/)).not.toBeInTheDocument();
+  });
 });

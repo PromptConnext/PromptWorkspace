@@ -284,7 +284,7 @@ describe("DecisionsPanel", () => {
     };
     render(<DecisionsPanel workspaceId="w1" />);
     expect(
-      screen.getByText("You asked for this. The tech steward approves it, not you."),
+      screen.getByText("You requested this, so someone else must approve it: the tech steward, or another workspace admin if none is set."),
     ).toBeInTheDocument();
   });
 
