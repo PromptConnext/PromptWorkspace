@@ -424,3 +424,12 @@ Plan approvals made before Task 6 read stale ("Changed since approval") after th
 | F25 part: "Finish signing in" toast cannot be dismissed | VS Code API has no dismiss; needs a different sign-in UI | Later |
 | F26 part: one task-ID spelling across web and editor | Changes what `startTask` writes; needs a grammar decision | Decision first |
 | Staging VSIX is hand-patched (display name and defaults) | Needs a build script for environment flavours | Separate task |
+| Deduplicate the workspace members fetch on the project page (Planner, DecisionsPanel, PresenceBar each fetch it) | Performance only; needs a shared members provider | Later |
+| Members see Planner briefly before the page switches them to Tasks on first load | Needs a neutral skeleton until the landing tab is known | Later |
+| Task branch slug: a short first word followed by one long word cuts to `T1-a` | Hard-cut fallback when the last word boundary is very early | Later, with a re-vendor of the engine copy |
+| Commit artifact link markup duplicated in TaskDrawer and VerifyConfirmDialog | One shared `ArtifactLink` | Later |
+| Task context fetches the spec and plan excerpts one after another | `Promise.all` them | Later |
+| Web does not warn on an open intent request whose spec has since changed; the server refuses with readable copy | Needs the latest decision status, not only the derived state | Later |
+| Receipts record `subject_stage: "tasks"` beside a hash that covers rules, plan and tasks | Document what the hash covers before customers use the D1 export | Before the D1 export ships |
+| `tests/test_request_id.py::test_a_rate_limited_response_still_carries_an_id` fails when a developer's `apps/cloud/.env.local` is present | The suite is not hermetic against `.env.local` | Separate test fix |
+| Smaller test gaps logged during review (fence variants, `[P]` lines through path checks, PUT /roles echo, dialog focus trap, Undo from Verified, slug boundaries) | Coverage only; behaviour verified by review | Later |
