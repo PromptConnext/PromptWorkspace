@@ -10,6 +10,7 @@ import pytest
 
 from app.generation.parsing import (
     fix_template_placeholders,
+    missing_task_refs,
     parse_files,
     parse_task_lines,
     strip_spec_kit_boilerplate,
@@ -329,3 +330,29 @@ def test_strip_spec_kit_boilerplate_removes_scaffolding():
     out_outside = out.split("```text")[0]
     assert "/specs/" not in out_outside and "specs/001" not in out_outside
     assert "```text\n/specs/x\n```" in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- [ ]  T029 x",
+        "- [ ] **T029** x",
+        "- [ ] T029: x",
+        "* [x] T029 [P] [US3] x",
+    ],
+)
+def test_parse_task_lines_accepts_variants(line: str):
+    tasks = parse_task_lines(line)
+    assert [t["ref"] for t in tasks] == ["T029"]
+
+
+def test_missing_task_refs():
+    assert missing_task_refs(["T001", "T002", "T004"]) == ["T003"]
+    assert missing_task_refs([]) == []
+    assert missing_task_refs(["T001", "T002", "T003"]) == []
+
+
+def test_missing_task_refs_pads_like_the_widest_ref():
+    assert missing_task_refs(["T1", "T2", "T4"]) == ["T3"]
+    refs = [f"T{n:03d}" for n in range(1, 36) if n != 29]
+    assert missing_task_refs(refs) == ["T029"]

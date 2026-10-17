@@ -388,10 +388,10 @@ export type ProjectionState = "current" | "pending" | "failed" | "not_applicable
 
 /** `tasks` for an imported repository named files that are not in it and not
  *  marked `(new)` (apps/cloud/app/generation/path_check.py). */
-export interface GenerationWarning {
-  code: "unmarked_new_paths";
-  items: { ref: string; path: string }[];
-}
+export type GenerationWarning =
+  | { code: "unmarked_new_paths"; items: { ref: string; path: string }[] }
+  // The generated task list skips numbers between its first and last ref.
+  | { code: "missing_task_numbers"; items: string[] };
 
 export interface GenerateDoneEvent {
   stage: StageKind;

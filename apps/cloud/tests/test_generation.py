@@ -612,3 +612,34 @@ def test_driver_prompt_states_todays_date_for_every_stage():
     for kind in ("constitution", "specify", "plan", "tasks"):
         assert "Today's date is 2026-10-03;" in driver_prompt(kind, today=date(2026, 10, 3)), kind
         assert f"Today's date is {utcnow().date().isoformat()};" in driver_prompt(kind), kind
+
+
+def test_tasks_done_payload_warns_on_missing_numbers(client: TestClient):
+    class GappedTasksProvider(FakeGenerationProvider):
+        async def stream(self, system_prompt, user_content, *args, **kwargs):
+            if "task-breakdown" not in system_prompt:
+                async for delta in super().stream(system_prompt, user_content, *args, **kwargs):
+                    yield delta
+                return
+            yield (
+                "# Tasks\n\n"
+                "- [ ] T001 Implement the first task from the plan\n"
+                "  - AC: The first task's behaviour is observable\n"
+                "- [ ] T002 Implement the second task from the plan\n"
+                "  - AC: The second task's behaviour is observable\n"
+                "- [ ] T004 Implement the fourth task from the plan\n"
+                "  - AC: The fourth task's behaviour is observable\n"
+            )
+            if kwargs.get("on_finish"):
+                kwargs["on_finish"]("stop")
+
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+    client.app.state.generation_provider = GappedTasksProvider()
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT)
+    done = _sse_events(res.text)["done"]
+
+    assert done["task_count"] == 3
+    assert {"code": "missing_task_numbers", "items": ["T003"]} in done["warnings"]

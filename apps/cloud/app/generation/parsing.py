@@ -16,7 +16,9 @@ from dataclasses import dataclass
 _FILE_OPEN_RE = re.compile(r"^```file:(.+)$")
 _INNER_FENCE_OPEN_RE = re.compile(r"^\s*```\S")
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-_TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$")
+# Tolerates the variants models emit: extra spaces after the checkbox, a bolded
+# ref (`**T029**`), and a colon after it (`T029:`).
+_TASK_LINE_RE = re.compile(r"^\s*[-*]\s+\[[ xX]?\]\s+\**(T\d+)\**:?\s+(\[P\]\s+)?(.+)$")
 # An indented `- AC: <criterion>` sub-bullet under a task line.
 _TASK_AC_RE = re.compile(r"^[ \t]+[-*]\s+(?:AC|Acceptance)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->\n?", re.DOTALL)
@@ -279,6 +281,16 @@ def parse_task_lines(doc: str) -> list[dict[str, object]]:
         if ac and ac.group(1) and criteria is not None:
             criteria.append(ac.group(1))
     return tasks
+
+
+def missing_task_refs(refs: list[str]) -> list[str]:
+    """Numbers absent between the lowest and highest ref (`T001`, `T002`, `T004`
+    gives `["T003"]`), padded to the widest ref in the input."""
+    numbers = {int(r[1:]) for r in refs if re.fullmatch(r"T\d+", r)}
+    if not numbers:
+        return []
+    width = max(len(r) - 1 for r in refs if re.fullmatch(r"T\d+", r))
+    return [f"T{n:0{width}d}" for n in range(min(numbers), max(numbers) + 1) if n not in numbers]
 
 
 # A `## Phase N: <name>` heading from the tasks template. The separator after the

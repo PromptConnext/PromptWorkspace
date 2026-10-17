@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
+from app.generation.parsing import missing_task_refs, parse_task_lines
 from app.generation.path_check import unknown_task_paths
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
@@ -359,6 +360,9 @@ async def generate(
         elif stage == "tasks":
             payload["task_count"] = applied.task_count
             payload["retired_count"] = applied.retired_count
+            gaps = missing_task_refs([t["ref"] for t in parse_task_lines(result.content)])
+            if gaps:
+                payload["warnings"] = [{"code": "missing_task_numbers", "items": gaps}]
             if codebase is not None:
                 snapshot = codebase.snapshot
                 unknown = unknown_task_paths(
@@ -371,12 +375,12 @@ async def generate(
                 if unknown:
                     # Reported, never rewritten: what a path was meant to be is
                     # the author's call.
-                    payload["warnings"] = [
+                    payload.setdefault("warnings", []).append(
                         {
                             "code": "unmarked_new_paths",
                             "items": [{"ref": u.ref, "path": u.path} for u in unknown],
                         }
-                    ]
+                    )
 
         repo.update_generation_run(
             run.id,

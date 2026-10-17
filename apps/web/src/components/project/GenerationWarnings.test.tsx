@@ -66,4 +66,13 @@ describe("GenerationWarnings", () => {
       "1 task names a file that isn't in the repository",
     );
   });
+
+  it("renders missing task numbers warning", () => {
+    render(
+      <GenerationWarnings warnings={[{ code: "missing_task_numbers", items: ["T029", "T031"] }]} />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Task numbers missing from the generated list: T029, T031. Regenerate, or add them by hand.",
+    );
+  });
 });
