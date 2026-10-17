@@ -21,6 +21,12 @@ import type { ProjectLink } from "../link/projectLink.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { StatusWriter } from "./statusWriter.ts";
 import { ensureTaskBranch } from "./taskBranch.ts";
+import {
+  COPY_CONTEXT_ACTION,
+  OPEN_IN_WEB_ACTION,
+  startNotice,
+  type StartChoice,
+} from "./startNotice.ts";
 
 export interface StartTaskDeps {
   assign: (projectId: string, taskId: string, userId: string) => Promise<unknown>;
@@ -31,7 +37,7 @@ export interface StartTaskDeps {
   log: OutputLogger;
 }
 
-type GitChoice = "branch" | "message" | "neither";
+type GitChoice = StartChoice;
 
 export async function startTask(
   entry: AssignedTask,
@@ -39,25 +45,34 @@ export async function startTask(
 ): Promise<void> {
   const { task, project_id: projectId } = entry;
 
+  // Ask before anything is written: Escape at the picker must leave the task
+  // exactly as it was (unclaimed, status untouched). With no task number or no
+  // linked repository there is nothing to ask about, so those go straight on.
+  const ref = taskRefFromFeatureTag(task.feature_tag);
+  const root = ref ? repoRootFor(projectId, deps) : undefined;
+  const branch = ref ? branchNameForTask(ref, task.title) : undefined;
+  let choice: GitChoice | undefined;
+  if (ref && root && branch) {
+    choice = await askGitChoice(ref, branch);
+    if (!choice) return;
+  }
+
   if (!(await claim(entry, deps))) return;
 
   if (task.status === "todo") {
     await deps.writer.setStatus({ projectId, taskId: task.id, status: "in_progress" });
   }
 
-  const ref = taskRefFromFeatureTag(task.feature_tag);
+  // These two replace the next-step notification (one notification per start):
+  // without a ref or a repository there is no branch to name, and what the
+  // developer most needs to hear is why commits will not close the task.
   if (!ref) {
-    // Nothing to carry. Claiming and starting still worked, so this is a
-    // notice rather than a failure — but it has to be said, or the developer
-    // will expect an auto-close that can never happen.
     void vscode.window.showInformationMessage(
       `Started "${task.title}". It has no task number, so commits cannot close it automatically.`,
     );
     return;
   }
-
-  const root = repoRootFor(projectId, deps);
-  if (!root) {
+  if (!root || !branch || !choice) {
     void vscode.window.showInformationMessage(
       `Started ${ref}. No git repository is linked to this project, so there is ` +
         "nowhere to put the task number yet.",
@@ -65,10 +80,9 @@ export async function startTask(
     return;
   }
 
-  const branch = branchNameForTask(ref, task.title);
   const message = `${ref}: ${task.title}`;
-  const choice = await askGitChoice(ref, branch);
-  if (choice === "neither") return;
+  let reported: GitChoice = choice;
+  let noticeBranch: string | undefined = currentBranch(root, deps);
 
   if (choice === "branch") {
     // Create and check out, or check out the branch that already exists:
@@ -82,13 +96,31 @@ export async function startTask(
         "Cancel",
       );
       if (retry !== "Prefill Message") return;
-    } else if (result === "checked_out") {
-      void vscode.window.showInformationMessage(`Switched to the existing branch ${branch}.`);
+      reported = "message";
+    } else {
+      noticeBranch = branch;
     }
   }
 
-  deps.git.setCommitMessage(root, message);
+  if (choice !== "neither") deps.git.setCommitMessage(root, message);
   deps.log.info(`started ${ref} (${choice})`);
+
+  void vscode.window
+    .showInformationMessage(
+      startNotice(ref, reported, noticeBranch),
+      COPY_CONTEXT_ACTION,
+      OPEN_IN_WEB_ACTION,
+    )
+    .then((picked) => {
+      const command =
+        picked === COPY_CONTEXT_ACTION
+          ? "promptworkspace.copyTaskContext"
+          : picked === OPEN_IN_WEB_ACTION
+            ? "promptworkspace.openTaskInWeb"
+            : undefined;
+      // The same node shape the task tree passes to these commands.
+      if (command) return vscode.commands.executeCommand(command, { kind: "task", entry });
+    });
 }
 
 /**
@@ -131,7 +163,7 @@ async function claim(entry: AssignedTask, deps: StartTaskDeps): Promise<boolean>
 
 /** One prompt, three answers. Two prompts for two carriers reads as nagging
  *  for a gesture that is supposed to remove friction. */
-async function askGitChoice(ref: string, branch: string): Promise<GitChoice> {
+async function askGitChoice(ref: string, branch: string): Promise<GitChoice | undefined> {
   const picked = await vscode.window.showQuickPick(
     [
       {
@@ -154,7 +186,8 @@ async function askGitChoice(ref: string, branch: string): Promise<GitChoice> {
     ],
     { title: `Start ${ref}`, placeHolder: "How should git carry the task number?" },
   );
-  return picked?.choice ?? "neither";
+  // Escape is a cancel, not "neither": the caller must not claim the task.
+  return picked?.choice;
 }
 
 /** The repository this project is linked to — found through the link table
@@ -165,4 +198,8 @@ function repoRootFor(projectId: string, deps: StartTaskDeps): vscode.Uri | undef
     if (deps.link.projectIdForRepoRoot(repo.root) === projectId) return repo.root;
   }
   return undefined;
+}
+
+function currentBranch(root: vscode.Uri, deps: StartTaskDeps): string | undefined {
+  return deps.git.repositoryFor(root)?.head?.name;
 }
