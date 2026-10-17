@@ -53,6 +53,12 @@ function route(href: string) {
   return { ok: true, json: async () => [] };
 }
 
+function fetchedHrefs() {
+  return (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+    String(call[0]),
+  );
+}
+
 function openTab(name: RegExp) {
   fireEvent.click(screen.getByRole("tab", { name }));
 }
@@ -387,9 +393,30 @@ describe("Planner", () => {
 
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
 
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByText(/your tech lead writes this step/i)).not.toBeInTheDocument();
-    expect(screen.queryAllByRole("tabpanel", { hidden: true })).toHaveLength(0);
+    // Panels stay mounted (their fetches run) but hidden: the text is in the
+    // DOM yet must not be visible.
+    await waitFor(() =>
+      expect(fetchedHrefs().some((href) => href.includes("/stage-documents/"))).toBe(true),
+    );
+    for (const note of screen.queryAllByText(/your tech lead writes this step/i)) {
+      expect(note).not.toBeVisible();
+    }
+    expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
+  });
+
+  it("starts fetching stage documents before the members list resolves", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) return new Promise(() => {});
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(fetchedHrefs().some((href) => href.includes("/stage-documents/"))).toBe(true),
+    );
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
   it("says the role could not be loaded instead of treating the viewer as a member", async () => {
@@ -404,7 +431,11 @@ describe("Planner", () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
 
     expect(await screen.findByText("Could not load your role. Reload to try again.")).toBeInTheDocument();
-    expect(screen.queryByText(/your tech lead writes this step/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
+    for (const note of screen.queryAllByText(/your tech lead writes this step/i)) {
+      expect(note).not.toBeVisible();
+    }
   });
 
   it("shows the Plan tab read-only to a member who is not a workspace admin", async () => {
@@ -468,7 +499,7 @@ describe("Planner", () => {
     );
 
     expect(await screen.findByText(/couldn't load the workspace members/i)).toBeInTheDocument();
-    openTab(/plan/i);
+    // No tabs without visible panels; the reduced surface is never served.
     expect(screen.queryByRole("button", { name: /create repository/i })).not.toBeInTheDocument();
   });
 
