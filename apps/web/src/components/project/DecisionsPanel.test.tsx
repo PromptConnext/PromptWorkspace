@@ -201,7 +201,13 @@ describe("DecisionsPanel", () => {
     decisions = {
       decisions: [
         decision({ id: "d3", created_at: "2026-10-06T08:00:00Z", subject_content: "# Tasks\n\nThree." }),
-        decision({ id: "d2", status: "rejected", can_resolve: false, created_at: "2026-10-05T08:00:00Z", subject_content: "# Tasks\n\nTwo." }),
+        decision({
+          id: "d2",
+          status: "rejected",
+          can_resolve: false,
+          created_at: "2026-10-05T08:00:00Z",
+          subject_content: "# Tasks\n\nTwo.",
+        }),
         decision({ id: "d1", status: "approved", can_resolve: false, subject_content: "# Tasks\n\nOne." }),
       ],
       states: { intent: "none", plan: "pending" },
@@ -284,7 +290,9 @@ describe("DecisionsPanel", () => {
     };
     render(<DecisionsPanel workspaceId="w1" />);
     expect(
-      screen.getByText("You requested this, so someone else must approve it: the tech steward, or another workspace admin if none is set."),
+      screen.getByText(
+        "You requested this, so someone else must approve it: the tech steward, or another workspace admin if none is set.",
+      ),
     ).toBeInTheDocument();
   });
 

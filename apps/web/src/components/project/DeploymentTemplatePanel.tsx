@@ -163,70 +163,70 @@ export function DeploymentTemplatePanel({
           {[...templates]
             .sort((a, b) => Number(b.recommended) - Number(a.recommended))
             .map((template) => (
-            <li key={template.id} className="rounded border border-slate-200 p-2">
-              <label className="flex items-start gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="deployment-template"
-                  className="mt-1"
-                  checked={selected === template.id}
-                  onChange={() => choose(template.id)}
-                  disabled={readOnly}
-                />
-                <span>
-                  <span className="font-medium text-slate-900">{template.name}</span>
-                  {template.recommended && (
-                    <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
-                      Fits your plan
+              <li key={template.id} className="rounded border border-slate-200 p-2">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="deployment-template"
+                    className="mt-1"
+                    checked={selected === template.id}
+                    onChange={() => choose(template.id)}
+                    disabled={readOnly}
+                  />
+                  <span>
+                    <span className="font-medium text-slate-900">{template.name}</span>
+                    {template.recommended && (
+                      <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                        Fits your plan
+                      </span>
+                    )}
+                    <span className="block text-xs text-slate-500">{template.description}</span>
+                    <span className="mt-1 block text-xs text-slate-400">
+                      {template.provider_label}
+                      {" · "}
+                      {ACCOUNT_NOTE[template.provider_credential_owner]}
                     </span>
-                  )}
-                  <span className="block text-xs text-slate-500">{template.description}</span>
-                  <span className="mt-1 block text-xs text-slate-400">
-                    {template.provider_label}
-                    {" · "}
-                    {ACCOUNT_NOTE[template.provider_credential_owner]}
+                    {/* The template's own caveats, at the moment of choosing.
+                        GitHub Pages costs a public repository, and that is not
+                        something a Tech Lead should discover from a document in
+                        the repo it already created. */}
+                    {template.notes.length > 0 && (
+                      <ul className="mt-1 list-inside list-disc text-xs text-slate-500">
+                        {template.notes.map((note) => (
+                          <li key={note}>{note}</li>
+                        ))}
+                      </ul>
+                    )}
                   </span>
-                  {/* The template's own caveats, at the moment of choosing.
-                      GitHub Pages costs a public repository, and that is not
-                      something a Tech Lead should discover from a document in
-                      the repo it already created. */}
-                  {template.notes.length > 0 && (
-                    <ul className="mt-1 list-inside list-disc text-xs text-slate-500">
-                      {template.notes.map((note) => (
-                        <li key={note}>{note}</li>
+                </label>
+
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-slate-500 underline hover:text-slate-700"
+                  onClick={() =>
+                    setExpanded((prev) => ({ ...prev, [template.id]: !prev[template.id] }))
+                  }
+                >
+                  {expanded[template.id] ? "Hide what it commits" : "See what it commits"}
+                </button>
+                {expanded[template.id] && (
+                  <div className="mt-2">
+                    <p className="mb-1 text-xs text-slate-500">
+                      {template.scaffold_paths.length} files, including:
+                    </p>
+                    <ul className="mb-2 list-inside list-disc text-xs text-slate-500">
+                      {template.scaffold_paths.slice(0, 8).map((path) => (
+                        <li key={path}>
+                          <code>{path}</code>
+                        </li>
                       ))}
                     </ul>
-                  )}
-                </span>
-              </label>
-
-              <button
-                type="button"
-                className="mt-2 text-xs text-slate-500 underline hover:text-slate-700"
-                onClick={() =>
-                  setExpanded((prev) => ({ ...prev, [template.id]: !prev[template.id] }))
-                }
-              >
-                {expanded[template.id] ? "Hide what it commits" : "See what it commits"}
-              </button>
-              {expanded[template.id] && (
-                <div className="mt-2">
-                  <p className="mb-1 text-xs text-slate-500">
-                    {template.scaffold_paths.length} files, including:
-                  </p>
-                  <ul className="mb-2 list-inside list-disc text-xs text-slate-500">
-                    {template.scaffold_paths.slice(0, 8).map((path) => (
-                      <li key={path}>
-                        <code>{path}</code>
-                      </li>
-                    ))}
-                  </ul>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs">
-                    {template.workflow_preview}
-                  </pre>
-                </div>
-              )}
-            </li>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs">
+                      {template.workflow_preview}
+                    </pre>
+                  </div>
+                )}
+              </li>
           ))}
         </ul>
       )}

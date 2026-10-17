@@ -6,9 +6,13 @@ import { taskRefLabel } from "@/lib/taskOrder";
 import type { Artifact, Task } from "@/lib/types";
 import { InlineCodeText, isHttpUrl } from "./TaskCard";
 
-/** `{repo}/commit/{sha}` for an http(s) repository URL, else null. */
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+
+/** `{repo}/commit/{sha}` for an http(s) repository URL and a hex sha, else null
+ * (the server stores the sha as a free string, so it is checked before it goes
+ * into the URL path). */
 export function commitUrl(repoUrl: string | null | undefined, sha: string): string | null {
-  if (!repoUrl || !isHttpUrl(repoUrl)) return null;
+  if (!repoUrl || !isHttpUrl(repoUrl) || !COMMIT_SHA.test(sha)) return null;
   const base = repoUrl
     .trim()
     .replace(/\/+$/, "")

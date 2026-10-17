@@ -20,8 +20,8 @@ const BASE_NAME: Record<DiffLabel, string> = {
  * requested, as a diff against the newest earlier approved version (else the
  * newest one sent back for changes) when there is one. Only an open decision
  * is diffed; a resolved one offers its document as approved (the listing sends
- * the text for the newest approved decision only, so an older card has none and
- * shows nothing). The text comes from
+ * the text for the newest approved decision and the newest sent-back one, so an
+ * older card has none and shows nothing). The text comes from
  * repositories and users, so every line is a text node in a `<pre>`-style
  * block, never parsed as markdown or HTML. */
 export function DecisionSubject({
