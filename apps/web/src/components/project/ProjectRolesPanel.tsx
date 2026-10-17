@@ -63,6 +63,9 @@ export function ProjectRolesPanel({
     <section className="mb-8 rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Decision roles</h2>
       <p className="mb-4 text-xs text-slate-500">Unassigned roles fall back to workspace admins.</p>
+      {!isAdmin && (
+        <p className="mb-4 text-xs text-slate-500">Only workspace admins can change these roles.</p>
+      )}
       {loadError && (
         <p role="alert" className="text-sm text-rose-700">
           {loadError}

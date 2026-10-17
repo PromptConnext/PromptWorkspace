@@ -734,6 +734,9 @@ export function Planner({
     error: membersError,
     refetch: refetchMembers,
   } = useCloudGet<WorkspaceMember[]>(`/workspaces/${project.workspace_id}/members`);
+  // Role-gated copy must not render until the role is known. The `!user` arm
+  // covers useCloudGet's early return (loading=false) while the session resolves.
+  const rolesPending = membersLoading || (!user && !membersError);
   const isTechLead = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 
   // Which stages already have a saved document. Each stage reports its own
@@ -1083,7 +1086,7 @@ export function Planner({
         </div>
       )}
 
-      {membersLoading || (!user && !membersError) ? (
+      {rolesPending ? (
         <div
           aria-hidden
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
@@ -1152,7 +1155,14 @@ export function Planner({
       {/* Every stage stays mounted so a half-typed intake form survives
           switching tabs; the inactive ones are hidden rather than unmounted,
           which also keeps them out of the accessibility tree. */}
-      {TABS.map((tab, index) => (
+      {rolesPending ? (
+        <div aria-hidden className="h-40 animate-pulse rounded-lg bg-slate-50" />
+      ) : membersError ? (
+        <p role="alert" className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+          Could not load your role. Reload to try again.
+        </p>
+      ) : (
+      TABS.map((tab, index) => (
         <div
           key={tab.key}
           id={`planner-panel-${tab.key}`}
@@ -1305,7 +1315,8 @@ export function Planner({
             />
           )}
         </div>
-      ))}
+      ))
+      )}
     </div>
   );
 }

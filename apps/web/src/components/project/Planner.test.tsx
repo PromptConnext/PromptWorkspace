@@ -88,8 +88,8 @@ describe("Planner", () => {
 
   it("renders the document upload and stage stepper for a planning-stage project", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
-    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
     await screen.findByRole("tab", { name: /specify/i });
+    expect(screen.getByText(/upload a prd \(pdf or markdown\)/i)).toBeInTheDocument();
     openTab(/specify/i);
     expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
   });
@@ -376,6 +376,35 @@ describe("Planner", () => {
     // Offering an authorable Plan step now and locking it a moment later
     // reads as the page changing its mind.
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
+  it("does not show the Tech Lead note while members load", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) return new Promise(() => {});
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/your tech lead writes this step/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("tabpanel", { hidden: true })).toHaveLength(0);
+  });
+
+  it("says the role could not be loaded instead of treating the viewer as a member", async () => {
+    global.fetch = vi.fn((url: RequestInfo | URL) => {
+      const href = url.toString();
+      if (href.includes("/members")) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+      }
+      return Promise.resolve(route(href));
+    }) as unknown as typeof fetch;
+
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    expect(await screen.findByText("Could not load your role. Reload to try again.")).toBeInTheDocument();
+    expect(screen.queryByText(/your tech lead writes this step/i)).not.toBeInTheDocument();
   });
 
   it("shows the Plan tab read-only to a member who is not a workspace admin", async () => {

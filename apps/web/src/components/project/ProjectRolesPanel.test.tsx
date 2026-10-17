@@ -60,6 +60,14 @@ describe("ProjectRolesPanel", () => {
     expect(setProjectRole).not.toHaveBeenCalled();
   });
 
+  it("explains disabled role pickers to members", () => {
+    const { unmount } = render(<ProjectRolesPanel projectId="p1" workspaceId="w1" isAdmin={false} />);
+    expect(screen.getByText("Only workspace admins can change these roles.")).toBeInTheDocument();
+    unmount();
+    render(<ProjectRolesPanel projectId="p1" workspaceId="w1" isAdmin />);
+    expect(screen.queryByText(/only workspace admins can change/i)).not.toBeInTheDocument();
+  });
+
   it("shows an alert and does not refetch when the update fails", async () => {
     setProjectRole.mockRejectedValue(new Error("Only admins can assign roles"));
     render(<ProjectRolesPanel projectId="p1" workspaceId="w1" isAdmin />);
