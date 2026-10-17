@@ -179,6 +179,54 @@ def test_plan_creates_spec_document_against_latest_requirement(client: TestClien
     assert spec.id == spec_id
 
 
+def _request_intent(client: TestClient, pid: str, status: str) -> None:
+    from app.models.schemas import Decision
+
+    repo = client.app.state.repository
+    project = repo.get_project(pid)
+    repo.save_decision(
+        Decision(
+            project_id=pid,
+            workspace_id=project.workspace_id,
+            kind="intent_approval",
+            title="Approve the intent",
+            subject_stage="specify",
+            subject_hash="h",
+            routed_hat="business_owner",
+            requested_by="alice",
+            status=status,
+        )
+    )
+
+
+@pytest.mark.parametrize("status", ["open", "rejected"])
+def test_plan_generation_refused_while_intent_open(client: TestClient, status: str):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _request_intent(client, pid, status)
+
+    res = _generate(client, pid, "plan", PLAN_INPUT)
+    assert res.status_code == 409
+    assert res.json()["detail"] == "intent_not_approved"
+    # Only the plan waits: the specification can still be revised.
+    assert _generate(client, pid, "specify", SPECIFY_INPUT).status_code == 200
+
+
+def test_plan_generation_allowed_when_intent_never_requested(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+
+    assert _generate(client, pid, "plan", PLAN_INPUT).status_code == 200
+
+
+def test_plan_generation_allowed_after_intent_approved(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _request_intent(client, pid, "approved")
+
+    assert _generate(client, pid, "plan", PLAN_INPUT).status_code == 200
+
+
 def test_tasks_requires_a_spec_document_first(client: TestClient):
     _ws_id, pid = _bootstrap(client)
 

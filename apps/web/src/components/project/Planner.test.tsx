@@ -20,6 +20,14 @@ vi.mock("./ApprovalControl", () => ({
   ),
 }));
 
+// The shared approval states the Planner reads; null until a test sets one.
+let intentState: string | null = null;
+vi.mock("./DeliveryOverview", () => ({
+  useDecisionsData: () => ({
+    data: intentState ? { states: { intent: intentState, plan: "none" } } : null,
+  }),
+}));
+
 const originalFetch = global.fetch;
 
 // The signed-in user is a workspace admin — the "Tech Lead" role, which is
@@ -66,6 +74,7 @@ describe("Planner", () => {
   beforeEach(() => {
     localStorage.clear();
     members = [ADMIN_MEMBER];
+    intentState = null;
     global.fetch = vi.fn((url: RequestInfo | URL) =>
       Promise.resolve(route(url.toString())),
     ) as unknown as typeof fetch;
@@ -1746,6 +1755,37 @@ describe("Planner", () => {
       "aria-selected",
       "true",
     );
+  });
+
+  it.each([
+    ["pending", "Waiting for the intent to be approved. The plan is written once the business owner approves it."],
+    ["changes_requested", "Changes were requested on the intent. Revise the specification and ask again."],
+  ])("blocks Continue to Plan while the intent is %s", async (state, copy) => {
+    intentState = state;
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    expect(await screen.findByTestId("approval-intent_approval")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue to Plan" })).not.toBeInTheDocument();
+    // Specify is not ticked while the intent waits.
+    expect(screen.getByRole("tab", { name: "1 · Specify" })).toBeInTheDocument();
+
+    openTab(/2 · plan/i);
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /generate plan/i })).toBeDisabled();
+  });
+
+  it("offers Continue to Plan once the intent is approved", async () => {
+    intentState = "approved";
+    mockStageDocuments({ specify: "# Spec" });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+
+    expect(await screen.findByRole("button", { name: "Continue to Plan" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "1 · Specify completed" })).toBeInTheDocument();
   });
 
   it("shows no Continue before the stage has a document", async () => {

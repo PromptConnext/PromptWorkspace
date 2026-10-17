@@ -31,6 +31,7 @@ import {
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { stripStreamFence } from "@/lib/planner-sse";
 import { ApprovalControl } from "./ApprovalControl";
+import { useDecisionsData } from "./DeliveryOverview";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
@@ -159,10 +160,17 @@ const REPLACE_CONFIRM =
 const TECH_LEAD_NOTE =
   "Your Tech Lead writes this step. You can read it here once they generate it.";
 
+// The plan waits for the intent once approval has been asked for.
+const INTENT_WAITING_TEXT =
+  "Waiting for the intent to be approved. The plan is written once the business owner approves it.";
+const INTENT_CHANGES_TEXT =
+  "Changes were requested on the intent. Revise the specification and ask again.";
+
 // The cloud's own ordering errors (app/api/generation.py), which arrive as raw
 // detail codes.
 const STAGE_ERROR_TEXT: Record<string, string> = {
   requirement_required: "Generate the specification first — the plan is written against it.",
+  intent_not_approved: INTENT_WAITING_TEXT,
   spec_document_required: "Save or generate the plan first — the task breakdown is derived from it.",
   model_connection_not_configured:
     "No model is configured for this workspace, so generation is unavailable.",
@@ -873,9 +881,22 @@ export function Planner({
     });
   }, [setActive]);
 
+  // Once intent approval is in use (asked for, not yet approved) the plan
+  // waits, and Specify is not finished. Never asked, or approved, gates
+  // nothing; so does a state that has not loaded.
+  const { data: decisions } = useDecisionsData();
+  const intentState = decisions?.states.intent;
+  const intentGate =
+    intentState === "pending"
+      ? INTENT_WAITING_TEXT
+      : intentState === "changes_requested"
+        ? INTENT_CHANGES_TEXT
+        : undefined;
+
   // Undefined means "not loaded yet" — only an explicit false locks, so an
   // in-flight fetch doesn't flash a lock message on a project that has one.
   function blockedBy(meta: StageMeta): string | undefined {
+    if (meta.stage === "plan" && intentGate) return intentGate;
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
     const label = previous?.label ?? meta.requires;
@@ -895,7 +916,7 @@ export function Planner({
         if (analysisRequired && analysis?.status !== "baseline_ready") return false;
         return hasPolicyScope(project) || hasPrd === true;
       case "specify":
-        return docPresent.specify === true;
+        return docPresent.specify === true && !intentGate;
       case "plan":
         return docPresent.plan === true;
       case "tasks":
@@ -1217,7 +1238,9 @@ export function Planner({
               after a generation or a save, and still there on the next visit.
               Generation is where the task graph is born and the board is where
               it is worked, so on Tasks the board comes first. */}
-          {tab.stages.length > 0 && tabDone(tab.key) && TABS[index + 1] && (
+          {tab.stages.length > 0 &&
+            (tabDone(tab.key) || (tab.key === "specify" && docPresent.specify === true)) &&
+            TABS[index + 1] && (
             <div className="flex flex-wrap items-center gap-2">
               {(tab.key === "specify" || tab.key === "tasks") && (
                 <ApprovalControl
@@ -1231,13 +1254,15 @@ export function Planner({
                   Open the task board
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => goTo(TABS[index + 1].key)}
-                className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
-              >
-                Continue to {TABS[index + 1].title}
-              </button>
+              {tabDone(tab.key) && (
+                <button
+                  type="button"
+                  onClick={() => goTo(TABS[index + 1].key)}
+                  className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
+                >
+                  Continue to {TABS[index + 1].title}
+                </button>
+              )}
             </div>
           )}
           {tab.key === "repository" && !isTechLead && !readOnly && (

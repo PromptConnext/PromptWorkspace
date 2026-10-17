@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 
 from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
+from app.delivery.decisions import latest_decision
 from app.dependencies import User, get_current_user, get_repository
 from app.generation.parsing import missing_task_refs, parse_task_lines
 from app.generation.path_check import unknown_task_paths
@@ -121,6 +122,12 @@ async def generate(
         requirement = repo.get_latest_requirement(project_id)
         if requirement is None:
             raise HTTPException(status_code=409, detail="requirement_required")
+        # Once intent approval is in use, the plan waits for it: a project
+        # that never asked is not gated. `latest_decision` already skips
+        # withdrawn and expired requests.
+        intent = latest_decision(repo.list_decisions(project_id), "intent_approval")
+        if intent is not None and intent.status in ("open", "rejected"):
+            raise HTTPException(status_code=409, detail="intent_not_approved")
     elif stage == "tasks":
         spec = repo.get_latest_spec_document(project_id)
         if spec is None:
