@@ -1,4 +1,5 @@
-// The "Project Context" webview: the three seeded files, as they are on disk.
+// The "Project Context" webview: the three seeded files, as they are on disk
+// (the constitution falls back to the cloud's text until the repository has it).
 //
 // Rendered as <pre>, deliberately. A markdown renderer is a dependency and a
 // CSP decision, and neither buys anything here — the audience that wants prose
@@ -9,6 +10,7 @@ import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { RepoDocs, RepoDocContents } from "./repoDocs.ts";
+import { resolveDocView } from "./docView.ts";
 
 export class ContextViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "promptworkspace.context";
@@ -47,10 +49,14 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === "open" && msg.path) {
         const current = this.active();
         if (!current) return;
-        const doc = await vscode.workspace.openTextDocument(
-          vscode.Uri.joinPath(current.folder.uri, msg.path),
-        );
-        await vscode.window.showTextDocument(doc, { preview: true });
+        try {
+          const doc = await vscode.workspace.openTextDocument(
+            vscode.Uri.joinPath(current.folder.uri, msg.path),
+          );
+          await vscode.window.showTextDocument(doc, { preview: true });
+        } catch {
+          void vscode.window.showWarningMessage(`Could not open ${msg.path}.`);
+        }
       }
       if (msg.type === "refresh") void this.render(true);
     });
@@ -86,31 +92,50 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
     this.lastRenderKey = key;
     if (!current) {
       this.view.webview.html = this.page(
-        "<p class='empty'>Open a project folder to see its coding rules.</p>",
+        "<p class='empty'>Link this folder to a project to see its coding rules.</p>",
       );
       return;
     }
     const folder = current.folder.uri;
     const docs = await this.docs.readAll(folder);
+    // Only the constitution has a cloud counterpart; fetch it only when the
+    // repository does not carry it yet.
+    const constitution = docs.find((d) => d.key === "constitution");
+    const cloudConstitution =
+      constitution && constitution.text === null
+        ? await this.docs.cloudConstitution(current.projectId)
+        : null;
     const drifted = await this.docs.constitutionDrifted(current.projectId, folder);
-    this.view.webview.html = this.page(this.body(docs, drifted));
+    this.view.webview.html = this.page(this.body(docs, drifted, cloudConstitution));
     this.watch(current.folder);
   }
 
-  private body(docs: RepoDocContents[], drifted: boolean | undefined): string {
+  private body(
+    docs: RepoDocContents[],
+    drifted: boolean | undefined,
+    cloudConstitution: string | null,
+  ): string {
     const notice =
       drifted === true
         ? `<p class="notice">The cloud's constitution has changed since this file was seeded.</p>`
         : "";
     const sections = docs
       .map((doc) => {
-        const header =
-          `<h2>${escapeHtml(doc.label)}` +
-          `<button data-path="${escapeHtml(doc.path)}">Open in editor</button></h2>`;
+        const view = resolveDocView(
+          doc,
+          doc.key === "constitution" ? cloudConstitution : null,
+        );
+        const open = view.canOpen
+          ? `<button data-path="${escapeHtml(doc.path)}">Open in editor</button>`
+          : "";
+        const header = `<h2>${escapeHtml(doc.label)}${open}</h2>`;
+        // Cloud text is model-generated: escaped exactly like file text.
         const content =
-          doc.text === null
-            ? `<p class="empty">Not present in this repository (${escapeHtml(doc.path)}).</p>`
-            : `<pre>${escapeHtml(doc.text)}</pre>`;
+          view.kind === "disk"
+            ? `<pre>${escapeHtml(view.text)}</pre>`
+            : view.kind === "cloud"
+              ? `<p class="empty">${escapeHtml(view.caption)}</p><pre>${escapeHtml(view.text)}</pre>`
+              : `<p class="empty">Not present in this repository (${escapeHtml(doc.path)}).</p>`;
         return `<section>${header}${content}</section>`;
       })
       .join("");
