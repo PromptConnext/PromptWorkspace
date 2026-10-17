@@ -28,6 +28,7 @@ function template(over: Partial<DeploymentTemplateOut>): DeploymentTemplateOut {
     scaffold_paths: [],
     workflow_preview: "",
     notes: [],
+    recommended: false,
     ...over,
   };
 }

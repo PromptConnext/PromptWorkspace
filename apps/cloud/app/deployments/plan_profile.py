@@ -119,3 +119,40 @@ def derive_stack_profile(
         name for name, keywords in _SERVICE_KEYWORDS if _score(text, keywords) > 0
     )
     return StackProfile(runtime=override or best_runtime, services=services)
+
+
+_NEXTJS = re.compile(r"\bnext\.?js\b", re.IGNORECASE)
+_STATIC_SITE = re.compile(r"\b(static (site|html)|plain html)\b", re.IGNORECASE)
+# Words that make a Node plan a server. "typescript", "javascript" and
+# "next.js" are left out: a static or Next.js site names them too.
+_NODE_SERVER_WORDS = ("node.js", "nodejs", "node", "express")
+
+
+def recommend_template(plan_text: str | None) -> str | None:
+    """The deployment template id the plan fits, or None when it says nothing
+    decisive. Reads the plan text itself rather than the profile alone,
+    because `derive_stack_profile` falls back to a Node default for a plan it
+    cannot read, which would make every empty plan look like a server.
+
+    A named backing service or server runtime means a container
+    (`docker-compose`), which is the only template that runs one. Otherwise a
+    Next.js plan fits `next-vercel` and a static-site plan fits `static-r2`.
+    """
+    text = (plan_text or "").lower()
+    if not text.strip():
+        return None
+
+    names_server = bool(derive_stack_profile(text).services) or any(
+        _score(text, keywords) > 0 for runtime, keywords in _RUNTIME_KEYWORDS if runtime != "node"
+    )
+    if _NEXTJS.search(text):
+        # "Next.js on Node" is still a Next.js site; only Express (or another
+        # runtime or a service, above) makes it a server of its own.
+        if names_server or _score(text, ("express",)) > 0:
+            return "docker-compose"
+        return "next-vercel"
+    if names_server or _score(text, _NODE_SERVER_WORDS) > 0:
+        return "docker-compose"
+    if _STATIC_SITE.search(text):
+        return "static-r2"
+    return None

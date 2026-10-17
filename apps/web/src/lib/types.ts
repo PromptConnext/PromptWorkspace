@@ -583,6 +583,8 @@ export interface DeploymentTemplateOut {
   // The template's own caveats — what it costs and what it assumes — shown at
   // selection time, not only in the repository it later writes.
   notes: string[];
+  // True for the one template the project's plan fits. At most one is.
+  recommended: boolean;
 }
 
 // A deployment provider a workspace admin connects (ADR 0023). The token is

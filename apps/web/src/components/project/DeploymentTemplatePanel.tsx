@@ -72,7 +72,9 @@ export function DeploymentTemplatePanel({
     data: templates,
     error: templatesError,
     loading: templatesLoading,
-  } = useCloudGet<DeploymentTemplateOut[]>("/deployment-templates");
+  } = useCloudGet<DeploymentTemplateOut[]>(
+    `/deployment-templates?project_id=${encodeURIComponent(project.id)}`,
+  );
 
   const [selected, setSelected] = useState<string | null>(
     project.deployment_config?.template_id ?? null,
@@ -158,7 +160,9 @@ export function DeploymentTemplatePanel({
 
       {templates && !readOnly && (
         <ul className="space-y-2">
-          {templates.map((template) => (
+          {[...templates]
+            .sort((a, b) => Number(b.recommended) - Number(a.recommended))
+            .map((template) => (
             <li key={template.id} className="rounded border border-slate-200 p-2">
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -171,6 +175,11 @@ export function DeploymentTemplatePanel({
                 />
                 <span>
                   <span className="font-medium text-slate-900">{template.name}</span>
+                  {template.recommended && (
+                    <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                      Fits your plan
+                    </span>
+                  )}
                   <span className="block text-xs text-slate-500">{template.description}</span>
                   <span className="mt-1 block text-xs text-slate-400">
                     {template.provider_label}
