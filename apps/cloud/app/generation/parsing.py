@@ -2,6 +2,8 @@
 `runStage()` (apps/engine/src/agent/loop.ts): `parseFiles`, `stripThinking`,
 `extractDocument`, `parseTaskLines`. Kept as pure functions so cloud- and
 engine-side generation stay behaviorally aligned without sharing runtime.
+The cloud `parse_files` now tolerates inner code fences inside a file block;
+the retired engine's `parseFiles` does not.
 """
 
 from __future__ import annotations
@@ -11,7 +13,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-_FILE_BLOCK_RE = re.compile(r"```file:([^\n]+)\n(.*?)```", re.DOTALL)
+_FILE_OPEN_RE = re.compile(r"^```file:(.+)$")
+_INNER_FENCE_OPEN_RE = re.compile(r"^```\S")
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$")
 # An indented `- AC: <criterion>` sub-bullet under a task line.
@@ -21,12 +24,32 @@ _SPECKIT_MARKER_LINE_RE = re.compile(r"^.*__SPECKIT_COMMAND_[A-Z]+__.*\n?", re.M
 
 
 def parse_files(raw: str) -> list[dict[str, str]]:
+    """Extract ```file:<path> blocks. A bare ``` line closes an inner fence
+    (opened by ```<lang>) if one is open, otherwise it closes the block, so
+    documents containing code fences stay whole. Unterminated blocks are dropped."""
     files: list[dict[str, str]] = []
-    for m in _FILE_BLOCK_RE.finditer(raw):
-        path = m.group(1).strip()
-        if ".." in path or path.startswith("/"):
+    path: str | None = None
+    lines: list[str] = []
+    inner_open = False
+    for line in raw.split("\n"):
+        if path is None:
+            m = _FILE_OPEN_RE.match(line)
+            if m:
+                path = m.group(1).strip()
+                lines = []
+                inner_open = False
             continue
-        files.append({"path": path, "content": m.group(2)})
+        if line.rstrip() == "```":
+            if inner_open:
+                inner_open = False
+            else:
+                if ".." not in path and not path.startswith("/"):
+                    files.append({"path": path, "content": "".join(f"{ln}\n" for ln in lines)})
+                path = None
+                continue
+        elif _INNER_FENCE_OPEN_RE.match(line) and not inner_open:
+            inner_open = True
+        lines.append(line)
     return files
 
 

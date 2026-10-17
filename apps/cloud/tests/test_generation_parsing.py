@@ -10,6 +10,7 @@ import pytest
 
 from app.generation.parsing import (
     fix_template_placeholders,
+    parse_files,
     parse_task_lines,
     strip_template_scaffolding,
     titles_match,
@@ -231,3 +232,25 @@ def test_titles_match(old: str, new: str, expected: bool):
     assert titles_match(old, new) is expected
     # symmetric: which generation came first does not change the answer
     assert titles_match(new, old) is expected
+
+
+def test_parse_files_keeps_inner_fences():
+    raw = (
+        "```file:plan.md\n# Plan\n\n### Documentation\n\n```text\nspecs/\n```\n\n"
+        "## After\nmore\n```\n"
+    )
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("## After\nmore\n")
+    assert "```text\nspecs/\n```" in files[0]["content"]
+
+
+def test_parse_files_two_blocks_each_with_inner_fence():
+    raw = (
+        "```file:a.md\n# A\n```bash\nls\n```\nend A\n```\n"
+        "```file:b.md\n# B\n```text\nx\n```\nend B\n```\n"
+    )
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"].endswith("end A\n")
+    assert files[1]["content"].endswith("end B\n")
