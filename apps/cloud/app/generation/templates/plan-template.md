@@ -2,8 +2,6 @@
 
 **Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
 
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
 **Note**: This template is filled in by the `__SPECKIT_COMMAND_PLAN__` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
@@ -43,18 +41,6 @@
 [Gates determined based on constitution file]
 
 ## Project Structure
-
-### Documentation (this feature)
-
-```text
-specs/[###-feature]/
-├── plan.md              # This file (__SPECKIT_COMMAND_PLAN__ command output)
-├── research.md          # Phase 0 output (__SPECKIT_COMMAND_PLAN__ command)
-├── data-model.md        # Phase 1 output (__SPECKIT_COMMAND_PLAN__ command)
-├── quickstart.md        # Phase 1 output (__SPECKIT_COMMAND_PLAN__ command)
-├── contracts/           # Phase 1 output (__SPECKIT_COMMAND_PLAN__ command)
-└── tasks.md             # Phase 2 output (__SPECKIT_COMMAND_TASKS__ command - NOT created by __SPECKIT_COMMAND_PLAN__)
-```
 
 ### Source Code (repository root)
 <!--

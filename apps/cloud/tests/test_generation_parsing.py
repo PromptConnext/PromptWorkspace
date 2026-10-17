@@ -12,6 +12,7 @@ from app.generation.parsing import (
     fix_template_placeholders,
     parse_files,
     parse_task_lines,
+    strip_spec_kit_boilerplate,
     strip_template_scaffolding,
     titles_match,
 )
@@ -297,3 +298,34 @@ def test_parse_files_indented_inner_fence_stays_inside_block():
     assert len(files) == 1
     assert files[0]["content"].endswith("after\n")
     assert "   ```bash\n   ls\n   ```\n" in files[0]["content"]
+
+
+def test_strip_spec_kit_boilerplate_removes_scaffolding():
+    doc = (
+        "# Tasks: Ledger\n\n"
+        "**Feature Branch**: `001-ledger`\n"
+        "**Input**: Design documents from `/specs/001-ledger/`\n"
+        "**Prerequisites**: plan.md (required), research.md\n"
+        "**Tests**: Tests are OPTIONAL - only include them if requested.\n\n"
+        "## Requirements\n\n"
+        "- **FR-001**: System MUST record entries\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST authenticate via [NEEDS CLARIFICATION: method]\n"
+        "- **FR-007**: System MUST retain data for [NEEDS CLARIFICATION: period]\n\n"
+        "Use [GUIDANCE_FILE] for runtime guidance.\n"
+        "Done when it matches `/specs/001-ledger/spec.md` and /specs/001-ledger/plan.md.\n"
+        "See specs/001-ledger/tasks.md.\n\n"
+        "```text\n/specs/x\n```\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert not any(ln.startswith("**Feature Branch**:") for ln in out.split("\n"))
+    assert "Example of marking unclear requirements" not in out
+    assert "FR-006" not in out and "FR-007" not in out
+    assert "**FR-001**" in out
+    assert "[GUIDANCE_FILE]" not in out
+    assert "**Input**:" not in out and "**Prerequisites**:" not in out
+    assert "Tests are OPTIONAL" not in out
+    assert "the specification" in out and "the plan" in out and "the task list" in out
+    out_outside = out.split("```text")[0]
+    assert "/specs/" not in out_outside and "specs/001" not in out_outside
+    assert "```text\n/specs/x\n```" in out

@@ -171,6 +171,73 @@ def fix_template_placeholders(doc: str) -> str:
     return text
 
 
+# Spec Kit header lines a generated tasks.md carries over from its template
+# (finding #31): they name design documents under /specs/ that a seeded
+# repository never has, and "Tests are OPTIONAL" contradicts a constitution
+# that asks for tests. Only the template's bold form, and only in the header
+# before the first `## ` heading: a phase paragraph that starts "Input:", or a
+# **Tests** line the model wrote for this project (no "OPTIONAL"), is content.
+_HEADER_BOILERPLATE_RE = re.compile(
+    r"^[ \t]*\*\*(?:Input|Prerequisites)\*\*[ \t]*:"
+    r"|^[ \t]*\*\*Tests\*\*[ \t]*:.*\bOPTIONAL\b"
+)
+# A reference to the Spec Kit feature folder's spec, plan or tasks
+# (`/specs/001-name/plan.md`, `specs/001/spec.md`). The seeded views of those
+# three sit together in one folder (docs/, or docs/promptworkspace/ in an
+# imported repository), so each becomes its sibling's name and works in either
+# layout. Any other /specs/ path is left alone: the seed writes no such file,
+# and a `specs/` folder inside another path (`tests/specs/001/`) is the
+# repository's own.
+_SPECS_REF_RE = re.compile(
+    r"(?<![\w./-])/?specs/\d{3}(?:-[\w.-]*)?/(spec|plan|tasks)\.md\b"
+)
+_SPEC_KIT_FEATURE_BRANCH_RE = re.compile(r"^[ \t]*\*\*Feature Branch\*\*[ \t]*:")
+_UNCLEAR_EXAMPLE_RE = re.compile(r"^[ \t]*\*?Example of marking unclear requirements\b")
+_LIST_ITEM_RE = re.compile(r"^[ \t]*[-*] ")
+# The plain-English name each Spec Kit folder document gets in running text.
+_DOC_NAME = {"spec": "the specification", "plan": "the plan", "tasks": "the task list"}
+# `_SPECS_REF_RE` plus the backticks around it, so "`/specs/001/spec.md`" does
+# not leave empty code spans behind.
+_SPECS_REF_TICKED_RE = re.compile(f"`?(?:{_SPECS_REF_RE.pattern})`?")
+
+
+def strip_spec_kit_boilerplate(content: str) -> str:
+    """Remove Spec Kit scaffolding a model carried over from its template: the
+    `**Feature Branch**` line, the "Example of marking unclear requirements"
+    block (its line and the list items under it), lines naming `[GUIDANCE_FILE]`,
+    the header `**Input**` / `**Prerequisites**` / "Tests are OPTIONAL" lines,
+    and `/specs/NNN-name/{spec,plan,tasks}.md` references, which become "the
+    specification", "the plan" and "the task list". Fenced code is untouched."""
+    out: list[str] = []
+    in_fence = False
+    in_header = True
+    skipping_example = False
+    for line in content.split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            skipping_example = False
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        if line.startswith("## "):
+            in_header = False
+        if skipping_example:
+            if _LIST_ITEM_RE.match(line) or not line.strip():
+                continue
+            skipping_example = False
+        if _UNCLEAR_EXAMPLE_RE.match(line):
+            skipping_example = True
+            continue
+        if _SPEC_KIT_FEATURE_BRANCH_RE.match(line) or "[GUIDANCE_FILE]" in line:
+            continue
+        if in_header and _HEADER_BOILERPLATE_RE.match(line):
+            continue
+        out.append(_SPECS_REF_TICKED_RE.sub(lambda m: _DOC_NAME[m.group(1)], line))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def extract_json_object(raw: str) -> dict | None:
     """Pull the first JSON object out of a completion. Models wrap JSON in a
     ```json fence, prefix it with "Here you go:", or both — asking nicely in

@@ -43,6 +43,7 @@ from app.deployments.registry import (
     render_deployment_doc,
     template_files,
 )
+from app.generation.parsing import _HEADER_BOILERPLATE_RE, _SPECS_REF_RE
 from app.models.schemas import Project
 from app.policies.registry import render_policy_scope_doc
 
@@ -99,26 +100,6 @@ def _conventions_section(constitution: str | None) -> str | None:
     return section or None
 
 
-# Spec Kit header lines a generated tasks.md carries over from its template
-# (finding #31): they name design documents under /specs/ that a seeded
-# repository never has, and "Tests are OPTIONAL" contradicts a constitution
-# that asks for tests. Only the template's bold form, and only in the header
-# before the first `## ` heading: a phase paragraph that starts "Input:", or a
-# **Tests** line the model wrote for this project (no "OPTIONAL"), is content.
-_HEADER_BOILERPLATE_RE = re.compile(
-    r"^[ \t]*\*\*(?:Input|Prerequisites)\*\*[ \t]*:"
-    r"|^[ \t]*\*\*Tests\*\*[ \t]*:.*\bOPTIONAL\b"
-)
-# A reference to the Spec Kit feature folder's spec, plan or tasks
-# (`/specs/001-name/plan.md`, `specs/001/spec.md`). The seeded views of those
-# three sit together in one folder (docs/, or docs/promptworkspace/ in an
-# imported repository), so each becomes its sibling's name and works in either
-# layout. Any other /specs/ path is left alone: the seed writes no such file,
-# and a `specs/` folder inside another path (`tests/specs/001/`) is the
-# repository's own.
-_SPECS_REF_RE = re.compile(
-    r"(?<![\w./-])/?specs/\d{3}(?:-[\w.-]*)?/(spec|plan|tasks)\.md\b"
-)
 _SEEDED_NAME = {"spec": "scope.md", "plan": "architecture.md", "tasks": "tasks.md"}
 _FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
 
