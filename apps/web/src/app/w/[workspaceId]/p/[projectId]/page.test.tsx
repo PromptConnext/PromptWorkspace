@@ -65,9 +65,15 @@ vi.mock("@/components/project/ProgressRollup", () => ({
 vi.mock("@/components/project/DiscussionThread", () => ({
   DiscussionThread: () => null,
 }));
+let graphTasks: { assigned_user_id: string | null }[] = [];
+let membersData: { user_id: string; role: "admin" | "member" }[] | null = null;
+vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: "u-me" } }) }));
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({
-    data: graphLoaded ? { project: { name: "P" } } : null,
+  useCloudGet: (path: string) =>
+    path.endsWith("/members")
+      ? { data: membersData, error: null, loading: !membersData }
+      : {
+    data: graphLoaded ? { project: { name: "P" }, tasks: graphTasks } : null,
     error: null,
     loading: !graphLoaded || graphReloading,
     refetch: vi.fn(),
@@ -75,7 +81,7 @@ vi.mock("@/lib/hooks", () => ({
     refreshError,
     lastUpdated: Date.now(),
     revalidate: vi.fn(),
-  }),
+  },
 }));
 
 beforeEach(() => {
@@ -84,6 +90,8 @@ beforeEach(() => {
   refreshError = null;
   graphLoaded = true;
   graphReloading = false;
+  graphTasks = [];
+  membersData = null;
 });
 afterEach(cleanup);
 
@@ -314,5 +322,43 @@ describe("first load", () => {
       />,
     );
     expect(screen.getByRole("navigation", { name: "crumbs" })).toHaveTextContent("WS / P");
+  });
+});
+
+describe("default tab by role", () => {
+  const renderPage = () =>
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+
+  it("opens Tasks for a member with assigned tasks", () => {
+    membersData = [{ user_id: "u-me", role: "member" }];
+    graphTasks = [{ assigned_user_id: "u-me" }];
+    renderPage();
+    expect(screen.getByRole("tab", { name: "Tasks" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens Planner for an admin", () => {
+    membersData = [{ user_id: "u-me", role: "admin" }];
+    graphTasks = [{ assigned_user_id: "u-me" }];
+    renderPage();
+    expect(screen.getByRole("tab", { name: "Planner" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens Planner for a member with no assigned tasks", () => {
+    membersData = [{ user_id: "u-me", role: "member" }];
+    graphTasks = [{ assigned_user_id: "someone-else" }];
+    renderPage();
+    expect(screen.getByRole("tab", { name: "Planner" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("leaves an explicit tab in the URL alone", () => {
+    membersData = [{ user_id: "u-me", role: "member" }];
+    graphTasks = [{ assigned_user_id: "u-me" }];
+    search = "tab=graph";
+    renderPage();
+    expect(screen.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
   });
 });
