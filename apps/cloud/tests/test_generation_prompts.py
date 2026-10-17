@@ -13,6 +13,7 @@ from app.generation.prompts import (
     NO_CI_FIRST_TASK_RULE,
     PLAN_AUTHOR_OVERRIDE_RULE,
     REPO_OCCURRENCES_RULE,
+    SPECIFY_SCOPE_RULE,
     codebase_baseline_prompt,
     driver_prompt,
 )
@@ -102,6 +103,12 @@ def test_the_constitution_prompt_marks_nothing_non_negotiable_unless_the_author_
     for kind in ("specify", "plan", "tasks"):
         assert CONSTITUTION_STRENGTH_RULE not in driver_prompt(kind)
     assert "NON-NEGOTIABLE" in CONSTITUTION_STRENGTH_RULE
+
+
+def test_specify_prompt_forbids_unrequested_channels():
+    """Trust env: the spec invented SMS and Google Calendar sync the author never named."""
+    assert SPECIFY_SCOPE_RULE in driver_prompt("specify")
+    assert SPECIFY_SCOPE_RULE not in driver_prompt("plan")
 
 
 def test_the_prefill_prompt_drafts_journeys_only_from_the_prds_goals():

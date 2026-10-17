@@ -97,6 +97,15 @@ CONSTITUTION_STRENGTH_RULE = (
     "the codebase baseline mention."
 )
 
+# The specify stage invented channels, vendors and features the author never
+# asked for (trust environment: SMS and Google Calendar sync). Unnamed needs
+# become clarifications, not choices.
+SPECIFY_SCOPE_RULE = (
+    "Do not add channels, vendors, integrations, devices or features the author's answers do "
+    "not name. Where a journey needs one the author did not name, write [NEEDS CLARIFICATION: "
+    "which <thing>?] instead of choosing."
+)
+
 # Rules for `tasks` on an imported repository. Observed on a real import
 # (2026-10-04): with only "do not re-scaffold" the model still emitted the
 # template's Setup/Foundational skeleton, invented paths for modules that
@@ -153,6 +162,8 @@ def driver_prompt(
     ]
     if kind == "constitution":
         lines.append(CONSTITUTION_STRENGTH_RULE)
+    if kind == "specify":
+        lines.append(SPECIFY_SCOPE_RULE)
     if kind == "plan":
         lines.append(PLAN_AUTHOR_OVERRIDE_RULE)
     if kind in ("plan", "tasks"):
