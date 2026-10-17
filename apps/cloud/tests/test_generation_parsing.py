@@ -254,3 +254,38 @@ def test_parse_files_two_blocks_each_with_inner_fence():
     assert [f["path"] for f in files] == ["a.md", "b.md"]
     assert files[0]["content"].endswith("end A\n")
     assert files[1]["content"].endswith("end B\n")
+
+
+def test_parse_files_closing_fence_on_content_line():
+    assert parse_files("```file:p.md\n# Plan\nlast line```\n") == [
+        {"path": "p.md", "content": "# Plan\nlast line\n"}
+    ]
+
+
+def test_parse_files_unclosed_inner_fence_is_salvaged():
+    files = parse_files("```file:plan.md\n# Plan\n```text\nx\n\n## After\nmore\n```\n")
+    assert len(files) == 1
+    assert files[0]["content"].startswith("# Plan\n")
+    assert "## After\nmore" in files[0]["content"]
+
+
+def test_parse_files_new_opener_ends_unclosed_block():
+    raw = "```file:a.md\n# A\n```text\nx\n```file:b.md\n# B\nend\n```\n"
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"] == "# A\n```text\nx\n"
+    assert files[1]["content"] == "# B\nend\n"
+
+
+def test_parse_files_unterminated_block_kept_at_eof():
+    assert parse_files("```file:a.md\n# A\nbody") == [
+        {"path": "a.md", "content": "# A\nbody\n"}
+    ]
+
+
+def test_parse_files_drops_unsafe_paths():
+    raw = (
+        "```file:../evil.md\nx\n```\n```file:/abs.md\ny\n```\n"
+        "```file:ok.md\nz\n```\n"
+    )
+    assert [f["path"] for f in parse_files(raw)] == ["ok.md"]

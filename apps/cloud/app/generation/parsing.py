@@ -26,30 +26,48 @@ _SPECKIT_MARKER_LINE_RE = re.compile(r"^.*__SPECKIT_COMMAND_[A-Z]+__.*\n?", re.M
 def parse_files(raw: str) -> list[dict[str, str]]:
     """Extract ```file:<path> blocks. A bare ``` line closes an inner fence
     (opened by ```<lang>) if one is open, otherwise it closes the block, so
-    documents containing code fences stay whole. Unterminated blocks are dropped."""
+    documents containing code fences stay whole. A line ending in ``` after
+    content closes the block too. A new ```file: line, or the end of input,
+    ends a block that was never closed, and its content is kept."""
     files: list[dict[str, str]] = []
     path: str | None = None
     lines: list[str] = []
     inner_open = False
+
+    def flush() -> None:
+        if path is not None and ".." not in path and not path.startswith("/"):
+            files.append({"path": path, "content": "".join(f"{ln}\n" for ln in lines)})
+
     for line in raw.split("\n"):
-        if path is None:
-            m = _FILE_OPEN_RE.match(line)
-            if m:
-                path = m.group(1).strip()
-                lines = []
-                inner_open = False
+        opener = _FILE_OPEN_RE.match(line)
+        if opener:
+            flush()
+            path, lines, inner_open = opener.group(1).strip(), [], False
             continue
-        if line.rstrip() == "```":
+        if path is None:
+            continue
+        stripped = line.rstrip()
+        if stripped == "```":
             if inner_open:
                 inner_open = False
             else:
-                if ".." not in path and not path.startswith("/"):
-                    files.append({"path": path, "content": "".join(f"{ln}\n" for ln in lines)})
+                flush()
                 path = None
                 continue
-        elif _INNER_FENCE_OPEN_RE.match(line) and not inner_open:
+        elif inner_open:
+            pass
+        elif stripped.startswith("```"):
             inner_open = True
+        elif stripped.endswith("```"):
+            lines.append(stripped[:-3])
+            flush()
+            path = None
+            continue
         lines.append(line)
+    if path is not None:
+        if lines and lines[-1] == "":
+            lines.pop()
+        flush()
     return files
 
 
