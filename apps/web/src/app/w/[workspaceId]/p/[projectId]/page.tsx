@@ -18,7 +18,7 @@ import { ProgressRollup } from "@/components/project/ProgressRollup";
 import { DiscussionThread } from "@/components/project/DiscussionThread";
 import { useCloudGet } from "@/lib/hooks";
 import { useWorkspaceName } from "@/lib/workspace";
-import type { ProjectGraph } from "@/lib/types";
+import type { ProjectGraph, WorkspaceMember } from "@/lib/types";
 
 // "Preview" is ungated on purpose (ADR 0021): a business user opening the
 // running application is the reason it exists. It is always present, even
@@ -209,6 +209,8 @@ function ProjectWorkspace({
     refreshOnFocus: true,
     pollMs: 30000,
   });
+  // Names the presence chips; the page had no members list of its own.
+  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
 
   // A reload of a graph already on screen: a change (a save in the Planner)
   // asked for it, so what is shown predates that change. Said, rather than
@@ -271,7 +273,7 @@ function ProjectWorkspace({
             />
           )}
           <div className="flex items-center gap-3">
-            <PresenceBar projectId={projectId} />
+            <PresenceBar projectId={projectId} members={members} />
             <Link
               href={`/w/${workspaceId}/p/${projectId}/settings`}
               className={`rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-500 hover:border-slate-300 ${FOCUS_RING}`}
