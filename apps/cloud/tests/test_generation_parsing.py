@@ -289,3 +289,11 @@ def test_parse_files_drops_unsafe_paths():
         "```file:ok.md\nz\n```\n"
     )
     assert [f["path"] for f in parse_files(raw)] == ["ok.md"]
+
+
+def test_parse_files_indented_inner_fence_stays_inside_block():
+    raw = "```file:a.md\n# A\n1. step\n   ```bash\n   ls\n   ```\nafter\n```\n"
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("after\n")
+    assert "   ```bash\n   ls\n   ```\n" in files[0]["content"]

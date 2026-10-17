@@ -14,7 +14,7 @@ import unicodedata
 from dataclasses import dataclass
 
 _FILE_OPEN_RE = re.compile(r"^```file:(.+)$")
-_INNER_FENCE_OPEN_RE = re.compile(r"^```\S")
+_INNER_FENCE_OPEN_RE = re.compile(r"^\s*```\S")
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TASK_LINE_RE = re.compile(r"^\s*[-*] \[[ xX]?\] (T\d+)\s+(\[P\]\s+)?(.+)$")
 # An indented `- AC: <criterion>` sub-bullet under a task line.
@@ -46,20 +46,22 @@ def parse_files(raw: str) -> list[dict[str, str]]:
             continue
         if path is None:
             continue
-        stripped = line.rstrip()
+        stripped = line.strip()
         if stripped == "```":
             if inner_open:
                 inner_open = False
-            else:
+            elif line.startswith("```"):
                 flush()
                 path = None
                 continue
+            else:
+                inner_open = True  # indented bare fence: a list item's code block
         elif inner_open:
             pass
-        elif stripped.startswith("```"):
+        elif _INNER_FENCE_OPEN_RE.match(line):
             inner_open = True
         elif stripped.endswith("```"):
-            lines.append(stripped[:-3])
+            lines.append(line.rstrip()[:-3])
             flush()
             path = None
             continue
