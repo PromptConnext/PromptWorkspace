@@ -15,6 +15,7 @@ import {
   type FolderLink,
 } from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
+import { PRODUCTION_DEFAULTS, taskRefFromBranch } from "@promptworkspace/cloud-client";
 import { SessionStore, fileLeaseStorage } from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
@@ -23,6 +24,7 @@ import {
   type TaskStatus,
 } from "@promptworkspace/cloud-client";
 import { projectIdFor, readConfig } from "./config.ts";
+import { environmentLabel } from "./util/environment.ts";
 import { ContextViewProvider } from "./context/contextView.ts";
 import { RepoDocs } from "./context/repoDocs.ts";
 import { createGitBridge } from "./git/gitBridge.ts";
@@ -108,6 +110,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeProject,
     (projectId) => (watcher ? watcher.pendingRefsFor(projectId) : EMPTY_PENDING),
     () => connection,
+    () => {
+      const active = activeProject();
+      if (!active) return undefined;
+      const repo = git
+        .repositories()
+        .find((r) => link.projectIdForRepoRoot(r.root) === active.projectId);
+      return taskRefFromBranch(repo?.head?.name) ?? undefined;
+    },
   );
   const contextView = new ContextViewProvider(context.extensionUri, docs, activeProject);
   const signIn = new SignInFlow(client, context.globalState, log);
@@ -215,7 +225,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const current = session.read();
     if (!current) return undefined;
-    const who = current.email ?? current.userId;
+    const cfg = readConfig();
+    const env = environmentLabel(cfg.apiUrl, PRODUCTION_DEFAULTS.cloudApiUrl);
+    const who = [current.email ?? current.userId, env].filter(Boolean).join(" · ");
     if (roster.lastRefreshError) return `${who} · offline`;
     return roster.refreshedAt
       ? `${who} · updated ${new Date(roster.refreshedAt).toLocaleTimeString()}`
@@ -333,7 +345,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       renderConnection();
       void link.offerLinks(candidates());
     }),
-    git.onDidChangeRepositoryState(() => rosterTree.refresh()),
+    git.onDidChangeRepositoryState(() => {
+      rosterTree.refresh();
+      tree.refresh();
+    }),
     // Another window signing in or out changes the shared secrets without an
     // event on this window's SessionStore; this is the only signal we get.
     context.secrets.onDidChange(() => renderConnection()),

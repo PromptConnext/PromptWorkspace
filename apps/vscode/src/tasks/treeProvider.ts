@@ -13,6 +13,7 @@ import * as vscode from "vscode";
 import type { AssignedTask } from "@promptworkspace/cloud-client";
 import { TASK_STATUS_LABELS, isClosed } from "@promptworkspace/cloud-client";
 import { taskRefFromFeatureTag } from "@promptworkspace/cloud-client";
+import { taskDescription } from "./taskRow.ts";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
@@ -38,6 +39,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly active: () => ActiveProject | undefined;
   private readonly pendingRefs: (projectId: string) => ReadonlySet<string>;
   private readonly connection: () => Connection;
+  private readonly currentBranchRef: () => string | undefined;
 
   constructor(
     store: TaskStore,
@@ -49,11 +51,15 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     pendingRefs: (projectId: string) => ReadonlySet<string>,
     // Signed out / unlinked (findings #37, #42): a banner row above the tasks.
     connection: () => Connection,
+    // Normalised task ref of the branch checked out in the active project's
+    // repository ("T1"), or undefined.
+    currentBranchRef: () => string | undefined,
   ) {
     this.store = store;
     this.active = active;
     this.pendingRefs = pendingRefs;
     this.connection = connection;
+    this.currentBranchRef = currentBranchRef;
   }
 
   refresh(): void {
@@ -68,14 +74,10 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     const ref = taskRefFromFeatureTag(task.feature_tag);
     const pending =
       ref !== null && this.pendingRefs(node.entry.project_id).has(ref);
-    item.description = [
-      task.feature_tag,
-      TASK_STATUS_LABELS[task.status],
-      pending ? "commit not pushed" : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
+    const onBranch = ref !== null && ref === this.currentBranchRef();
+    item.description = taskDescription(task, { pending, onBranch });
+    if (onBranch) item.iconPath = new vscode.ThemeIcon("play-circle");
+    else if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
     item.contextValue = "promptworkspace.task";
     item.checkboxState = isClosed(task.status)
       ? vscode.TreeItemCheckboxState.Checked
