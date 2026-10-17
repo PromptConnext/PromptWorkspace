@@ -568,7 +568,8 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
         }))
 
     make("old-approved", 1, "approved")
-    make("rejected", 2, "rejected")
+    make("old-rejected", 1.5, "rejected")
+    make("new-rejected", 2, "rejected")  # the diff base for a re-request after changes
     make("new-approved", 3, "approved")
     make("withdrawn", 4, "withdrawn")
     make("open", 5, "open")
@@ -581,12 +582,48 @@ def test_get_decisions_omits_content_of_superseded_decisions(client, project):
         "open": "content of open",
         "new-approved": "content of new-approved",  # the diff base for the next request
         "plan-approved": "content of plan-approved",  # newest approved of its own kind
+        "new-rejected": "content of new-rejected",
         "old-approved": None,
-        "rejected": None,
+        "old-rejected": None,
         "withdrawn": None,
     }
     # The omitted copy still exists; only the listing leaves it out.
     assert repo.get_decision(project, "old-approved").subject_content == "content of old-approved"
+
+
+def test_content_carriers_include_latest_changes_requested(client, project):
+    """The version sent back is the diff base for the re-request, so the newest
+    sent-back (stored as `rejected`) decision of each kind carries its copy."""
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    base = Decision(
+        project_id=project, workspace_id=ws_id, kind="plan_approval", title="Plan",
+        subject_stage="tasks", subject_hash="h", routed_hat="tech_steward",
+        requested_by="bob",
+    )
+    t = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    def make(name, minutes, status, kind="plan_approval"):
+        return repo.save_decision(base.model_copy(update={
+            "id": name, "status": status, "kind": kind,
+            "created_at": t + timedelta(minutes=minutes),
+            "subject_content": f"content of {name}",
+        }))
+
+    make("sent-back-1", 1, "rejected")
+    make("sent-back-2", 2, "rejected")
+    make("intent-sent-back", 3, "rejected", kind="intent_approval")
+    make("open", 4, "open")
+
+    listing = client.get(f"/projects/{project}/decisions", headers=BOB).json()["decisions"]
+    content = {d["id"]: d["subject_content"] for d in listing}
+
+    assert content == {
+        "open": "content of open",
+        "sent-back-2": "content of sent-back-2",
+        "intent-sent-back": "content of intent-sent-back",
+        "sent-back-1": None,
+    }
 
 
 

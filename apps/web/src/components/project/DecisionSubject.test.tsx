@@ -32,18 +32,34 @@ describe("DecisionSubject", () => {
   it("shows the diff against the last approved version", () => {
     const previous = decision({ id: "d0", status: "approved", subject_content: "# Spec\n\nBook a slot.\nOld rule." });
     const current = decision({ subject_content: "# Spec\n\nBook a slot.\nNew rule." });
-    render(<DecisionSubject decision={current} previous={previous} />);
+    render(<DecisionSubject decision={current} previous={previous} label="approved" />);
 
-    expect(screen.getByText(/since the last approval/i)).toBeInTheDocument();
+    expect(screen.getByText("Changes since the approved version")).toBeInTheDocument();
     expect(screen.getByText("Old rule.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
     expect(screen.getByText("New rule.").closest("[data-diff]")).toHaveAttribute("data-diff", "add");
     expect(screen.getByText("Book a slot.").closest("[data-diff]")).toHaveAttribute("data-diff", "same");
   });
 
-  it("says so when the document did not change since the last approval", () => {
+  it("diffs a re-request against the version sent back", () => {
+    const previous = decision({ id: "d0", status: "rejected", subject_content: "# Spec\n\nBook a slot.\nOld rule." });
+    const current = decision({ subject_content: "# Spec\n\nBook a slot.\nNew rule." });
+    render(<DecisionSubject decision={current} previous={previous} label="sent_back" />);
+
+    expect(screen.getByText("Changes since the version sent back")).toBeInTheDocument();
+    expect(screen.getByText("Old rule.").closest("[data-diff]")).toHaveAttribute("data-diff", "del");
+    expect(screen.getByText("New rule.").closest("[data-diff]")).toHaveAttribute("data-diff", "add");
+  });
+
+  it("says so when the document did not change since the version sent back", () => {
+    const previous = decision({ id: "d0", status: "rejected" });
+    render(<DecisionSubject decision={decision({})} previous={previous} label="sent_back" />);
+    expect(screen.getByText("No changes since the version sent back")).toBeInTheDocument();
+  });
+
+  it("says so when the document did not change since the approved version", () => {
     const previous = decision({ id: "d0", status: "approved" });
-    render(<DecisionSubject decision={decision({})} previous={previous} />);
-    expect(screen.getByText(/no changes since the last approval/i)).toBeInTheDocument();
+    render(<DecisionSubject decision={decision({})} previous={previous} label="approved" />);
+    expect(screen.getByText("No changes since the approved version")).toBeInTheDocument();
   });
 
   it("shows the full text when nothing was approved before", () => {
@@ -61,9 +77,9 @@ describe("DecisionSubject", () => {
 
   it("falls back to the full text when the earlier approval has no saved copy", () => {
     const previous = decision({ id: "d0", status: "approved", subject_content: null });
-    render(<DecisionSubject decision={decision({})} previous={previous} />);
+    render(<DecisionSubject decision={decision({})} previous={previous} label="approved" />);
     expect(screen.getByText("Book a slot.")).toBeInTheDocument();
-    expect(screen.queryByText(/since the last approval/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/changes since/i)).not.toBeInTheDocument();
   });
 
   it("shows nothing for an older resolved decision whose copy the listing omitted", () => {

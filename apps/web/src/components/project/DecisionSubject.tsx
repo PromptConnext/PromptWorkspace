@@ -9,20 +9,31 @@ const LINE_STYLE: Record<DiffLine["kind"], string> = {
 };
 const MARK: Record<DiffLine["kind"], string> = { same: " ", add: "+", del: "-" };
 
+/** Which earlier version a diff is against: the caption names it. */
+export type DiffLabel = "approved" | "sent_back";
+const BASE_NAME: Record<DiffLabel, string> = {
+  approved: "the approved version",
+  sent_back: "the version sent back",
+};
+
 /** What a decision asks the approver to sign: the document as it was when
- * requested, as a diff against the newest earlier approved version when there
- * is one. Only an open decision is diffed; a resolved one offers its document
- * as approved (the listing sends the text for the newest approved decision
- * only, so an older card has none and shows nothing). The text comes from
+ * requested, as a diff against the newest earlier approved version (else the
+ * newest one sent back for changes) when there is one. Only an open decision
+ * is diffed; a resolved one offers its document as approved (the listing sends
+ * the text for the newest approved decision only, so an older card has none and
+ * shows nothing). The text comes from
  * repositories and users, so every line is a text node in a `<pre>`-style
  * block, never parsed as markdown or HTML. */
 export function DecisionSubject({
   decision,
   previous,
+  label = "approved",
 }: {
   decision: Decision;
-  /** The newest earlier approved decision of the same kind, if any. */
+  /** The earlier decision of the same kind to diff against, if any. */
   previous: Decision | null;
+  /** How `previous` is named in the caption. */
+  label?: DiffLabel;
 }) {
   const content = decision.subject_content;
   const before = previous?.subject_content ?? null;
@@ -49,10 +60,10 @@ export function DecisionSubject({
     : diff === null
       ? previous === null
         ? "Full document (nothing was approved before)"
-        : "Full document (the last approval has no saved copy to compare)"
+        : `Full document (${BASE_NAME[label]} has no saved copy to compare)`
       : unchanged
-        ? "No changes since the last approval"
-        : "Changes since the last approval";
+        ? `No changes since ${BASE_NAME[label]}`
+        : `Changes since ${BASE_NAME[label]}`;
 
   return (
     <details open={isOpen} className="mt-2 rounded border border-slate-200">

@@ -278,17 +278,20 @@ class DecisionResolve(BaseModel):
 
 def content_carriers(decisions: list[Decision]) -> set[str]:
     """The ids of the decisions a listing sends `subject_content` for: the open
-    ones (the approver reads and diffs them) and the newest approved decision of
-    each kind (the diff base for the next request). Every older decision would
-    cost its whole document, up to ~12 KB each, on every tab load."""
+    ones (the approver reads and diffs them) and, per kind, the newest approved
+    and the newest sent-back one (stored as `rejected`): the diff bases for the
+    next request. Every older decision would cost its whole document, up to
+    ~12 KB each, on every tab load."""
     keep = {d.id for d in decisions if d.status == "open"}
-    newest: dict[str, Decision] = {}
-    for d in decisions:
-        if d.status == "approved" and (
-            d.kind not in newest or d.created_at > newest[d.kind].created_at
-        ):
-            newest[d.kind] = d
-    return keep | {d.id for d in newest.values()}
+    for status in ("approved", "rejected"):
+        newest: dict[str, Decision] = {}
+        for d in decisions:
+            if d.status == status and (
+                d.kind not in newest or d.created_at > newest[d.kind].created_at
+            ):
+                newest[d.kind] = d
+        keep |= {d.id for d in newest.values()}
+    return keep
 
 
 def decision_out(
