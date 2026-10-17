@@ -44,16 +44,18 @@ def content_hash(content: str) -> str:
 def subject_of(kind: str, contents: Mapping[str, str | None]) -> str | None:
     """What a decision of `kind` approves, from its stage documents' text by
     stage (absent or None: no document). A one-stage subject is its document
-    unchanged; a longer one joins each present document under its heading
-    ("# Project rules", "# Plan", "# Tasks"), leaving out a missing or blank
-    one. None when the last stage has no document: nothing to approve."""
+    unchanged; a longer one joins each present document under a separator
+    line ("===== Project rules =====", "===== Plan =====", "===== Tasks
+    =====") that cannot be mistaken for a document's own heading, leaving out
+    a missing or blank one. None when the last stage has no document: nothing
+    to approve."""
     stages = SUBJECT_STAGES[kind]
     present = {s: text for s in stages if (text := contents.get(s)) and text.strip()}
     if stages[-1] not in present:
         return None
     if len(stages) == 1:
         return present[stages[0]]
-    return "\n\n".join(f"# {SECTION_OF[s]}\n\n{present[s].strip()}" for s in present)
+    return "\n\n".join(f"===== {SECTION_OF[s]} =====\n\n{present[s].strip()}" for s in present)
 
 
 def latest_decision(decisions: list[Decision], kind: str) -> Decision | None:

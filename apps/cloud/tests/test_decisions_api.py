@@ -940,7 +940,10 @@ def test_plan_approval_snapshot_includes_rules_plan_and_tasks(client, project):
 
     body = _request(client, project, "plan_approval").json()
 
-    expected = f"# Project rules\n\n{RULES}\n\n# Plan\n\n{PLAN}\n\n# Tasks\n\n{TASKS.strip()}"
+    expected = (
+        f"===== Project rules =====\n\n{RULES}\n\n===== Plan =====\n\n{PLAN}\n\n"
+        f"===== Tasks =====\n\n{TASKS.strip()}"
+    )
     assert body["subject_content"] == expected
     assert body["subject_stage"] == "tasks"  # kept for the web
     stored = client.app.state.repository.get_decision(project, body["id"])
@@ -953,7 +956,7 @@ def test_plan_approval_snapshot_leaves_out_missing_rules_and_plan(client, projec
 
     body = _request(client, project, "plan_approval").json()
 
-    assert body["subject_content"] == f"# Tasks\n\n{TASKS.strip()}"
+    assert body["subject_content"] == f"===== Tasks =====\n\n{TASKS.strip()}"
 
 
 def test_plan_approval_without_tasks_has_nothing_to_approve(client, project):
@@ -1007,7 +1010,7 @@ def test_a_plan_edit_before_the_answer_is_409(client, project):
     assert res.json()["detail"] == "decision_subject_changed"
 
 
-def test_legacy_tasks_only_plan_approval_still_resolves(client, project):
+def test_legacy_tasks_only_plan_approval_reads_stale_and_409s(client, project):
     _save_tasks(client, project)
     repo = client.app.state.repository
     # The pre-change shape: the subject is the tasks document alone.

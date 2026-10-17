@@ -156,12 +156,12 @@ def test_parse_files_two_blocks_each_with_inner_fence():
 - Test: `apps/cloud/tests/test_decisions_api.py`, `apps/cloud/tests/test_decision_rules.py`
 
 **Interfaces:**
-- Produces: `approval_subject(repo: Repository, project_id: str, kind: str) -> str | None` in `approvals.py`: joins the present documents as `"# Project rules\n\n{constitution}\n\n# Plan\n\n{plan}\n\n# Tasks\n\n{tasks}"` (intent: the specify document unchanged); returns `None` when the kind's last stage is missing. `current_hash(repo, project_id, kind)` hashes `approval_subject`. Every caller that passed a stage now passes a kind.
+- Produces: `approval_subject(repo: Repository, project_id: str, kind: str) -> str | None` in `approvals.py`: joins the present documents, each trimmed, as `"===== Project rules =====\n\n{constitution}\n\n===== Plan =====\n\n{plan}\n\n===== Tasks =====\n\n{tasks}"`, leaving out an absent or blank rules or plan document with its separator (intent: the specify document unchanged); returns `None` when the kind's last stage is missing. `current_hash(repo, project_id, kind)` hashes `approval_subject`. Every caller that passed a stage now passes a kind.
 
 - [ ] **Step 1: Write the failing tests**
-  - `test_plan_approval_snapshot_includes_rules_plan_and_tasks`: request plan approval; the stored `subject_content` contains `# Project rules`, `# Plan`, `# Tasks` and each document's text.
+  - `test_plan_approval_snapshot_includes_rules_plan_and_tasks`: request plan approval; the stored `subject_content` contains `===== Project rules =====`, `===== Plan =====`, `===== Tasks =====` and each document's text.
   - `test_editing_plan_stales_plan_approval`: approve, then save a changed plan document → plan approval state is `stale`.
-  - `test_legacy_tasks_only_plan_approval_still_resolves`: insert a plan decision whose `subject_content` is tasks text only (pre-change shape); resolving it returns 409 `decision_subject_changed` rather than 500, and the approval state reads `stale`.
+  - `test_legacy_tasks_only_plan_approval_reads_stale_and_409s`: insert a plan decision whose `subject_content` is tasks text only (pre-change shape); resolving it returns 409 `decision_subject_changed` rather than 500, and the approval state reads `stale`.
 - [ ] **Step 2:** Run `pytest tests/test_decisions_api.py tests/test_decision_rules.py -q -k "rules_plan_and_tasks or stales_plan or legacy_tasks_only"`. Expected: FAIL.
 - [ ] **Step 3: Implement** as in Interfaces. The repository-creation gate (`sync.py:776-782`) uses the same `current_hash`.
 - [ ] **Step 4:** Run `pytest tests/test_decisions_api.py tests/test_decision_rules.py tests/test_delivery_gate.py -q`. Expected: PASS.

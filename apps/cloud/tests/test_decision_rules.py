@@ -128,19 +128,20 @@ def test_overdue_means_open_and_past_expiry():
     assert not is_overdue(_decision(), now)  # no expiry recorded (pre-0009)
 
 
-def test_plan_approval_subject_heads_rules_plan_and_tasks():
+def test_plan_approval_subject_separates_rules_plan_and_tasks():
     contents = {"constitution": "Rules.\n", "plan": "  Plan.", "tasks": "Tasks.", "specify": "x"}
     assert subject_of("plan_approval", contents) == (
-        "# Project rules\n\nRules.\n\n# Plan\n\nPlan.\n\n# Tasks\n\nTasks."
+        "===== Project rules =====\n\nRules.\n\n===== Plan =====\n\nPlan.\n\n"
+        "===== Tasks =====\n\nTasks."
     )
 
 
 def test_plan_approval_subject_leaves_out_missing_or_blank_documents():
     assert subject_of("plan_approval", {"plan": "Plan.", "tasks": "Tasks."}) == (
-        "# Plan\n\nPlan.\n\n# Tasks\n\nTasks."
+        "===== Plan =====\n\nPlan.\n\n===== Tasks =====\n\nTasks."
     )
     assert subject_of("plan_approval", {"constitution": " \n", "tasks": "Tasks."}) == (
-        "# Tasks\n\nTasks."
+        "===== Tasks =====\n\nTasks."
     )
 
 
