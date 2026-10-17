@@ -24,6 +24,8 @@ import { ensureTaskBranch } from "./taskBranch.ts";
 import {
   COPY_CONTEXT_ACTION,
   OPEN_IN_WEB_ACTION,
+  noRepositoryNotice,
+  noTaskNumberNotice,
   startNotice,
   type StartChoice,
 } from "./startNotice.ts";
@@ -65,18 +67,14 @@ export async function startTask(
 
   // These two replace the next-step notification (one notification per start):
   // without a ref or a repository there is no branch to name, and what the
-  // developer most needs to hear is why commits will not close the task.
+  // developer most needs to hear is why commits will not close the task. Both
+  // still offer the agent hand-off.
   if (!ref) {
-    void vscode.window.showInformationMessage(
-      `Started "${task.title}". It has no task number, so commits cannot close it automatically.`,
-    );
+    showStartNotice(noTaskNumberNotice(task.title), entry);
     return;
   }
   if (!root || !branch || !choice) {
-    void vscode.window.showInformationMessage(
-      `Started ${ref}. No git repository is linked to this project, so there is ` +
-        "nowhere to put the task number yet.",
-    );
+    showStartNotice(noRepositoryNotice(ref), entry);
     return;
   }
 
@@ -95,32 +93,34 @@ export async function startTask(
         "Prefill Message",
         "Cancel",
       );
-      if (retry !== "Prefill Message") return;
-      reported = "message";
+      reported = retry === "Prefill Message" ? "message" : "neither";
     } else {
       noticeBranch = branch;
     }
   }
 
-  if (choice !== "neither") deps.git.setCommitMessage(root, message);
+  if (reported !== "neither") deps.git.setCommitMessage(root, message);
   deps.log.info(`started ${ref} (${choice})`);
 
+  showStartNotice(startNotice(ref, reported, noticeBranch), entry);
+}
+
+/** The one notification a start ends with: the message plus the two agent
+ *  hand-off actions, wired to the commands the task tree uses. */
+function showStartNotice(message: string, entry: AssignedTask): void {
   void vscode.window
-    .showInformationMessage(
-      startNotice(ref, reported, noticeBranch),
-      COPY_CONTEXT_ACTION,
-      OPEN_IN_WEB_ACTION,
-    )
+    .showInformationMessage(message, COPY_CONTEXT_ACTION, OPEN_IN_WEB_ACTION)
     .then((picked) => {
-      const command =
-        picked === COPY_CONTEXT_ACTION
-          ? "promptworkspace.copyTaskContext"
-          : picked === OPEN_IN_WEB_ACTION
-            ? "promptworkspace.openTaskInWeb"
-            : undefined;
+      const command = commandForAction(picked);
       // The same node shape the task tree passes to these commands.
       if (command) return vscode.commands.executeCommand(command, { kind: "task", entry });
     });
+}
+
+function commandForAction(picked: string | undefined): string | undefined {
+  if (picked === COPY_CONTEXT_ACTION) return "promptworkspace.copyTaskContext";
+  if (picked === OPEN_IN_WEB_ACTION) return "promptworkspace.openTaskInWeb";
+  return undefined;
 }
 
 /**

@@ -26,3 +26,18 @@ export function startNotice(
     "context and paste it into Claude Code, Cursor or your agent of choice."
   );
 }
+
+const HAND_OFF = "You can still hand it to your AI agent: copy the task context.";
+
+/** Start Task on a task whose feature tag carries no task number. */
+export function noTaskNumberNotice(title: string): string {
+  return `Started "${title}". It has no task number, so commits cannot close it automatically. ${HAND_OFF}`;
+}
+
+/** Start Task when no git repository is linked to the project. */
+export function noRepositoryNotice(featureTag: string): string {
+  return (
+    `Started ${featureTag}. No git repository is linked to this project, so there is ` +
+    `nowhere to put the task number yet. ${HAND_OFF}`
+  );
+}
