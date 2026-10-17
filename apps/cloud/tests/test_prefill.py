@@ -149,6 +149,15 @@ def test_a_project_with_no_source_material_is_rejected_rather_than_invented(clie
     assert res.json()["detail"] == "no_source_material"
 
 
+def test_a_select_option_over_200_characters_is_rejected(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    field = {"key": "kind", "label": "Kind", "options": ["x" * 201]}
+
+    res = _prefill(client, pid, "specify", fields=[field])
+
+    assert res.status_code == 422
+
+
 def test_draft_is_advisory_and_writes_nothing(client: TestClient):
     """A prefill must not create the Requirement or the stage document the
     real stage owns — the author has not approved anything yet."""

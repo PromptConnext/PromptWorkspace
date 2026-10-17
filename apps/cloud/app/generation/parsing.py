@@ -197,7 +197,11 @@ _SPECS_REF_RE = re.compile(
 )
 _SPEC_KIT_FEATURE_BRANCH_RE = re.compile(r"^[ \t]*\*\*Feature Branch\*\*[ \t]*:")
 _UNCLEAR_EXAMPLE_RE = re.compile(r"^[ \t]*\*?Example of marking unclear requirements\b")
-_LIST_ITEM_RE = re.compile(r"^[ \t]*[-*] ")
+# The template's own two example requirements under that line; a model's real
+# requirements there are kept.
+_UNCLEAR_EXAMPLE_ITEM_RE = re.compile(
+    r"^[ \t]*[-*] .*\[NEEDS CLARIFICATION: (?:auth method|retention period) not specified"
+)
 # The plain-English name each Spec Kit folder document gets in running text.
 _DOC_NAME = {"spec": "the specification", "plan": "the plan", "tasks": "the task list"}
 # `_SPECS_REF_RE` plus the backticks around it, so "`/specs/001/spec.md`" does
@@ -208,7 +212,7 @@ _SPECS_REF_TICKED_RE = re.compile(f"`?(?:{_SPECS_REF_RE.pattern})`?")
 def strip_spec_kit_boilerplate(content: str) -> str:
     """Remove Spec Kit scaffolding a model carried over from its template: the
     `**Feature Branch**` line, the "Example of marking unclear requirements"
-    block (its line and the list items under it), lines naming `[GUIDANCE_FILE]`,
+    block (its line and the template's two example items), lines naming `[GUIDANCE_FILE]`,
     the header `**Input**` / `**Prerequisites**` / "Tests are OPTIONAL" lines,
     and `/specs/NNN-name/{spec,plan,tasks}.md` references, which become "the
     specification", "the plan" and "the task list". Fenced code is untouched."""
@@ -216,6 +220,7 @@ def strip_spec_kit_boilerplate(content: str) -> str:
     in_fence = False
     in_header = True
     skipping_example = False
+    dropped_item = False
     for line in content.split("\n"):
         if _FENCE_RE.match(line):
             in_fence = not in_fence
@@ -228,11 +233,15 @@ def strip_spec_kit_boilerplate(content: str) -> str:
         if line.startswith("## "):
             in_header = False
         if skipping_example:
-            if _LIST_ITEM_RE.match(line) or not line.strip():
+            if _UNCLEAR_EXAMPLE_ITEM_RE.match(line):
+                dropped_item = True
+                continue
+            if not line.strip() and not dropped_item:
                 continue
             skipping_example = False
         if _UNCLEAR_EXAMPLE_RE.match(line):
             skipping_example = True
+            dropped_item = False
             continue
         if _SPEC_KIT_FEATURE_BRANCH_RE.match(line) or "[GUIDANCE_FILE]" in line:
             continue

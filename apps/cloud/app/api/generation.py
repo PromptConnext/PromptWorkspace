@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -413,7 +413,9 @@ class PrefillField(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     hint: str = Field(default="", max_length=400)
     # A select's choices: the model must answer with one of them.
-    options: list[str] = Field(default_factory=list, max_length=24)
+    options: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=24
+    )
 
 
 class PrefillRequest(BaseModel):

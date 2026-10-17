@@ -252,8 +252,9 @@ class DecisionOut(DecisionBase):
     # migration 0006 and for older decisions a listing leaves out
     # (`content_carriers`).
     subject_content: str | None
-    # True while `subject_hash` is the hash of the stage document as it is now;
-    # false once the document was edited after this decision was made.
+    # True while `subject_hash` is the hash of the decision's subject as it is
+    # now (for the plan approval: project rules, plan and tasks); false once
+    # that subject changed after this decision was made.
     is_current: bool
 
 

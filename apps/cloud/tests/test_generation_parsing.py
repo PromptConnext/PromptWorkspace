@@ -311,8 +311,10 @@ def test_strip_spec_kit_boilerplate_removes_scaffolding():
         "## Requirements\n\n"
         "- **FR-001**: System MUST record entries\n\n"
         "*Example of marking unclear requirements:*\n\n"
-        "- **FR-006**: System MUST authenticate via [NEEDS CLARIFICATION: method]\n"
-        "- **FR-007**: System MUST retain data for [NEEDS CLARIFICATION: period]\n\n"
+        "- **FR-006**: System MUST authenticate users via "
+        "[NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]\n"
+        "- **FR-007**: System MUST retain user data for "
+        "[NEEDS CLARIFICATION: retention period not specified]\n\n"
         "Use [GUIDANCE_FILE] for runtime guidance.\n"
         "Done when it matches `/specs/001-ledger/spec.md` and /specs/001-ledger/plan.md.\n"
         "See specs/001-ledger/tasks.md.\n\n"
@@ -330,6 +332,20 @@ def test_strip_spec_kit_boilerplate_removes_scaffolding():
     out_outside = out.split("```text")[0]
     assert "/specs/" not in out_outside and "specs/001" not in out_outside
     assert "```text\n/specs/x\n```" in out
+
+
+def test_strip_spec_kit_boilerplate_keeps_real_requirements_after_the_example_line():
+    doc = (
+        "## Requirements\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]\n"
+        "- **FR-007**: System MUST export reports\n\n"
+        "## Success\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Example of marking" not in out
+    assert "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]" in out
+    assert "- **FR-007**: System MUST export reports\n\n## Success" in out
 
 
 @pytest.mark.parametrize(
