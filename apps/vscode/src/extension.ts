@@ -10,6 +10,7 @@ import {
   CONNECTED,
   cachedLabel,
   connectionState,
+  queueStatusItem,
   type Connection,
   type ConnectionKind,
   type FolderLink,
@@ -102,18 +103,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const store = new TaskStore(client, cache, log);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 5);
-  statusBar.command = "promptworkspace.flushQueue";
   // Only this environment's and this account's writes: the queue file is
   // shared by every window.
   const queued = () => queue.count(belongsTo(scope(), session.read()?.userId ?? lastUserId));
   const refreshStatusBar = () => {
-    const pending = queued();
-    if (pending === 0) {
+    const item = queueStatusItem(queued(), session.read() !== null);
+    if (!item) {
       statusBar.hide();
       return;
     }
-    statusBar.text = `$(cloud-upload) PromptWorkspace: ${pending} pending`;
-    statusBar.tooltip = "Task updates waiting to reach the cloud. Click to retry.";
+    statusBar.text = item.text;
+    statusBar.tooltip = item.tooltip;
+    statusBar.command = item.command;
     statusBar.show();
   };
   const writer = new StatusWriter(client, store, queue, log, refreshStatusBar, () => ({
@@ -597,7 +598,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         await vscode.env.clipboard.writeText(context.text);
         void vscode.window.showInformationMessage(
-          copiedMessage(entry.task.feature_tag ?? entry.task.title, context.missing),
+          copiedMessage(
+            entry.task.feature_tag ?? entry.task.title,
+            context.missing,
+            context.signedOut,
+          ),
         );
       },
     ),

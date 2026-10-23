@@ -115,6 +115,28 @@ export function connectionState(
   return CONNECTED;
 }
 
+/** The pending-writes status bar item, or undefined to hide it. A flush
+ *  sends nothing while signed out, so then the click signs in instead of
+ *  promising a retry it cannot make. */
+export function queueStatusItem(
+  pending: number,
+  signedIn: boolean,
+): { text: string; tooltip: string; command: string } | undefined {
+  if (pending <= 0) return undefined;
+  const text = `$(cloud-upload) PromptWorkspace: ${pending} pending`;
+  return signedIn
+    ? {
+        text,
+        tooltip: "Task updates waiting to reach the cloud. Click to retry.",
+        command: "promptworkspace.flushQueue",
+      }
+    : {
+        text,
+        tooltip: "Task updates waiting for you to sign in. Click to sign in.",
+        command: "promptworkspace.signIn",
+      };
+}
+
 /** " 2 task updates are kept ...", or nothing for an empty queue. */
 function queuedSuffix(queued: number): string {
   if (queued <= 0) return "";

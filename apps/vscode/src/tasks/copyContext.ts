@@ -12,6 +12,7 @@ import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
 import type { AssignedTask } from "@promptworkspace/cloud-client";
 import {
   CloudHttpError,
+  CloudNotLoggedInError,
   TASK_STATUS_LABELS,
   branchNameForTask,
   taskRefFromFeatureTag,
@@ -27,6 +28,9 @@ export interface TaskContext {
   text: string;
   /** Parts whose fetch failed or timed out. A document that does not exist is not listed. */
   missing: MissingPart[];
+  /** A part went missing because no one is signed in, not because the cloud
+   *  was slow: the message then asks for a sign-in instead of blaming it. */
+  signedOut: boolean;
 }
 
 /** Facts only the extension host knows; passed in as data so this file never imports vscode. */
@@ -89,6 +93,9 @@ export async function buildTaskContext(
   if (!spec.ok) missing.push("specification");
   if (!plan.ok) missing.push("plan");
   if (!constitution.ok) missing.push("rules");
+  const signedOut = [spec, plan, constitution].some(
+    (part) => !part.ok && part.error instanceof CloudNotLoggedInError,
+  );
 
   if (spec.ok && spec.value) lines.push("## Specification (excerpt)", "", spec.value, "");
   if (plan.ok && plan.value) {
@@ -109,19 +116,24 @@ export async function buildTaskContext(
       "in this repository, so do not search the disk for spec.md, plan.md or tasks.md.",
     "",
   );
-  return { text: lines.join("\n"), missing };
+  return { text: lines.join("\n"), missing, signedOut };
 }
 
 /** The sentence the command shows once the context is on the clipboard. */
-export function copiedMessage(tag: string, missing: readonly MissingPart[]): string {
+export function copiedMessage(
+  tag: string,
+  missing: readonly MissingPart[],
+  signedOut = false,
+): string {
   if (missing.length === 0) return `Copied context for ${tag}.`;
-  return (
-    `Copied context for ${tag} without the ${missing.join(" and ")}. ` +
-    `PromptWorkspace did not answer in time.`
-  );
+  const why = signedOut
+    ? "Sign in to PromptWorkspace to include them."
+    : "PromptWorkspace did not answer in time.";
+  return `Copied context for ${tag} without the ${missing.join(" and ")}. ${why}`;
 }
 
-type Settled<T> = { ok: true; value: T } | { ok: false };
+/** `error` is what the promise rejected with; absent on a timeout. */
+type Settled<T> = { ok: true; value: T } | { ok: false; error?: unknown };
 
 /** Resolves with the value, or `{ ok: false }` if the promise rejects or does not settle in time. */
 function settle<T>(promise: Promise<T>, timeoutMs: number): Promise<Settled<T>> {
@@ -132,9 +144,9 @@ function settle<T>(promise: Promise<T>, timeoutMs: number): Promise<Settled<T>> 
         clearTimeout(timer);
         resolve({ ok: true, value });
       },
-      () => {
+      (error: unknown) => {
         clearTimeout(timer);
-        resolve({ ok: false });
+        resolve({ ok: false, error });
       },
     );
   });

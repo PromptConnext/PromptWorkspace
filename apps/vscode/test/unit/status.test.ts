@@ -12,6 +12,7 @@ import { CloudHttpError, CloudNotLoggedInError } from "@promptworkspace/cloud-cl
 import {
   cachedLabel,
   connectionState,
+  queueStatusItem,
   isAuthFailure,
   refreshFailureIsAuth,
   withBanner,
@@ -169,4 +170,19 @@ test("a refresh token that cannot be read (locked keyring) is offline, not signe
   assert.equal(await refreshFailureIsAuth(err, locked), false);
   const gone = { signedIn: () => true, hasRefreshToken: async () => false };
   assert.equal(await refreshFailureIsAuth(err, gone), true);
+});
+
+test("the queue item offers a retry when signed in and a sign-in when not", () => {
+  assert.equal(queueStatusItem(0, true), undefined);
+  assert.deepEqual(queueStatusItem(2, true), {
+    text: "$(cloud-upload) PromptWorkspace: 2 pending",
+    tooltip: "Task updates waiting to reach the cloud. Click to retry.",
+    command: "promptworkspace.flushQueue",
+  });
+  // A flush does nothing signed out, so the click must not promise one.
+  assert.deepEqual(queueStatusItem(1, false), {
+    text: "$(cloud-upload) PromptWorkspace: 1 pending",
+    tooltip: "Task updates waiting for you to sign in. Click to sign in.",
+    command: "promptworkspace.signIn",
+  });
 });

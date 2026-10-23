@@ -6,8 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CloudHttpError } from "@promptworkspace/cloud-client";
-import { buildTaskContext } from "../../src/tasks/copyContext.ts";
+import { CloudHttpError, CloudNotLoggedInError } from "@promptworkspace/cloud-client";
+import { buildTaskContext, copiedMessage } from "../../src/tasks/copyContext.ts";
 
 const silentLog = { info() {}, warn() {}, error() {} };
 const client = {
@@ -182,4 +182,34 @@ test("an absent document is not missing", async () => {
   );
   assert.deepEqual(result.missing, []);
   assert.doesNotMatch(result.text, /## Specification/);
+});
+
+test("signed out, every cloud part is missing and the result says why", async () => {
+  const signedOut = {
+    getProjectGraph: async () => {
+      throw new CloudNotLoggedInError();
+    },
+    getStageDocument: async () => {
+      throw new CloudNotLoggedInError();
+    },
+  } as never;
+  const noDocs = { read: async () => { throw new CloudNotLoggedInError(); } } as never;
+  const result = await buildTaskContext(withPlan(), signedOut, noDocs, silentLog);
+  assert.deepEqual(result.missing, ["specification", "plan", "rules"]);
+  assert.equal(result.signedOut, true);
+  assert.equal(
+    copiedMessage("T014", result.missing, result.signedOut),
+    "Copied context for T014 without the specification and plan and rules. " +
+      "Sign in to PromptWorkspace to include them.",
+  );
+});
+
+test("a timeout or failure keeps the did-not-answer wording", async () => {
+  const result = await buildTaskContext(withPlan(), clientWith(new Error("503")), docs, silentLog);
+  assert.equal(result.signedOut, false);
+  assert.equal(
+    copiedMessage("T014", result.missing, result.signedOut),
+    "Copied context for T014 without the specification. PromptWorkspace did not answer in time.",
+  );
+  assert.equal(copiedMessage("T014", []), "Copied context for T014.");
 });
