@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api._guards import require_admin, require_project, require_project_members
 from app.db.repository import DeliveryStoreUnavailable, ReceiptConflict, Repository
-from app.delivery import notices
+from app.delivery import line_notices, notices
 from app.delivery.approvals import (
     approval_subject,
     current_hash,
@@ -510,15 +510,26 @@ def request_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     sync_decision_receipts(repo, project_id, [decision, *after])
+    link = notices.decision_link(request.app.state.settings.web_app_url, decision)
     try:
         resolvers = eligible_resolvers(decision, roles, member_ids,
                                        admin_ids_of(members, user.id, is_admin))
-        link = notices.decision_link(request.app.state.settings.web_app_url, decision)
         _email(request, background, notices.recipients(resolvers, members),
                notices.requested(decision, project.name, link))
     except Exception:
         # The decision is saved; a failed notice is logged, not a failed request.
         logger.exception("decision email failed, project=%s decision=%s", project_id, decision.id)
+    try:
+        resolvers = eligible_resolvers(decision, roles, member_ids,
+                                       admin_ids_of(members, user.id, is_admin))
+        send, who = notices.line_who(decision, resolvers, roles, members)
+        if send:
+            request.app.state.line_notifier.notify_project(project_id, partial(
+                line_notices.requested, project.name, decision.kind, who,
+                decision.routed_hat, link))
+    except Exception:
+        logger.exception("decision LINE notice failed, project=%s decision=%s",
+                         project_id, decision.id)
     return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
 
 
@@ -593,6 +604,19 @@ def resolve_decision(
         except Exception:
             logger.exception("decision email failed, project=%s decision=%s",
                              project_id, resolved.id)
+    try:
+        link = notices.decision_link(request.app.state.settings.web_app_url, resolved)
+        resolver = next((m.email for m in members if m.user_id == user.id and m.email),
+                        user.email)
+        if resolved.status == "rejected":
+            build = partial(line_notices.changes_requested, project.name, resolved.kind,
+                            resolver, resolved.rationale, link)
+        else:
+            build = partial(line_notices.approved, project.name, resolved.kind, resolver, link)
+        request.app.state.line_notifier.notify_project(project_id, build)
+    except Exception:
+        logger.exception("decision LINE notice failed, project=%s decision=%s",
+                         project_id, resolved.id)
     out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
                   is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
     return _mutation_out(resolved, after, hashes, out)

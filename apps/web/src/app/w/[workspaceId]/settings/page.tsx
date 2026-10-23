@@ -7,6 +7,7 @@ import { GithubConnectionForm } from "@/components/GithubConnectionForm";
 import { ModelConnectionForm } from "@/components/ModelConnectionForm";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
+import { WorkspaceLanguageForm } from "@/components/WorkspaceLanguageForm";
 import { WorkspaceNameForm } from "@/components/WorkspaceNameForm";
 import { WorkspaceReindexPanel } from "@/components/WorkspaceReindexPanel";
 import { useIsWorkspaceAdmin, useWorkspaceName } from "@/lib/workspace";
@@ -35,6 +36,7 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
         </h1>
 
         <WorkspaceNameForm workspaceId={workspaceId} />
+        <WorkspaceLanguageForm workspaceId={workspaceId} />
 
         {isAdmin && (
           <>

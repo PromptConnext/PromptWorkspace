@@ -125,6 +125,7 @@ def update_workspace(
         name=body.name,
         git_config=body.git_config,
         rag_index_pmo_discussions=body.rag_index_pmo_discussions,
+        language=body.language,
     )
 
 

@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from functools import partial
 from typing import NamedTuple
 
 from app.config import Settings
 from app.db.repository import Repository
 from app.decision_email import DecisionMailer
-from app.delivery import notices
+from app.delivery import line_notices, notices
 from app.delivery.decisions import eligible_resolvers, is_overdue
 from app.delivery.ledger import sync_decision_receipts
+from app.integrations.line import LineNotifier
 from app.models.schemas import Role
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,11 @@ class SweepResult(NamedTuple):
 
 
 def sweep_decisions(
-    repo: Repository, mailer: DecisionMailer, settings: Settings, now: datetime
+    repo: Repository,
+    mailer: DecisionMailer,
+    settings: Settings,
+    now: datetime,
+    notifier: LineNotifier | None = None,
 ) -> SweepResult:
     expired = reminded = 0
     touched: set[str] = set()
@@ -51,6 +57,9 @@ def sweep_decisions(
                     expired += 1
                     mailer.send(notices.recipients({d.requested_by}, members),
                                 *notices.expired(d, project.name, link))
+                    if notifier is not None:
+                        notifier.notify_project(d.project_id, partial(
+                            line_notices.expired, project.name, d.kind, link))
                 elif d.reminded_at is None:
                     if repo.update_open_decision(
                         d.project_id, d.id, {"reminded_at": now}
@@ -58,11 +67,15 @@ def sweep_decisions(
                         continue
                     reminded += 1
                     admins = {m.user_id for m in members if m.role == Role.admin}
-                    resolvers = eligible_resolvers(
-                        d, repo.list_project_roles(d.project_id),
-                        {m.user_id for m in members}, admins)
+                    roles = repo.list_project_roles(d.project_id)
+                    resolvers = eligible_resolvers(d, roles, {m.user_id for m in members}, admins)
                     mailer.send(notices.recipients(resolvers, members),
                                 *notices.reminder(d, project.name, link))
+                    send, who = notices.line_who(d, resolvers, roles, members)
+                    if notifier is not None and send:
+                        notifier.notify_project(d.project_id, partial(
+                            line_notices.reminder, project.name, d.kind, who,
+                            d.routed_hat, link))
             except Exception:  # noqa: BLE001 - one decision must not stop the pass
                 logger.exception("decision sweep failed for decision=%s", d.id)
     finally:

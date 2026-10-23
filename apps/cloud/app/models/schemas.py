@@ -259,6 +259,7 @@ class WorkspaceUpdate(BaseModel):
     name: WorkspaceName | None = None
     git_config: dict | None = None
     rag_index_pmo_discussions: bool | None = None
+    language: Literal["en", "th"] | None = None
 
 
 class Workspace(BaseModel):
@@ -275,8 +276,46 @@ class Workspace(BaseModel):
     # discussions are always in. A typed column, not another integration_config
     # key — this is a first-class workspace setting, not vendor config.
     rag_index_pmo_discussions: bool = False
+    # Language of notifications sent for the workspace's projects (LINE, plan
+    # 0032). Email and the web UI do not read it.
+    language: Literal["en", "th"] = "en"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ProjectLineLink(BaseModel):
+    """The LINE group a project's notifications go to (plan 0032). One per project."""
+
+    project_id: str
+    group_id: str
+    group_name: str | None = None
+    linked_by: str
+    linked_at: datetime
+
+
+class LineLinkCode(BaseModel):
+    """A pending, single-use code an admin pastes into the LINE group to link it."""
+
+    code: str
+    project_id: str
+    created_by: str
+    expires_at: datetime
+
+
+class ProjectLineStatus(BaseModel):
+    """`GET /projects/{id}/line`: whether LINE is on and which group is linked."""
+
+    configured: bool
+    connected: bool
+    group_name: str | None = None
+    linked_at: datetime | None = None
+    bot_basic_id: str | None = None
+
+
+class LineLinkCodeOut(BaseModel):
+    code: str
+    expires_at: datetime
+    bot_basic_id: str | None = None
 
 
 class WorkspaceMember(BaseModel):

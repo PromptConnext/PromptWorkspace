@@ -15,6 +15,7 @@ export interface Workspace {
   created_by: string;
   git_config: Record<string, unknown>;
   integration_config: Record<string, unknown>;
+  language: "en" | "th";
   created_at: string;
   updated_at: string;
 }
@@ -768,6 +769,22 @@ export interface DecisionsOut {
  *  (absent from an API older than the snapshot): refetch then. */
 export interface DecisionMutationOut extends Decision {
   snapshot?: DecisionsOut | null;
+}
+
+/** `GET /projects/{id}/line` (apps/cloud/app/api/line.py). */
+export interface ProjectLineStatus {
+  configured: boolean;
+  connected: boolean;
+  group_name: string | null;
+  linked_at: string | null;
+  bot_basic_id: string | null;
+}
+
+/** `POST /projects/{id}/line/link-code`. */
+export interface LineLinkCode {
+  code: string;
+  expires_at: string;
+  bot_basic_id: string | null;
 }
 
 export interface ProjectRoleOut {

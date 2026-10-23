@@ -26,6 +26,7 @@ from app.api import (
     github,
     health,
     integrations,
+    line,
     me,
     policies,
     presence,
@@ -116,7 +117,7 @@ async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
         try:
             result = await asyncio.to_thread(
                 sweep_decisions, app.state.repository, app.state.decision_mailer,
-                settings, utcnow())
+                settings, utcnow(), app.state.line_notifier)
             if result.expired or result.reminded:
                 logger.info("Decision sweep: %s expired, %s reminded", *result)
         except Exception:  # noqa: BLE001 - the sweep must never crash the app
@@ -244,6 +245,13 @@ async def lifespan(app: FastAPI):
     app.state.decision_mailer = build_decision_mailer(settings)
     if isinstance(app.state.decision_mailer, NullDecisionMailer):
         logger.info("Decision email disabled: SMTP_HOST or SMTP_FROM not set")
+    from app.delivery.line_throttle import DiscussionThrottle
+    from app.integrations.line import build_line_notifier
+
+    app.state.line_notifier = build_line_notifier(settings, app.state.repository)
+    app.state.discussion_throttle = DiscussionThrottle()
+    if not app.state.line_notifier.enabled:
+        logger.info("LINE notifications disabled: LINE_CHANNEL_SECRET or token not set")
     logger.info(
         "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,
@@ -270,6 +278,7 @@ async def lifespan(app: FastAPI):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):
             await reconcile_task
+        app.state.line_notifier.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -315,6 +324,7 @@ def create_app() -> FastAPI:
     # -> a wrong 404, never reaching this router's own signature check).
     app.include_router(github.router)
     app.include_router(integrations.router)
+    app.include_router(line.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
     app.include_router(repository_docs.router)
