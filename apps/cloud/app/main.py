@@ -26,6 +26,7 @@ from app.api import (
     github,
     health,
     integrations,
+    line,
     me,
     policies,
     presence,
@@ -321,6 +322,7 @@ def create_app() -> FastAPI:
     # -> a wrong 404, never reaching this router's own signature check).
     app.include_router(github.router)
     app.include_router(integrations.router)
+    app.include_router(line.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
     app.include_router(repository_docs.router)

@@ -112,6 +112,11 @@ class LineNotifier:
     def enabled(self) -> bool:
         return self._client is not None
 
+    @property
+    def client(self) -> LineClient | None:
+        """The webhook replies and reads group names through the same client."""
+        return self._client
+
     def notify_project(self, project_id: str, build: Callable[[str], str]) -> None:
         if self._client is None:
             return

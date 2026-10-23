@@ -19,10 +19,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 # Prefixes that count against the limit. Reads of the whole graph and the cheap
-# /changes probe both live under /sync; webhooks under /api/webhooks. Chat
+# /changes probe both live under /sync; webhooks under /api/webhooks (and the
+# LINE webhook under /integrations/line, a path fixed in the LINE console). Chat
 # (M9) is metered separately by cost too (app/rag/budget.py) but still counts
 # against the request-throughput bucket like every other hot path.
-_LIMITED_PREFIXES = ("/sync", "/api/webhooks", "/desktop-auth")
+_LIMITED_PREFIXES = ("/sync", "/api/webhooks", "/desktop-auth", "/integrations/line")
 _LIMITED_SUFFIXES = ("/assistant/chat",)
 
 

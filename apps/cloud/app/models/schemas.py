@@ -302,6 +302,22 @@ class LineLinkCode(BaseModel):
     expires_at: datetime
 
 
+class ProjectLineStatus(BaseModel):
+    """`GET /projects/{id}/line`: whether LINE is on and which group is linked."""
+
+    configured: bool
+    connected: bool
+    group_name: str | None = None
+    linked_at: datetime | None = None
+    bot_basic_id: str | None = None
+
+
+class LineLinkCodeOut(BaseModel):
+    code: str
+    expires_at: datetime
+    bot_basic_id: str | None = None
+
+
 class WorkspaceMember(BaseModel):
     workspace_id: str
     user_id: str
