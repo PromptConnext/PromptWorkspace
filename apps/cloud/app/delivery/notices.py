@@ -18,12 +18,22 @@ def _line(text: str) -> str:
 
 
 def line_who(
-    decision: Decision, roles: list[ProjectRole], members: list[WorkspaceMember]
-) -> str | None:
-    """The one person a LINE notice names: the routed hat's holder while they
-    are a member. None means the admins decide (any-admin wording)."""
+    decision: Decision,
+    resolvers: set[str],
+    roles: list[ProjectRole],
+    members: list[WorkspaceMember],
+) -> tuple[bool, str | None]:
+    """Whether a LINE notice goes out for `decision`, and whom it names.
+    `resolvers` is `eligible_resolvers`: nobody means nobody can act (no
+    message); the routed hat's holder means their email (no message if they
+    have none); anyone else is the admin pool (any-admin wording, name None)."""
+    if not resolvers:
+        return False, None
     holder = next((r.user_id for r in roles if r.hat == decision.routed_hat), None)
-    return next((m.email for m in members if m.user_id == holder and m.email), None)
+    if holder in resolvers:
+        email = next((m.email for m in members if m.user_id == holder and m.email), None)
+        return email is not None, email
+    return True, None
 
 
 def decision_link(web_app_url: str, decision: Decision) -> str:

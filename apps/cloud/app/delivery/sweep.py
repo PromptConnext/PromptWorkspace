@@ -71,10 +71,11 @@ def sweep_decisions(
                     resolvers = eligible_resolvers(d, roles, {m.user_id for m in members}, admins)
                     mailer.send(notices.recipients(resolvers, members),
                                 *notices.reminder(d, project.name, link))
-                    if notifier is not None:
+                    send, who = notices.line_who(d, resolvers, roles, members)
+                    if notifier is not None and send:
                         notifier.notify_project(d.project_id, partial(
-                            line_notices.reminder, project.name, d.kind,
-                            notices.line_who(d, roles, members), d.routed_hat, link))
+                            line_notices.reminder, project.name, d.kind, who,
+                            d.routed_hat, link))
             except Exception:  # noqa: BLE001 - one decision must not stop the pass
                 logger.exception("decision sweep failed for decision=%s", d.id)
     finally:

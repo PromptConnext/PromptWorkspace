@@ -103,6 +103,27 @@ def test_request_without_holder_names_any_admin(client, project, line):
     assert "any workspace admin" in text
 
 
+def test_request_by_the_only_holder_sends_nothing(client, project, line):
+    client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "bob"},
+               headers=ALICE)
+
+    _request(client, project, headers=BOB)
+
+    assert line.pushed == []
+
+
+def test_holder_without_email_sends_nothing(client, project, line):
+    repo = client.app.state.repository
+    ws_id = repo.get_project(project).workspace_id
+    repo.add_member(ws_id, "carol", Role.member, email=None)
+    client.put(f"/projects/{project}/roles/business_owner", json={"user_id": "carol"},
+               headers=ALICE)
+
+    _request(client, project)
+
+    assert line.pushed == []
+
+
 def test_changes_requested_pushes_reason(client, project, line):
     did = _request(client, project).json()["id"]
     line.pushed.clear()
@@ -168,3 +189,17 @@ def test_sweep_pushes_reminder_and_expired_once():
     sweep_decisions(repo, mailer, settings, now + timedelta(hours=11), notifier)
     ((_, text),) = recorder.pushed
     assert "counts as not approved" in text
+
+
+def test_sweep_reminder_skipped_when_nobody_can_act():
+    from app.decision_email import RecordingDecisionMailer
+
+    settings = Settings(decision_reminder_hours=48, web_app_url="https://w.example")
+    repo, notifier, recorder, now = _sweep_setup(hours_left=10)
+    (d,) = repo.list_due_decisions(now + timedelta(hours=48))
+    # bob requested it and holds the hat: nobody else may decide
+    repo.set_project_role(d.project_id, d.workspace_id, "business_owner", "bob", "alice")
+
+    sweep_decisions(repo, RecordingDecisionMailer(), settings, now, notifier)
+
+    assert recorder.pushed == []

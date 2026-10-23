@@ -510,19 +510,23 @@ def request_decision(
     except DeliveryStoreUnavailable:
         raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
     sync_decision_receipts(repo, project_id, [decision, *after])
+    link = notices.decision_link(request.app.state.settings.web_app_url, decision)
     try:
         resolvers = eligible_resolvers(decision, roles, member_ids,
                                        admin_ids_of(members, user.id, is_admin))
-        link = notices.decision_link(request.app.state.settings.web_app_url, decision)
         _email(request, background, notices.recipients(resolvers, members),
                notices.requested(decision, project.name, link))
     except Exception:
         # The decision is saved; a failed notice is logged, not a failed request.
         logger.exception("decision email failed, project=%s decision=%s", project_id, decision.id)
     try:
-        request.app.state.line_notifier.notify_project(project_id, partial(
-            line_notices.requested, project.name, decision.kind,
-            notices.line_who(decision, roles, members), decision.routed_hat, link))
+        resolvers = eligible_resolvers(decision, roles, member_ids,
+                                       admin_ids_of(members, user.id, is_admin))
+        send, who = notices.line_who(decision, resolvers, roles, members)
+        if send:
+            request.app.state.line_notifier.notify_project(project_id, partial(
+                line_notices.requested, project.name, decision.kind, who,
+                decision.routed_hat, link))
     except Exception:
         logger.exception("decision LINE notice failed, project=%s decision=%s",
                          project_id, decision.id)
