@@ -476,8 +476,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // what the stores hold before the session listener refreshes them.
         watcher?.rescope();
         await Promise.all([store.rescope(), roster.rescope()]);
-        await session.adoptLegacySession();
-        session.rescope();
+        // An adoption stores, and so already emits, the session; a second
+        // emit from `rescope` would start a second refresh chain.
+        if (!(await session.adoptLegacySession())) session.rescope();
       }
       if (!event.affectsConfiguration("promptworkspace.projectId")) return;
       await reactToActiveProjectChange();
