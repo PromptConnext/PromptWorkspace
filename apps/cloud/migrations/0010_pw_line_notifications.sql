@@ -21,8 +21,9 @@
 -- member-readable column and needs nothing.
 --
 -- DEPLOY ORDER
--- Apply BEFORE deploying the code that reads `language`: the Supabase
--- adapter selects every Workspace column.
+-- Apply BEFORE deploying this code: the Supabase adapter's create_workspace
+-- inserts every Workspace field, `language` included, so creating a workspace
+-- fails (PGRST204, unknown column) until this migration is applied.
 
 alter table pw_workspaces add column if not exists language text not null default 'en';
 
