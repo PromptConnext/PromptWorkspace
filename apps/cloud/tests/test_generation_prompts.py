@@ -14,6 +14,7 @@ from app.generation.prompts import (
     PLAN_AUTHOR_OVERRIDE_RULE,
     REPO_OCCURRENCES_RULE,
     SPECIFY_SCOPE_RULE,
+    TASKS_AC_FILES_RULE,
     codebase_baseline_prompt,
     driver_prompt,
 )
@@ -147,3 +148,12 @@ def test_brownfield_tasks_name_the_files_repo_occurrences_lists():
     # leave room for a file it does not show in exactly those cases.
     assert "and N more files" in REPO_OCCURRENCES_RULE
     assert "searched" in REPO_OCCURRENCES_RULE
+
+
+def test_tasks_prompt_limits_acceptance_criteria_to_real_files():
+    """The 2026-10-18 walkthrough: T001's acceptance criterion cited a
+    `project_structure.md` that nothing in the plan, the repository or an
+    earlier task had."""
+    assert TASKS_AC_FILES_RULE in driver_prompt("tasks")
+    assert TASKS_AC_FILES_RULE in driver_prompt("tasks", existing_codebase=True)
+    assert TASKS_AC_FILES_RULE not in driver_prompt("plan")
