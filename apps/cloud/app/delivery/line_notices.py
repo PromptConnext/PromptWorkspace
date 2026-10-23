@@ -103,14 +103,16 @@ def reminder(
 ) -> str:
     holder = _v(who)
     if lang == "th":
+        waiting = f"รอ {holder} ตัดสินใจ" if holder else "รอผู้ดูแลเวิร์กสเปซคนใดก็ได้ตัดสินใจ"
         return _msg(
             project,
-            f"เตือน: {_APPROVAL_TH[kind]} ยังรอ {holder} ตัดสินใจ และจะหมดอายุเร็วๆ นี้",
+            f"เตือน: {_APPROVAL_TH[kind]} ยัง{waiting} และจะหมดอายุเร็วๆ นี้",
             f"ตัดสินใจที่นี่: {_v(link)}",
         )
+    who_en = holder or "any workspace admin"
     return _msg(
         project,
-        f"Reminder: {_APPROVAL_EN[kind]} is still waiting for {holder} and expires soon.",
+        f"Reminder: {_APPROVAL_EN[kind]} is still waiting for {who_en} and expires soon.",
         f"Decide here: {_v(link)}",
     )
 
@@ -162,7 +164,7 @@ def linked(project: str, lang: Lang) -> str:
     return f"Linked to {name}. This group will get PromptWorkspace notifications for it."
 
 
-def test_message(project: str, lang: Lang) -> str:
+def line_test_message(project: str, lang: Lang) -> str:
     if lang == "th":
         return _msg(project, "ข้อความทดสอบ การแจ้งเตือนผ่าน LINE ของโปรเจกต์นี้ใช้งานได้")
     return _msg(project, "Test message. LINE notifications for this project are working.")

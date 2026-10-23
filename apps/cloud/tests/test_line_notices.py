@@ -135,11 +135,11 @@ def test_linked():
     )
 
 
-def test_test_message():
-    assert ln.test_message("Acme", "en") == (
+def test_line_test_message():
+    assert ln.line_test_message("Acme", "en") == (
         f"{H}\nTest message. LINE notifications for this project are working."
     )
-    assert ln.test_message("Acme", "th") == (
+    assert ln.line_test_message("Acme", "th") == (
         f"{H}\nข้อความทดสอบ การแจ้งเตือนผ่าน LINE ของโปรเจกต์นี้ใช้งานได้"
     )
 
@@ -160,3 +160,16 @@ def test_newlines_in_names_are_flattened():
     assert len(out.split("\n")) == 3
     r = ln.changes_requested("Acme", "plan_approval", "b", "line1\nline2\r\n", L, "en")
     assert "Reason: line1 line2" in r and len(r.split("\n")) == 4
+
+
+def test_reminder_no_holder_uses_any_admin_phrase():
+    en = ln.reminder("Acme", "plan_approval", None, "tech_steward", L, "en")
+    assert en == (
+        f"{H}\nReminder: Plan approval is still waiting for any workspace admin "
+        f"and expires soon.\nDecide here: {L}"
+    )
+    th = ln.reminder("Acme", "intent_approval", None, "business_owner", L, "th")
+    assert th == (
+        f"{H}\nเตือน: การอนุมัติความต้องการ ยังรอผู้ดูแลเวิร์กสเปซคนใดก็ได้ตัดสินใจ "
+        f"และจะหมดอายุเร็วๆ นี้\nตัดสินใจที่นี่: {L}"
+    )
