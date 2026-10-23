@@ -260,6 +260,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const notified = new Set<ConnectionKind>();
   // Set by the Sign Out command: a sign-out the user asked for is not news.
   let signingOut = false;
+  // Starts running now, keyed project_id:task_id (see promptworkspace.startTask).
+  const startsInFlight = new Set<string>();
   let signedInContext: boolean | undefined;
   const folderLinks = (linkable: ReturnType<typeof candidates>): FolderLink[] =>
     (vscode.workspace.workspaceFolders ?? [])
@@ -587,16 +589,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
-        await startTask(entry, {
-          assign: (projectId, taskId, userId) =>
-            client.assignTask(projectId, taskId, userId),
-          writer,
-          git,
-          link,
-          currentUserId: () => session.read()?.userId,
-          log,
-        });
-        await store.refresh();
+        // A second invocation while the first is still at the picker or
+        // writing must not run a second start (two branch switches, two logs).
+        const key = `${entry.project_id}:${entry.task.id}`;
+        if (startsInFlight.has(key)) {
+          log.info(`start already running for ${entry.task.feature_tag ?? entry.task.id}`);
+          return;
+        }
+        startsInFlight.add(key);
+        try {
+          await startTask(entry, {
+            assign: (projectId, taskId, userId) =>
+              client.assignTask(projectId, taskId, userId),
+            writer,
+            git,
+            link,
+            currentUserId: () => session.read()?.userId,
+            log,
+          });
+          await store.refresh();
+        } finally {
+          startsInFlight.delete(key);
+        }
       },
     ),
     vscode.commands.registerCommand(
