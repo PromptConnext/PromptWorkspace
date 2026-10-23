@@ -1211,7 +1211,7 @@ def set_task_status(
     # Only a real transition into implemented asks the group to verify.
     if body.status == TaskStatus.implemented and previous != TaskStatus.implemented:
         try:
-            web = request.app.state.settings.web_app_url
+            web = request.app.state.settings.web_app_url.rstrip("/")
             link = f"{web}/w/{project.workspace_id}/p/{project_id}?tab=tasks&task={task_id}"
             request.app.state.line_notifier.notify_project(project_id, partial(
                 line_notices.ready_to_verify, project.name,
