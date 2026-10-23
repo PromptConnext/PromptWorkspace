@@ -20,6 +20,9 @@ export interface SessionSignal {
   /** The last task or roster refresh failed because the session is gone
    *  (see `isAuthFailure`), not merely because the refresh gave up for now. */
   authFailed: boolean;
+  /** Status writes still queued for this environment and account. An
+   *  involuntary sign-out keeps them, so the message says they are waiting. */
+  queued: number;
 }
 
 export interface RosterSignal {
@@ -73,7 +76,8 @@ export function connectionState(
       state: "signed_out",
       message:
         "Signed out of PromptWorkspace. Task lists are not updating and commits will not " +
-        "close tasks until you sign in.",
+        "close tasks until you sign in." +
+        queuedSuffix(session.queued),
       banner: "Signed out: click to sign in",
       action: { title: "Sign in", command: "promptworkspace.signIn" },
       statusText: "$(account) PromptWorkspace: sign in",
@@ -109,6 +113,13 @@ export function connectionState(
     };
   }
   return CONNECTED;
+}
+
+/** " 2 task updates are kept ...", or nothing for an empty queue. */
+function queuedSuffix(queued: number): string {
+  if (queued <= 0) return "";
+  const updates = queued === 1 ? "1 task update is" : `${queued} task updates are`;
+  return ` ${updates} kept and will be sent after you sign in.`;
 }
 
 export interface BannerRow {

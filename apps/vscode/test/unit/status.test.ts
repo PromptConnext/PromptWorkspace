@@ -18,13 +18,13 @@ import {
   type FolderLink,
 } from "../../src/auth/status.ts";
 
-const SIGNED_IN = { stored: true, authFailed: false };
+const SIGNED_IN = { stored: true, authFailed: false, queued: 0 };
 const ROSTER = { cached: true, linkable: 2 };
 const linked: FolderLink = { name: "checkout", linked: true, declined: false, hasMatch: true };
 const unlinked: FolderLink = { name: "checkout", linked: false, declined: false, hasMatch: false };
 
 test("no session is signed_out, with a Sign in action", () => {
-  const state = connectionState({ stored: false, authFailed: false }, ROSTER, [linked]);
+  const state = connectionState({ stored: false, authFailed: false, queued: 0 }, ROSTER, [linked]);
   assert.equal(state.state, "signed_out");
   assert.equal(state.action?.title, "Sign in");
   assert.equal(state.action?.command, "promptworkspace.signIn");
@@ -34,19 +34,34 @@ test("no session is signed_out, with a Sign in action", () => {
 });
 
 test("a stored session the cloud refuses is signed_out too", () => {
-  const state = connectionState({ stored: true, authFailed: true }, ROSTER, [linked]);
+  const state = connectionState({ stored: true, authFailed: true, queued: 0 }, ROSTER, [linked]);
   assert.equal(state.state, "signed_out");
   assert.equal(state.notify, true);
 });
 
 test("a window that was never signed in shows the state but does not pop a notification", () => {
   const state = connectionState(
-    { stored: false, authFailed: true },
+    { stored: false, authFailed: true, queued: 0 },
     { cached: false, linkable: 0 },
     [],
   );
   assert.equal(state.state, "signed_out");
   assert.equal(state.notify, false);
+});
+
+test("signed out with queued updates says they are kept", () => {
+  // An involuntary sign-out keeps the queue; the user must know the writes
+  // are waiting, not lost.
+  const two = connectionState({ stored: true, authFailed: true, queued: 2 }, ROSTER, [linked]);
+  assert.match(two.message, / 2 task updates are kept and will be sent after you sign in\.$/);
+  const one = connectionState({ stored: false, authFailed: false, queued: 1 }, ROSTER, [linked]);
+  assert.match(one.message, / 1 task update is kept and will be sent after you sign in\.$/);
+});
+
+test("signed out with an empty queue says nothing about updates", () => {
+  const state = connectionState({ stored: false, authFailed: false, queued: 0 }, ROSTER, [linked]);
+  assert.doesNotMatch(state.message, /task update/);
+  assert.match(state.message, /until you sign in\.$/);
 });
 
 test("a session with an unlinked folder is unlinked, with a Link this folder action", () => {
@@ -114,7 +129,7 @@ test("the banner node leads a non-empty tree", () => {
 });
 
 test("an empty tree gets no banner, so the welcome view still shows", () => {
-  const state = connectionState({ stored: false, authFailed: false }, ROSTER, []);
+  const state = connectionState({ stored: false, authFailed: false, queued: 0 }, ROSTER, []);
   assert.deepEqual(withBanner(state, []), []);
   assert.deepEqual(withBanner(connectionState(SIGNED_IN, ROSTER, [linked]), ["a"]), ["a"]);
 });

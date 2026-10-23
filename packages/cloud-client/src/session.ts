@@ -220,9 +220,11 @@ export class SessionStore {
     this.emit(session);
   }
 
-  /** Callers must also drop the task cache and the pending-write queue: a
-   *  queued status write belongs to the identity that made it and must never
-   *  flush under the next user. `extension.ts` wires that; see onDidChange. */
+  /** Callers must also drop the task cache. The pending-write queue is
+   *  dropped only on a sign-out the user asked for: each entry records the
+   *  environment and account that made it, so one kept through an involuntary
+   *  clear never flushes under the next user. `extension.ts` wires that; see
+   *  onDidChange. */
   async clear(): Promise<void> {
     await this.secrets.delete(this.key(ACCESS_SECRET));
     await this.secrets.delete(this.key(REFRESH_SECRET));
