@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_ATTEMPTS, StatusQueue, type QueueEntry } from "../src/queue.ts";
+import { MAX_ATTEMPTS, StatusQueue, belongsTo, type QueueEntry } from "../src/queue.ts";
 
 function makeQueue(startAt = 1_000) {
   let saved: QueueEntry[] = [];
@@ -143,4 +143,54 @@ test("clear drops everything (sign-out must not leak writes to the next user)", 
   await queue.clear();
   assert.equal(queue.size(), 0);
   assert.deepEqual(saved(), []);
+});
+
+test("flush skips entries that belong to another environment", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  const seen: string[] = [];
+  const result = await queue.flush(async (e) => {
+    seen.push(e.taskId);
+  }, belongsTo("a", "u1"));
+  assert.deepEqual(seen, ["t1"]);
+  assert.equal(result.sent, 1);
+  assert.equal(queue.size(), 1);
+  assert.equal(queue.list()[0].scope, "b");
+  assert.equal(queue.list()[0].attempts, 0);
+});
+
+test("entries without an owner belong to every owner", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented" });
+  const result = await queue.flush(async () => {}, belongsTo("a", "u1"));
+  assert.equal(result.sent, 1);
+  assert.equal(queue.size(), 0);
+});
+
+test("drop removes another user's entries and reports the count", async () => {
+  const { queue, saved } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  const dropped = await queue.drop(
+    (e) => e.scope === "a" && e.userId !== undefined && e.userId !== "u2",
+  );
+  assert.equal(dropped, 1);
+  assert.equal(queue.size(), 1);
+  assert.equal(saved()[0].scope, "b");
+});
+
+test("the same task on two environments queues twice", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a" });
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "b" });
+  assert.equal(queue.size(), 2);
+});
+
+test("count filters by owner", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  assert.equal(queue.count(), 2);
+  assert.equal(queue.count(belongsTo("a", "u1")), 1);
 });

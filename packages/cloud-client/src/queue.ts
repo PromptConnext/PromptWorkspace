@@ -18,12 +18,28 @@ export interface QueueEntry {
   taskId: string;
   status: TaskStatus;
   artifact?: StatusArtifact;
+  /** Environment the write was made against (a host such as `abc.supabase.co`).
+   *  Absent on entries queued before this field existed, and from apps/mcp. */
+  scope?: string;
+  /** Cloud user who made the write. Absent under the same conditions. */
+  userId?: string;
   enqueuedAt: number;
   attempts: number;
   nextAttemptAt: number;
 }
 
 export type QueueFlusher = (entry: QueueEntry) => Promise<void>;
+
+/** An entry with no owner recorded belongs to everyone, so a queue written
+ *  before scope and user existed still flushes. */
+export function belongsTo(
+  scope: string,
+  userId: string | undefined,
+): (e: QueueEntry) => boolean {
+  return (e) =>
+    (e.scope === undefined || e.scope === scope) &&
+    (e.userId === undefined || e.userId === userId);
+}
 
 /** Backoff, then park. Parking is deliberate: an entry that has failed four
  *  times needs a human to look, not a tighter loop. */
@@ -57,6 +73,10 @@ export class StatusQueue {
     return this.entries.length;
   }
 
+  count(belongs?: (e: QueueEntry) => boolean): number {
+    return belongs ? this.entries.filter(belongs).length : this.entries.length;
+  }
+
   parked(): QueueEntry[] {
     return this.entries.filter((e) => e.attempts >= MAX_ATTEMPTS);
   }
@@ -71,7 +91,10 @@ export class StatusQueue {
     await this.load();
     const now = this.deps.now();
     const existing = this.entries.findIndex(
-      (e) => e.taskId === entry.taskId && e.projectId === entry.projectId,
+      (e) =>
+        e.taskId === entry.taskId &&
+        e.projectId === entry.projectId &&
+        e.scope === entry.scope,
     );
     const next: QueueEntry = {
       ...entry,
@@ -94,9 +117,13 @@ export class StatusQueue {
   /**
    * Attempt every entry that is due. A failure backs the entry off rather than
    * blocking the ones behind it — a single unreachable project must not hold
-   * up a queue that is otherwise flushable.
+   * up a queue that is otherwise flushable. Entries `belongs` rejects are left
+   * untouched: no attempt, no backoff change.
    */
-  async flush(flusher: QueueFlusher): Promise<{ sent: number; failed: number }> {
+  async flush(
+    flusher: QueueFlusher,
+    belongs?: (e: QueueEntry) => boolean,
+  ): Promise<{ sent: number; failed: number }> {
     await this.load();
     const now = this.deps.now();
     let sent = 0;
@@ -104,7 +131,11 @@ export class StatusQueue {
     const survivors: QueueEntry[] = [];
 
     for (const entry of this.entries) {
-      if (entry.attempts >= MAX_ATTEMPTS || entry.nextAttemptAt > now) {
+      if (
+        (belongs && !belongs(entry)) ||
+        entry.attempts >= MAX_ATTEMPTS ||
+        entry.nextAttemptAt > now
+      ) {
         survivors.push(entry);
         continue;
       }
@@ -136,6 +167,15 @@ export class StatusQueue {
     const now = this.deps.now();
     this.entries = this.entries.map((e) => ({ ...e, attempts: 0, nextAttemptAt: now }));
     await this.persist();
+  }
+
+  /** Remove the entries `predicate` matches; returns how many went. */
+  async drop(predicate: (e: QueueEntry) => boolean): Promise<number> {
+    await this.load();
+    const before = this.entries.length;
+    this.entries = this.entries.filter((e) => !predicate(e));
+    await this.persist();
+    return before - this.entries.length;
   }
 
   async clear(): Promise<void> {
