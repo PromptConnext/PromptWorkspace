@@ -367,6 +367,7 @@ async def generate(
         elif stage == "tasks":
             payload["task_count"] = applied.task_count
             payload["retired_count"] = applied.retired_count
+            payload["retired_refs"] = applied.retired_refs
             gaps = missing_task_refs([t["ref"] for t in parse_task_lines(result.content)])
             if gaps:
                 payload["warnings"] = [{"code": "missing_task_numbers", "items": gaps}]

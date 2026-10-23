@@ -113,6 +113,10 @@ class StageApplyResult:
     # status on a retired row are gone from view even though `projection` says
     # "current", so callers should surface this count, not just task_count.
     retired_count: int | None = None
+    # The references of those tombstoned tasks (`feature_tag`, or the title
+    # when a row has none), in write order and without repeats — so a caller
+    # can name what it retired, not only count it.
+    retired_refs: list[str] | None = None
     # Why `projection` is "failed", in the caller's own error vocabulary.
     error: str | None = None
 
@@ -176,7 +180,7 @@ def apply_stage_content(
     _enqueue(app, project, "stage_documents", document.id)
 
     try:
-        projection, entity_ids, task_count, retired_count, error = _project(
+        projection, entity_ids, task_count, retired_count, retired_refs, error = _project(
             repo, project, stage, content, user_input=user_input
         )
     except Exception:
@@ -223,6 +227,7 @@ def apply_stage_content(
         projection=projection,
         task_count=task_count,
         retired_count=retired_count,
+        retired_refs=retired_refs,
         error=error,
     )
 
@@ -234,14 +239,17 @@ def _project(
     content: str,
     *,
     user_input: str | None,
-) -> tuple[ProjectionState, list[str], int | None, int | None, str | None]:
+) -> tuple[
+    ProjectionState, list[str], int | None, int | None, list[str] | None, str | None
+]:
     if stage not in PROJECTION_NODE_TYPE or not content.strip():
         # `constitution` has no entity, and clearing the editor is not a
         # request to create a titleless Requirement or to empty the board.
-        return "not_applicable", [], None, None, None
+        return "not_applicable", [], None, None, None, None
 
     if stage == "specify":
-        return "current", [_apply_specify(repo, project, content, user_input)], None, None, None
+        entity_id = _apply_specify(repo, project, content, user_input)
+        return "current", [entity_id], None, None, None, None
 
     if stage == "plan":
         requirement = repo.get_latest_requirement(project.id)
@@ -250,10 +258,11 @@ def _project(
             # the graph alone and say so. The Planner locks `plan` until
             # `specify` has a document, so this is the out-of-order API
             # caller, not the normal path.
-            return "failed", [], None, None, MISSING_REQUIREMENT_ERROR
+            return "failed", [], None, None, None, MISSING_REQUIREMENT_ERROR
         return (
             "current",
             [_apply_plan(repo, project, requirement, content)],
+            None,
             None,
             None,
             None,
@@ -265,15 +274,17 @@ def _project(
     # incremental apply both silently skip, since they filter/drop a task with
     # no spec_id.
     if repo.get_latest_spec_document(project.id) is None:
-        return "failed", [], None, None, SPEC_DOCUMENT_REQUIRED_ERROR
+        return "failed", [], None, None, None, SPEC_DOCUMENT_REQUIRED_ERROR
 
     parsed = parse_task_lines(content)
     if not parsed:
-        return "failed", [], None, None, NO_CHECKLIST_ERROR
+        return "failed", [], None, None, None, NO_CHECKLIST_ERROR
     # Changes first: tasks carry the id of the change they belong to.
     change_of = reconcile_delivery_changes(repo, project, content)
-    written, live_count, retired_count = _apply_tasks(repo, project, parsed, change_of)
-    return "current", written, live_count, retired_count, None
+    written, live_count, retired_count, retired_refs = _apply_tasks(
+        repo, project, parsed, change_of
+    )
+    return "current", written, live_count, retired_count, retired_refs, None
 
 
 def _apply_specify(
@@ -326,7 +337,7 @@ def _apply_tasks(
     project: Project,
     parsed: list[dict[str, object]],
     change_of: Mapping[str, str] | None = None,
-) -> tuple[list[str], int, int]:
+) -> tuple[list[str], int, int, list[str]]:
     """Reconcile the checklist against the board: update, insert, retire.
 
     Matching is by normalized reference, so "T012" in one generation and "T12"
@@ -414,13 +425,26 @@ def _apply_tasks(
 
     live_count = len(writes)
     retired_at = utcnow()
+    retired_refs: list[str] = []
+
+    def _note_retired(task: Task) -> None:
+        # "T001 [P]" is the tag with its parallel marker; the reference is "T001".
+        label = (task.feature_tag or "").removesuffix(" [P]") or task.title
+        if label not in retired_refs:
+            retired_refs.append(label)
+
     for task in superseded:
+        _note_retired(task)
         writes.append(task.model_copy(update={"deleted_at": retired_at}))
-    for ref, task in live.items():
+    # The board is read back in no fixed order, so the unclaimed rows are
+    # taken in reference order ("T3" before "T12") to give a stable list.
+    for ref, task in sorted(live.items(), key=lambda item: (len(item[0]), item[0])):
         if ref in claimed:
             continue
+        _note_retired(task)
         writes.append(task.model_copy(update={"deleted_at": retired_at}))
     for task in duplicate_live:
+        _note_retired(task)
         # Consolidated into whichever row above now carries this reference
         # (or itself retired, if the checklist dropped the reference too) —
         # either way, a reference keeps at most one live row after this write.
@@ -438,7 +462,7 @@ def _apply_tasks(
         source="pz",
         seed_fields=PLANNER_SEED_FIELDS,
     )
-    return [task.id for task in writes], live_count, retired_count
+    return [task.id for task in writes], live_count, retired_count, retired_refs
 
 
 def _enqueue(app: Any, project: Project, node_type: str, node_id: str) -> None:

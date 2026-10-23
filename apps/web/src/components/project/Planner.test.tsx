@@ -1360,7 +1360,7 @@ describe("Planner", () => {
   });
 
   // A tasks-document save whose PATCH reports `projection`.
-  function mockTasksSave(projection: string) {
+  function mockTasksSave(projection: string, extra: Record<string, unknown> = {}) {
     global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
       const href = url.toString();
       const match = href.match(/\/stage-documents\/(\w+)/);
@@ -1373,7 +1373,7 @@ describe("Planner", () => {
             stage: match[1],
             content,
             updated_at: "2026-08-01T00:00:00Z",
-            ...(init?.method === "PATCH" ? { projection } : {}),
+            ...(init?.method === "PATCH" ? { projection, ...extra } : {}),
           }),
         });
       }
@@ -1416,6 +1416,55 @@ describe("Planner", () => {
     fireEvent.click(tasks.getByRole("button", { name: /open the task board/i }));
     expect(onOpenTasks).toHaveBeenCalled();
     expect(onChange).not.toHaveBeenCalled(); // nothing on the board changed
+  });
+
+  it("names the retired tasks a generation reports", async () => {
+    const sse = (done: object) => {
+      const encoder = new TextEncoder();
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify(done)}\n`));
+          controller.close();
+        },
+      });
+    };
+    const generateTasks = async (done: object) => {
+      cleanup();
+      mockStageDocuments({ specify: "# Spec", plan: "# Plan" });
+      const base = global.fetch;
+      global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) =>
+        url.toString().includes("/generate/tasks")
+          ? Promise.resolve({ ok: true, body: sse(done) })
+          : base(url, init),
+      ) as unknown as typeof fetch;
+      render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+      await screen.findByRole("tab", { name: /tasks/i });
+      openTab(/tasks/i);
+      const button = await screen.findByRole("button", { name: /generate tasks/i });
+      await waitFor(() => expect(button).toBeEnabled());
+      fireEvent.click(button);
+    };
+    const base = { stage: "tasks", title: "Tasks", content: "# Tasks", projection: "current" };
+
+    await generateTasks({ ...base, task_count: 2, retired_count: 2, retired_refs: ["T003", "T004"] });
+    expect(await screen.findByText("2 tasks on the board, 2 retired (T003, T004)")).toBeInTheDocument();
+
+    const seven = ["T003", "T004", "T005", "T006", "T007", "T008", "T009"];
+    await generateTasks({ ...base, task_count: 2, retired_count: 7, retired_refs: seven });
+    expect(
+      await screen.findByText(
+        "2 tasks on the board, 7 retired (T003, T004, T005, T006, T007, and 2 more)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("names the retired tasks a save reports", async () => {
+    mockTasksSave("current", { retired_count: 2, retired_refs: ["T003", "T004"] });
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+
+    await saveTasksDocument();
+
+    expect(await screen.findByText(/— 2 retired \(T003, T004\)/)).toBeInTheDocument();
   });
 
   it("a save that moves the task board has the page reload the project graph", async () => {
