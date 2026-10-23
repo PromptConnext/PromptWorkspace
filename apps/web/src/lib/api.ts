@@ -153,6 +153,18 @@ export function renameWorkspace(
   });
 }
 
+// Admin-only. Sets the language used for notifications sent for this workspace.
+export function setWorkspaceLanguage(
+  workspaceId: string,
+  language: "en" | "th",
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<Workspace>(`/workspaces/${workspaceId}`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ language }),
+  });
+}
+
 export function listMembers(workspaceId: string, authHeaders: Record<string, string>) {
   return apiFetch<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`, authHeaders);
 }

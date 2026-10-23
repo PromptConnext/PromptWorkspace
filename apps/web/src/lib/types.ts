@@ -15,6 +15,7 @@ export interface Workspace {
   created_by: string;
   git_config: Record<string, unknown>;
   integration_config: Record<string, unknown>;
+  language: "en" | "th";
   created_at: string;
   updated_at: string;
 }
