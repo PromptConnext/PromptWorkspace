@@ -771,6 +771,22 @@ export interface DecisionMutationOut extends Decision {
   snapshot?: DecisionsOut | null;
 }
 
+/** `GET /projects/{id}/line` (apps/cloud/app/api/line.py). */
+export interface ProjectLineStatus {
+  configured: boolean;
+  connected: boolean;
+  group_name: string | null;
+  linked_at: string | null;
+  bot_basic_id: string | null;
+}
+
+/** `POST /projects/{id}/line/link-code`. */
+export interface LineLinkCode {
+  code: string;
+  expires_at: string;
+  bot_basic_id: string | null;
+}
+
 export interface ProjectRoleOut {
   hat: ProjectHat;
   user_id: string | null;

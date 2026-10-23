@@ -5,6 +5,7 @@ import { use } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
 import { ProjectRolesPanel } from "@/components/project/ProjectRolesPanel";
+import { LineNotificationsPanel } from "@/components/project/LineNotificationsPanel";
 import { ReindexPanel } from "@/components/project/ReindexPanel";
 import { useCloudGet } from "@/lib/hooks";
 import { useIsWorkspaceAdmin, useWorkspaceName } from "@/lib/workspace";
@@ -42,6 +43,7 @@ function ProjectSettingsView({
         </h1>
 
         <ProjectRolesPanel projectId={projectId} workspaceId={workspaceId} isAdmin={isAdmin} />
+        <LineNotificationsPanel projectId={projectId} isAdmin={isAdmin} />
         {isAdmin && <ReindexPanel projectId={projectId} />}
       </main>
     </>

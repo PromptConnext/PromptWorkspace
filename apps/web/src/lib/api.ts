@@ -25,6 +25,8 @@ import type {
   StageKind,
   Task,
   TaskStatus,
+  LineLinkCode,
+  ProjectLineStatus,
   Workspace,
   WorkspaceMember,
   WorkspaceReindexResult,
@@ -507,4 +509,24 @@ export function setProjectRole(
     method: "PUT",
     body: JSON.stringify({ user_id: userId }),
   });
+}
+
+// LINE group connection (apps/cloud/app/api/line.py). Reads are for members,
+// the other three are admin-only.
+export function getLineStatus(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<ProjectLineStatus>(`/projects/${projectId}/line`, authHeaders);
+}
+
+export function createLineLinkCode(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<LineLinkCode>(`/projects/${projectId}/line/link-code`, authHeaders, {
+    method: "POST",
+  });
+}
+
+export function disconnectLine(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<unknown>(`/projects/${projectId}/line`, authHeaders, { method: "DELETE" });
+}
+
+export function sendLineTest(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<unknown>(`/projects/${projectId}/line/test`, authHeaders, { method: "POST" });
 }
