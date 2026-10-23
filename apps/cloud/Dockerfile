@@ -21,4 +21,9 @@ EXPOSE 8080
 
 # Single worker: presence + rate-limit + metrics state is in-process (v1).
 # Horizontal scale needs a shared backplane first — see README.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+# `exec` makes uvicorn the container's main process, so the SIGTERM a deploy
+# sends reaches it (whether `sh -c` does that itself depends on the shell, and
+# a shell left as PID 1 ignores the signal). On SIGTERM uvicorn stops accepting connections
+# and gives requests in flight, generation streams included, up to 30 s to
+# finish; the platform's grace period must be longer (docs/DEPLOYMENT.md §2.3).
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-graceful-shutdown 30"]

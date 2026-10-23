@@ -59,6 +59,7 @@ from app.models.schemas import (
     Deployment,
     GithubConnectionOut,
     GithubConnectRequest,
+    GithubRepoImportedBy,
     GithubRepoListOut,
     GithubRepoOut,
     GraphUpsertRequest,
@@ -164,6 +165,26 @@ def disconnect_github(
     return _connection_out(repo.update_workspace(workspace_id, integration_config=merged))
 
 
+def _imported_by(
+    repo: Repository, workspace_id: str, user: User, repo_ids: list[int]
+) -> dict[int, GithubRepoImportedBy]:
+    """Which listed repositories a project already imported, by GitHub id, in
+    one read. A project in another workspace the caller does not belong to
+    marks the repository as taken without naming itself."""
+    projects = repo.list_projects_by_repo_ids(repo_ids)
+    visible = {workspace_id}
+    for other in {p.workspace_id for p in projects} - visible:
+        if repo.get_membership(other, user.id) is not None:
+            visible.add(other)
+    return {
+        p.repo_id: GithubRepoImportedBy(project_id=p.id, name=p.name)
+        if p.workspace_id in visible
+        else GithubRepoImportedBy()
+        for p in projects
+        if p.repo_id is not None
+    }
+
+
 @router.get(
     "/workspaces/{workspace_id}/integrations/github/repos", response_model=GithubRepoListOut
 )
@@ -199,11 +220,14 @@ async def list_github_repos(
             raise HTTPException(status_code=400, detail="github_token_rejected") from exc
         raise HTTPException(status_code=502, detail="github_unreachable") from exc
 
+    imported_by = _imported_by(repo, workspace_id, user, [row["id"] for row in rows])
     return GithubRepoListOut(
         owner=owner,
         owner_type=config.get("owner_type"),
         account_login=config.get("account_login"),
-        repositories=[GithubRepoOut(**row) for row in rows],
+        repositories=[
+            GithubRepoOut(**row, imported_by=imported_by.get(row["id"])) for row in rows
+        ],
         truncated=truncated,
     )
 

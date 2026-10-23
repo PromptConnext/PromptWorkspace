@@ -179,6 +179,54 @@ def test_plan_creates_spec_document_against_latest_requirement(client: TestClien
     assert spec.id == spec_id
 
 
+def _request_intent(client: TestClient, pid: str, status: str) -> None:
+    from app.models.schemas import Decision
+
+    repo = client.app.state.repository
+    project = repo.get_project(pid)
+    repo.save_decision(
+        Decision(
+            project_id=pid,
+            workspace_id=project.workspace_id,
+            kind="intent_approval",
+            title="Approve the intent",
+            subject_stage="specify",
+            subject_hash="h",
+            routed_hat="business_owner",
+            requested_by="alice",
+            status=status,
+        )
+    )
+
+
+@pytest.mark.parametrize("status", ["open", "rejected"])
+def test_plan_generation_refused_while_intent_open(client: TestClient, status: str):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _request_intent(client, pid, status)
+
+    res = _generate(client, pid, "plan", PLAN_INPUT)
+    assert res.status_code == 409
+    assert res.json()["detail"] == "intent_not_approved"
+    # Only the plan waits: the specification can still be revised.
+    assert _generate(client, pid, "specify", SPECIFY_INPUT).status_code == 200
+
+
+def test_plan_generation_allowed_when_intent_never_requested(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+
+    assert _generate(client, pid, "plan", PLAN_INPUT).status_code == 200
+
+
+def test_plan_generation_allowed_after_intent_approved(client: TestClient):
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _request_intent(client, pid, "approved")
+
+    assert _generate(client, pid, "plan", PLAN_INPUT).status_code == 200
+
+
 def test_tasks_requires_a_spec_document_first(client: TestClient):
     _ws_id, pid = _bootstrap(client)
 
@@ -612,3 +660,34 @@ def test_driver_prompt_states_todays_date_for_every_stage():
     for kind in ("constitution", "specify", "plan", "tasks"):
         assert "Today's date is 2026-10-03;" in driver_prompt(kind, today=date(2026, 10, 3)), kind
         assert f"Today's date is {utcnow().date().isoformat()};" in driver_prompt(kind), kind
+
+
+def test_tasks_done_payload_warns_on_missing_numbers(client: TestClient):
+    class GappedTasksProvider(FakeGenerationProvider):
+        async def stream(self, system_prompt, user_content, *args, **kwargs):
+            if "task-breakdown" not in system_prompt:
+                async for delta in super().stream(system_prompt, user_content, *args, **kwargs):
+                    yield delta
+                return
+            yield (
+                "# Tasks\n\n"
+                "- [ ] T001 Implement the first task from the plan\n"
+                "  - AC: The first task's behaviour is observable\n"
+                "- [ ] T002 Implement the second task from the plan\n"
+                "  - AC: The second task's behaviour is observable\n"
+                "- [ ] T004 Implement the fourth task from the plan\n"
+                "  - AC: The fourth task's behaviour is observable\n"
+            )
+            if kwargs.get("on_finish"):
+                kwargs["on_finish"]("stop")
+
+    _ws_id, pid = _bootstrap(client)
+    _generate(client, pid, "specify", SPECIFY_INPUT)
+    _generate(client, pid, "plan", PLAN_INPUT)
+    client.app.state.generation_provider = GappedTasksProvider()
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT)
+    done = _sse_events(res.text)["done"]
+
+    assert done["task_count"] == 3
+    assert {"code": "missing_task_numbers", "items": ["T003"]} in done["warnings"]

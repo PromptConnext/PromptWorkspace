@@ -6,10 +6,16 @@ generated document instead of treating it as instructions to itself.
 
 from __future__ import annotations
 
+import pytest
+
 from app.generation.parsing import (
     fix_template_placeholders,
+    missing_task_refs,
+    parse_files,
     parse_task_lines,
+    strip_spec_kit_boilerplate,
     strip_template_scaffolding,
+    titles_match,
 )
 
 
@@ -165,3 +171,215 @@ def test_feature_placeholder_untouched_inside_code_fence():
     out = fix_template_placeholders(doc)
     assert "run [FEATURE NAME]" in out
     assert "Use [FEATURE] here." not in out
+
+
+# --- titles_match (task 4.1, finding #57) -----------------------------------
+# A regenerated task keeps its row (and a closed row its status) only when its
+# title still describes the same work. Light rewording matches; different work
+# does not, in either script.
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        # identical, and identical after case/space/punctuation normalisation
+        ("Persist the payment record", "Persist the payment record", True),
+        ("Persist the payment record", "  persist the Payment record. ", True),
+        # light rewording keeps the task
+        ("Persist the payment record", "Persist the payment ledger", True),
+        (
+            "[US1] Replace ASSET GROW in src/App.tsx",
+            "[US1] Replace ASSET GROW in src/App.tsx and src/lib/exporters.ts",
+            True,
+        ),
+        # different work under the same ref
+        ("Add the payment intent endpoint", "Reconcile settlements nightly", False),
+        ("Persist the payment record", "Replace ASSET GROW in src/App.tsx", False),
+        # Thai has no spaces between words; similarity must still see it
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "เพิ่มหน้าตั้งค่าโปรไฟล์ของผู้ใช้", True),
+        ("เพิ่มหน้าตั้งค่าโปรไฟล์ผู้ใช้", "แก้ไขการส่งออกรายงานยอดขาย", False),
+        ("[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx", "[US2] เปลี่ยนชื่อแบรนด์ใน src/App.tsx ทั้งหมด", True),
+        # adding the files the work touches is not different work (review of 4.1)
+        (
+            "Replace ASSET GROW branding",
+            "Replace ASSET GROW branding in `src/App.tsx`, `src/lib/exporters.ts` and "
+            "`index.html`",
+            True,
+        ),
+        ("Create user model", "Create the User model in src/models/user.ts", True),
+        # ...and different work naming the same files is still different work
+        (
+            "Add the payment intent endpoint in `src/api/payments.ts`",
+            "Reconcile settlements nightly in `src/api/payments.ts`",
+            False,
+        ),
+        # ...a path without backticks counts as a path only with a slash and an extension
+        ("Create user model", "Create user model in src/models/user.ts and src/db/user.sql", True),
+        # a dotted technology name or a slash phrase is a word, not a path (review of 2609900)
+        ("Switch to Socket.io", "Switch to Express.js", False),
+        ("Rewrite in Rust.rs", "Rewrite in Go.go", False),
+        ("Add Socket.io server", "Add Express.js server", False),
+        ("Set up CI/CD", "Set up client/server split", False),
+        # other scripts are compared too, not reduced to nothing
+        ("Добавить экспорт отчётов", "Добавить экспорт всех отчётов", True),
+        ("Добавить экспорт отчётов", "Исправить вход пользователя", False),
+        ("添加用户导出功能", "添加用户数据导出功能", True),
+        ("添加用户导出功能", "修复登录页面错误", False),
+        # empty titles are only the same as each other
+        ("", "", True),
+        ("", "Persist the payment record", False),
+    ],
+)
+def test_titles_match(old: str, new: str, expected: bool):
+    assert titles_match(old, new) is expected
+    # symmetric: which generation came first does not change the answer
+    assert titles_match(new, old) is expected
+
+
+def test_parse_files_keeps_inner_fences():
+    raw = (
+        "```file:plan.md\n# Plan\n\n### Documentation\n\n```text\nspecs/\n```\n\n"
+        "## After\nmore\n```\n"
+    )
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("## After\nmore\n")
+    assert "```text\nspecs/\n```" in files[0]["content"]
+
+
+def test_parse_files_two_blocks_each_with_inner_fence():
+    raw = (
+        "```file:a.md\n# A\n```bash\nls\n```\nend A\n```\n"
+        "```file:b.md\n# B\n```text\nx\n```\nend B\n```\n"
+    )
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"].endswith("end A\n")
+    assert files[1]["content"].endswith("end B\n")
+
+
+def test_parse_files_closing_fence_on_content_line():
+    assert parse_files("```file:p.md\n# Plan\nlast line```\n") == [
+        {"path": "p.md", "content": "# Plan\nlast line\n"}
+    ]
+
+
+def test_parse_files_unclosed_inner_fence_is_salvaged():
+    files = parse_files("```file:plan.md\n# Plan\n```text\nx\n\n## After\nmore\n```\n")
+    assert len(files) == 1
+    assert files[0]["content"].startswith("# Plan\n")
+    assert "## After\nmore" in files[0]["content"]
+
+
+def test_parse_files_new_opener_ends_unclosed_block():
+    raw = "```file:a.md\n# A\n```text\nx\n```file:b.md\n# B\nend\n```\n"
+    files = parse_files(raw)
+    assert [f["path"] for f in files] == ["a.md", "b.md"]
+    assert files[0]["content"] == "# A\n```text\nx\n"
+    assert files[1]["content"] == "# B\nend\n"
+
+
+def test_parse_files_unterminated_block_kept_at_eof():
+    assert parse_files("```file:a.md\n# A\nbody") == [
+        {"path": "a.md", "content": "# A\nbody\n"}
+    ]
+
+
+def test_parse_files_drops_unsafe_paths():
+    raw = (
+        "```file:../evil.md\nx\n```\n```file:/abs.md\ny\n```\n"
+        "```file:ok.md\nz\n```\n"
+    )
+    assert [f["path"] for f in parse_files(raw)] == ["ok.md"]
+
+
+def test_parse_files_indented_inner_fence_stays_inside_block():
+    raw = "```file:a.md\n# A\n1. step\n   ```bash\n   ls\n   ```\nafter\n```\n"
+    files = parse_files(raw)
+    assert len(files) == 1
+    assert files[0]["content"].endswith("after\n")
+    assert "   ```bash\n   ls\n   ```\n" in files[0]["content"]
+
+
+def test_strip_spec_kit_boilerplate_removes_scaffolding():
+    doc = (
+        "# Tasks: Ledger\n\n"
+        "**Feature Branch**: `001-ledger`\n"
+        "**Input**: Design documents from `/specs/001-ledger/`\n"
+        "**Prerequisites**: plan.md (required), research.md\n"
+        "**Tests**: Tests are OPTIONAL - only include them if requested.\n\n"
+        "## Requirements\n\n"
+        "- **FR-001**: System MUST record entries\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST authenticate users via "
+        "[NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]\n"
+        "- **FR-007**: System MUST retain user data for "
+        "[NEEDS CLARIFICATION: retention period not specified]\n\n"
+        "Use [GUIDANCE_FILE] for runtime guidance.\n"
+        "Done when it matches `/specs/001-ledger/spec.md` and /specs/001-ledger/plan.md.\n"
+        "See specs/001-ledger/tasks.md.\n\n"
+        "```text\n/specs/x\n```\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert not any(ln.startswith("**Feature Branch**:") for ln in out.split("\n"))
+    assert "Example of marking unclear requirements" not in out
+    assert "FR-006" not in out and "FR-007" not in out
+    assert "**FR-001**" in out
+    assert "[GUIDANCE_FILE]" not in out
+    assert "**Input**:" not in out and "**Prerequisites**:" not in out
+    assert "Tests are OPTIONAL" not in out
+    assert "the specification" in out and "the plan" in out and "the task list" in out
+    out_outside = out.split("```text")[0]
+    assert "/specs/" not in out_outside and "specs/001" not in out_outside
+    assert "```text\n/specs/x\n```" in out
+
+
+def test_strip_spec_kit_boilerplate_keeps_real_requirements_after_the_example_line():
+    doc = (
+        "## Requirements\n\n"
+        "*Example of marking unclear requirements:*\n\n"
+        "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]\n"
+        "- **FR-007**: System MUST export reports\n\n"
+        "## Success\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Example of marking" not in out
+    assert "- **FR-006**: System MUST notify users [NEEDS CLARIFICATION: which channel?]" in out
+    assert "- **FR-007**: System MUST export reports\n\n## Success" in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- [ ]  T029 x",
+        "- [ ] **T029** x",
+        "- [ ] T029: x",
+        "* [x] T029 [P] [US3] x",
+        "- [ ] **T029:** x",
+    ],
+)
+def test_parse_task_lines_accepts_variants(line: str):
+    tasks = parse_task_lines(line)
+    assert [t["ref"] for t in tasks] == ["T029"]
+
+
+def test_missing_task_refs():
+    assert missing_task_refs(["T001", "T002", "T004"]) == ["T003"]
+    assert missing_task_refs([]) == []
+    assert missing_task_refs(["T001", "T002", "T003"]) == []
+
+
+def test_missing_task_refs_pads_like_the_widest_ref():
+    assert missing_task_refs(["T1", "T2", "T4"]) == ["T3"]
+    refs = [f"T{n:03d}" for n in range(1, 36) if n != 29]
+    assert missing_task_refs(refs) == ["T029"]
+
+
+def test_missing_task_refs_is_capped_at_fifty():
+    assert len(missing_task_refs(["T001", "T900"])) == 50
+
+
+def test_missing_task_refs_ignores_a_wildly_sparse_list():
+    assert missing_task_refs(["T1", "T99999999"]) == []
+    assert missing_task_refs(["T0001", "T1002"]) == []
+    assert len(missing_task_refs(["T0001", "T1000"])) == 50

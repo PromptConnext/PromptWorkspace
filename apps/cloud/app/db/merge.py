@@ -39,6 +39,8 @@ _RESERVED = frozenset({"id", "project_id", "updated_at", "deleted_at", "field_ve
 #
 #   * assigned_user_id — app-authored via a dedicated endpoint (ADR 0018); the
 #     engine never sends it.
+#   * change_id — set by the Planner from tasks.md phases (plan 0029); the
+#     engine's minimal push never sends it and must not wipe it.
 #   * status, acceptance_criteria — what a task is and whether it is done.
 #     `set_task_status`'s own docstring names both as the reason that route
 #     exists: a "mark done" through the full-graph door would merge an empty
@@ -56,7 +58,7 @@ _RESERVED = frozenset({"id", "project_id", "updated_at", "deleted_at", "field_ve
 # Note this is not the same thing as dropping the key from the dict: the key
 # stays (so every row a batch writes carries the same columns, which PostgREST
 # requires of a bulk insert) and the merge simply never writes it.
-_NEVER_IMPLICIT = frozenset({"assigned_user_id", "status", "acceptance_criteria"})
+_NEVER_IMPLICIT = frozenset({"assigned_user_id", "status", "acceptance_criteria", "change_id"})
 
 # The seed set the Planner's in-process writer passes to `upsert_graph` (see
 # `app/generation/stage_apply.py::_apply_tasks`). `feature_tag` is declared "pmo"

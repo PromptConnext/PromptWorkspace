@@ -15,6 +15,8 @@ import { readKnownClones } from "./knownClones.ts";
 import type { StorageLike } from "@promptworkspace/cloud-client";
 import type { RosterStore } from "./rosterStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
+import { bannerTreeItem } from "../auth/banner.ts";
+import { withBanner, type BannerRow, type Connection } from "../auth/status.ts";
 
 export class WorkspaceTreeNode {
   readonly kind = "workspace";
@@ -32,7 +34,7 @@ export class ProjectTreeNode {
   }
 }
 
-export type RosterNode = WorkspaceTreeNode | ProjectTreeNode;
+export type RosterNode = WorkspaceTreeNode | ProjectTreeNode | BannerRow;
 
 const STATE_ICON: Record<ProjectRow["localState"], string> = {
   local: "repo",
@@ -54,12 +56,20 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
   private readonly tasks: TaskStore;
   private readonly git: GitBridge;
   private readonly state: StorageLike;
+  private readonly connection: () => Connection;
 
-  constructor(roster: RosterStore, tasks: TaskStore, git: GitBridge, state: StorageLike) {
+  constructor(
+    roster: RosterStore,
+    tasks: TaskStore,
+    git: GitBridge,
+    state: StorageLike,
+    connection: () => Connection,
+  ) {
     this.roster = roster;
     this.tasks = tasks;
     this.git = git;
     this.state = state;
+    this.connection = connection;
   }
 
   refresh(): void {
@@ -99,6 +109,7 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
   }
 
   getTreeItem(node: RosterNode): vscode.TreeItem {
+    if (node.kind === "banner") return bannerTreeItem(node);
     if (node.kind === "workspace") {
       const item = new vscode.TreeItem(
         node.row.workspaceName,
@@ -131,7 +142,12 @@ export class RosterTreeProvider implements vscode.TreeDataProvider<RosterNode> {
   }
 
   getChildren(node?: RosterNode): RosterNode[] {
-    if (!node) return this.rows().map((row) => new WorkspaceTreeNode(row));
+    if (!node) {
+      return withBanner(
+        this.connection(),
+        this.rows().map((row) => new WorkspaceTreeNode(row)),
+      );
+    }
     if (node.kind === "workspace") {
       return node.row.projects.map((row) => new ProjectTreeNode(row));
     }

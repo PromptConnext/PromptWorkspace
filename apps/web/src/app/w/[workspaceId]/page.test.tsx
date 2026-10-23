@@ -4,14 +4,28 @@ import { Suspense } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage from "./page";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+const push = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace: vi.fn() }) }));
 vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
 vi.mock("@/components/NewProjectDialog", () => ({
-  NewProjectDialog: ({ open }: { open: boolean }) =>
-    open ? <div role="dialog">New project dialog</div> : null,
+  NewProjectDialog: ({
+    open,
+    onCreated,
+  }: {
+    open: boolean;
+    onCreated: (project: { id: string }) => void;
+  }) =>
+    open ? (
+      <div role="dialog">
+        New project dialog
+        <button type="button" onClick={() => onCreated({ id: "p9" })}>
+          created
+        </button>
+      </div>
+    ) : null,
 }));
 vi.mock("@/lib/workspace", () => ({
   useWorkspace: () => ({
@@ -43,12 +57,14 @@ async function renderPage() {
 
 const state: Record<string, { data?: unknown; loading: boolean; error?: string | null }> = {};
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: (path: string) => state[path.endsWith("/members") ? "members" : "projects"],
+  useCloudGet: (path: string) =>
+    state[path.includes("/me/decisions") ? "decisions" : path.endsWith("/members") ? "members" : "projects"],
 }));
 
 beforeEach(() => {
   state.members = { data: undefined, loading: true };
   state.projects = { data: [], loading: false };
+  state.decisions = { data: undefined, loading: true };
 });
 afterEach(cleanup);
 
@@ -68,10 +84,36 @@ describe("workspace home", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("keeps the dialog open while the new project opens", async () => {
+    await renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "created" }));
+
+    expect(push).toHaveBeenCalledWith("/w/w1/p/p9");
+    // Not closed onto the "No projects yet" list for the seconds the
+    // navigation takes (finding #4).
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
   it("hides empty state when fetch error occurs", async () => {
     state.projects = { data: undefined, loading: false, error: "Failed to load projects" };
     await renderPage();
     expect(await screen.findByText("Failed to load projects")).toBeInTheDocument();
     expect(screen.queryByText("No projects yet. Create your first project to start planning.")).toBeNull();
+  });
+
+  it("shows the number of decisions waiting on the Inbox button", async () => {
+    state.decisions = { data: [{ id: "a" }, { id: "b" }], loading: false };
+    await renderPage();
+    expect(await screen.findByRole("link", { name: "Inbox · 2" })).toHaveAttribute(
+      "href",
+      "/w/w1/inbox",
+    );
+  });
+
+  it("shows plain Inbox when nothing is waiting", async () => {
+    state.decisions = { data: [], loading: false };
+    await renderPage();
+    expect(await screen.findByRole("link", { name: "Inbox" })).toBeInTheDocument();
   });
 });

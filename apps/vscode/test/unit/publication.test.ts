@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aheadOf, partitionByPublication } from "../../src/git/publication.ts";
+import { aheadOf, partitionByPublication, partitionWithHeld } from "../../src/git/publication.ts";
 
 const sha = (s: string) => ({ sha: s });
 
@@ -92,4 +92,30 @@ test("aheadOf reads a count only when a branch is tracked", () => {
   assert.equal(aheadOf({ upstream: "origin/T1", ahead: 3 }), 3);
   // Tracked, but the Git extension has not filled the count in yet.
   assert.equal(aheadOf({ upstream: "origin/main" }), 0);
+});
+
+test("a held commit is published even when it has fallen off the log page", () => {
+  // Held = published once, close not written yet. With ahead > 0 the plain
+  // partition would read "absent from the page" as rewritten-away and drop it.
+  const pending = [{ sha: "old", held: true }, sha("new")];
+  const { published, unpublished, dropped } = partitionWithHeld(
+    pending,
+    [sha("new"), sha("mid")], // "old" is far down the history
+    1,
+  );
+  assert.deepEqual(published.map((p) => p.sha), ["old"]);
+  assert.deepEqual(unpublished.map((p) => p.sha), ["new"]);
+  assert.deepEqual(dropped, []);
+});
+
+test("without held entries partitionWithHeld is partitionByPublication", () => {
+  const pending = [sha("a"), sha("gone")];
+  const log = [sha("a")];
+  assert.deepEqual(partitionWithHeld(pending, log, 1), partitionByPublication(pending, log, 1));
+});
+
+test("a held commit stays published with no upstream or nothing ahead", () => {
+  const pending = [{ sha: "h", held: true }];
+  assert.deepEqual(partitionWithHeld(pending, [], undefined).published, pending);
+  assert.deepEqual(partitionWithHeld(pending, [], 0).published, pending);
 });

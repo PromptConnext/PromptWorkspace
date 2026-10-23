@@ -13,6 +13,7 @@ import {
   PENDING_CLONE_TTL_MS,
   buildRoster,
   linkCandidatesFrom,
+  pickerCandidatesFrom,
   pendingCloneMatches,
   safeRepoUrl,
   type RosterInput,
@@ -67,6 +68,29 @@ test("an open folder's SSH remote matches an https repo_url", () => {
   );
   assert.equal(ws.projects[0].localState, "local");
   assert.equal(ws.projects[0].localPath, "/src/checkout");
+});
+
+test("an open folder whose remote is an SSH host alias is local (#35)", () => {
+  const [ws] = buildRoster(
+    input({ openRepos: [{ path: "/src/checkout", remotes: ["git@github.com-work:acme/checkout.git"] }] }),
+  );
+  assert.equal(ws.projects[0].localState, "local");
+  assert.equal(ws.projects[0].localPath, "/src/checkout");
+});
+
+test("an SSH host alias that fits two projects makes neither local", () => {
+  const [ws] = buildRoster(
+    input({
+      entries: [
+        {
+          workspace: WS,
+          projects: [project(), project({ id: "p2", name: "Checkout fork" })],
+        },
+      ],
+      openRepos: [{ path: "/src/checkout", remotes: ["git@github.com-work:acme/checkout.git"] }],
+    }),
+  );
+  assert.deepEqual(ws.projects.map((p) => p.localState), ["remote-only", "remote-only"]);
 });
 
 test("a knownClones entry makes a project local even with nothing open", () => {
@@ -183,4 +207,25 @@ test("link candidates carry every project with a usable repo, not just assigned 
   assert.deepEqual(candidates.map((c) => c.projectId), ["p1"]);
   assert.equal(candidates[0].projectName, "Checkout API");
   assert.equal(candidates[0].workspaceName, "Acme Corp");
+});
+
+test("picker candidates include projects without a repository", () => {
+  const rows = buildRoster(
+    input({
+      entries: [
+        {
+          workspace: WS,
+          projects: [
+            project(),
+            project({ id: "p2", name: "Marketing", repo_url: null, lifecycle_status: "planning" }),
+          ],
+        },
+      ],
+    }),
+  );
+  const candidates = pickerCandidatesFrom(rows);
+  assert.deepEqual(candidates.map((c) => c.projectId), ["p1", "p2"]);
+  assert.equal(candidates[1].repoUrl, null);
+  assert.equal(candidates[1].workspaceName, "Acme Corp");
+  assert.deepEqual(linkCandidatesFrom(rows).map((c) => c.projectId), ["p1"]);
 });

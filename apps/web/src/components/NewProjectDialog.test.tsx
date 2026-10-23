@@ -50,6 +50,7 @@ function repo(overrides: Partial<Record<string, unknown>> = {}) {
     archived: false,
     empty: false,
     pushed_at: "2026-09-15T00:00:00Z",
+    imported_by: null,
     ...overrides,
   };
 }
@@ -93,6 +94,54 @@ describe("NewProjectDialog", () => {
     expect(body.import_repo_full_name).toBeUndefined();
   });
 
+  it("Create shows a pending state until navigation", async () => {
+    // The parent navigates on onCreated; until the project page replaces this
+    // one, the dialog stays and says so, instead of closing onto the old list.
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockFetch({ "/projects": { id: "p1", name: "My App" } });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "My App" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Opening My App…");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closing while a created project opens leaves a fresh dialog next time", async () => {
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    mockFetch({ "/projects": { id: "p1", name: "My App" } });
+    const { rerender } = render(
+      <NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />,
+    );
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "My App" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(<NewProjectDialog open={false} workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+    rerender(<NewProjectDialog open workspaceId="ws1" onClose={onClose} onCreated={onCreated} />);
+
+    fireEvent.click(screen.getByText("Start from scratch"));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "Second" },
+    });
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
   it("lists repositories and filters by name", async () => {
     mockFetch({
       [REPO_LIST_PATH]: {
@@ -116,7 +165,7 @@ describe("NewProjectDialog", () => {
     expect(screen.queryByText("other")).not.toBeInTheDocument();
   });
 
-  it("disables archived and empty rows with a reason", async () => {
+  it("disables archived rows but keeps an empty-flagged row selectable with an advisory hint", async () => {
     mockFetch({
       [REPO_LIST_PATH]: {
         owner: "acme",
@@ -137,8 +186,69 @@ describe("NewProjectDialog", () => {
 
     expect(archivedRow).toBeDisabled();
     expect(archivedRow.textContent).toMatch(/archived on github/i);
-    expect(emptyRow).toBeDisabled();
-    expect(emptyRow.textContent).toMatch(/no commits yet/i);
+    expect(emptyRow).not.toBeDisabled();
+    expect(emptyRow.textContent).toMatch(/github reports no commits yet/i);
+    expect(emptyRow.textContent).toMatch(/you can still import it/i);
+  });
+
+  it("disables a repository a project already imported and names that project", async () => {
+    mockFetch({
+      [REPO_LIST_PATH]: {
+        owner: "acme",
+        owner_type: "Organization",
+        account_login: "acme-bot",
+        repositories: [
+          repo({
+            full_name: "acme/marketing-studio",
+            name: "marketing-studio",
+            imported_by: { project_id: "p9", name: "Marketing Studio" },
+          }),
+          repo({
+            full_name: "acme/elsewhere",
+            name: "elsewhere",
+            imported_by: { project_id: null, name: null },
+          }),
+          repo({ full_name: "acme/fresh", name: "fresh" }),
+        ],
+        truncated: false,
+      },
+    });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={vi.fn()} onCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Import a GitHub repository"));
+    const taken = await screen.findByRole("button", { name: /marketing-studio/ });
+    const elsewhere = screen.getByRole("button", { name: /elsewhere/ });
+    const fresh = screen.getByRole("button", { name: /^fresh/ });
+
+    expect(taken).toBeDisabled();
+    expect(taken.textContent).toContain("Already imported as Marketing Studio");
+    expect(elsewhere).toBeDisabled();
+    expect(elsewhere.textContent).toMatch(/already imported by another workspace/i);
+    expect(fresh).not.toBeDisabled();
+  });
+
+  it("shows a clear message when the server refuses an empty repository", async () => {
+    mockFetch({
+      [REPO_LIST_PATH]: {
+        owner: "acme",
+        owner_type: "Organization",
+        account_login: "acme-bot",
+        repositories: [repo({ full_name: "acme/blank-slate", name: "blank-slate", empty: true })],
+        truncated: false,
+      },
+      "/projects": { status: 400, detail: "repo_is_empty" },
+    });
+    render(<NewProjectDialog open workspaceId="ws1" onClose={vi.fn()} onCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Import a GitHub repository"));
+    fireEvent.click(await screen.findByRole("button", { name: /blank-slate/ }));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(/no commits on its default branch/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("repo_is_empty")).not.toBeInTheDocument();
   });
 
   it("names the connected owner when the repository list is empty", async () => {

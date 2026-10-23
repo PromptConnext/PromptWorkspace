@@ -88,7 +88,15 @@ migration as a labelled section, in order. Future migrations start at `0003_*`.
 | `0023_configurable_embed_dim.sql` | **destructive** — replaces the fixed `vector(1536)` embedding width with a required `--var embed_dim=<N>`; deletes existing embeddings, needs a reindex after |
 | (file `0001_pw_schema_migrations_ledger.sql`, was 0024) | `pw_schema_migrations` — the ledger `scripts/migrate.py` reads/writes |
 
-**0006–0008 were found by actually running `apps/cloud` against a real local
+Files after the baseline are numbered in the same directory and recorded in the ledger:
+
+| File | Adds |
+|---|---|
+| `0007_pw_receipts.sql` | `pw_receipts`, the append-only hash chain of decision transitions (service_role SELECT/INSERT only; triggers refuse UPDATE, DELETE and TRUNCATE) |
+| `0008_pw_decision_snapshots.sql` | `pw_decision_snapshots`, the erasable store for the document text an approval was requested on; copies and clears the legacy `pw_decisions.subject_content` (apply before the D1 API) |
+| `0009_pw_decision_expiry.sql` | `pw_decisions.expires_at` and `reminded_at`, status `expired`; open rows get `now() + 7 days` (apply before the D1 API) |
+
+**0006–0008 of the baseline sections were found by actually running `apps/cloud` against a real local
 Supabase instance** (`supabase start` + these migrations + `AUTH_MODE=supabase`
 against a real signed-up user) instead of only the in-memory backend the test
 suite uses. Each is a genuine bug that was invisible until then:

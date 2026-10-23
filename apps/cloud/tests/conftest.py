@@ -35,6 +35,11 @@ os.environ.pop("MANAGED_EMBED_MODEL", None)
 os.environ.pop("MANAGED_EMBED_DIM", None)
 os.environ.pop("MANAGED_EMBED_API_KEY", None)
 
+# The plan 0029 trust gate: exported in a shell, it would turn every
+# create-repository test into a 409 plan_approval_required. Tests that need the
+# gate switch it on through app.state.settings.
+os.environ.pop("REQUIRE_PLAN_APPROVAL", None)
+
 import pytest
 from fastapi.testclient import TestClient
 

@@ -77,7 +77,7 @@
       {
         "view": "promptworkspace.tasks",
         "when": "!promptworkspace.signedIn",
-        "contents": "Sign in to see the tasks assigned to you.\n[Sign in](command:promptworkspace.signIn)\n\nAlready have a code from the browser?\n[Paste a sign-in code](command:promptworkspace.signInWithCode)"
+        "contents": "Sign in from the Projects view above to see the tasks assigned to you."
       },
       {
         "view": "promptworkspace.tasks",
@@ -122,6 +122,11 @@
       {
         "command": "promptworkspace.setTaskStatus",
         "title": "Set Task Status…",
+        "category": "PromptWorkspace"
+      },
+      {
+        "command": "promptworkspace.taskActions",
+        "title": "Task Actions…",
         "category": "PromptWorkspace"
       },
       {
@@ -297,6 +302,10 @@
         },
         {
           "command": "promptworkspace.copyTaskContext",
+          "when": "false"
+        },
+        {
+          "command": "promptworkspace.taskActions",
           "when": "false"
         },
         {

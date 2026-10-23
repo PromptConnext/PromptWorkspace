@@ -28,6 +28,7 @@ const task: Task = {
   assignee: "jira-bob",
   sprint: "Sprint 3",
   assigned_user_id: "u1",
+  change_id: null,
   updated_at: "2026-08-01T00:00:00Z",
   deleted_at: null,
   field_versions: {},
@@ -200,6 +201,50 @@ describe("TaskDrawer", () => {
     expect(link).toHaveAttribute("href", "https://github.com/acme/widget/commit/abcdef1234567890");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
+  });
+
+  it("links a commit artifact to the repository", () => {
+    const bare = { ...graph.artifacts[0], uri: "git:abcdef1234567890" };
+    render(
+      <TaskDrawer
+        task={task}
+        graph={{
+          ...graph,
+          project: {
+            ...graph.project,
+            repo_url: "https://github.com/acme/widget.git/",
+          },
+        }}
+        members={members}
+        artifacts={[bare]}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "abcdef1" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widget/commit/abcdef1234567890",
+    );
+  });
+
+  it("leaves a commit unlinked when the repository is not an http URL", () => {
+    const bare = { ...graph.artifacts[0], uri: "git:abcdef1234567890" };
+    render(
+      <TaskDrawer
+        task={task}
+        graph={{
+          ...graph,
+          project: {
+            ...graph.project,
+            repo_url: "git@github.com:acme/widget.git",
+          },
+        }}
+        members={members}
+        artifacts={[bare]}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("abcdef1")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "abcdef1" })).not.toBeInTheDocument();
   });
 
   it("closes on Escape and on the close button", async () => {

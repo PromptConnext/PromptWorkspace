@@ -15,10 +15,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { assignTask, listMembers, setTaskStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { applyBoardFilters, groupBoardTasks, specLabel, sprintOf } from "@/lib/boardFilters";
+import { useCloudGet } from "@/lib/hooks";
 import { plainInlineCode } from "@/lib/inlineCode";
 import { taskRefLabel } from "@/lib/taskOrder";
 import { useToast } from "@/lib/toast";
-import type { Artifact, ProjectGraph, Task, TaskStatus, WorkspaceMember } from "@/lib/types";
+import type {
+  Artifact,
+  DeliveryPlan,
+  ProjectGraph,
+  Task,
+  TaskStatus,
+  WorkspaceMember,
+} from "@/lib/types";
 import { BOARD_ROW, BoardColumn, BoardSkeleton } from "./BoardColumn";
 import { BoardToolbar } from "./BoardToolbar";
 import { memberShortName } from "./MemberChip";
@@ -39,6 +47,7 @@ import { canMoveAnywhere, canMoveTo, moveDeniedReason } from "./taskPermissions"
 import { useBoardShortcuts } from "./useBoardShortcuts";
 import { useBoardUrlState } from "./useBoardUrlState";
 import { useOptimisticTasks } from "./useOptimisticTasks";
+import { VerifyConfirmDialog } from "./VerifyConfirmDialog";
 
 /**
  * Members decide every permission on the board (`viewer.role` comes from the
@@ -83,12 +92,21 @@ export function TaskBoard({
   const [membersState, setMembersState] = useState<MembersState>({ status: "loading" });
   const [membersAttempt, setMembersAttempt] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // The task awaiting a "Mark verified" confirmation.
+  const [verifying, setVerifying] = useState<string | null>(null);
   // Collapsed swimlanes, keyed `${group}:${laneKey}` so "Unassigned" folded
   // under Assignee doesn't fold "No sprint" when the grouping changes.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const { filters, setFilters, clearFilters, openTaskId, openTask, closeTask } = useBoardUrlState();
   const board = useOptimisticTasks(graph.tasks);
+  // Change labels only when grouping by change; a null path fetches nothing.
+  const { data: deliveryPlan } = useCloudGet<DeliveryPlan>(
+    filters.group === "change" ? `/projects/${projectId}/delivery-plan` : null,
+  );
+  const changeTitle = new Map(
+    (deliveryPlan?.changes ?? []).map((c) => [c.id, `${c.ref} · ${c.title}`]),
+  );
   // Undo, Retry and the drag announcer run after later renders; they read the
   // current rows and writes rather than the ones captured when they were made.
   const tasksRef = useRef(board.tasks);
@@ -286,6 +304,19 @@ export function TaskBoard({
     });
   }
 
+  /**
+   * Every user-initiated move goes through here. Verifying asks first, showing
+   * the evidence; any other column moves straight away. Undo and Retry call
+   * `move` directly: a retry was already confirmed, and an undo isn't a verify.
+   */
+  function requestMove(task: Task, next: TaskStatus) {
+    if (next === "verified" && task.status !== "verified") {
+      setVerifying(task.id);
+      return;
+    }
+    void move(task, next);
+  }
+
   const activeTask = activeId ? (board.tasks.find((t) => t.id === activeId) ?? null) : null;
 
   function handleDragStart(event: DragStartEvent) {
@@ -311,7 +342,7 @@ export function TaskBoard({
       });
       return;
     }
-    void move(task, next);
+    requestMove(task, next);
   }
 
   if (graph.tasks.length === 0) {
@@ -340,6 +371,7 @@ export function TaskBoard({
   // column and every lane.
   const visibleTasks = applyBoardFilters(board.tasks, filters, viewer.userId);
   // The optimistic row, so the drawer shows a pending move or assignment.
+  const verifyingTask = verifying ? (board.tasks.find((t) => t.id === verifying) ?? null) : null;
   const openedTask = openTaskId ? (board.tasks.find((t) => t.id === openTaskId) ?? null) : null;
 
   function toggleLane(key: string) {
@@ -384,7 +416,7 @@ export function TaskBoard({
                   readOnly={readOnly}
                   artifacts={artifactsByTask.get(t.id)}
                   onAssign={(task, next) => void assign(task, next)}
-                  onMove={(task, next) => void move(task, next)}
+                  onMove={requestMove}
                   onOpen={(task) => openTask(task.id)}
                 />
               ))}
@@ -401,6 +433,7 @@ export function TaskBoard({
       : groupBoardTasks(visibleTasks, filters.group, {
           memberLabel: (id) => memberName(id ?? ""),
           specLabel: (id) => (id ? (specLabel(graph, id) ?? "Unknown spec") : "No spec"),
+          changeLabel: (id) => (id ? (changeTitle.get(id) ?? "Unknown change") : "No change"),
         });
 
   return (
@@ -535,7 +568,7 @@ export function TaskBoard({
                     <MoveMenu
                       task={t}
                       viewer={viewer}
-                      onMove={(task, next) => void move(task, next)}
+                      onMove={requestMove}
                     />
                   ) : (
                     <LockNote reason={moveDeniedReason(t, viewer)} />
@@ -544,6 +577,18 @@ export function TaskBoard({
               )
         }
       />
+      {verifyingTask && (
+        <VerifyConfirmDialog
+          task={verifyingTask}
+          artifacts={artifactsByTask.get(verifyingTask.id) ?? []}
+          repoUrl={graph.project.repo_url}
+          onCancel={() => setVerifying(null)}
+          onConfirm={() => {
+            setVerifying(null);
+            void move(latest(verifyingTask), "verified");
+          }}
+        />
+      )}
     </>
   );
 }

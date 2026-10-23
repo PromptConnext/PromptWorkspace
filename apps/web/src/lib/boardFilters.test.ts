@@ -22,6 +22,7 @@ function task(overrides: Partial<Task> & { id: string }): Task {
     assignee: null,
     sprint: null,
     assigned_user_id: null,
+    change_id: null,
     updated_at: "2026-08-01T00:00:00Z",
     deleted_at: null,
     field_versions: {},
@@ -32,6 +33,7 @@ function task(overrides: Partial<Task> & { id: string }): Task {
 const ctx = {
   memberLabel: (id: string | null) => (id ? `member-${id}` : "Unassigned"),
   specLabel: (id: string | null) => (id ? `spec-${id}` : "No spec"),
+  changeLabel: (id: string | null) => (id ? `change-${id}` : "No change"),
 };
 
 describe("parseBoardFilters / writeBoardFilters", () => {
@@ -181,5 +183,19 @@ describe("groupBoardTasks", () => {
       ["s2", "spec-s2"],
       [EMPTY_GROUP_KEY, "No spec"],
     ]);
+  });
+
+  it("groups by change with unassigned tasks last", () => {
+    const tasks = [
+      task({ id: "a", change_id: "c2" }),
+      task({ id: "b", change_id: null }),
+      task({ id: "c", change_id: "c1" }),
+    ];
+    const groups = groupBoardTasks(tasks, "change", {
+      ...ctx,
+      changeLabel: (id) => (id === "c1" ? "C1 · Setup" : "C2 · Book"),
+    });
+    expect(groups.map((g) => g.label)).toEqual(["C1 · Setup", "C2 · Book", "No change"]);
+    expect(groups[2].key).toBe(EMPTY_GROUP_KEY);
   });
 });

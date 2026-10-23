@@ -55,14 +55,27 @@ export class StatusWriter {
       await this.store.refresh();
       return true;
     } catch (err) {
-      if (err instanceof CloudHttpError && err.status >= 400 && err.status < 500) {
+      // 401 is the session, not a verdict on the write. If the session
+      // survived (a transient auth hiccup) the write is queued like any other
+      // transient failure; if the failed refresh just signed us out, it takes
+      // the not-signed-in path below — the sign-out already cleared the queue,
+      // and a write queued after it would flush under the next account.
+      const sessionLost =
+        err instanceof CloudNotLoggedInError ||
+        (err instanceof CloudHttpError && err.status === 401 && !this.client.signedIn());
+      if (
+        err instanceof CloudHttpError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 401
+      ) {
         if (previous) this.store.applyLocalStatus(req.taskId, previous);
         const message = this.explain(err);
         this.log.warn(`status write refused (${err.status}): ${err.message}`);
         if (!req.silent) void vscode.window.showWarningMessage(message);
         return false;
       }
-      if (err instanceof CloudNotLoggedInError) {
+      if (sessionLost) {
         if (previous) this.store.applyLocalStatus(req.taskId, previous);
         if (!req.silent) {
           void vscode.window.showWarningMessage("Sign in to PromptWorkspace first.");

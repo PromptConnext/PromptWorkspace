@@ -30,6 +30,8 @@ export function TopBar({
   // close handler can skip restoring focus to the trigger: that restore would
   // pull focus out from under the dialog that is opening.
   const choseNew = useRef(false);
+  // Where focus returns when the dialog closes.
+  const switcherRef = useRef<HTMLButtonElement>(null);
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-6">
@@ -63,11 +65,20 @@ export function TopBar({
               router.push(`/w/${id}`);
             }}
           >
-            <SelectTrigger aria-label="Active workspace" className="ml-2 max-w-[8rem] min-w-0 sm:max-w-[14rem]">
+            <SelectTrigger
+              ref={switcherRef}
+              aria-label="Active workspace"
+              title={activeWorkspace?.name}
+              // Radix ignores className on SelectValue (it is not meant to be
+              // styled), so the value's span is reached from the trigger.
+              className="ml-2 max-w-[8rem] min-w-0 whitespace-nowrap sm:max-w-[14rem] [&>span]:min-w-0 [&>span]:truncate"
+            >
               {/* The old blank <option> is a placeholder now — Radix reserves
                   the empty value for "nothing selected" and refuses it on an
                   item, which also means onValueChange can no longer hand back
                   the "" the previous handler had to guard against. */}
+              {/* One line: a long name ends in an ellipsis (the full name is the
+                  trigger's title) rather than wrapping the bar to two lines. */}
               <SelectValue placeholder="Select workspace…" />
             </SelectTrigger>
             <SelectContent
@@ -127,7 +138,13 @@ export function TopBar({
       </div>
       <NewWorkspaceDialog
         open={creating}
-        onClose={() => setCreating(false)}
+        onClose={() => {
+          setCreating(false);
+          // Normally cleared by the switcher's close handler; clear it here too
+          // in case that never ran, so a later close still restores focus.
+          choseNew.current = false;
+        }}
+        returnFocusRef={switcherRef}
         onCreate={async (name) => {
           const ws = await createWorkspace(name);
           router.push(`/w/${ws.id}`);

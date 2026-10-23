@@ -16,7 +16,7 @@
 
 import {
   isCloneableRepoUrl,
-  sameRepo,
+  projectsMatchingRemotes,
   type CloudClient,
   type LoggerLike,
 } from "@promptworkspace/cloud-client";
@@ -61,15 +61,13 @@ export async function listProjectCandidates(
   return out;
 }
 
-/** Candidates whose repository is the one this folder's remotes point at. */
+/** Candidates whose repository is the one this folder's remotes point at.
+ *  An SSH host alias (`github.com-work`) counts only when it fits exactly one
+ *  project; the shared rule is `projectsMatchingRemotes`. */
 export function matchCandidates(
   remotes: string[],
   candidates: ProjectCandidate[],
 ): ProjectCandidate[] {
   if (remotes.length === 0) return [];
-  return candidates.filter(
-    (candidate) =>
-      candidate.repoUrl !== null &&
-      remotes.some((remote) => sameRepo(remote, candidate.repoUrl)),
-  );
+  return projectsMatchingRemotes(remotes, candidates);
 }

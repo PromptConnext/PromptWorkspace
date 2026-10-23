@@ -3,7 +3,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOSAVE_DELAY_MS, StageInputForm } from "./StageInputForm";
-import { stageDraftKey, type StageAnswers, type StageField } from "./stage-forms";
+import {
+  CONSTITUTION_FIELDS,
+  stageDraftKey,
+  type StageAnswers,
+  type StageField,
+} from "./stage-forms";
 
 vi.mock("@/lib/auth", () => {
   const auth = { authHeaders: () => ({ Authorization: "Bearer test" }) };
@@ -234,6 +239,34 @@ describe("StageInputForm — answers stored in the cloud", () => {
     expect(putStageInputs).not.toHaveBeenCalled();
   });
 
+  it("typing in an optional rules field does not append to default text", async () => {
+    serverHas({});
+    render(<Harness fields={CONSTITUTION_FIELDS} />);
+    await settle();
+
+    const quality = screen.getByLabelText(/Quality bar/) as HTMLTextAreaElement;
+    // The standard text is a hint to read, not a value to edit around.
+    expect(quality.value).toBe("");
+    expect(quality.placeholder).toContain("Tests, linting, and type checks pass in CI");
+
+    fireEvent.change(quality, { target: { value: "100% coverage" } });
+    expect(quality.value).toBe("100% coverage");
+    await advance(AUTOSAVE_DELAY_MS * 2);
+    expect(putStageInputs.mock.calls[0][2]).toMatchObject({ quality: "100% coverage" });
+    expect(putStageInputs.mock.calls[0][2].quality).not.toContain("Tests, linting");
+  });
+
+  it("shows governance as a multi-line field so its standard text is not clipped", async () => {
+    serverHas({});
+    render(<Harness fields={CONSTITUTION_FIELDS} />);
+    await settle();
+
+    const governance = screen.getByLabelText(/Governance/);
+    expect(governance.tagName).toBe("TEXTAREA");
+    expect((governance as HTMLTextAreaElement).value).toBe("");
+    expect((governance as HTMLTextAreaElement).placeholder).toContain("Tech Lead approval");
+  });
+
   it("sends the pending save, with the latest answers, when unmounted", async () => {
     serverHas({});
     const { unmount } = render(<Harness />);
@@ -398,5 +431,35 @@ describe("StageInputForm — answers stored in the cloud", () => {
       problem: "Drafted problem",
       users: "Drafted users",
     });
+  });
+
+  it("drafts a select field from its options and flattens multi-line answers for inputs", async () => {
+    serverHas({});
+    prefillStage.mockResolvedValue({
+      fields: { project_type: "Web application", testing: "Jest\nPlaywright" },
+      sources: ["spec"],
+    });
+    const fields: StageField[] = [
+      {
+        key: "project_type",
+        label: "Project type",
+        type: "select",
+        options: ["Web application", "CLI tool"],
+      },
+      { key: "testing", label: "Testing", type: "text" },
+    ];
+    render(<Harness withPrefill fields={fields} />);
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    await settle();
+
+    expect(screen.getByLabelText(/Project type/).textContent).toContain("Web application");
+    expect((screen.getByLabelText(/Testing/) as HTMLInputElement).value).toBe("Jest; Playwright");
+    const sent = prefillStage.mock.calls[0][2] as { key: string; options?: string[] }[];
+    expect(sent.find((f) => f.key === "project_type")?.options).toEqual([
+      "Web application",
+      "CLI tool",
+    ]);
   });
 });

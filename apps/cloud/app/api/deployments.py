@@ -30,6 +30,7 @@ from app.api._guards import require_admin, require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.attribution import freeze_build_tasks
+from app.deployments.plan_profile import recommend_template
 from app.deployments.preview_url import repo_full_name_from_url
 from app.deployments.registry import BUILTIN_TEMPLATES, get_template, template_files
 from app.integrations.deploy_providers import (
@@ -123,6 +124,9 @@ class DeploymentTemplateOut(BaseModel):
     # requires this for GitHub Pages specifically — a template whose cost is a
     # public repository must say so where the choice is made, not after it.
     notes: list[str]
+    # True for the one template the project's plan fits (plan_profile.py
+    # `recommend_template`); false for all when there is no plan or no project.
+    recommended: bool = False
 
 
 class BuildTaskOut(BaseModel):
@@ -227,8 +231,17 @@ def list_deployment_templates(
     # org-owned template merge lands in this same endpoint with no web
     # contract change — `ws:`-prefixed rows appended to the built-ins.
     workspace_id: str | None = None,
+    # The project whose `plan` document decides which template is flagged
+    # `recommended`. Optional: without it, nothing is.
+    project_id: str | None = None,
     user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
 ) -> list[DeploymentTemplateOut]:
+    recommended_id: str | None = None
+    if project_id:
+        require_project(repo, project_id, user)
+        plan = repo.get_stage_document(project_id, "plan")
+        recommended_id = recommend_template(plan.content if plan else None)
     out: list[DeploymentTemplateOut] = []
     for template in BUILTIN_TEMPLATES:
         files = template_files(template.id)
@@ -263,6 +276,7 @@ def list_deployment_templates(
                 scaffold_paths=sorted(path for path, _, _ in files),
                 workflow_preview=workflow,
                 notes=list(template.notes),
+                recommended=template.id == recommended_id,
             )
         )
     return out

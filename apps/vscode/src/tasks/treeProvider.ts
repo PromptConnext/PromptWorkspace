@@ -13,9 +13,12 @@ import * as vscode from "vscode";
 import type { AssignedTask } from "@promptworkspace/cloud-client";
 import { TASK_STATUS_LABELS, isClosed } from "@promptworkspace/cloud-client";
 import { taskRefFromFeatureTag } from "@promptworkspace/cloud-client";
+import { taskDescription } from "./taskRow.ts";
 import type { ActiveProject } from "../link/activeProject.ts";
 import type { TaskStore } from "./taskStore.ts";
 import { escapeMarkdown } from "../util/markdown.ts";
+import { bannerTreeItem } from "../auth/banner.ts";
+import { withBanner, type BannerRow, type Connection } from "../auth/status.ts";
 
 export class TaskNode {
   readonly kind = "task";
@@ -26,7 +29,7 @@ export class TaskNode {
   }
 }
 
-export type TreeNode = TaskNode;
+export type TreeNode = TaskNode | BannerRow;
 
 export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined>();
@@ -35,6 +38,8 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly store: TaskStore;
   private readonly active: () => ActiveProject | undefined;
   private readonly pendingRefs: (projectId: string) => ReadonlySet<string>;
+  private readonly connection: () => Connection;
+  private readonly currentBranchRef: () => string | undefined;
 
   constructor(
     store: TaskStore,
@@ -44,10 +49,17 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     // number parsed. Injected rather than read, so the tree keeps no state
     // that could disagree with the watcher's.
     pendingRefs: (projectId: string) => ReadonlySet<string>,
+    // Signed out / unlinked (findings #37, #42): a banner row above the tasks.
+    connection: () => Connection,
+    // Normalised task ref of the branch checked out in the active project's
+    // repository ("T1"), or undefined.
+    currentBranchRef: () => string | undefined,
   ) {
     this.store = store;
     this.active = active;
     this.pendingRefs = pendingRefs;
+    this.connection = connection;
+    this.currentBranchRef = currentBranchRef;
   }
 
   refresh(): void {
@@ -55,28 +67,27 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   getTreeItem(node: TreeNode): vscode.TreeItem {
+    if (node.kind === "banner") return bannerTreeItem(node);
     const { task } = node.entry;
     const item = new vscode.TreeItem(task.title, vscode.TreeItemCollapsibleState.None);
     item.id = `task:${task.id}`;
     const ref = taskRefFromFeatureTag(task.feature_tag);
     const pending =
       ref !== null && this.pendingRefs(node.entry.project_id).has(ref);
-    item.description = [
-      task.feature_tag,
-      TASK_STATUS_LABELS[task.status],
-      pending ? "commit not pushed" : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
+    const onBranch = ref !== null && ref === this.currentBranchRef();
+    item.description = taskDescription(task, { pending, onBranch });
+    if (onBranch) item.iconPath = new vscode.ThemeIcon("play-circle");
+    else if (pending) item.iconPath = new vscode.ThemeIcon("cloud-upload");
     item.contextValue = "promptworkspace.task";
     item.checkboxState = isClosed(task.status)
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
     item.tooltip = this.tooltip(node.entry);
+    // A row click used to copy the context with only a toast to show for it,
+    // and Start Task was a hover-only icon (finding #36). It now asks.
     item.command = {
-      command: "promptworkspace.copyTaskContext",
-      title: "Copy Task Context",
+      command: "promptworkspace.taskActions",
+      title: "Task Actions",
       arguments: [node],
     };
     return item;
@@ -86,7 +97,8 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     if (node) return [];
     const current = this.active();
     if (!current) return [];
-    return this.store.forProject(current.projectId).map((entry) => new TaskNode(entry));
+    const tasks = this.store.forProject(current.projectId).map((entry) => new TaskNode(entry));
+    return withBanner(this.connection(), tasks);
   }
 
   private tooltip(entry: AssignedTask): vscode.MarkdownString {

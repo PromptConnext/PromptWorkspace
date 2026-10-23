@@ -1,4 +1,4 @@
-// Two small pieces of cross-window state, both in globalState.
+// Small pieces of cross-window state, all in globalState.
 //
 // globalState and not workspaceState, for the same reason in both cases: the
 // window that starts a clone is not the window that receives it. Neither value
@@ -14,6 +14,10 @@ import type { PendingClone } from "./roster.ts";
 
 export const KNOWN_CLONES_KEY = "promptworkspace.knownClones";
 export const PENDING_CLONE_KEY = "promptworkspace.pendingClone";
+/** Folders (URI strings) the user answered "Not a project folder" for. Read
+ *  by ProjectLink (no link offer) and by the connection state (no "unlinked"
+ *  warning), so an unrelated repository is asked about once, not forever. */
+export const NOT_PROJECT_FOLDERS_KEY = "promptworkspace.notProjectFolders";
 
 export function readKnownClones(state: StorageLike): Record<string, string> {
   return state.get<Record<string, string>>(KNOWN_CLONES_KEY) ?? {};
@@ -38,10 +42,23 @@ export async function writePendingClone(
   await state.update(PENDING_CLONE_KEY, pending);
 }
 
-/** Sign-out. The path map names another account's machine layout and the
- *  pending record names another account's project; neither may survive into
- *  the next session. */
+export function readNotProjectFolders(state: StorageLike): string[] {
+  const value = state.get<string[]>(NOT_PROJECT_FOLDERS_KEY);
+  return Array.isArray(value) ? value : [];
+}
+
+export async function markNotProjectFolder(state: StorageLike, folderUri: string): Promise<void> {
+  const current = readNotProjectFolders(state);
+  if (current.includes(folderUri)) return;
+  await state.update(NOT_PROJECT_FOLDERS_KEY, [...current, folderUri]);
+}
+
+/** Sign-out. The path map names another account's machine layout, the
+ *  pending record names another account's project, and "not a project
+ *  folder" was that account's answer (the next one may have a project
+ *  there); none may survive into the next session. */
 export async function clearCloneState(state: StorageLike): Promise<void> {
   await state.update(KNOWN_CLONES_KEY, undefined);
   await state.update(PENDING_CLONE_KEY, undefined);
+  await state.update(NOT_PROJECT_FOLDERS_KEY, undefined);
 }

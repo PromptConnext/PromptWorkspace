@@ -30,6 +30,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     scaffold_paths: [".github/workflows/deploy.yml", "site/index.html"],
     workflow_preview: "name: Deploy preview\non:\n  push:\n",
     notes: [],
+    recommended: false,
   },
   {
     id: "nextjs-vercel",
@@ -50,6 +51,7 @@ const TEMPLATES: DeploymentTemplateOut[] = [
     scaffold_paths: [".github/workflows/deploy.yml", "app/page.tsx"],
     workflow_preview: "name: Deploy preview\n",
     notes: ["Vercel bills this project to your own account."],
+    recommended: false,
   },
 ];
 
@@ -113,6 +115,26 @@ afterEach(() => {
 });
 
 describe("DeploymentTemplatePanel", () => {
+  it("lists the recommended template first with a 'Fits your plan' badge", async () => {
+    mockFetch({
+      templates: [TEMPLATES[0], { ...TEMPLATES[1], recommended: true }],
+    });
+    render(
+      <DeploymentTemplatePanel
+        project={makeProject()}
+        workspaceId="w1"
+        readOnly={false}
+        onChange={() => {}}
+      />,
+    );
+    await screen.findByText("Fits your plan");
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Next.js → Vercel");
+    expect(items[0]).toHaveTextContent("Fits your plan");
+    expect(screen.getAllByText("Fits your plan")).toHaveLength(1);
+    expect(items[1]).not.toHaveTextContent("Fits your plan");
+  });
+
   it("offers every template as a single-select choice", async () => {
     render(
       <DeploymentTemplatePanel

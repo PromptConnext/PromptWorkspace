@@ -38,6 +38,7 @@ export interface Task {
   feature_tag?: string | null;
   acceptance_criteria: AcceptanceCriterion[];
   assigned_user_id?: string | null;
+  change_id?: string | null;
   updated_at?: string | null;
 }
 

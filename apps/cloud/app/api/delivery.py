@@ -1,0 +1,651 @@
+"""Plan 0029 delivery routes: the delivery plan (changes in dependency
+waves), project hats, and approval decisions (M1 + M2).
+
+Every table behind these routes is service-only (migration 0004); the rules
+are here. Reads tolerate a database without migration 0004 (empty results);
+writes answer 503 `delivery_store_unavailable`.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Collection
+from datetime import datetime, timedelta
+from functools import partial
+from typing import Literal
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
+
+from app.api._guards import require_admin, require_project, require_project_members
+from app.db.repository import DeliveryStoreUnavailable, ReceiptConflict, Repository
+from app.delivery import notices
+from app.delivery.approvals import (
+    approval_subject,
+    current_hash,
+    plan_state,
+    states_of,
+    subject_hashes,
+    sync_approval_mirrors,
+)
+from app.delivery.changes import wave_of
+from app.delivery.decisions import (
+    HAT_OF,
+    STAGE_OF,
+    TITLE_OF,
+    ApprovalState,
+    Blocked,
+    blocked_reason,
+    can_resolve,
+    content_hash,
+    eligible_resolvers,
+    is_overdue,
+    latest_decision,
+)
+from app.delivery.ledger import append_receipt, sync_decision_receipts
+from app.delivery.receipts import sha256_text
+from app.dependencies import User, get_current_user, get_repository
+from app.models.schemas import (
+    Decision,
+    Project,
+    ProjectRole,
+    ReceiptDraft,
+    Role,
+    WorkspaceMember,
+    utcnow,
+)
+
+logger = logging.getLogger("promptworkspace.delivery")
+
+router = APIRouter(tags=["delivery"])
+
+# A task counts toward its Change's progress once it is implemented or verified.
+DONE_STATUSES = frozenset({"implemented", "verified"})
+
+Hat = Literal["business_owner", "tech_steward"]
+HATS: tuple[Hat, ...] = ("business_owner", "tech_steward")
+
+
+class DeliveryChangeOut(BaseModel):
+    id: str
+    ref: str
+    key: str
+    title: str
+    kind: str
+    story: int | None
+    priority: str | None
+    position: int
+    wave: int
+    depends_on: list[str]
+    task_ids: list[str]
+    # Progress: `done` counts the Change's live tasks that are implemented or
+    # verified, `total` all of them (`done <= total == len(task_ids)`).
+    done: int
+    total: int
+
+
+class DeliveryPlanOut(BaseModel):
+    changes: list[DeliveryChangeOut]
+    plan_approval: ApprovalState
+
+
+class ProjectRoleOut(BaseModel):
+    hat: Hat
+    user_id: str | None
+
+
+class ProjectRoleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str | None
+
+
+def _plan_out(repo: Repository, project_id: str, plan_approval: ApprovalState) -> DeliveryPlanOut:
+    """The project's Changes in their waves, with the tasks each one carries."""
+    changes = repo.list_delivery_changes(project_id)
+    waves = wave_of(changes)
+    ref_of_key = {c.key: c.ref for c in changes}
+    task_ids: dict[str, list[str]] = {c.id: [] for c in changes}
+    done: dict[str, int] = {c.id: 0 for c in changes}
+    for task_id, change_id, status in repo.list_task_change_status(project_id):
+        if change_id in task_ids:
+            task_ids[change_id].append(task_id)
+            if status in DONE_STATUSES:
+                done[change_id] += 1
+    return DeliveryPlanOut(
+        changes=[
+            DeliveryChangeOut(
+                id=c.id,
+                ref=c.ref,
+                key=c.key,
+                title=c.title,
+                kind=c.kind,
+                story=c.story,
+                priority=c.priority,
+                position=c.position,
+                wave=waves[c.key],
+                depends_on=[ref_of_key[k] for k in c.depends_on if k in ref_of_key],
+                task_ids=task_ids[c.id],
+                done=done[c.id],
+                total=len(task_ids[c.id]),
+            )
+            for c in changes
+        ],
+        plan_approval=plan_approval,
+    )
+
+
+@router.get("/projects/{project_id}/delivery-plan", response_model=DeliveryPlanOut)
+def get_delivery_plan(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeliveryPlanOut:
+    require_project(repo, project_id, user)
+    return _plan_out(repo, project_id, plan_state(repo, project_id))
+
+
+def _member_ids(repo: Repository, project: Project, user: User) -> set[str]:
+    return {m.user_id for m in repo.list_members(project.workspace_id)} | {user.id}
+
+
+def _roles_out(roles: list[ProjectRole], member_ids: Collection[str]) -> list[ProjectRoleOut]:
+    """Every hat, held or not, from the project's roles as read. A holder who
+    has left the workspace reads as unassigned: decisions route to the admins
+    then (`eligible_resolvers`), and the row is left behind by `remove_member`."""
+    holders = {r.hat: r.user_id for r in roles if r.user_id in member_ids}
+    return [ProjectRoleOut(hat=hat, user_id=holders.get(hat)) for hat in HATS]
+
+
+@router.get("/projects/{project_id}/roles", response_model=list[ProjectRoleOut])
+def get_project_roles(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[ProjectRoleOut]:
+    project = require_project(repo, project_id, user)
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
+
+
+def _email(request: Request, background: BackgroundTasks,
+           to: list[str], message: tuple[str, str]) -> None:
+    """Queue one notification after the response; never fails the request."""
+    if to:
+        background.add_task(request.app.state.decision_mailer.send, to, *message)
+
+
+@router.put("/projects/{project_id}/roles/{hat}", response_model=list[ProjectRoleOut])
+def put_project_role(
+    project_id: str,
+    hat: Hat,
+    body: ProjectRoleUpdate,
+    request: Request,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> list[ProjectRoleOut]:
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+    if body.user_id is not None and repo.get_membership(project.workspace_id, body.user_id) is None:
+        raise HTTPException(status_code=400, detail="role_user_not_a_member")
+    try:
+        repo.set_project_role(project_id, project.workspace_id, hat, body.user_id, user.id)
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    try:
+        append_receipt(repo, ReceiptDraft(
+            project_id=project_id, workspace_id=project.workspace_id,
+            event="role.assigned" if body.user_id else "role.cleared",
+            subject_type="project_role", subject_id=f"{project_id}:{hat}",
+            actor=user.id, body={"hat": hat, "user_id": body.user_id},
+        ))
+    except Exception:
+        # The hat is set; a lost receipt is logged, not a failed request.
+        logger.exception("role receipt failed, project=%s hat=%s", project_id, hat)
+    if body.user_id is not None:
+        try:
+            waiting = [d for d in repo.list_decisions(project_id)
+                       if d.status == "open" and d.routed_hat == hat
+                       and d.requested_by != body.user_id]
+            if waiting:
+                members = repo.list_members(project.workspace_id)
+                link = notices.decision_link(request.app.state.settings.web_app_url, waiting[0])
+                _email(request, background, notices.recipients({body.user_id}, members),
+                       notices.assigned(waiting, project.name, link, hat))
+        except Exception:
+            # The hat is set; a failed notice is logged, not a failed request.
+            logger.exception("hat assignment email failed, project=%s hat=%s", project_id, hat)
+    return _roles_out(repo.list_project_roles(project_id), _member_ids(repo, project, user))
+
+
+DecisionKindIn = Literal["intent_approval", "plan_approval"]
+
+
+class DecisionBase(BaseModel):
+    """A decision's fields without the two that are costly: the document text
+    (`DecisionOut.subject_content`) and the staleness check (`is_current`)."""
+
+    id: str
+    project_id: str
+    workspace_id: str
+    kind: str
+    title: str
+    subject_stage: str
+    subject_hash: str
+    routed_hat: str
+    status: str
+    rationale: str | None
+    requested_by: str
+    resolved_by: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+    expires_at: datetime | None = None
+    reminded_at: datetime | None = None
+    can_resolve: bool
+    # Why an open decision is stuck for this caller: "no_approver" (nobody but
+    # the requester could approve it: assign the hat to someone else) or
+    # "own_request" (the caller asked; someone else approves).
+    blocked: Blocked | None = None
+
+
+class DecisionOut(DecisionBase):
+    # The document text at request time; null for a decision made before
+    # migration 0006 and for older decisions a listing leaves out
+    # (`content_carriers`).
+    subject_content: str | None
+    # True while `subject_hash` is the hash of the decision's subject as it is
+    # now (for the plan approval: project rules, plan and tasks); false once
+    # that subject changed after this decision was made.
+    is_current: bool
+
+
+class DecisionsOut(BaseModel):
+    decisions: list[DecisionOut]
+    states: dict[str, ApprovalState]
+
+
+class DecisionMutationOut(DecisionOut):
+    """The requested or resolved decision, plus `snapshot`: the project's
+    `GET /decisions` as it stands after the write, so a client applies it
+    instead of refetching. `None` when the stage documents could not be read
+    after the write; the client refetches then."""
+
+    snapshot: DecisionsOut | None = None
+
+
+class DecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: DecisionKindIn
+
+
+class DecisionResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    outcome: Literal["approved", "rejected"]
+    rationale: str | None = None
+
+
+def content_carriers(decisions: list[Decision]) -> set[str]:
+    """The ids of the decisions a listing sends `subject_content` for: the open
+    ones (the approver reads and diffs them) and, per kind, the newest approved
+    and the newest sent-back one (stored as `rejected`): the diff bases for the
+    next request. Every older decision would cost its whole document, up to
+    ~12 KB each, on every tab load."""
+    keep = {d.id for d in decisions if d.status == "open"}
+    for status in ("approved", "rejected"):
+        newest: dict[str, Decision] = {}
+        for d in decisions:
+            if d.status == status and (
+                d.kind not in newest or d.created_at > newest[d.kind].created_at
+            ):
+                newest[d.kind] = d
+        keep |= {d.id for d in newest.values()}
+    return keep
+
+
+def decision_out(
+    decision: Decision,
+    *,
+    user_id: str,
+    roles,
+    member_ids: set[str],
+    is_admin: bool,
+    admin_ids: Collection[str],
+    hashes: dict[str, str | None] | None = None,
+    with_content: bool = True,
+) -> DecisionOut:
+    """`hashes` are the subject hashes as they are now, by kind. Without them
+    (the read after a write failed) a decision reads as current: the request
+    and resolve routes only write against a subject whose hash they just
+    matched.
+    `with_content=False` leaves `subject_content` out (see `content_carriers`)."""
+    return DecisionOut(
+        **decision.model_dump(exclude={"subject_content"}),
+        subject_content=decision.subject_content if with_content else None,
+        # An overdue decision the sweep has not closed yet cannot be answered.
+        can_resolve=not is_overdue(decision, utcnow())
+        and can_resolve(decision, user_id, roles, member_ids, is_admin),
+        blocked=blocked_reason(decision, user_id, roles, member_ids, admin_ids),
+        is_current=hashes is None or hashes.get(decision.kind) == decision.subject_hash,
+    )
+
+
+def _routing_context(
+    repo: Repository,
+    project: Project,
+    user_id: str,
+    role: Role,
+    members: list[WorkspaceMember],
+):
+    """Who may resolve what, for the caller `user_id`, whose membership and
+    `role` are already confirmed, and the workspace `members` read with it.
+    The caller always counts as a member: the list is one PostgREST page
+    (max_rows), and in a workspace larger than that a caller confirmed through
+    `get_membership` is missing from it. Known limit: another hat holder left
+    off the page still reads as a non-member."""
+    roles = repo.list_project_roles(project.id)
+    return roles, {m.user_id for m in members} | {user_id}, role == Role.admin
+
+
+def admin_ids_of(members: list[WorkspaceMember], user_id: str, is_admin: bool) -> set[str]:
+    """The workspace admins on the member page, plus the caller when they are
+    one (see `_routing_context` on the page limit)."""
+    ids = {m.user_id for m in members if m.role == Role.admin}
+    return ids | {user_id} if is_admin else ids
+
+
+def _hashes_after_write(repo: Repository, project_id: str) -> dict[str, str | None] | None:
+    """The subject hashes read after this request's write, so the mirror and the
+    snapshot describe the documents as they are now, including an edit that
+    landed while the request ran. `None` when the read fails: the write is
+    committed and must not become a 500, so the caller skips the mirror (it
+    is rewritten on the next resolve or stage save) and sends no snapshot.
+    Not exact under concurrency: a stage save landing between this read and
+    the mirror write can still be overwritten by a mirror computed from these
+    hashes, until that next resolve or stage save corrects it."""
+    try:
+        return subject_hashes(repo, project_id)
+    except Exception:
+        logger.exception("stage hash read failed after a decision write, project=%s",
+                         project_id)
+        return None
+
+
+def _listing(
+    decisions: list[Decision],
+    hashes: dict[str, str | None],
+    out: Callable[..., DecisionOut],
+) -> DecisionsOut:
+    """`GET /decisions` from the project's decisions (newest first) and the
+    subject hashes as they are now."""
+    keep = content_carriers(decisions)
+    return DecisionsOut(
+        decisions=[out(d, hashes=hashes, with_content=d.id in keep) for d in decisions],
+        states=states_of(decisions, hashes),
+    )
+
+
+def _mutation_out(
+    decision: Decision,
+    decisions: list[Decision],
+    hashes: dict[str, str | None] | None,
+    out: Callable[..., DecisionOut],
+) -> DecisionMutationOut:
+    """`decision` with the listing after the write: `decisions` are the
+    project's decisions as they now stand (newest first), `hashes` the subject
+    hashes read after it (no snapshot without them)."""
+    snapshot = _listing(decisions, hashes, out) if hashes is not None else None
+    return DecisionMutationOut(**out(decision, hashes=hashes).model_dump(), snapshot=snapshot)
+
+
+def _read_listing(
+    repo: Repository, project_id: str, user: User
+) -> tuple[DecisionsOut, list[ProjectRoleOut]]:
+    """The project's decision listing as `user` sees it, and the project roles
+    read on the way. One membership check, and one read each of the roles, the
+    decisions and the stage documents."""
+    project, role, members = require_project_members(repo, project_id, user)
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
+    out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
+    listing = _listing(repo.list_decisions(project_id), subject_hashes(repo, project_id), out)
+    return listing, _roles_out(roles, member_ids)
+
+
+@router.get("/projects/{project_id}/decisions", response_model=DecisionsOut)
+def list_project_decisions(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionsOut:
+    return _read_listing(repo, project_id, user)[0]
+
+
+class DeliveryOverviewOut(BaseModel):
+    """What the Delivery and Decisions tabs show, in one request: the
+    delivery plan, the decision listing with the approval states, and the
+    project's hats. Each part equals its own route's answer."""
+
+    plan: DeliveryPlanOut
+    decisions: list[DecisionOut]
+    states: dict[str, ApprovalState]
+    roles: list[ProjectRoleOut]
+
+
+@router.get("/projects/{project_id}/delivery-overview", response_model=DeliveryOverviewOut)
+def get_delivery_overview(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DeliveryOverviewOut:
+    listing, roles = _read_listing(repo, project_id, user)
+    return DeliveryOverviewOut(
+        plan=_plan_out(repo, project_id, listing.states["plan"]),
+        decisions=listing.decisions,
+        states=listing.states,
+        roles=roles,
+    )
+
+
+@router.post("/projects/{project_id}/decisions", response_model=DecisionMutationOut)
+def request_decision(
+    project_id: str,
+    body: DecisionRequest,
+    request: Request,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionMutationOut:
+    project, role, members = require_project_members(repo, project_id, user)
+    # One read gives the hash and the text it covers, so the stored snapshot
+    # is exactly the subject the hash binds: for the plan approval the project
+    # rules, the plan and the tasks together.
+    subject = approval_subject(repo, project_id, body.kind)
+    if subject is None:
+        raise HTTPException(status_code=409, detail="decision_subject_missing")
+    current = content_hash(subject)
+    if body.kind == "plan_approval" and not repo.list_delivery_changes(project_id):
+        raise HTTPException(status_code=409, detail="delivery_plan_missing")
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
+    out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
+
+    try:
+        decisions = repo.list_decisions(project_id)
+        latest = latest_decision(decisions, body.kind)
+        if latest is not None and latest.status == "approved" and latest.subject_hash == current:
+            # Already approved as it stands: asking again must not demote it
+            # to pending (which would also close the create-repository gate).
+            return _mutation_out(latest, decisions, _hashes_after_write(repo, project_id), out)
+        after = list(decisions)  # the listing as this request leaves it
+        for i, existing in enumerate(decisions):
+            if existing.kind != body.kind or existing.status != "open":
+                continue
+            if is_overdue(existing, utcnow()):
+                closed = repo.update_open_decision(
+                    project_id, existing.id, {"status": "expired", "resolved_at": utcnow()})
+                if closed is not None:  # None: resolved since the read
+                    after[i] = closed
+                continue
+            if existing.subject_hash == current:
+                return _mutation_out(existing, after, _hashes_after_write(repo, project_id), out)
+            closed = repo.update_open_decision(
+                project_id, existing.id,
+                {"status": "withdrawn", "resolved_by": user.id, "resolved_at": utcnow()})
+            if closed is not None:
+                after[i] = closed
+        decision = repo.save_decision(
+            Decision(
+                project_id=project_id,
+                workspace_id=project.workspace_id,
+                kind=body.kind,
+                title=TITLE_OF[body.kind],
+                subject_stage=STAGE_OF[body.kind],
+                subject_hash=current,
+                subject_content=subject,
+                routed_hat=HAT_OF[body.kind],
+                requested_by=user.id,
+                expires_at=utcnow()
+                + timedelta(days=request.app.state.settings.decision_ttl_days),
+            )
+        )
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    sync_decision_receipts(repo, project_id, [decision, *after])
+    try:
+        resolvers = eligible_resolvers(decision, roles, member_ids,
+                                       admin_ids_of(members, user.id, is_admin))
+        link = notices.decision_link(request.app.state.settings.web_app_url, decision)
+        _email(request, background, notices.recipients(resolvers, members),
+               notices.requested(decision, project.name, link))
+    except Exception:
+        # The decision is saved; a failed notice is logged, not a failed request.
+        logger.exception("decision email failed, project=%s decision=%s", project_id, decision.id)
+    return _mutation_out(decision, [decision, *after], _hashes_after_write(repo, project_id), out)
+
+
+@router.post(
+    "/projects/{project_id}/decisions/{decision_id}/resolve",
+    response_model=DecisionMutationOut,
+)
+def resolve_decision(
+    project_id: str,
+    decision_id: str,
+    body: DecisionResolve,
+    request: Request,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> DecisionMutationOut:
+    project, role, members = require_project_members(repo, project_id, user)
+    # The whole list, not `get_decision`: the same one request, and the
+    # approval states, the mirror and the snapshot all need it afterwards.
+    decisions = repo.list_decisions(project_id)
+    decision = next((d for d in decisions if d.id == decision_id), None)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    if decision.status != "open":
+        raise HTTPException(status_code=409, detail="decision_not_open")
+    if is_overdue(decision, utcnow()):
+        raise HTTPException(status_code=409, detail="decision_expired")
+    roles, member_ids, is_admin = _routing_context(repo, project, user.id, role, members)
+    if decision.requested_by == user.id:
+        raise HTTPException(status_code=403, detail="self_approval_not_allowed")
+    if not can_resolve(decision, user.id, roles, member_ids, is_admin):
+        raise HTTPException(status_code=403, detail="decision_not_routed_to_you")
+    # A decision stored before its subject grew (a plan approval of the tasks
+    # alone) hashes differently from today's subject, so it reads as changed.
+    current = current_hash(repo, project_id, decision.kind)
+    if current != decision.subject_hash:
+        raise HTTPException(status_code=409, detail="decision_subject_changed")
+    rationale = (body.rationale or "").strip() or None
+    if body.outcome == "rejected" and rationale is None:
+        raise HTTPException(status_code=422, detail="rationale_required")
+    try:
+        # Compare-and-set: of two concurrent resolves only one finds it open.
+        resolved = repo.update_open_decision(
+            project_id, decision_id,
+            {
+                "status": body.outcome,
+                "rationale": rationale,
+                "resolved_by": user.id,
+                "resolved_at": utcnow(),
+            },
+        )
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    if resolved is None:
+        raise HTTPException(status_code=409, detail="decision_not_open")
+    after = [resolved if d.id == resolved.id else d for d in decisions]
+    sync_decision_receipts(repo, project_id, after)
+    hashes = _hashes_after_write(repo, project_id)
+    if hashes is not None:
+        try:
+            sync_approval_mirrors(repo, project_id, decisions=after, hashes=hashes)
+        except Exception:
+            # The decision is saved; the mirror is derived and rewritten on the
+            # next resolve or stage save, so a failed write must not turn a
+            # committed approval into a 500.
+            logger.exception("approval mirror sync failed for project=%s", project_id)
+    if resolved.status == "rejected":
+        try:
+            link = notices.decision_link(request.app.state.settings.web_app_url, resolved)
+            _email(request, background, notices.recipients({resolved.requested_by}, members),
+                   notices.changes_requested(resolved, project.name, link))
+        except Exception:
+            logger.exception("decision email failed, project=%s decision=%s",
+                             project_id, resolved.id)
+    out = partial(decision_out, user_id=user.id, roles=roles, member_ids=member_ids,
+                  is_admin=is_admin, admin_ids=admin_ids_of(members, user.id, is_admin))
+    return _mutation_out(resolved, after, hashes, out)
+
+
+class SnapshotErase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str
+
+
+class SnapshotEraseOut(BaseModel):
+    erased: bool
+
+
+@router.post(
+    "/projects/{project_id}/decisions/{decision_id}/erase-snapshot",
+    response_model=SnapshotEraseOut,
+)
+def erase_decision_snapshot(
+    project_id: str,
+    decision_id: str,
+    body: SnapshotErase,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> SnapshotEraseOut:
+    """Erase the document text a decision stored (PDPA erasure). The decision,
+    its hash and every receipt stay; one `decision.snapshot_erased` receipt
+    records who erased it, with only a hash of the reason. Safe to retry."""
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+    reason = body.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="reason_required")
+    if repo.get_decision(project_id, decision_id) is None:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    try:
+        erased = repo.erase_decision_snapshot(project_id, decision_id, user.id)
+    except DeliveryStoreUnavailable:
+        raise HTTPException(status_code=503, detail="delivery_store_unavailable") from None
+    recorded = any(
+        r.subject_id == decision_id and r.event == "decision.snapshot_erased"
+        for r in repo.list_receipts(project_id)
+    )
+    if not recorded and (
+        erased or repo.get_decision(project_id, decision_id).subject_content is None
+    ):
+        try:
+            append_receipt(repo, ReceiptDraft(
+                project_id=project_id, workspace_id=project.workspace_id,
+                event="decision.snapshot_erased", subject_type="decision",
+                subject_id=decision_id, actor=user.id,
+                body={"reason_sha256": sha256_text(reason)},
+            ))
+        except (ReceiptConflict, DeliveryStoreUnavailable):
+            raise HTTPException(status_code=503, detail="receipt_write_failed") from None
+    return SnapshotEraseOut(erased=erased)

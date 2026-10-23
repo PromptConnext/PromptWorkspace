@@ -67,6 +67,20 @@ class Settings(BaseSettings):
     # accept URL emailed to invitees; also the Supabase invite redirect target.
     web_app_url: str = "http://localhost:3000"
 
+    # Decision notification email (enterprise AI v2.1 D1). The same SMTP relay
+    # Supabase Auth uses (docs/DEPLOYMENT.md "Auth email"); Supabase itself
+    # only sends auth email. Empty host or sender: notifications are off.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+
+    # Decision timeouts (enterprise AI v2.1 D1).
+    decision_ttl_days: int = 7
+    decision_reminder_hours: int = 48
+    decision_sweep_interval_seconds: int = 900  # 0 disables the sweep loop
+
     # External-tracker credentials (M5). Kept in the server env / secret manager,
     # never in a workspace row (ADR 0010 §5). Outbound Jira uses Basic auth
     # (email + API token).
@@ -186,6 +200,13 @@ class Settings(BaseSettings):
     typesafe_api_key: str = ""
     typesafe_base_url: str = "https://api.typesafe.ai/v1"
     typesafe_model: str = "jev-latest"
+
+    # Plan 0029 delivery gates: when true, create-repository refuses until the
+    # project has its project rules, a tasks document and an *approved, current*
+    # delivery-plan decision (409 constitution_required / tasks_required /
+    # plan_approval_required). Off by default so develop and main keep today's
+    # behaviour; the trust environment turns it on.
+    require_plan_approval: bool = False
 
     # Managed embeddings for the assistant (plan 0008 M1): Typhoon is
     # generation-only, so a keyless (no BYO) workspace needs a separate

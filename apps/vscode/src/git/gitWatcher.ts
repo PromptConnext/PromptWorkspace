@@ -33,10 +33,10 @@ import type { StatusWriter } from "../tasks/statusWriter.ts";
 import type { TaskStore } from "../tasks/taskStore.ts";
 import type { OutputLogger } from "../util/log.ts";
 import type { CommitRef, GitBridge, RepoRef } from "./gitBridge.ts";
-import { aheadOf, partitionByPublication } from "./publication.ts";
+import { aheadOf, partitionWithHeld } from "./publication.ts";
+import { attributeCommits, mergeBaseCandidates } from "./divergence.ts";
 import {
   collidingRefs,
-  refsForCommit,
   taskRefFromBranch,
   taskRefFromFeatureTag,
 } from "@promptworkspace/cloud-client";
@@ -64,6 +64,9 @@ interface PendingCommit {
   sha: string;
   subject: string;
   refs: string[];
+  /** Published, but its close was not written (no session, or the task list
+   *  had not loaded). Retried on the next scan; never shown as unpushed. */
+  held?: boolean;
 }
 
 interface RepoState {
@@ -99,6 +102,7 @@ export class GitWatcher {
   private readonly scanLimit: () => number;
   private readonly closeOn: () => CloseTasksOn;
   private readonly defaultBranchFor: (projectId: string) => string | null;
+  private readonly isSignedIn: () => boolean;
 
   constructor(
     git: GitBridge,
@@ -111,6 +115,7 @@ export class GitWatcher {
     scanLimit: () => number,
     closeOn: () => CloseTasksOn,
     defaultBranchFor: (projectId: string) => string | null,
+    isSignedIn: () => boolean,
   ) {
     this.git = git;
     this.store = store;
@@ -122,6 +127,7 @@ export class GitWatcher {
     this.scanLimit = scanLimit;
     this.closeOn = closeOn;
     this.defaultBranchFor = defaultBranchFor;
+    this.isSignedIn = isSignedIn;
   }
 
   start(): void {
@@ -157,7 +163,21 @@ export class GitWatcher {
     );
   }
 
-  private async scan(repo: RepoRef): Promise<void> {
+  /** One scan at a time per repository. Several triggers can overlap now (the
+   *  debounce, startup, sign-in, the task list loading), and two scans over
+   *  the same stale `state` would race to write it. */
+  private readonly scanning = new Map<string, Promise<void>>();
+
+  private scan(repo: RepoRef): Promise<void> {
+    const key = repo.root.toString();
+    const run = (this.scanning.get(key) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.scanNow(repo));
+    this.scanning.set(key, run);
+    return run;
+  }
+
+  private async scanNow(repo: RepoRef): Promise<void> {
     if (!this.enabled()) return;
     await this.loadState();
 
@@ -189,7 +209,10 @@ export class GitWatcher {
     const aheadUnchanged = (state.lastAhead ?? null) === aheadKey;
     // Both, not either: a push moves `ahead` and leaves HEAD alone, and an
     // amend moves HEAD and leaves `ahead` alone.
-    if (headUnchanged && aheadUnchanged) return;
+    // Not while commits are held: a held commit is published but its close has
+    // not been written yet (no session, or the tasks had not loaded), and
+    // nothing in git will change to prompt another look at it.
+    if (headUnchanged && aheadUnchanged && !(state.pending ?? []).some((p) => p.held)) return;
 
     let commits: CommitRef[] = [];
     let fresh: CommitRef[] = [];
@@ -219,12 +242,15 @@ export class GitWatcher {
     }
 
     const branchRef = this.branchRefFor(repo, projectId);
+    // #41: the branch's ref covers only commits after it left the default
+    // branch, never the history it inherited.
+    const base =
+      branchRef && fresh.length > 0 ? await this.branchPoint(repo, projectId) : undefined;
     const pending = [...(state.pending ?? [])];
     const known = new Set(pending.map((p) => p.sha));
     // Oldest first, matching the order tasks were worked in.
-    for (const commit of [...fresh].reverse()) {
+    for (const { commit, refs } of attributeCommits(fresh, branchRef, base)) {
       if (known.has(commit.sha)) continue;
-      const refs = refsForCommit(commit.subject, branchRef);
       if (refs.length === 0) continue;
       pending.push({ sha: commit.sha, subject: commit.subject, refs });
       known.add(commit.sha);
@@ -238,7 +264,7 @@ export class GitWatcher {
       return;
     }
 
-    const { published, unpublished, dropped } = partitionByPublication(
+    const { published, unpublished, dropped } = partitionWithHeld(
       pending,
       commits,
       ahead,
@@ -251,9 +277,10 @@ export class GitWatcher {
         `${gone.refs.join(", ")} dropped: ${gone.sha.slice(0, 8)} is no longer in the history`,
       );
     }
-    if (published.length > 0) await this.closePublished(projectId, published);
+    const held = published.length > 0 ? await this.closePublished(projectId, published) : [];
 
-    const kept = unpublished.slice(-PENDING_CAP);
+    // Held commits stay pending (oldest first) so the next scan retries them.
+    const kept = [...held, ...unpublished].slice(-PENDING_CAP);
     this.state[key] = {
       lastScannedHeadSha: repo.headSha,
       lastAhead: aheadKey,
@@ -264,7 +291,8 @@ export class GitWatcher {
       pending: kept,
     };
     await this.cache.write(CACHE_FILES.gitState, this.state);
-    this.republishPending(projectId, kept);
+    // The tree's "commit not pushed" marker is for unpublished commits only.
+    this.republishPending(projectId, kept.filter((p) => !p.held));
   }
 
   /** The branch's own task ref, or null when it must not be used: a detached
@@ -279,6 +307,24 @@ export class GitWatcher {
     return taskRefFromBranch(name);
   }
 
+  /** Where HEAD's branch left the default branch: the merge-base with the
+   *  remote-tracking default, else the local one. Undefined when neither
+   *  resolves or the Git API cannot answer, which keeps the old attribution. */
+  private async branchPoint(repo: RepoRef, projectId: string): Promise<string | undefined> {
+    const head = repo.head?.name;
+    if (!head) return undefined;
+    for (const ref of mergeBaseCandidates(this.defaultBranchFor(projectId), repo.head?.upstream)) {
+      const base = await this.git.mergeBase(repo.root, head, ref);
+      if (base) return base;
+    }
+    this.logOnce(
+      `${repo.root.toString()}:no-merge-base`,
+      `${repo.root.fsPath}: no merge-base with the default branch; ` +
+        `attributing every new commit on ${head} to its task`,
+    );
+    return undefined;
+  }
+
   private republishPending(projectId: string, pending: PendingCommit[]): void {
     const refs = new Set<string>();
     for (const entry of pending) for (const ref of entry.refs) refs.add(ref);
@@ -290,12 +336,24 @@ export class GitWatcher {
     this.pendingEmitter.fire();
   }
 
+  /** Close the tasks these published commits name. Returns the commits to try
+   *  again: all of them while the task list has not loaded yet, and any whose
+   *  write was not accepted because there is no session. Forgetting them
+   *  instead would lose the close permanently, since the scan only runs again
+   *  when git changes. */
   private async closePublished(
     projectId: string,
     entries: PendingCommit[],
-  ): Promise<void> {
+  ): Promise<PendingCommit[]> {
+    // `refreshedAt` is 0 until this session has fetched the list; a cached
+    // list from the last session may be stale (a task assigned since), so its
+    // being non-empty proves nothing.
+    if (this.store.refreshedAt === 0) {
+      this.log.info(`task list not loaded yet; holding ${entries.length} published commit(s)`);
+      return entries.map((e) => ({ ...e, held: true }));
+    }
     const tasks = this.store.forProject(projectId);
-    if (tasks.length === 0) return;
+    const held = new Map<string, PendingCommit>();
 
     // Numeric normalisation makes T012 and T12 the same ref. If a project
     // genuinely contains both as distinct tasks, neither can be auto-closed —
@@ -329,7 +387,7 @@ export class GitWatcher {
           continue;
         }
 
-        await this.writer.setStatus({
+        const written = await this.writer.setStatus({
           projectId,
           taskId: entry.task.id,
           // A published commit is evidence of implementation, not of
@@ -344,9 +402,19 @@ export class GitWatcher {
           },
           silent: true,
         });
-        this.log.info(`closed ${ref} from ${commit.sha.slice(0, 8)}`);
+        if (written) {
+          this.log.info(`closed ${ref} from ${commit.sha.slice(0, 8)}`);
+        } else if (!this.isSignedIn()) {
+          this.log.warn(
+            `${ref} from ${commit.sha.slice(0, 8)} not closed: not signed in; will retry after sign-in`,
+          );
+          held.set(commit.sha, { ...commit, held: true });
+        }
+        // Otherwise the cloud refused it (the writer has logged why); retrying
+        // an answer that will not change would only repeat it.
       }
     }
+    return [...held.values()];
   }
 
   private currentUserId(): string | undefined {

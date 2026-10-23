@@ -26,7 +26,7 @@ const DETAIL_MESSAGES: Record<string, string> = {
   // which workspace or project already imported it.
   repo_already_imported: "This repository is already connected to a PromptWorkspace project.",
   repo_is_empty:
-    "That repository has no commits yet — PromptWorkspace can only add files on top of an existing one.",
+    "GitHub shows no commits on its default branch — PromptWorkspace can only add files on top of an existing commit. Push one (and check the default branch) and try again.",
   invalid_repo_full_name: "That doesn't look like a repository — refresh the list and try again.",
   github_repo_not_in_token_scope:
     'The workspace\'s GitHub token can\'t read that repository — a token scoped to "Only select ' +
@@ -58,6 +58,9 @@ export function NewProjectDialog({
   const [consent, setConsent] = useState(false);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  // The created project's name while the parent navigates to it: the dialog
+  // stays, busy, until the project page replaces this one (finding #4).
+  const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
@@ -67,6 +70,8 @@ export function NewProjectDialog({
     setConsent(false);
     setFilter("");
     setError(null);
+    setOpening(null);
+    setBusy(false);
   }
 
   function close() {
@@ -96,39 +101,42 @@ export function NewProjectDialog({
 
   if (!open) return null;
 
+  // Still busy after success: the navigation onCreated starts takes seconds,
+  // and the dialog stays until it lands.
+  function opened(project: Project) {
+    setOpening(project.name);
+    onCreated(project);
+  }
+
   async function createScratch() {
-    if (!name.trim()) return;
+    if (busy || !name.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const project = await createProject({ name: name.trim(), workspace_id: workspaceId }, authHeaders());
-      reset();
-      onCreated(project);
+      opened(await createProject({ name: name.trim(), workspace_id: workspaceId }, authHeaders()));
     } catch (err) {
       setError((err as Error).message);
-    } finally {
       setBusy(false);
     }
   }
 
   async function createImport() {
-    if (!selected || !consent) return;
+    if (busy || !selected || !consent) return;
     setBusy(true);
     setError(null);
     try {
-      const project = await createProject(
-        {
-          name: name.trim() || selected.name,
-          workspace_id: workspaceId,
-          import_repo_full_name: selected.full_name,
-        },
-        authHeaders(),
+      opened(
+        await createProject(
+          {
+            name: name.trim() || selected.name,
+            workspace_id: workspaceId,
+            import_repo_full_name: selected.full_name,
+          },
+          authHeaders(),
+        ),
       );
-      reset();
-      onCreated(project);
     } catch (err) {
       setError(describeError((err as Error).message));
-    } finally {
       setBusy(false);
     }
   }
@@ -266,11 +274,21 @@ export function NewProjectDialog({
                 )}
                 <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
                   {filtered.map((r) => {
+                    // Already-imported is advisory too: the server answers 409
+                    // `repo_already_imported` at create time whatever this says.
                     const disabledReason = r.archived
                       ? "archived on GitHub — unarchive it first, PromptWorkspace must be able to push"
-                      : r.empty
-                        ? "no commits yet — PromptWorkspace can only add files on top of an existing commit"
+                      : r.imported_by
+                        ? r.imported_by.name
+                          ? `Already imported as ${r.imported_by.name}`
+                          : "Already imported by another workspace"
                         : null;
+                    // Advisory only: GitHub's size lags after a first push, so
+                    // the server (which checks the branch head) decides.
+                    const hint = r.empty
+                      ? "GitHub reports no commits yet — if you just pushed, you can still import it"
+                      : null;
+                    const note = disabledReason ?? hint;
                     return (
                       <li key={r.full_name}>
                         <button
@@ -285,7 +303,7 @@ export function NewProjectDialog({
                           </span>
                           <span className="text-xs text-slate-500">
                             {r.default_branch}
-                            {disabledReason ? ` — ${disabledReason}` : ""}
+                            {note ? ` — ${note}` : ""}
                           </span>
                         </button>
                       </li>
@@ -393,6 +411,10 @@ export function NewProjectDialog({
             </div>
           </div>
         )}
+        {/* Mounted up front so the line is announced when it appears. */}
+        <p role="status" className="mt-3 text-xs text-slate-500 empty:hidden">
+          {opening !== null ? `Opening ${opening}…` : ""}
+        </p>
       </div>
     </div>
   );

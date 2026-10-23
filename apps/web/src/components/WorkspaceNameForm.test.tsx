@@ -15,14 +15,16 @@ vi.mock("@/lib/api", () => ({
 
 const isWorkspaceAdmin = vi.fn();
 const refetch = vi.fn();
+let workspaceName = "Acme";
 vi.mock("@/lib/workspace", () => ({
   useIsWorkspaceAdmin: (...args: unknown[]) => isWorkspaceAdmin(...args),
-  useWorkspaceName: () => "Acme",
+  useWorkspaceName: () => workspaceName,
   useWorkspace: () => ({ refetch }),
 }));
 
 beforeEach(() => {
   isWorkspaceAdmin.mockReturnValue(true);
+  workspaceName = "Acme";
 });
 
 afterEach(() => {
@@ -70,7 +72,7 @@ describe("WorkspaceNameForm", () => {
     await userEvent.clear(input);
     await userEvent.type(input, "Globex");
     await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Saved");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
     // The roster has not refetched here (refetch is a mock), so the current
     // name is still "Acme": only the last-saved guard keeps Save disabled.
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
@@ -78,7 +80,27 @@ describe("WorkspaceNameForm", () => {
     // Editing again re-enables Save and clears the confirmation.
     await userEvent.type(input, "!");
     expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  it("allows renaming back to a saved name after another admin renames it", async () => {
+    renameWorkspace.mockResolvedValue({ id: "w1", name: "Globex" });
+    const { rerender } = render(<WorkspaceNameForm workspaceId="w1" />);
+    const input = screen.getByLabelText(/workspace name/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "Globex");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+    // The roster refetch lands with our name, then another admin renames it.
+    workspaceName = "Globex";
+    rerender(<WorkspaceNameForm workspaceId="w1" />);
+    expect(screen.getByRole("status")).toHaveTextContent("Saved");
+    workspaceName = "Initech";
+    rerender(<WorkspaceNameForm workspaceId="w1" />);
+    expect(input).toHaveValue("Initech");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Globex");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
   });
 
   it("shows the server error in an alert and does not refresh", async () => {

@@ -19,7 +19,7 @@ or subsystem, not by file. -->
 ### Implemented
 
 <!-- One bullet per capability with real code behind it — routes, handlers,
-models, jobs, screens: "- Story listing API — src/server.js, src/routes/stories.js".
+models, jobs, screens: "- Story listing API (src/server.js, src/routes/stories.js)".
 A declaration alone is weak evidence; prefer capabilities several outlined
 lines agree on. Note when a capability has no tests. -->
 

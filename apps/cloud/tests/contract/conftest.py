@@ -31,13 +31,8 @@ Standing the target up locally (plan 0020 M2), from the repository root:
     cd apps/cloud
     DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
       scripts/migrate.py apply --var embed_dim=1024   # 0023 refuses without the var
-    # The local stack does not auto-expose tables created by a migration to the
-    # Data API roles (supabase/config.toml's `auto_expose_new_tables`, unset),
-    # and migration 0006 grants only `authenticated`. The production posture
-    # this suite targets is the RLS-bypassing service key (see
-    # app/db/supabase_repository.py's module docstring), so grant it:
-    psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \\
-      -c 'grant select, insert, update, delete on all tables in schema public to service_role'
+    # No hand grants: 0005_pw_service_role_grants.sql grants `service_role`
+    # what the server reaches, exactly as on a new hosted project.
     export PROMPTWORKSPACE_CONTRACT_SUPABASE_URL=http://127.0.0.1:54321
     export PROMPTWORKSPACE_CONTRACT_SUPABASE_KEY=<SERVICE_ROLE_KEY from `supabase start`>
     pytest -q -m contract

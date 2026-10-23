@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api import (
     assistant,
+    delivery,
     deployments,
     desktop_auth,
     discussions,
@@ -28,7 +29,9 @@ from app.api import (
     me,
     policies,
     presence,
+    receipts,
     repo_analysis,
+    repository_docs,
     stage_documents,
     stage_inputs,
     sync,
@@ -41,6 +44,7 @@ from app.generation.managed import build_managed_connection, build_managed_embed
 from app.generation.service import HttpGenerationProvider
 from app.integrations.github import HttpGithubClient
 from app.integrations.typesafe import HttpTypeSafeClient
+from app.models.schemas import utcnow
 from app.observability import init_sentry
 from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
@@ -98,6 +102,25 @@ async def _tombstone_gc_loop(app: FastAPI, settings: Settings) -> None:
                 logger.info("Tombstone GC purged %s", purged)
         except Exception:  # noqa: BLE001 - GC must never crash the app
             logger.exception("Tombstone GC pass failed")
+
+
+async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
+    """Expire unanswered decisions and send reminders (enterprise AI v2.1 D1).
+    Runs the sweep off the event loop: it sends SMTP mail."""
+    if settings.decision_sweep_interval_seconds <= 0:
+        return
+    from app.delivery.sweep import sweep_decisions
+
+    while True:
+        await asyncio.sleep(settings.decision_sweep_interval_seconds)
+        try:
+            result = await asyncio.to_thread(
+                sweep_decisions, app.state.repository, app.state.decision_mailer,
+                settings, utcnow())
+            if result.expired or result.reminded:
+                logger.info("Decision sweep: %s expired, %s reminded", *result)
+        except Exception:  # noqa: BLE001 - the sweep must never crash the app
+            logger.exception("Decision sweep pass failed")
 
 
 @asynccontextmanager
@@ -216,6 +239,11 @@ async def lifespan(app: FastAPI):
     from app.invitations_email import build_invitation_mailer
 
     app.state.invitation_mailer = build_invitation_mailer(settings)
+    from app.decision_email import NullDecisionMailer, build_decision_mailer
+
+    app.state.decision_mailer = build_decision_mailer(settings)
+    if isinstance(app.state.decision_mailer, NullDecisionMailer):
+        logger.info("Decision email disabled: SMTP_HOST or SMTP_FROM not set")
     logger.info(
         "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,
@@ -224,16 +252,20 @@ async def lifespan(app: FastAPI):
     from app.deployments.reconcile import reconcile_loop
 
     gc_task = asyncio.create_task(_tombstone_gc_loop(app, settings))
+    sweep_task = asyncio.create_task(_decision_sweep_loop(app, settings))
     embed_task = asyncio.create_task(embed_worker_loop(app))
     reconcile_task = asyncio.create_task(reconcile_loop(app, settings))
     try:
         yield
     finally:
         gc_task.cancel()
+        sweep_task.cancel()
         embed_task.cancel()
         reconcile_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await gc_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
         with contextlib.suppress(asyncio.CancelledError):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):
@@ -285,6 +317,7 @@ def create_app() -> FastAPI:
     app.include_router(integrations.router)
     app.include_router(presence.router)
     app.include_router(sync.router)
+    app.include_router(repository_docs.router)
     app.include_router(me.router)
     app.include_router(assistant.router)
     app.include_router(discussions.router)
@@ -292,6 +325,8 @@ def create_app() -> FastAPI:
     app.include_router(generation.router)
     app.include_router(stage_documents.router)
     app.include_router(stage_inputs.router)
+    app.include_router(delivery.router)
+    app.include_router(receipts.router)
     app.include_router(repo_analysis.router)
     app.include_router(policies.router)
     app.include_router(deployments.router)

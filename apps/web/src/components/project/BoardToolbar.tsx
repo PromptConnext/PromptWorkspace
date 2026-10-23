@@ -26,6 +26,7 @@ const GROUP_OPTIONS: { value: BoardGroup; label: string }[] = [
   { value: "assignee", label: "Assignee" },
   { value: "sprint", label: "Sprint" },
   { value: "spec", label: "Spec" },
+  { value: "change", label: "Change" },
 ];
 
 const FOCUS_RING =

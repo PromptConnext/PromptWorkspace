@@ -13,7 +13,9 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import { DocumentUpload } from "./DocumentUpload";
+import { GenerationWarnings } from "./GenerationWarnings";
 import { DocumentPreview } from "./DocumentPreview";
+import { RepositoryDocsBanner } from "./RepositoryDocsBanner";
 import { DeploymentTemplatePanel } from "./DeploymentTemplatePanel";
 import { PolicyScopePanel } from "./PolicyScopePanel";
 import { useStageGeneration } from "./useStageGeneration";
@@ -28,6 +30,8 @@ import {
 } from "./stage-forms";
 import { MarkdownEditor } from "@/components/ui/MarkdownEditor";
 import { stripStreamFence } from "@/lib/planner-sse";
+import { ApprovalControl } from "./ApprovalControl";
+import { useDecisionsData } from "./DeliveryOverview";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
@@ -36,7 +40,9 @@ import type {
   Project,
   ProjectionState,
   RepoAnalysisOut,
+  RepositoryDocsStatus,
   StageKind,
+  SyncDocsResult,
   WorkspaceMember,
 } from "@/lib/types";
 
@@ -133,6 +139,8 @@ const EDITOR_LABEL: Partial<Record<StageKind, string>> = {
   tasks: "Tasks document",
 };
 
+const PLAN_APPROVAL_NOTE =
+  "Plan approval is requested on the Tasks step, once tasks are generated. It covers the project rules, the plan and the tasks.";
 const PLAN_HELPER = "Not technical? Use Suggest from Spec, then review.";
 // Advice, not a lock: generate/plan runs without a constitution
 // (app/api/generation.py only folds one in when it exists).
@@ -148,13 +156,23 @@ const STAGE_META: Record<string, StageMeta> = Object.fromEntries(
 // so this only turns the section read-only rather than hiding it.
 const ADMIN_ONLY_STAGES: StageKind[] = ["constitution", "plan"];
 
+const REPLACE_CONFIRM =
+  "This replaces the current document and makes the repository copy out of date. Continue?";
+
 const TECH_LEAD_NOTE =
   "Your Tech Lead writes this step. You can read it here once they generate it.";
+
+// The plan waits for the intent once approval has been asked for.
+const INTENT_WAITING_TEXT =
+  "Waiting for the intent to be approved. The plan is written once the business owner approves it.";
+const INTENT_CHANGES_TEXT =
+  "Changes were requested on the intent. Revise the specification and ask again.";
 
 // The cloud's own ordering errors (app/api/generation.py), which arrive as raw
 // detail codes.
 const STAGE_ERROR_TEXT: Record<string, string> = {
   requirement_required: "Generate the specification first — the plan is written against it.",
+  intent_not_approved: INTENT_WAITING_TEXT,
   spec_document_required: "Save or generate the plan first — the task breakdown is derived from it.",
   model_connection_not_configured:
     "No model is configured for this workspace, so generation is unavailable.",
@@ -195,6 +213,8 @@ function StageSection({
   blockedBy,
   note,
   onDocPresence,
+  onDocStamp,
+  onGraphChange,
   onOpenTasks,
   analysisGate,
   onOpenAnalysis,
@@ -203,6 +223,7 @@ function StageSection({
   recommendation,
   prefill,
   prefillHint,
+  confirmReplace,
 }: {
   projectId: string;
   stage: StageKind;
@@ -215,6 +236,13 @@ function StageSection({
    *  Without it a non-author sees an unexplained empty editor. */
   note?: string;
   onDocPresence?: (stage: StageKind, present: boolean) => void;
+  /** Reports the document's saved-at stamp whenever it changes (load, save,
+   *  generation), so the approval chip beside the stage can refetch. */
+  onDocStamp?: (stage: StageKind, stamp: string | null) => void;
+  /** Called when a save or generation updated the graph from the document
+   *  (`projection: "current"`), so the page reloads the board, the Delivery
+   *  tab and the rest instead of showing the old tasks until its next poll. */
+  onGraphChange?: () => void;
   /** Switches the page to its Tasks tab, so a document the graph rejected can
    *  be checked against the board it failed to move. */
   onOpenTasks?: () => void;
@@ -231,6 +259,10 @@ function StageSection({
   recommendation?: string;
   prefill?: PrefillOption;
   prefillHint?: ReactNode;
+  /** Asked before a generation overwrites the document, when the repository
+   *  already holds a copy of it (the project is at `repo_created`): the copy
+   *  falls behind and has to be synced through a pull request. */
+  confirmReplace?: string;
 }) {
   const { authHeaders } = useAuth();
   const fields = STAGE_FIELDS[stage];
@@ -253,6 +285,13 @@ function StageSection({
   // both null until this session writes something, same as docProjection.
   const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
+
+  // Reported once the document has loaded, so every later change of stamp is
+  // a save or a regeneration (the Planner refreshes the docs banner on those).
+  useEffect(() => {
+    if (docLoaded) onDocStamp?.(stage, docUpdatedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, docUpdatedAt, docLoaded]);
 
   // Every previously generated or hand-edited stage document is fetched on
   // mount, so reopening the project shows the work as it was left rather than
@@ -290,6 +329,7 @@ function StageSection({
       setDocProjection(result.projection ?? null);
       setDocRetiredCount(result.retired_count ?? null);
       onDocPresence?.(stage, result.content.trim().length > 0);
+      if (result.projection === "current") onGraphChange?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, result, stage]);
@@ -327,6 +367,7 @@ function StageSection({
       setDocProjectionError(doc.error ?? null);
       setDocRetiredCount(doc.retired_count ?? null);
       onDocPresence?.(stage, doc.content.trim().length > 0);
+      if (doc.projection === "current") onGraphChange?.();
     } catch (err) {
       setDocError((err as Error).message);
     } finally {
@@ -338,6 +379,10 @@ function StageSection({
   // are injected server-side as context, so there is nothing left to ask.
   const userInput = fields ? composeStageInput(fields, answers) : TASKS_INPUT;
   const ready = fields ? requiredFieldsFilled(fields, answers) : true;
+  const generateAfterConfirm = () => {
+    if (confirmReplace && !window.confirm(confirmReplace)) return;
+    generate(stage, userInput);
+  };
   // Until the stage has a document, generating it is the thing to do here;
   // after that the tab's "Continue to …" takes over as the primary action.
   const hasDoc = docContent.trim().length > 0;
@@ -393,7 +438,7 @@ function StageSection({
             }
             onClick={() => {
               flushAnswers.current?.();
-              generate(stage, userInput);
+              generateAfterConfirm();
             }}
             className={hasDoc ? SECONDARY_BUTTON : PRIMARY_BUTTON}
           >
@@ -425,7 +470,7 @@ function StageSection({
               {error.retryable && (
                 <button
                   type="button"
-                  onClick={() => generate(stage, userInput)}
+                  onClick={generateAfterConfirm}
                   className="mt-2 rounded border border-red-300 bg-white px-2 py-1 text-xs"
                 >
                   Retry
@@ -442,13 +487,14 @@ function StageSection({
               </p>
               <button
                 type="button"
-                onClick={() => generate(stage, userInput)}
+                onClick={generateAfterConfirm}
                 className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-xs"
               >
                 Generate again
               </button>
             </div>
           )}
+          {status === "done" && <GenerationWarnings warnings={result?.warnings} />}
           {status === "done" && result && (
             <p className="mt-2 text-xs text-slate-500">
               {result.task_count !== undefined
@@ -631,6 +677,8 @@ export function Planner({
   projectId,
   onChange,
   onOpenTasks,
+  step,
+  onStepChange,
 }: {
   project: Project;
   projectId: string;
@@ -638,9 +686,43 @@ export function Planner({
   /** Switches the page to its Tasks tab — the board the generated tasks land
    *  on. Optional so the Planner still renders standalone in tests. */
   onOpenTasks?: () => void;
+  /** The step to open on, from the page URL (`?step=`). Without one the
+   *  Planner opens on the first step not yet done, once that is known. */
+  step?: string | null;
+  /** Told each step the user opens, so the page can keep it in the URL. */
+  onStepChange?: (key: string) => void;
 }) {
   const { authHeaders, user } = useAuth();
-  const [active, setActive] = useState<string>("foundation");
+  const urlStep = TABS.some((t) => t.key === step) ? (step as string) : null;
+  const [active, setActiveTab] = useState<string>(urlStep ?? "foundation");
+  // The step the user chose: from the URL, a tab click, a "Continue" button.
+  // Never the step the Planner opened by itself, so opening on Plan does not
+  // count as the Tech Lead entering it (the tech-review handoff below).
+  const [chosenStep, setChosenStep] = useState<string | null>(urlStep);
+  // Set once the open step must not move by itself any more: the user chose
+  // one or touched the Planner, or it was already picked from the progress.
+  const settled = useRef(urlStep !== null);
+  const settle = useCallback(() => {
+    settled.current = true;
+  }, []);
+  // A click, key or edit inside a step's panel is the user working in that
+  // step: it counts as choosing it when nothing was chosen yet, as when the
+  // Planner opened there by itself. Only then can the handoff below fire for
+  // a step the Planner opened on (a Tech Lead acting in Plan or Repository);
+  // loading, hovering or focusing alone never chooses.
+  const workIn = useCallback((key: string) => {
+    settled.current = true;
+    setChosenStep((prev) => prev ?? key);
+  }, []);
+  const setActive = useCallback(
+    (key: string) => {
+      settled.current = true;
+      setActiveTab(key);
+      setChosenStep(key);
+      onStepChange?.(key);
+    },
+    [onStepChange],
+  );
 
   // "Tech Lead" is the workspace admin role — there is no separate role in the
   // schema (app/models/schemas.py's Role is admin | member), and the cloud
@@ -652,6 +734,9 @@ export function Planner({
     error: membersError,
     refetch: refetchMembers,
   } = useCloudGet<WorkspaceMember[]>(`/workspaces/${project.workspace_id}/members`);
+  // Role-gated copy must not render until the role is known. The `!user` arm
+  // covers useCloudGet's early return (loading=false) while the session resolves.
+  const rolesPending = membersLoading || (!user && !membersError);
   const isTechLead = !!members?.some((m) => m.user_id === user?.id && m.role === "admin");
 
   // Which stages already have a saved document. Each stage reports its own
@@ -661,6 +746,9 @@ export function Planner({
   const notePresence = useCallback((stage: StageKind, present: boolean) => {
     setDocPresent((prev) => (prev[stage] === present ? prev : { ...prev, [stage]: present }));
   }, []);
+  // When each stage's document was last written, so the approval chip beside
+  // a stage refetches its state after a save or regeneration.
+  const [docStamp, setDocStamp] = useState<Partial<Record<StageKind, string | null>>>({});
   // Whether an uploaded PRD has text to draft from. Undefined while the
   // document list loads, so neither the draft button nor its "upload one
   // first" hint flashes up before it is known which applies.
@@ -669,21 +757,68 @@ export function Planner({
   // The "Continue to …" buttons: switch the tab and bring the strip — and
   // keyboard focus — to it, since the button pressed lived on the panel that
   // just hid.
-  const goTo = useCallback((key: string) => {
-    setActive(key);
-    requestAnimationFrame(() => {
-      const tab = document.getElementById(`planner-tab-${key}`);
-      tab?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-      tab?.focus();
-    });
-  }, []);
+  const goTo = useCallback(
+    (key: string) => {
+      setActive(key);
+      requestAnimationFrame(() => {
+        const tab = document.getElementById(`planner-tab-${key}`);
+        tab?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        tab?.focus();
+      });
+    },
+    [setActive],
+  );
 
-  // Only the finished project is frozen. Earlier states stay editable: the
-  // explicit "Send to Tech Lead" handoff is gone, so there is no moment at
+  // Only the finished project is frozen, and only the parts the repository
+  // was seeded from by a one-shot write: the policy scope, the PRD upload, the
+  // deployment template and the repository panel. Earlier states stay editable:
+  // the explicit "Send to Tech Lead" handoff is gone, so there is no moment at
   // which a business user deliberately locks their own specification, and
   // freezing during tech review would disable the Plan step in exactly the
-  // state it exists for.
+  // state it exists for. The planning documents themselves stay editable after
+  // the repository exists; their repository copies catch up through a pull
+  // request (RepositoryDocsBanner).
   const readOnly = project.lifecycle_status === "repo_created";
+
+  // Whether the repository's seeded documents have fallen behind the planning
+  // documents. Imported repositories are out of scope (the cloud answers 409
+  // sync_not_supported_for_imported_repository for them), so they never ask.
+  // Only a repository this project created has a seed to re-derive; a legacy
+  // row with no recorded origin is treated as imported, as the cloud does.
+  const docsSyncApplies = readOnly && project.repo_origin === "created";
+  const docsStatusPath = `/projects/${projectId}/repository/docs-status`;
+  // A status that cannot be read is said so in the banner (with no button);
+  // the stages work without it.
+  const {
+    data: docsStatus,
+    error: docsStatusError,
+    refetch: refetchDocsStatus,
+  } = useCloudGet<RepositoryDocsStatus>(docsStatusPath, docsSyncApplies, {
+    refreshOnFocus: true,
+  });
+  // The stamps each stage has reported. A stage reports first when its
+  // document loads; a stamp that moves after that is a save or regeneration,
+  // which may put a repository copy out of date (or back in step), so the
+  // banner rereads the status instead of waiting for a focus event.
+  const stamps = useRef<Partial<Record<StageKind, string | null>>>({});
+  const noteStamp = useCallback(
+    (stage: StageKind, stamp: string | null) => {
+      const saved = stage in stamps.current && stamps.current[stage] !== stamp;
+      stamps.current[stage] = stamp;
+      setDocStamp((prev) => (prev[stage] === stamp ? prev : { ...prev, [stage]: stamp }));
+      if (saved && docsSyncApplies) refetchDocsStatus();
+    },
+    [docsSyncApplies, refetchDocsStatus],
+  );
+  const syncDocs = useCallback(async () => {
+    const out = await apiFetch<SyncDocsResult>(
+      `/projects/${projectId}/repository/sync-docs`,
+      authHeaders(),
+      { method: "POST" },
+    );
+    refetchDocsStatus();
+    return out;
+  }, [projectId, authHeaders, refetchDocsStatus]);
 
   const advanced = useRef(false);
   const lifecycle = project.lifecycle_status;
@@ -692,8 +827,12 @@ export function Planner({
   // the event the lifecycle used to model with a button the business user had
   // to remember to press; both transitions are fire-and-forget because the
   // cloud rejects an out-of-order one and nothing here depends on the result.
+  // Only a step the user chose counts: the Planner opening on Plan by itself
+  // (the first step not done) must not move the project into tech review,
+  // but the Tech Lead then working in that step does (`workIn`).
   useEffect(() => {
-    if ((active !== "plan" && active !== "repository") || !isTechLead || advanced.current) return;
+    const entered = chosenStep === "plan" || chosenStep === "repository";
+    if (!entered || !isTechLead || advanced.current) return;
     if (lifecycle !== "planning" && lifecycle !== "pending_tech_review") return;
     advanced.current = true;
     (async () => {
@@ -706,7 +845,7 @@ export function Planner({
       onChange();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, isTechLead, lifecycle, projectId]);
+  }, [chosenStep, isTechLead, lifecycle, projectId]);
 
   // Plan 0027. Read only for a project that could need it — one that names a
   // repository before `repo_created`, i.e. an imported one — and owned here
@@ -745,11 +884,24 @@ export function Planner({
     requestAnimationFrame(() => {
       document.getElementById(CODEBASE_ANALYSIS_ANCHOR)?.scrollIntoView?.({ behavior: "smooth" });
     });
-  }, []);
+  }, [setActive]);
+
+  // Once intent approval is in use (asked for, not yet approved) the plan
+  // waits, and Specify is not finished. Never asked, or approved, gates
+  // nothing; so does a state that has not loaded.
+  const { data: decisions } = useDecisionsData();
+  const intentState = decisions?.states.intent;
+  const intentGate =
+    intentState === "pending"
+      ? INTENT_WAITING_TEXT
+      : intentState === "changes_requested"
+        ? INTENT_CHANGES_TEXT
+        : undefined;
 
   // Undefined means "not loaded yet" — only an explicit false locks, so an
   // in-flight fetch doesn't flash a lock message on a project that has one.
   function blockedBy(meta: StageMeta): string | undefined {
+    if (meta.stage === "plan" && intentGate) return intentGate;
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
     const label = previous?.label ?? meta.requires;
@@ -769,7 +921,7 @@ export function Planner({
         if (analysisRequired && analysis?.status !== "baseline_ready") return false;
         return hasPolicyScope(project) || hasPrd === true;
       case "specify":
-        return docPresent.specify === true;
+        return docPresent.specify === true && !intentGate;
       case "plan":
         return docPresent.plan === true;
       case "tasks":
@@ -780,6 +932,23 @@ export function Planner({
         return false;
     }
   }
+
+  // Open on the first step not yet done (finding #28: a project whose steps
+  // 0-3 were complete still opened on Foundation), once every step's progress
+  // has loaded. Not when the URL named a step, the user picked one, or the
+  // user already started working in the step on screen (see `settle`).
+  const progressKnown =
+    docPresent.specify !== undefined &&
+    docPresent.plan !== undefined &&
+    docPresent.tasks !== undefined &&
+    (hasPolicyScope(project) || hasPrd !== undefined);
+  useEffect(() => {
+    if (settled.current || !progressKnown) return;
+    settled.current = true;
+    setActiveTab(TABS.find((t) => !tabDone(t.key))?.key ?? TABS[TABS.length - 1].key);
+    // tabDone reads this render's progress, which `progressKnown` gates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressKnown]);
 
   // The draft button is one prefill call (app/api/generation.py::prefill); it
   // is named after what that call will actually read. Specify reads uploads
@@ -841,7 +1010,14 @@ export function Planner({
     ) : undefined;
 
   return (
-    <div className="space-y-4">
+    // Any click, key or edit inside the Planner settles the open step, so
+    // progress that loads late never moves someone mid-edit.
+    <div
+      className="space-y-4"
+      onClickCapture={settle}
+      onKeyDownCapture={settle}
+      onChangeCapture={settle}
+    >
       {lifecycle === "repo_created" && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
           <p className="font-medium">Repository created</p>
@@ -910,12 +1086,12 @@ export function Planner({
         </div>
       )}
 
-      {membersLoading || (!user && !membersError) ? (
+      {rolesPending ? (
         <div
           aria-hidden
           className="h-[41px] animate-pulse border-b border-slate-200 bg-slate-50"
         />
-      ) : (
+      ) : membersError ? null : (
       <div role="tablist" aria-label="Spec Kit stages" className="flex gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-slate-200">
         {TABS.map((tab) => {
           const done = tabDone(tab.key);
@@ -967,17 +1143,35 @@ export function Planner({
       </div>
       )}
 
+      {docsSyncApplies && (
+        <RepositoryDocsBanner
+          status={docsStatus}
+          statusError={docsStatusError}
+          canSync={isTechLead}
+          onSync={syncDocs}
+        />
+      )}
+
       {/* Every stage stays mounted so a half-typed intake form survives
           switching tabs; the inactive ones are hidden rather than unmounted,
           which also keeps them out of the accessibility tree. */}
+      {rolesPending && <div aria-hidden className="h-40 animate-pulse rounded-lg bg-slate-50" />}
+      {!rolesPending && membersError && (
+        <p role="alert" className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+          Could not load your role. Reload to try again.
+        </p>
+      )}
       {TABS.map((tab, index) => (
         <div
           key={tab.key}
           id={`planner-panel-${tab.key}`}
           role="tabpanel"
           aria-labelledby={`planner-tab-${tab.key}`}
-          hidden={active !== tab.key}
+          hidden={rolesPending || !!membersError || active !== tab.key}
           className="space-y-4"
+          onClickCapture={() => workIn(tab.key)}
+          onKeyDownCapture={() => workIn(tab.key)}
+          onChangeCapture={() => workIn(tab.key)}
         >
           {tab.key === "foundation" && (
             <>
@@ -1011,11 +1205,17 @@ export function Planner({
           {tab.stages.map((stage) => {
             const meta = STAGE_META[stage];
             const authorGated = ADMIN_ONLY_STAGES.includes(stage) && !isTechLead;
-            // Tasks stay generatable after `repo_created`: they are graph rows
-            // the board works from, not part of the seeded repository, and the
-            // cloud does not refuse the stage there. Freezing them stranded a
-            // project that reached the repo with no task graph.
-            const stageReadOnly = (readOnly && stage !== "tasks") || authorGated;
+            // After the repository exists the planning documents stay editable:
+            // their repository copies are synced through a pull request, so
+            // the author gate (rules and plan belong to the Tech Lead) is what
+            // makes a stage read-only. An imported repository (or a legacy one
+            // with no recorded origin, which the cloud treats as imported) stays
+            // frozen as before: its seed was relocated around the team's own files and
+            // cannot be re-derived safely (the sync is not supported for it).
+            // Tasks are graph rows the board works from, not part of the
+            // seeded repository, so they are never frozen.
+            const stageReadOnly =
+              authorGated || (readOnly && project.repo_origin !== "created" && stage !== "tasks");
             return (
               <StageSection
                 key={stage}
@@ -1025,8 +1225,10 @@ export function Planner({
                 buttonLabel={meta.buttonLabel}
                 blurb={meta.blurb}
                 blockedBy={stageReadOnly ? undefined : blockedBy(meta)}
-                note={authorGated && !readOnly ? TECH_LEAD_NOTE : undefined}
+                note={authorGated ? TECH_LEAD_NOTE : undefined}
                 onDocPresence={notePresence}
+                onDocStamp={noteStamp}
+                onGraphChange={onChange}
                 onOpenTasks={onOpenTasks}
                 analysisGate={stage === "plan" || stage === "tasks" ? analysisGate : undefined}
                 onOpenAnalysis={analysisRequired ? openAnalysis : undefined}
@@ -1039,27 +1241,43 @@ export function Planner({
                 }
                 prefill={PREFILLABLE_STAGES.includes(stage) ? prefillFor(stage) : undefined}
                 prefillHint={stage === "specify" ? specifyPrefillHint : undefined}
+                confirmReplace={readOnly && stage !== "tasks" ? REPLACE_CONFIRM : undefined}
               />
             );
           })}
+          {tab.key === "plan" && (
+            <p className="rounded bg-slate-50 p-3 text-xs text-slate-600">{PLAN_APPROVAL_NOTE}</p>
+          )}
           {/* The next step, said once this one has produced its document —
               after a generation or a save, and still there on the next visit.
               Generation is where the task graph is born and the board is where
               it is worked, so on Tasks the board comes first. */}
-          {tab.stages.length > 0 && tabDone(tab.key) && TABS[index + 1] && (
+          {tab.stages.length > 0 &&
+            (tabDone(tab.key) || (tab.key === "specify" && docPresent.specify === true)) &&
+            TABS[index + 1] && (
             <div className="flex flex-wrap items-center gap-2">
+              {(tab.key === "specify" || tab.key === "tasks") && (
+                <ApprovalControl
+                  projectId={projectId}
+                  workspaceId={project.workspace_id}
+                  kind={tab.key === "specify" ? "intent_approval" : "plan_approval"}
+                  refreshKey={docStamp[tab.key === "specify" ? "specify" : "tasks"]}
+                />
+              )}
               {tab.key === "tasks" && onOpenTasks && (
                 <button type="button" onClick={onOpenTasks} className={PRIMARY_BUTTON}>
                   Open the task board
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => goTo(TABS[index + 1].key)}
-                className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
-              >
-                Continue to {TABS[index + 1].title}
-              </button>
+              {tabDone(tab.key) && (
+                <button
+                  type="button"
+                  onClick={() => goTo(TABS[index + 1].key)}
+                  className={tab.key === "tasks" && onOpenTasks ? SECONDARY_BUTTON : PRIMARY_BUTTON}
+                >
+                  Continue to {TABS[index + 1].title}
+                </button>
+              )}
             </div>
           )}
           {tab.key === "repository" && !isTechLead && !readOnly && (

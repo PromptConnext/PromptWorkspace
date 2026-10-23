@@ -513,3 +513,13 @@ def test_format_status_report_redacts_credentials_in_db_url(tmp_path):
 def test_status_subcommand_is_wired_into_the_parser():
     args = migrate.build_parser().parse_args(["status"])
     assert args.func is migrate.cmd_status
+
+
+def test_delivery_migration_needs_no_vars_and_no_own_transaction():
+    (m,) = [
+        m
+        for m in migrate.discover_migrations(migrate.MIGRATIONS_DIR_DEFAULT)
+        if m.filename == "0004_pw_delivery_and_decisions.sql"
+    ]
+    assert m.required_vars() == []
+    assert m.is_self_transactional() is False

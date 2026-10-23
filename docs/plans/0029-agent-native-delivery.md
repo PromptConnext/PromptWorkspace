@@ -1,6 +1,6 @@
 # Plan 0029: Agent-native delivery. Agents do the work, people govern the outcome
 
-**Date:** 2026-10-04 · **Status:** Draft for review (product reframing; no code yet) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
+**Date:** 2026-10-04 · **Status:** Draft for review. **Slice 1 (M1 + M2) in progress on `feature/trust-outcome`**, test environment `promptworkspace-trust.truthledgers.com` ([implementation plan](../superpowers/plans/2026-10-04-trust-outcome-m1-m2.md)) · **Basis:** `develop` at `444540e`: source, migrations, ADRs 0001–0028, plans 0001–0028, and the [product vision of 2026-09-12](../product-vision-2026-09-12.md)
 
 **Relationship to existing documents.** This builds on the product vision rather than replacing it. The vision said PromptWorkspace is "a governance and auditability product wearing a planning-tool interface" (§4). This plan takes that literally: the planning-tool interface (task board, assignment, manual `verified`) is the part designed for the old way of working. The governance core underneath (evidence graph, policy scope, seeded repo, CI-observed deploys) is what the agent era needs most. Four follow-up ADRs are proposed in §12. Until they are accepted, nothing here overrides an accepted ADR.
 
@@ -195,7 +195,7 @@ flowchart TB
 | Verification is a person looking | Admin-only `verified` | Volume of agent output makes per-task human inspection impossible. Proof has to be automated, and people review the *proof* and the *risk* |
 | Context travels by copy-paste | `copyTaskContext` to clipboard | Agents should pull a complete, versioned brief and push structured results back |
 | The AI session is private | No agent observability anywhere in cloud, extension or MCP | Without run traces, there is no evidence, no cost control and no audit trail for regulated buyers |
-| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback |
+| Planning ends when tasks exist | Lifecycle stops at `repo_created` | Agent delivery needs a live plan: re-plan on failure, on new information and on feedback. First slice shipped 2026-10-10: the Specify, project-rules and Plan stages stay editable after `repo_created`, and the repository's seeded copies catch up through a pull request a person merges (`docs-status`, `sync-docs`); an edit of the Tasks document (by hand or by regeneration) makes the delivery-plan approval stale, while an edit of the Plan document alone does not yet (§13 item 14), and `generate/tasks` still reconciles the board |
 | Sprints and assignees are planning tools | `sprint`/`assignee` mirrored from Jira/ClickUp | Sprints pace human capacity. Agent capacity is elastic. The constraint becomes decision latency and risk |
 | Progress is counting finished tasks | `ProgressRollup.tsx` | 100 % of tasks "implemented" says nothing about whether the outcome works |
 | Rules are documents for people to read | Constitution, `docs/conventions.md` | Rules must be enforceable: some as prompts, some as CI checks, some as hard gates |
@@ -276,7 +276,7 @@ flowchart LR
     V1["CI: build, tests,<br/>scans, AC tests"]:::platform
     V2["Reviewer / Security /<br/>Architecture agents<br/>(never the builder)"]:::ai
     V3["Evidence Pack +<br/>Trust Score + risk tier<br/>↺ fail: back to ③ (bounded retry)"]:::platform
-    V4{"Risk gate:<br/>auto (T0/T1) or<br/>human approval (T2/T3)"}:::gate
+    V4{"Risk gate:<br/>lane per §5.4 matrix"}:::gate
     V1 --> V2 --> V3 --> V4
   end
 
@@ -298,7 +298,7 @@ flowchart LR
 | Lane \ Phase | ① Define | ② Plan | ③ Execute | ④ Verify | ⑤ Release |
 |---|---|---|---|---|---|
 | **Business owner** | **Describes intent, answers questions, approves intent** | (none) | Answers business questions agents raise | Approves Changes that touch business-critical rules (T3, if named) | **Checks preview against outcomes, gives feedback, decides release** |
-| **Tech steward** | (none) | **Sets guardrails, approves plan** | Answers technical questions, resolves conflicts | **Approves T2/T3 Changes by reviewing evidence; spot-checks T1** | **Co-signs release** |
+| **Tech steward** | (none) | **Sets guardrails, approves plan** | Answers technical questions, resolves conflicts | **Approves T2/T3 Changes by reviewing evidence; approves T1 at L1; spot-checks T1 at L2** | **Co-signs release** |
 | **Engineer** | (none) | Reviews plan (optional) | **Takes over stuck Changes; pairs with agents on hard ones** | Does the human code review that T3 requires | (none) |
 | **Agents** | Draft outcomes and questions | Draft tech plan and Delivery Plan | **Build, test, commit, open PRs, ask when unsure** | **Review, scan, prove acceptance criteria, fix findings** | Assemble Release Candidate and changelog |
 | **Platform / CI** | Stores intent and versions | Provisions repo and branch protection | Schedules, leases, dispatches, observes | Runs CI, computes evidence and trust, posts gate status | Merge queue, deploy, freeze evidence |
@@ -359,6 +359,22 @@ Three architectural commitments keep this consistent with decisions already made
 2. **No model writes the pipeline.** ADR 0024 becomes a hard guardrail: agent workflows are hand-written templates seeded by the cloud, and any agent diff touching `.github/workflows/**` or deployment scaffolds fails the gate.
 3. **The gate lives in GitHub, not in our UI.** A required `promptworkspace/gate` status check plus branch protection means a Change cannot merge without its decisions, even if someone bypasses PromptWorkspace. A client-only gate (§1.5) is not a gate.
 
+### 2.4 v2.1 vocabulary (customer-facing names)
+
+Added 2026-10-14. The CEO's v2.1 View 2 names the workflow stages differently. Customer-facing material uses the v2.1 names; engineering keeps this plan's names.
+
+| v2.1 (customer-facing) | This plan (engineering) |
+|---|---|
+| 1 Inception: Project Constitution, Spec, agents draft, Commander + product owner approve | ① Intent and ② Plan |
+| 2 Construction: spec items → tasks → agent team, sandbox, hash-anchored edits | ③ Execute |
+| 3 Validation: four checks, independent reviewer, Commander signs where the tier requires | ④ Verify |
+| 4 Operation: staged release, release needs a person at T2, incident rule | ⑤ Release |
+| Pass / Escalate / Keep out | gate lanes (unchanged) |
+| Handoff (to a human agent) | **Take over** |
+| AI Commander L1–L3 | a person's certification level; caps the project's autonomy level (D3) |
+
+Status tags for anything shown outside the company follow the v2.1 plan §3: **Production** (on `main`), **Trust env** (on the trust environment, not merged), **Designed**, **Proposed**.
+
 ---
 
 ## 3. As-Is vs. To-Be
@@ -375,7 +391,7 @@ Three architectural commitments keep this consistent with decisions already made
 | Uncertainty | Developer asks on chat, or guesses | `raise_question` becomes a typed Decision. The Change pauses, others continue |
 | Conflicts | Developers discover them at merge | Prevented by area leases, caught by merge queue plus full CI, resolved by rebase agent or escalated |
 | Verification | Admin drags to Verified | Evidence Pack: CI + acceptance proof + independent agent reviews + Trust Score |
-| Human approval | Implicit and per task | **Risk-tiered**: none for T0, batched for T1, per Change for T2, two people plus code review for T3 |
+| Human approval | Implicit and per task | **Risk-tiered**: none for T0 (at L1+), steward per Change for T1 at L1 (none at L2 with strong evidence), per Change for T2, two people plus code review for T3 |
 | Status source | Clicks and push detection | Events: agent run, CI, gate, merge, deploy |
 | Progress | Tasks done ÷ total | Scenarios proven on a running build ÷ scenarios in scope |
 | Business user role | Writes PRD, watches | Owns intent, answers business questions, accepts outcomes, decides release |
@@ -535,12 +551,12 @@ The **Trust Score** (0–100) is computed by a published, deterministic formula 
 
 | Tier | Typical triggers | Gate |
 |---|---|---|
-| **T0 Routine** | Docs, tests only, copy, styling, no new dependency | Auto-merge when evidence is complete |
-| **T1 Standard** | Feature code inside approved outcomes and areas, Trust ≥ 80 | Auto-merge to `develop`. The steward sees it in the release review (batch), not per PR |
+| **T0 Routine** | Docs, tests only, copy, styling, no new dependency | Pass at L1/L2 when evidence is complete |
+| **T1 Standard** | Feature code inside approved outcomes and areas, Trust ≥ 80 | Escalate at L1; Pass at L2 only with strong evidence and within budget (§5.4). Where it passes, the steward sees it in the release review (batch), not per PR |
 | **T2 Elevated** | New dependency, schema migration, public API change, Trust < 80, any *high* finding accepted | Steward approves this Change from its evidence |
 | **T3 Critical** | Auth, payments, personal data (PDPA/GDPR scope), infra, secrets, policy-tagged requirement | Steward plus a named second approver (DPO, security or business owner), and a human line-by-line review |
 
-Production release is always a human decision, whatever the tiers. The autonomy level (§5.4) can make the whole project stricter (L0 = every Change T2+) and never looser than the policy scope allows.
+Production release is always a human decision, whatever the tiers. The autonomy level (§5.4) can make the whole project stricter (L0 escalates every Change; see §5.4) and never looser than the policy scope allows.
 
 **Business users without implementation detail.** Business owners see Outcomes, scenarios in plain language, Decisions phrased as business choices with a recommendation, the preview, and outcome progress. They never see branches, diffs or Trust Score maths unless they open them. Notifications deep-link to a single decision card that can be answered on a phone.
 
@@ -607,15 +623,33 @@ The cloud has only `admin` and `member` today (`schemas.py:75`). The To-Be model
 
 The project concierge (the evolved assistant) is a side panel on every screen. It answers "why did C3 get blocked?" or "what's left for the booking outcome?", and drafts intent or questions. It never writes authoritative state directly.
 
-### 5.4 Autonomy levels (per project)
+### 5.4 Autonomy levels and the lane matrix (per project)
 
-| Level | Name | Behaviour | Who it is for |
-|---|---|---|---|
-| **L0** | Assisted | Agents draft PRs. Every Change needs steward approval. Humans may still execute Changes themselves | First project, sceptical teams, migration Phase 1 |
-| **L1** | Supervised (default) | Risk policy applies as written. T0/T1 auto-merge to `develop` | Most teams |
-| **L2** | Autonomous | Wider T1 band, agents may self-propose sub-Changes inside outcomes, release still human | Mature projects with strong `verify.yml` |
+Amended 2026-10-14 to the CEO's Enterprise AI Architecture v2.1, View 1 (umbrella `docs/plans/2026-10-11-enterprise-ai-architecture-v2-1-plan.md` §1.3, decision 1). The earlier text let L1 auto-merge T1; View 1 is stricter and is now the rule.
 
-The level is a guardrail decision and is shown on Mission Control, so nobody is surprised by how much the agents are allowed to do.
+| Level | Name | Who it is for |
+|---|---|---|
+| **A0** | Observe | Agents read and propose; no actions at all |
+| **L0** | Assisted | First project, sceptical teams, migration Phase 1 |
+| **L1** | Supervised (default) | Most teams |
+| **L2** | Autonomous | Projects that earned it through the promotion rule |
+
+| | T0 routine | T1 standard | T2 elevated | T3 critical |
+|---|---|---|---|---|
+| **L2** | Pass | Pass* | Escalate to steward | Escalate to steward + named approver |
+| **L1** | Pass | Escalate | Escalate to steward | Escalate to steward + named approver |
+| **L0** | Escalate | Escalate | Escalate to steward | Escalate to steward + named approver |
+| **A0** | no actions | no actions | no actions | no actions |
+
+\* Only with strong evidence and within budget; otherwise Escalate.
+
+Rules that hold at every level, in this order, before the matrix is read:
+
+1. Any policy violation → **Keep out**.
+2. Over budget → **Escalate**.
+3. The tier is the maximum of the action's floor and the Change's predicted tier. Floors: a merge into the release branch (`main`) ≥ T1, a release ≥ T2, production data = T3; a merge into `develop` has no floor beyond the predicted tier. A merge touching auth, money or personal data is T3.
+
+Promotion (L1 → L2) is itself a Decision with a receipt; an incident demotes. The level is a guardrail decision shown on Mission Control.
 
 ---
 
@@ -661,7 +695,8 @@ R = does it · A = accountable / decides · C = consulted · I = informed
 | Tests from scenarios | (none) | I | C | **R** | (none) |
 | Deterministic verification | (none) | I | (none) | (none) | **R** |
 | Agent reviews (code, security, architecture) | (none) | I | (none) | **R** | (none) |
-| T0/T1 approval | (none) | I (batch) | (none) | (none) | **R** (auto) |
+| T0 approval (auto at L1+) | (none) | I (batch) | (none) | (none) | **R** (auto) |
+| T1 approval (steward at L1, auto at L2) | (none) | **A**, R at L1; I (batch) at L2 | (none) | (none) | **R** (auto, L2 only) |
 | T2 approval | (none) | **A**, R | C | (none) | (none) |
 | T3 approval | C / A (if named) | **A**, R | R (code review) | (none) | (none) |
 | Business questions | **A**, R | I | (none) | R (ask) | (none) |
@@ -701,7 +736,7 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 1. A plan with at least 3 user stories produces Changes automatically, with no extra LLM call.
 2. At least 2 Changes run in parallel in GitHub Actions and open PRs without a person touching code.
 3. Every PR shows an Evidence Pack in the web app, with per-scenario proof.
-4. A T0/T1 Change merges with zero human clicks. A T2 Change cannot merge until the steward approves in the Decision Inbox, and that is enforced by branch protection.
+4. A T0 Change merges into `develop` with zero human clicks at L1; a T1 Change escalates at L1. A T2 Change cannot merge until the steward approves in the Decision Inbox, and that is enforced by branch protection.
 5. An agent question reaches the right person and the answer resumes the run.
 6. Mission Control shows outcome progress based on proven scenarios.
 
@@ -713,8 +748,10 @@ The MVP is done when, on a real greenfield web project (Next.js template):
 | **M2** | **Decisions** | `pw_discussions`, admin/member roles | `pw_decisions` (type, options, recommendation, routed_to, status, rationale). Decision Inbox screen. Project hats (business owner, steward) as a project-member column. Email notification. The existing lifecycle routes gain server-side precondition checks (§1.5) |
 | **M3** | **Runner** | Engine adapters (claude-code, codex), `repo_seed.py`, Actions secrets path from ADR 0021, `apps/mcp` | Hand-written `agent.yml` template seeded at provisioning. One adapter first: Claude Code headless with the customer's `ANTHROPIC_API_KEY` secret. Per-repo runner token (minted like the webhook secret) scoped to the change routes. MCP tools `get_change`, `raise_question`, `report_progress`. Cloud dispatches via `workflow_dispatch`. Branch, commits with `T` refs, PR with trailer. Simple lease: Changes from the same phase group are dispatched only after their dependencies merge. Bounded retries (default 2) |
 | **M4** | **Verification and evidence** | Webhook ingest (`workflow_run`, `pull_request`), `pw_artifacts` | Hand-written `verify.yml` per template (build, typecheck, lint, test, `gitleaks`, `npm audit`/`pip-audit`, semgrep default rules). Test naming convention carries scenario IDs, and `evidence.json` maps them. One **Reviewer agent** run on `pull_request` (same runner, different role profile, read-only). `pw_evidence`, Evidence Pack panel, Trust Score v1 (published formula) |
-| **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. Auto-green for T0/T1, Decision for T2/T3 |
+| **M5** | **Risk gate** | Fine-grained PAT (extended permissions), `deployments/` patterns | Risk policy v1: path globs, new-dependency detection, migration detection, policy-scope flags, mapped to tiers. `promptworkspace/gate` commit status. Branch protection seeded on `develop`. Lane per §5.4 (T0 Pass at L1, T1 Pass at L2 only), Decision for T2/T3 |
 | **M6** | **Mission Control and outcome progress** | `ProgressRollup.tsx`, `pw_deployment_tasks`, Preview tab | Outcome progress from scenario evidence on the latest `develop` build. "Needs you" strip. Live Change states. Release Candidate is a read-only report on the existing Preview tab |
+
+**Slice 1 notes (2026-10-04).** In code, a Change is `DeliveryChange` (`pw_delivery_changes`, `/projects/{id}/delivery-plan`) because `/sync/projects/{id}/changes` already names the sync head. Three M1/M2 items moved: scenario IDs `O<story>.S<n>` move to M4 (nothing consumes them before evidence exists); decision email moves to after M3 (the cloud has no general email transport yet; in-app Inbox only); separation of duties on self-approval waits for real teams (it would block one-person test projects). The create-repository approval gate ships behind `REQUIRE_PLAN_APPROVAL`, on in the trust environment only.
 
 ### 9.3 Explicitly not in the MVP
 
@@ -786,11 +823,11 @@ Arun approves the plan. The repo is provisioned with `agent.yml`, `verify.yml` a
 
 **Day 2: Execution.** C1 runs and merges (T0, auto). C2 runs. Its Builder asks a blocking question: *"Store phone numbers in plain text or encrypted? The constitution doesn't say."* Arun answers "encrypted at rest, see ADR" and files an ADR proposal from the agent's draft. C2's evidence is complete, Trust 88, but it is T3, so Arun reviews the auth diff line by line, Ploy approves the data handling summary in business language, and C2 merges. C3, C4 and C5 now run **in parallel**, except that C4 queues for about twenty minutes behind C3, because both need the area lease on `lib/patients/**`.
 
-**Day 3: Verification catches a real problem.** The Security agent on C4 flags a log line that writes the patient's phone number (a *high* finding, guardrail "no PII in logs"). The Builder fixes it on retry 1, and the semgrep check now passes. C3 and C5 are T1 with Trust 91 and 86 and merge automatically. C4 is T3: Arun approves and Ploy signs off the consent wording.
+**Day 3: Verification catches a real problem.** The Security agent on C4 flags a log line that writes the patient's phone number (a *high* finding, guardrail "no PII in logs"). The Builder fixes it on retry 1, and the semgrep check now passes. C3 and C5 are T1 with Trust 91 and 86; this is a first project at the default L1, so both escalate and Arun approves each from the evidence. C4 is T3: Arun approves and Ploy signs off the consent wording.
 
 **Day 4: Release.** Mission Control shows O1 4/4, O2 4/4 and O3 2/3: O3.S3 ("schedule updates without reload") has no passing proof. The Release agent's Release Candidate says so plainly. Ploy tries the staging preview, likes it, and gives feedback: *"Staff also need to cancel a booking."* That becomes new intent (O4) rather than a ticket. Arun and Ploy decide "Release without O3.S3", the gap is recorded in the decision, and production deploys. Mint never wrote a line of code. Mint spent forty minutes reviewing C2 with Arun and improving `verify.yml`.
 
-**What people did:** 2 approvals (intent, plan), 4 answers, 4 T3 sign-offs, 1 release decision, 1 feedback. **What they did not do:** create, assign, claim, move or verify a single task.
+**What people did:** 2 approvals (intent, plan), 4 answers, 2 T1 approvals, 4 T3 sign-offs, 1 release decision, 1 feedback. **What they did not do:** create, assign, claim, move or verify a single task.
 
 ### 11.2 Brownfield: a small feature on an existing repo
 
@@ -798,7 +835,7 @@ A logistics company has imported its existing Django repo (plan 0027). Its busin
 
 The Intent agent drafts one outcome with three scenarios, including "exports only the requester's own shipments". The Planning agent reads the codebase baseline, sees an existing `exports/` module, and plans **one** Change: C14, predicted T1. The tech steward approves the plan in one click from the notification: one Change, one known module, predicted T1.
 
-The Builder reuses the existing export helper, adds a view, and adds three tests named after the scenarios. The Reviewer agent notices the queryset is not filtered by tenant in one branch of the code, and the scenario test for "own shipments only" fails. The Builder fixes it on retry 1. The evidence is complete, Trust 92, tier T1: it merges to `develop` with no human action. The business owner gets a notification: *"O7 'CSV export' is proven on staging; try it."* It ships in the Friday release decision with four other outcomes.
+The Builder reuses the existing export helper, adds a view, and adds three tests named after the scenarios. The Reviewer agent notices the queryset is not filtered by tenant in one branch of the code, and the scenario test for "own shipments only" fails. The Builder fixes it on retry 1. The evidence is complete, Trust 92, tier T1, project at L2: it merges to `develop` with no human action (at L1 it would escalate to the steward). The business owner gets a notification: *"O7 'CSV export' is proven on staging; try it."* It ships in the Friday release decision with four other outcomes.
 
 **Human time:** about five minutes. **Traditional equivalent:** a ticket, a grooming discussion, an assignment, a developer day, a code review round-trip and a manual QA pass.
 
@@ -852,4 +889,13 @@ An audit of every earlier plan against `develop` on 2026-10-04 updated their Sta
 | 11 | Business-user desktop follow-up plan | ADR 0028 | Open question 4 in §12 |
 | 12 | Drop `pw_projects.owner_id`; make `workspace_id` NOT NULL | Plans 0001 / 0002 | Low priority. Any later migration |
 | 13 | Pricing rewrite, download page, product copy, contact-webhook loss, locale tests | Plan 0022 | **Not this repo.** `PromptConnext/promptconnext-corp-web` |
+| 14 | Bind `plan_approval` to the Plan document as well as Tasks, so a plan edit after approval stales it | Editable plan after the repository (2026-10-10) | Done in plan 0030 Task 6 (2026-10-17): the plan approval covers the project rules, the plan and the tasks as one snapshot and one hash, so editing any of the three stales it |
+| 15 | Legacy `repo_created` projects with a NULL `repo_origin` (pre-migration 0035, from scratch or imported) get no document edit and no sync: backfill the origin or let an admin declare it | Editable plan after the repository (2026-10-10) | Low priority. Any later migration |
+| 16 | Sync PR for imported repositories: re-derive the relocated seed (`fit_to_existing_repo`) against a tree that already holds it | Editable plan after the repository (2026-10-10) | **Phase 2**, with the other PRs into existing repos |
+| 17 | The docs banner cannot be dismissed, so a hand-maintained `AGENTS.md` (or any seeded document a team edits on GitHub) keeps it showing "out of date" | Editable plan after the repository (2026-10-10) | Low priority. Any later release |
+| 18 | D1b: four-eyes for T3 decisions, step-up MFA (AAL2) for T3 approvals, delegation records | Enterprise AI v2.1 plan §4 D1 | With D3, when T3 decisions exist |
+| 19 | Drop `pw_decisions.subject_content` once every environment has run migration 0008 and the fallback read is removed. The drop-column migration must first copy any non-null legacy `subject_content` into `pw_decision_snapshots`, because code older than D1 may have written it after 0008 ran | D1 core (2026-10-14 plan) | Any later migration |
+| 20 | v2.1 delivery milestones D2–D6 (agents act, gate on every change, platform extraction, second product, Commanders) | Umbrella `docs/plans/2026-10-11-enterprise-ai-architecture-v2-1-plan.md` §4 | One plan per milestone, after D1 |
+| 21 | D1 core shipped on `feature/d1-receipts` (2026-10-16): hash-chained receipts with export, erasable decision snapshots, strict no self-approval, decision email, decision expiry with reminder. Done in code; open until the branch merges to `develop` and migrations 0007–0009 plus the SMTP variables are applied per environment | Enterprise AI v2.1 plan §4 D1 | Close after the `develop` deploy |
+| 22 | Plan 0030 (2026-10-17 end-to-end walkthrough fixes): its Deferred table lists the findings and review follow-ups it did not fix | Plan 0030 | See `docs/plans/0030-e2e-walkthrough-fixes.md`, Deferred |
 

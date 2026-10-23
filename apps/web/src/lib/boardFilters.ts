@@ -14,7 +14,7 @@ import type { ProjectGraph, Task } from "./types";
  * unfiltered board keeps the short `?tab=tasks` link it always had.
  */
 
-export type BoardGroup = "none" | "assignee" | "sprint" | "spec";
+export type BoardGroup = "none" | "assignee" | "sprint" | "spec" | "change";
 
 export interface BoardFilters {
   q: string;
@@ -36,7 +36,7 @@ export const EMPTY_FILTERS: BoardFilters = {
   hideEmpty: false,
 };
 
-const GROUPS: readonly BoardGroup[] = ["none", "assignee", "sprint", "spec"];
+const GROUPS: readonly BoardGroup[] = ["none", "assignee", "sprint", "spec", "change"];
 
 /**
  * The bucket for tasks with no value in the grouped field. Not a plausible
@@ -145,6 +145,7 @@ const EMPTY_LABEL: Record<Exclude<BoardGroup, "none">, string> = {
   assignee: "Unassigned",
   sprint: "No sprint",
   spec: "No spec",
+  change: "No change",
 };
 
 // Numeric collation, so "Sprint 2" comes before "Sprint 10".
@@ -162,14 +163,27 @@ export function groupBoardTasks(
   ctx: {
     memberLabel: (userId: string | null) => string;
     specLabel: (specId: string | null) => string;
+    changeLabel: (changeId: string | null) => string;
   },
 ): TaskGroup[] {
   if (group === "none") return [{ key: "all", label: "All Tasks", tasks }];
 
   const valueOf = (t: Task): string | null =>
-    group === "assignee" ? t.assigned_user_id : group === "sprint" ? sprintOf(t) : t.spec_id;
+    group === "assignee"
+      ? t.assigned_user_id
+      : group === "sprint"
+        ? sprintOf(t)
+        : group === "spec"
+          ? t.spec_id
+          : t.change_id;
   const labelOf = (value: string): string =>
-    group === "assignee" ? ctx.memberLabel(value) : group === "spec" ? ctx.specLabel(value) : value;
+    group === "assignee"
+      ? ctx.memberLabel(value)
+      : group === "spec"
+        ? ctx.specLabel(value)
+        : group === "change"
+          ? ctx.changeLabel(value)
+          : value;
 
   const buckets = new Map<string, Task[]>();
   for (const t of tasks) {

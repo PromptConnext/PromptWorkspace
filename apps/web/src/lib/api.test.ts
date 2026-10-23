@@ -123,3 +123,80 @@ describe("apiFetch error detail", () => {
     await expect(apiFetch("/x", {})).rejects.toMatchObject({ message: "invalid_request" });
   });
 });
+
+describe("apiFetch transient failures", () => {
+  const ok = { ok: true, status: 200, json: async () => ({ n: 1 }) };
+  const fail = (status: number) => ({ ok: false, status, json: async () => ({ detail: "x" }) });
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function mockFetch(...responses: Array<object | Error>) {
+    const fn = vi.fn(async () => {
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    globalThis.fetch = fn as unknown as typeof fetch;
+    return fn;
+  }
+
+  it("a failed GET is retried once, 400 ms later, on a network error", async () => {
+    const fetchMock = mockFetch(new TypeError("Failed to fetch"), ok);
+    const result = apiFetch<{ n: number }>("/projects/p1/decisions", {});
+
+    await vi.advanceTimersByTimeAsync(399);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toEqual({ n: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([502, 503, 504])("a GET answered %i is retried once", async (status) => {
+    const fetchMock = mockFetch(fail(status), ok);
+    const result = apiFetch<{ n: number }>("/projects/p1/decisions", {});
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(result).resolves.toEqual({ n: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after one retry and reports the second failure", async () => {
+    const fetchMock = mockFetch(fail(503), fail(503), ok);
+    const result = apiFetch("/projects/p1/decisions", {});
+    const assertion = expect(result).rejects.toMatchObject({ status: 503 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an ordinary refusal", async () => {
+    const fetchMock = mockFetch(fail(404), ok);
+    const result = apiFetch("/projects/p1/decisions", {});
+    const assertion = expect(result).rejects.toMatchObject({ status: 404 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["POST", "PATCH", "PUT", "DELETE"])("a %s is never retried", async (method) => {
+    const fetchMock = mockFetch(fail(503), ok);
+    const result = apiFetch("/projects/p1/decisions", {}, { method });
+    const assertion = expect(result).rejects.toMatchObject({ status: 503 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a write that fails on the network is not retried either", async () => {
+    const fetchMock = mockFetch(new TypeError("Failed to fetch"), ok);
+    const result = apiFetch("/projects/p1/decisions", {}, { method: "POST" });
+    const assertion = expect(result).rejects.toThrow("Failed to fetch");
+    await vi.advanceTimersByTimeAsync(2000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

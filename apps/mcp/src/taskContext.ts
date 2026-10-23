@@ -13,6 +13,8 @@
 
 import {
   TASK_STATUS_LABELS,
+  branchNameForTask,
+  taskRefFromFeatureTag,
   type AssignedTask,
   type CloudClient,
   type LoggerLike,
@@ -26,13 +28,22 @@ export async function buildTaskContext(
   log: LoggerLike,
 ): Promise<string> {
   const { task } = entry;
-  const lines: string[] = [
-    `# Task ${task.feature_tag ?? task.id}: ${task.title}`,
-    "",
+  const ref = taskRefFromFeatureTag(task.feature_tag);
+  const lines: string[] = [`# Task ${task.feature_tag ?? task.id}: ${task.title}`, ""];
+  if (ref) {
+    // Same header as apps/vscode's copy (finding #38): the branch Start Task
+    // uses and the subject prefix that closes the task on push.
+    lines.push(
+      `Work on branch \`${branchNameForTask(ref, task.title)}\`; ` +
+        `start commit subjects with \`${ref}:\`.`,
+      "",
+    );
+  }
+  lines.push(
     `- Task id: ${task.id}`,
     `- Project: ${entry.project_name} (${entry.workspace_name})`,
     `- Status: ${TASK_STATUS_LABELS[task.status]}`,
-  ];
+  );
   if (entry.repo_url) lines.push(`- Repository: ${entry.repo_url}`);
   lines.push("");
 
@@ -65,7 +76,7 @@ export async function buildTaskContext(
     "## What to do",
     "",
     `Implement this task in the current workspace. When it is done, commit with ` +
-      `\`${task.feature_tag ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
+      `\`${ref ?? "T?"}: <what you did>\` in the subject so PromptWorkspace ` +
       `closes the task automatically.`,
     "",
   );

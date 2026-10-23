@@ -354,3 +354,142 @@ def test_ac_lines_added_by_hand_in_the_planner_editor_land_on_the_task(client: T
     assert res.status_code == 200, res.text
     task = next(t for t in _live_tasks(client, pid) if t.feature_tag == "T002")
     assert [c.text for c in task.acceptance_criteria] == ["A duplicate payment id is rejected"]
+
+
+# --- a ref that now means different work (task 4.1, finding #57) -------------
+
+REMEANT_TASKS = THREE_TASKS.replace(
+    "- [ ] T003 Reconcile settlements nightly\n",
+    "- [ ] T003 Replace the ASSET GROW brand in the exported PDF footer\n",
+)
+
+
+def _t3(client: TestClient, pid: str):
+    """The one live task T003 resolves to (None when the ref is ambiguous)."""
+    task_id = tasks_by_ref(_live_tasks(client, pid)).get("T3")
+    return next((t for t in _live_tasks(client, pid) if t.id == task_id), None)
+
+
+def _close_t003(client: TestClient, pid: str, *, status: TaskStatus | None):
+    repo = client.app.state.repository
+    task = next(t for t in _live_tasks(client, pid) if t.feature_tag == "T003")
+    repo.assign_task(pid, task.id, "alice", utcnow())
+    if status is not None:
+        repo.set_task_status(pid, task.id, status, utcnow())
+    artifact = repo.upsert_task_artifact(
+        pid, task.id, "https://example.test/commit/abc", "abc", ArtifactKind.code, utcnow()
+    )
+    return task, artifact
+
+
+def test_a_closed_task_whose_ref_now_means_different_work_is_retired_with_its_evidence(
+    client: TestClient,
+):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    closed, artifact = _close_t003(client, pid, status=TaskStatus.verified)
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT, REMEANT_TASKS)
+    assert res.status_code == 200, res.text
+    payload = _done(res)
+    assert payload["task_count"] == 3
+    assert payload["retired_count"] == 1
+
+    repo = client.app.state.repository
+    # The closed row is history: retired, with its own title, status, assignee.
+    old = repo._graph[pid]["tasks"][closed.id]
+    assert old.deleted_at is not None
+    assert old.title == "Reconcile settlements nightly"
+    assert old.status == TaskStatus.verified
+    assert old.assigned_user_id == "alice"
+    stored_artifact = repo._graph[pid]["artifacts"][artifact.id]
+    assert stored_artifact.deleted_at is None
+    assert stored_artifact.task_id == closed.id
+
+    # The new work under T003 starts fresh and does not inherit the evidence.
+    tasks = _live_tasks(client, pid)
+    assert colliding_refs(t.feature_tag for t in tasks) == set()
+    fresh = _t3(client, pid)
+    assert fresh.id != closed.id
+    assert fresh.title == "Replace the ASSET GROW brand in the exported PDF footer"
+    assert fresh.status == TaskStatus.todo
+    assert fresh.assigned_user_id is None
+    assert all(a.task_id != fresh.id for a in repo.get_graph(pid).artifacts)
+
+
+def test_an_open_task_with_evidence_counts_as_closed_work(client: TestClient):
+    """A commit already attributed to the task is evidence even if nobody
+    moved its status: carrying that commit onto different work is the same
+    corruption."""
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    closed, _ = _close_t003(client, pid, status=None)
+
+    _generate(client, pid, "tasks", TASKS_INPUT, REMEANT_TASKS)
+
+    fresh = _t3(client, pid)
+    assert fresh.id != closed.id
+    assert client.app.state.repository._graph[pid]["tasks"][closed.id].deleted_at is not None
+
+
+def test_a_reworded_title_keeps_its_status(client: TestClient):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    closed, _ = _close_t003(client, pid, status=TaskStatus.implemented)
+
+    for body in (
+        THREE_TASKS,  # identical: must not churn into retire-and-insert
+        THREE_TASKS.replace("Reconcile settlements nightly", "Reconcile the settlements nightly"),
+    ):
+        res = _generate(client, pid, "tasks", TASKS_INPUT, body)
+        assert res.status_code == 200, res.text
+        assert _done(res)["retired_count"] == 0
+
+        task = _t3(client, pid)
+        assert task.id == closed.id
+        assert task.status == TaskStatus.implemented
+        assert task.assigned_user_id == "alice"
+    assert task.title == "Reconcile the settlements nightly"
+
+
+def test_an_open_task_without_evidence_keeps_its_row_when_retitled(client: TestClient):
+    """Unstarted work carries nothing that could be misattributed, so a new
+    title under its ref is simply an update, as before."""
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    before = _t3(client, pid)
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT, REMEANT_TASKS)
+    assert _done(res)["retired_count"] == 0
+    after = _t3(client, pid)
+    assert after.id == before.id
+    assert after.title.startswith("Replace the ASSET GROW brand")
+
+
+def test_a_hand_edit_that_retitles_a_closed_task_also_retires_it(client: TestClient):
+    """Review ruling on 4.1: the rule is about the board, not who wrote the
+    document, so a manual save that turns closed T003 into different work is
+    the same hazard as a regeneration that does."""
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, THREE_TASKS)
+    closed, artifact = _close_t003(client, pid, status=TaskStatus.implemented)
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/tasks", json={"content": REMEANT_TASKS}, headers=ALICE
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["projection"] == "current"
+    repo = client.app.state.repository
+    old = repo._graph[pid]["tasks"][closed.id]
+    assert old.deleted_at is not None
+    assert old.status == TaskStatus.implemented
+    assert repo._graph[pid]["artifacts"][artifact.id].task_id == closed.id
+    fresh = _t3(client, pid)
+    assert fresh.id != closed.id
+    assert fresh.status == TaskStatus.todo

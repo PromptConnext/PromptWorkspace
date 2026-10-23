@@ -93,3 +93,96 @@ export function sameRepo(a: string | null | undefined, b: string | null | undefi
   const right = normalizeRepoUrl(b);
   return left !== null && left === right;
 }
+
+/** How a folder's remote relates to a project's `repo_url`. */
+export type RemoteMatch = "exact" | "alias" | "none";
+
+/**
+ * The host an SSH-config alias stands for, or the host itself.
+ *
+ * Developers with two accounts on one git host write `Host github.com-work` in
+ * `~/.ssh/config` and clone from `git@github.com-work:org/repo`; `git remote -v`
+ * (what both surfaces read) shows the alias, never the real host. A TLD never
+ * contains a hyphen, so a hyphen in the LAST label is the alias suffix. A
+ * hyphen anywhere else (`my-github.com`) is part of a real host name, and an
+ * IDN TLD (`xn--…`) is left alone.
+ */
+function aliasBaseHost(host: string): string {
+  const lastDot = host.lastIndexOf(".");
+  if (lastDot < 0) return host;
+  const label = host.slice(lastDot + 1);
+  if (label.startsWith("xn--")) return host;
+  const dash = label.indexOf("-");
+  if (dash <= 0 || dash === label.length - 1) return host;
+  return host.slice(0, lastDot + 1 + dash);
+}
+
+function splitKey(key: string): { host: string; path: string } {
+  const slash = key.indexOf("/");
+  return slash < 0
+    ? { host: key, path: "" }
+    : { host: key.slice(0, slash), path: key.slice(slash + 1) };
+}
+
+/** Whether a URL-form remote names a port (`ssh://host:2222/…`). The SSH
+ *  shorthand `user@host:path` cannot carry one. */
+function hasExplicitPort(raw: string): boolean {
+  const value = raw.trim();
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return false;
+  try {
+    return new URL(value).port !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `exact` when the two name one repository on one host (what `sameRepo`
+ * answers). `alias` only when the hosts differ solely by a `-<suffix>` on the
+ * same base host AND the owner/repo path is identical AND neither side names a
+ * port — a port picks a server, and an alias is too weak a claim to say it is
+ * the same one. Anything else, and anything unparseable, is `none`.
+ */
+export function remotesMatch(remote: string, repoUrl: string): RemoteMatch {
+  const left = normalizeRepoUrl(remote);
+  const right = normalizeRepoUrl(repoUrl);
+  if (left === null || right === null) return "none";
+  if (left === right) return "exact";
+  const a = splitKey(left);
+  const b = splitKey(right);
+  if (!a.path || a.path !== b.path) return "none";
+  if (hasExplicitPort(remote) || hasExplicitPort(repoUrl)) return "none";
+  return aliasBaseHost(a.host) === aliasBaseHost(b.host) ? "alias" : "none";
+}
+
+/**
+ * The roster projects a folder with these remotes belongs to.
+ *
+ * Exact matches win and are all returned, as before — a monorepo or a fork can
+ * legitimately name several, and the caller asks which. Alias matches are a
+ * weaker claim (the alias could point anywhere; we only know its spelling), so
+ * they are used only when nothing matched exactly, and only when exactly ONE
+ * project matches: an alias that fits two projects links neither rather than
+ * picking one.
+ */
+export function projectsMatchingRemotes<T extends { repoUrl?: string | null }>(
+  remotes: readonly string[],
+  candidates: readonly T[],
+): T[] {
+  const kind = (candidate: T): RemoteMatch => {
+    const url = candidate.repoUrl;
+    if (!url) return "none";
+    let best: RemoteMatch = "none";
+    for (const remote of remotes) {
+      const match = remotesMatch(remote, url);
+      if (match === "exact") return "exact";
+      if (match === "alias") best = "alias";
+    }
+    return best;
+  };
+  const kinds = candidates.map((candidate) => ({ candidate, match: kind(candidate) }));
+  const exact = kinds.filter((k) => k.match === "exact").map((k) => k.candidate);
+  if (exact.length > 0) return exact;
+  const alias = kinds.filter((k) => k.match === "alias").map((k) => k.candidate);
+  return alias.length === 1 ? alias : [];
+}
