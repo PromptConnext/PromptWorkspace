@@ -220,3 +220,6 @@
 | Retry queue for failed sends | Inbox and email still carry the decision | Later |
 | Email and web UI following workspace language | Out of scope for this change | Later |
 | Slack / Teams | Seam kept (`LineClient`-shaped protocol) | Later |
+| Batch names only authors with a member email; "+N" counts from the shortened list | Final review, 2026-10-23 | Later |
+| Discussion message lookups use the request-scoped repository on the worker | Final review, 2026-10-23; fine while the token is valid | Use `app.state.repository` in the closure |
+| Smaller review notes: link-code delete+insert race, unbounded throttle and executor queues, panel refresh in-flight guard, tests for cancel/expiry/unmount, workspace language `pending` state | Polish | Later |
