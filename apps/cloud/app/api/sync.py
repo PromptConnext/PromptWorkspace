@@ -25,6 +25,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -36,6 +37,7 @@ from app.api._guards import (
     require_workspace,
 )
 from app.db.repository import CrossProjectWrite, Repository
+from app.delivery import line_notices
 from app.delivery.approvals import plan_state
 from app.dependencies import User, get_current_user, get_repository
 from app.deployments.plan_profile import StackProfile
@@ -1160,6 +1162,7 @@ def set_task_status(
     project_id: str,
     task_id: str,
     body: TaskStatusUpdate,
+    request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> Task:
@@ -1203,7 +1206,20 @@ def set_task_status(
             body.artifact.kind,
             now,
         )
-    return repo.set_task_status(project_id, task_id, body.status, now)
+    previous = task.status
+    updated = repo.set_task_status(project_id, task_id, body.status, now)
+    # Only a real transition into implemented asks the group to verify.
+    if body.status == TaskStatus.implemented and previous != TaskStatus.implemented:
+        try:
+            web = request.app.state.settings.web_app_url
+            link = f"{web}/w/{project.workspace_id}/p/{project_id}?tab=tasks&task={task_id}"
+            request.app.state.line_notifier.notify_project(project_id, partial(
+                line_notices.ready_to_verify, project.name,
+                updated.feature_tag or "", updated.title, link))
+        except Exception:
+            logger.exception("ready-to-verify LINE notice failed, project=%s task=%s",
+                             project_id, task_id)
+    return updated
 
 
 @router.put("/sync/projects/{project_id}/graph", response_model=GraphUpsertResponse)

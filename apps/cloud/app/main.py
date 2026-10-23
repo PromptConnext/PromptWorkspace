@@ -245,9 +245,11 @@ async def lifespan(app: FastAPI):
     app.state.decision_mailer = build_decision_mailer(settings)
     if isinstance(app.state.decision_mailer, NullDecisionMailer):
         logger.info("Decision email disabled: SMTP_HOST or SMTP_FROM not set")
+    from app.delivery.line_throttle import DiscussionThrottle
     from app.integrations.line import build_line_notifier
 
     app.state.line_notifier = build_line_notifier(settings, app.state.repository)
+    app.state.discussion_throttle = DiscussionThrottle()
     if not app.state.line_notifier.enabled:
         logger.info("LINE notifications disabled: LINE_CHANNEL_SECRET or token not set")
     logger.info(

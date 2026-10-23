@@ -16,15 +16,27 @@ source="pmo" through the same repo.upsert_graph() path this endpoint uses.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api._guards import require_project
 from app.db.repository import Repository
+from app.delivery import line_notices
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import ENTITY_TYPES, Discussion, DiscussionCreate, GraphUpsertRequest
+from app.models.schemas import (
+    ENTITY_TYPES,
+    Discussion,
+    DiscussionCreate,
+    GraphUpsertRequest,
+    Project,
+    Task,
+    utcnow,
+)
 from app.rag.queue import EmbedJob, enqueue
 from app.rag.source import RAG_NODE_TYPES
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["discussions"])
 
 _VALID_PARENT_TYPES = {t for t in ENTITY_TYPES if t != "discussions"}
@@ -62,4 +74,48 @@ def create_discussion(
             EmbedJob(project.workspace_id, project_id, "discussions", discussion.id),
         )
 
+    try:
+        _notify_line(request, project, user, discussion, repo)
+    except Exception:
+        logger.exception("discussion LINE notice failed, project=%s", project_id)
+
     return discussion
+
+
+def _about(
+    repo: Repository, project_id: str, node_type: str, node_id: str
+) -> tuple[str | None, str | None, str | None]:
+    """(kind, ref, title) for `about_label`; no kind means "the project"."""
+    node = repo.get_node(project_id, node_type, node_id)
+    if node_type == "tasks" and isinstance(node, Task):
+        return "task", node.feature_tag, node.title
+    if node_type == "spec_documents":
+        return "spec", None, None
+    stage = getattr(node, "stage", None) if node_type == "stage_documents" else None
+    if stage in ("specify", "plan"):
+        return ("spec" if stage == "specify" else "plan"), None, None
+    return None, None, None
+
+
+def _notify_line(
+    request: Request, project: Project, user: User, discussion: Discussion, repo: Repository
+) -> None:
+    state = request.app.state
+    if not state.discussion_throttle.allow(project.id, discussion.parent_node_id, utcnow()):
+        return
+    members = repo.list_members(project.workspace_id)
+    author = next((m.email for m in members if m.user_id == user.id and m.email), user.email)
+    kind, ref, title = _about(
+        repo, project.id, discussion.parent_node_type, discussion.parent_node_id
+    )
+    link = f"{state.settings.web_app_url}/w/{project.workspace_id}/p/{project.id}?tab=discussion"
+    state.line_notifier.notify_project(
+        project.id,
+        lambda lang: line_notices.discussion(
+            project.name,
+            author or "Someone",
+            line_notices.about_label(kind, ref, title, lang),
+            link,
+            lang,
+        ),
+    )

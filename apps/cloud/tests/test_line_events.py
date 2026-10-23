@@ -203,3 +203,98 @@ def test_sweep_reminder_skipped_when_nobody_can_act():
     sweep_decisions(repo, RecordingDecisionMailer(), settings, now, notifier)
 
     assert recorder.pushed == []
+
+
+# -- ready to verify and discussion comments (Task 6) ------------------------
+
+
+def _task(client, pid, title="Book a slot", status="in_progress", tag="T012") -> str:
+    from app.models.schemas import Task
+
+    task = Task(project_id=pid, title=title, feature_tag=tag, assigned_user_id="alice")
+    repo = client.app.state.repository
+    repo.upsert_graph(pid, GraphUpsertRequest(tasks=[task]), source="pmo")
+    repo.set_task_status(pid, task.id, status, utcnow())
+    return task.id
+
+
+def _status(client, pid, tid, status, headers=ALICE):
+    return client.patch(f"/projects/{pid}/tasks/{tid}/status", json={"status": status},
+                        headers=headers)
+
+
+def test_implemented_transition_pushes_ready_to_verify_once(client, project, line):
+    tid = _task(client, project)
+
+    assert _status(client, project, tid, "implemented").status_code == 200
+    ((to, text),) = line.pushed
+    assert to == GROUP
+    assert "T012 Book a slot is implemented and ready to verify" in text
+    assert f"?tab=tasks&task={tid}" in text
+
+    line.pushed.clear()
+    assert _status(client, project, tid, "implemented").status_code == 200
+    assert line.pushed == []
+
+
+def test_other_transitions_push_nothing(client, project, line):
+    tid = _task(client, project, status="todo")
+
+    for status in ("in_progress", "verified", "todo"):
+        assert _status(client, project, tid, status).status_code == 200
+
+    assert line.pushed == []
+
+
+def _comment(client, pid, node_type, node_id, body="Private: call 0812345678", headers=BOB):
+    return client.post(
+        f"/projects/{pid}/discussions",
+        json={"parent_node_type": node_type, "parent_node_id": node_id, "body": body},
+        headers=headers)
+
+
+def test_discussion_comment_pushes_without_body(client, project, line):
+    tid = _task(client, project)
+
+    assert _comment(client, project, "tasks", tid).status_code == 201
+
+    ((to, text),) = line.pushed
+    assert to == GROUP
+    assert "bob@x.com commented on T012 Book a slot" in text
+    assert "?tab=discussion" in text
+    assert "0812345678" not in text and "Private" not in text
+
+
+def test_discussion_on_spec_names_the_specification(client, project, line):
+    spec = client.app.state.repository.get_graph(project).spec_documents[0]
+
+    _comment(client, project, "spec_documents", spec.id)
+
+    ((_, text),) = line.pushed
+    assert "commented on the specification" in text
+
+
+def test_discussion_burst_on_one_node_pushes_once_per_10_minutes(client, project, line):
+    from app.delivery.line_throttle import DiscussionThrottle
+
+    tid = _task(client, project)
+    throttle = DiscussionThrottle()
+    t0 = utcnow()
+
+    assert throttle.allow(project, tid, t0)
+    assert not throttle.allow(project, tid, t0 + timedelta(minutes=9, seconds=59))
+    assert throttle.allow(project, tid, t0 + timedelta(minutes=10))
+
+    for _ in range(3):
+        _comment(client, project, "tasks", tid)
+    assert len(line.pushed) == 1
+
+
+def test_comments_on_two_nodes_push_twice(client, project, line):
+    first = _task(client, project, title="One", tag="T001")
+    second = _task(client, project, title="Two", tag="T002")
+
+    _comment(client, project, "tasks", first)
+    _comment(client, project, "tasks", second)
+
+    assert len(line.pushed) == 2

@@ -132,7 +132,7 @@ def expired(project: str, kind: str, link: str, lang: Lang) -> str:
 
 
 def ready_to_verify(project: str, ref: str, title: str, link: str, lang: Lang) -> str:
-    task = f"{_v(ref)} {_v(title, _TITLE_CAP)}"
+    task = f"{_v(ref)} {_v(title, _TITLE_CAP)}".strip()
     if lang == "th":
         return _msg(project, f"{task} ทำเสร็จแล้ว รอการตรวจรับ", f"ตรวจรับที่นี่: {_v(link)}")
     return _msg(
