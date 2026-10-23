@@ -788,4 +788,6 @@ export interface InboxItem {
   project_name: string;
   workspace_id: string;
   workspace_name: string;
+  /** Who sent a request back; set only on the caller's own sent-back items. */
+  resolver_email?: string | null;
 }

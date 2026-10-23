@@ -49,6 +49,8 @@ class InboxItem(BaseModel):
     project_name: str
     workspace_id: str
     workspace_name: str
+    # Who sent a request back; only set for the caller's own sent-back items.
+    resolver_email: str | None = None
 
 
 @router.get("/decisions", response_model=list[InboxItem])
@@ -79,12 +81,17 @@ def list_my_decisions(
                 for d in all_decisions:
                     if (d.status == "rejected" and d.requested_by == user.id
                             and latest_decision(all_decisions, d.kind) is d):
+                        if members is None:
+                            members = repo.list_members(workspace.id)
+                            role = member_role(repo, workspace.id, members, user.id)
+                        resolver = next((m for m in members if m.user_id == d.resolved_by), None)
                         items.append(
                             InboxItem(
                                 decision=DecisionBase(
                                     **d.model_dump(exclude={"subject_content"}),
                                     can_resolve=False,
                                 ),
+                                resolver_email=resolver.email if resolver else None,
                                 project_id=project.id,
                                 project_name=project.name,
                                 workspace_id=workspace.id,
