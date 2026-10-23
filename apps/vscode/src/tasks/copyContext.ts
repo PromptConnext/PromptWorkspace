@@ -11,6 +11,7 @@
 import type { CloudClient, LoggerLike } from "@promptworkspace/cloud-client";
 import type { AssignedTask } from "@promptworkspace/cloud-client";
 import {
+  CloudHttpError,
   TASK_STATUS_LABELS,
   branchNameForTask,
   taskRefFromFeatureTag,
@@ -18,11 +19,22 @@ import {
 import type { RepoDocs } from "../context/repoDocs.ts";
 
 const SPEC_EXCERPT_CHARS = 4000;
+const DEFAULT_TIMEOUT_MS = 5000;
+
+export type MissingPart = "specification" | "plan" | "rules";
+
+export interface TaskContext {
+  text: string;
+  /** Parts whose fetch failed or timed out. A document that does not exist is not listed. */
+  missing: MissingPart[];
+}
 
 /** Facts only the extension host knows; passed in as data so this file never imports vscode. */
 export interface TaskContextExtra {
   branch?: string;
   webUrl?: string;
+  /** How long each fetch may take before its part is reported missing. Default 5000. */
+  timeoutMs?: number;
 }
 
 export async function buildTaskContext(
@@ -31,7 +43,7 @@ export async function buildTaskContext(
   docs: RepoDocs,
   log: LoggerLike,
   extra: TaskContextExtra = {},
-): Promise<string> {
+): Promise<TaskContext> {
   const { task } = entry;
   const ref = taskRefFromFeatureTag(task.feature_tag);
   // The heading and "What to do" spell the task the same way (the normalised
@@ -67,15 +79,23 @@ export async function buildTaskContext(
     lines.push("");
   }
 
-  const spec = await specifyExcerpt(entry, client, log);
-  if (spec) lines.push("## Specification (excerpt)", "", spec, "");
+  const timeoutMs = extra.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const [spec, plan, constitution] = await Promise.all([
+    settle(specifyExcerpt(entry, client, log), timeoutMs),
+    settle(planExcerpt(entry, client, log), timeoutMs),
+    settle(docs.read(entry.project_id, "constitution"), timeoutMs),
+  ]);
+  const missing: MissingPart[] = [];
+  if (!spec.ok) missing.push("specification");
+  if (!plan.ok) missing.push("plan");
+  if (!constitution.ok) missing.push("rules");
 
-  const plan = await planExcerpt(entry, client, log);
-  if (plan) lines.push("## Implementation plan (excerpt)", "", plan, "");
-
-  const constitution = await docs.read(entry.project_id, "constitution");
-  if (constitution) {
-    lines.push("## Project coding rules", "", constitution.trim(), "");
+  if (spec.ok && spec.value) lines.push("## Specification (excerpt)", "", spec.value, "");
+  if (plan.ok && plan.value) {
+    lines.push("## Implementation plan (excerpt)", "", plan.value, "");
+  }
+  if (constitution.ok && constitution.value) {
+    lines.push("## Project coding rules", "", constitution.value.trim(), "");
   }
 
   lines.push(
@@ -89,7 +109,39 @@ export async function buildTaskContext(
       "in this repository, so do not search the disk for spec.md, plan.md or tasks.md.",
     "",
   );
-  return lines.join("\n");
+  return { text: lines.join("\n"), missing };
+}
+
+/** The sentence the command shows once the context is on the clipboard. */
+export function copiedMessage(tag: string, missing: readonly MissingPart[]): string {
+  if (missing.length === 0) return `Copied context for ${tag}.`;
+  return (
+    `Copied context for ${tag} without the ${missing.join(" and ")}. ` +
+    `PromptWorkspace did not answer in time.`
+  );
+}
+
+type Settled<T> = { ok: true; value: T } | { ok: false };
+
+/** Resolves with the value, or `{ ok: false }` if the promise rejects or does not settle in time. */
+function settle<T>(promise: Promise<T>, timeoutMs: number): Promise<Settled<T>> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false }), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ ok: true, value });
+      },
+      () => {
+        clearTimeout(timer);
+        resolve({ ok: false });
+      },
+    );
+  });
+}
+
+function isNotFound(err: unknown): boolean {
+  return err instanceof CloudHttpError && err.status === 404;
 }
 
 /** The task page in the web app; shared by "Open in the web app" and the copied context. */
@@ -112,8 +164,9 @@ async function specifyExcerpt(
     const stage = await client.getStageDocument(entry.project_id, "specify");
     return stage.content ? capped(stage.content) : null;
   } catch (err) {
+    if (isNotFound(err)) return null;
     log.info(`specification unavailable: ${String(err)}`);
-    return null;
+    throw err;
   }
 }
 
@@ -129,8 +182,9 @@ async function planExcerpt(
     if (!spec?.content) return null;
     return capped(spec.content);
   } catch (err) {
-    // A missing excerpt degrades the copy; it must never fail it.
+    // The caller turns a throw into "missing": the copy degrades, never fails.
+    if (isNotFound(err)) return null;
     log.info(`plan excerpt unavailable: ${String(err)}`);
-    return null;
+    throw err;
   }
 }

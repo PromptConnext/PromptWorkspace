@@ -37,7 +37,7 @@ import { linkCandidatesFrom, pickerCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
-import { buildTaskContext, taskWebUrl } from "./tasks/copyContext.ts";
+import { buildTaskContext, copiedMessage, taskWebUrl } from "./tasks/copyContext.ts";
 import { StatusQueue, belongsTo, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
@@ -565,14 +565,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           .repositories()
           .find((r) => link.projectIdForRepoRoot(r.root) === entry.project_id);
         const { webUrl } = readConfig();
-        await vscode.env.clipboard.writeText(
-          await buildTaskContext(entry, client, docs, log, {
-            branch: repo?.head?.name,
-            webUrl: webUrl ? taskWebUrl(webUrl, entry) : undefined,
-          }),
+        const context = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Copying task context…",
+          },
+          () =>
+            buildTaskContext(entry, client, docs, log, {
+              branch: repo?.head?.name,
+              webUrl: webUrl ? taskWebUrl(webUrl, entry) : undefined,
+            }),
         );
+        await vscode.env.clipboard.writeText(context.text);
         void vscode.window.showInformationMessage(
-          `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
+          copiedMessage(entry.task.feature_tag ?? entry.task.title, context.missing),
         );
       },
     ),

@@ -15,7 +15,7 @@
 // because `vscode.workspace.fs` is the reader an editor should use.
 
 import * as vscode from "vscode";
-import { SEEDED_DOCS, sameDocText, seededDocFor, type CloudClient, type SeededDocKey } from "@promptworkspace/cloud-client";
+import { CloudHttpError, SEEDED_DOCS, sameDocText, seededDocFor, type CloudClient, type SeededDocKey } from "@promptworkspace/cloud-client";
 import type { OutputLogger } from "../util/log.ts";
 
 export { SEEDED_DOCS, type SeededDocKey };
@@ -63,7 +63,16 @@ export class RepoDocs {
       if (text) return text;
     }
     if (key !== "constitution") return null;
-    return this.cloudConstitution(projectId);
+    // Unlike `cloudConstitution`, an outage throws here (an absent document is
+    // still null), so copy-task-context can say the rules are missing.
+    try {
+      const stage = await this.client.getStageDocument(projectId, "constitution");
+      return stage.content || null;
+    } catch (err) {
+      if (err instanceof CloudHttpError && err.status === 404) return null;
+      this.log.info(`constitution unavailable from cloud: ${String(err)}`);
+      throw err;
+    }
   }
 
   /** The cloud's constitution text, or null when it has none or is unreachable. */
