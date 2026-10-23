@@ -244,6 +244,11 @@ async def lifespan(app: FastAPI):
     app.state.decision_mailer = build_decision_mailer(settings)
     if isinstance(app.state.decision_mailer, NullDecisionMailer):
         logger.info("Decision email disabled: SMTP_HOST or SMTP_FROM not set")
+    from app.integrations.line import build_line_notifier
+
+    app.state.line_notifier = build_line_notifier(settings, app.state.repository)
+    if not app.state.line_notifier.enabled:
+        logger.info("LINE notifications disabled: LINE_CHANNEL_SECRET or token not set")
     logger.info(
         "PromptWorkspace Cloud %s started (backend=%s)",
         __version__,
@@ -270,6 +275,7 @@ async def lifespan(app: FastAPI):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):
             await reconcile_task
+        app.state.line_notifier.shutdown()
 
 
 def create_app() -> FastAPI:

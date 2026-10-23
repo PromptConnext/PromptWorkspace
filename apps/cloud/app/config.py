@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
 
+    # LINE notifications (plan 0032). Env only; an empty secret or token turns
+    # the feature off and nothing is sent. The basic id (e.g. "@123abcde") is
+    # optional and only used to build the "add the bot" link in settings.
+    line_channel_secret: str = ""
+    line_channel_access_token: str = ""
+    line_bot_basic_id: str = ""
+
     # Decision timeouts (enterprise AI v2.1 D1).
     decision_ttl_days: int = 7
     decision_reminder_hours: int = 48
