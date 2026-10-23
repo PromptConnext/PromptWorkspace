@@ -16,11 +16,21 @@ const ERROR_COPY: Record<string, string> = {
   line_send_failed: "Could not send the test message. Try again.",
   line_not_connected: "Connect a LINE group first.",
   line_not_configured: "LINE notifications are not set up on this server.",
+  admin_required: "Only workspace admins can change this.",
 };
 
+const UNKNOWN_ERROR = "Something went wrong. Try again.";
+
+/** Known codes get their copy; any other server code is not shown raw. */
 function errorCopy(e: unknown, fallback: string): string {
   const message = e instanceof Error ? e.message : "";
-  return ERROR_COPY[message] ?? (message || fallback);
+  if (!message) return fallback;
+  return ERROR_COPY[message] ?? UNKNOWN_ERROR;
+}
+
+/** LINE's add-friend link for a bot's basic id ("@abc" → ".../%40abc"). */
+function botLink(basicId: string): string {
+  return `https://line.me/R/ti/p/%40${encodeURIComponent(basicId.replace(/^@/, ""))}`;
 }
 
 const BUTTON =
@@ -122,11 +132,14 @@ export function LineNotificationsPanel({
       <p className="text-sm text-slate-600">LINE notifications are not set up on this server.</p>
     );
   } else if (status?.connected) {
-    const since = status.linked_at ? new Date(status.linked_at).toLocaleDateString() : "";
+    const since = status.linked_at
+      ? ` since ${new Date(status.linked_at).toLocaleDateString()}`
+      : "";
     body = (
       <>
         <p className="text-sm text-slate-700">
-          Connected to {status.group_name || "a LINE group"} since {since}.
+          Connected to {status.group_name || "a LINE group"}
+          {since}.
         </p>
         {isAdmin && (
           <div className="mt-3 flex gap-2">
@@ -146,7 +159,21 @@ export function LineNotificationsPanel({
       <>
         <p className="text-sm text-slate-700">
           1. Add the PromptWorkspace bot to your LINE group
-          {code.bot_basic_id ? ` (${code.bot_basic_id})` : ""}.
+          {code.bot_basic_id && (
+            <>
+              {" ("}
+              <a
+                href={botLink(code.bot_basic_id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {code.bot_basic_id}
+              </a>
+              )
+            </>
+          )}
+          .
         </p>
         <p className="mt-1 text-sm text-slate-700">
           2. Type this in the group:{" "}

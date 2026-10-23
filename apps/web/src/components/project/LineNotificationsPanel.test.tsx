@@ -65,9 +65,13 @@ describe("LineNotificationsPanel", () => {
     render(<LineNotificationsPanel projectId="p1" isAdmin />);
     await userEvent.click(await screen.findByRole("button", { name: "Connect LINE group" }));
     expect(await screen.findByText("link PW-ABC123")).toBeInTheDocument();
-    expect(
-      screen.getByText("1. Add the PromptWorkspace bot to your LINE group (@pwbot)."),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/1\. Add the PromptWorkspace bot to your LINE group/)).toHaveTextContent(
+      "1. Add the PromptWorkspace bot to your LINE group (@pwbot).",
+    );
+    const bot = screen.getByRole("link", { name: "@pwbot" });
+    expect(bot).toHaveAttribute("href", "https://line.me/R/ti/p/%40pwbot");
+    expect(bot).toHaveAttribute("target", "_blank");
+    expect(bot.getAttribute("rel")).toContain("noopener");
     expect(screen.getByRole("button", { name: "Check connection" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
@@ -128,5 +132,40 @@ describe("LineNotificationsPanel", () => {
     render(<LineNotificationsPanel projectId="p1" isAdmin={false} />);
     expect(await screen.findByText(/Connected to Ops team since/)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("step 1 has no bot link when the server names no bot", async () => {
+    getLineStatus.mockResolvedValue(NOT_CONNECTED);
+    createLineLinkCode.mockResolvedValue({
+      code: "PW-ABC123",
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+      bot_basic_id: null,
+    });
+    render(<LineNotificationsPanel projectId="p1" isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Connect LINE group" }));
+    expect(
+      await screen.findByText("1. Add the PromptWorkspace bot to your LINE group."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("leaves out the date when the link has none", async () => {
+    getLineStatus.mockResolvedValue({ ...CONNECTED, linked_at: null });
+    render(<LineNotificationsPanel projectId="p1" isAdmin={false} />);
+    expect(await screen.findByText("Connected to Ops team.")).toBeInTheDocument();
+  });
+
+  it("maps admin_required and hides unknown error codes", async () => {
+    getLineStatus.mockResolvedValue(CONNECTED);
+    disconnectLine.mockRejectedValueOnce(new ApiError(403, "admin_required"));
+    render(<LineNotificationsPanel projectId="p1" isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(
+      await screen.findByText("Only workspace admins can change this."),
+    ).toBeInTheDocument();
+    sendLineTest.mockRejectedValueOnce(new ApiError(500, "line_link_store_failed"));
+    await userEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
+    expect(screen.queryByText("line_link_store_failed")).toBeNull();
   });
 });
