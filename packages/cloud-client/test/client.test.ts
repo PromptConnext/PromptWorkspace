@@ -11,12 +11,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { CloudClient } from "../src/client.ts";
 import { CloudHttpError, CloudNotLoggedInError } from "../src/errors.ts";
+import { memorySecrets, memoryState } from "./helpers.ts";
 import {
   SessionStore,
   fileLeaseStorage,
   type LeaseStorageLike,
   type RefreshLease,
-  type SecretsLike,
   type StorageLike,
 } from "../src/session.ts";
 
@@ -32,34 +32,6 @@ async function withServer(handler: Handler, fn: (base: string) => Promise<void>)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-}
-
-function memorySecrets(): SecretsLike {
-  const values = new Map<string, string>();
-  return {
-    async get(key) {
-      return values.get(key);
-    },
-    async store(key, value) {
-      values.set(key, value);
-    },
-    async delete(key) {
-      values.delete(key);
-    },
-  };
-}
-
-function memoryState(): StorageLike {
-  const values = new Map<string, unknown>();
-  return {
-    get<T>(key: string) {
-      return values.get(key) as T | undefined;
-    },
-    async update(key, value) {
-      if (value === undefined) values.delete(key);
-      else values.set(key, value);
-    },
-  };
 }
 
 const silentLog = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -523,7 +495,7 @@ function sharedLeases(): LeaseStorageLike {
     async read() {
       return cell.lease;
     },
-    async write(lease) {
+    async write(_scope, lease) {
       cell.lease = lease;
     },
   };
@@ -531,12 +503,12 @@ function sharedLeases(): LeaseStorageLike {
 
 /** Two "windows": separate clients and SessionStores over one shared secret
  *  store, one shared state store and one shared lease store. */
-function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}) {
+function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void>; scope?: string } = {}) {
   const secrets = memorySecrets();
   const state = memoryState();
   const leases = sharedLeases();
   const make = () => {
-    const session = new SessionStore(secrets, state, leases);
+    const session = new SessionStore(secrets, state, leases, () => opts.scope ?? "");
     const client = new CloudClient({
       session,
       config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
@@ -607,6 +579,17 @@ test("two clients over one store make one refresh call", async () => {
   });
 });
 
+test("two windows on one environment still share one session", async () => {
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, b } = twoWindows(base, { scope: "abc.supabase.co" });
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+    await Promise.all([a.client.listAssignedTasks(), b.client.listAssignedTasks()]);
+    assert.equal(cloud.refreshes(), 1);
+    assert.equal(await b.session.refreshToken(), "r1");
+  });
+});
+
 test("an expired lease is taken over", async () => {
   // A window that crashed mid-refresh leaves its lease behind. It must expire,
   // or one dead window stops every other window from ever refreshing.
@@ -622,15 +605,15 @@ test("an expired lease is taken over", async () => {
     await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
 
     // Already expired: taken at once.
-    await leases.write({ owner: "dead-window", until: t - 1 });
+    await leases.write("", { owner: "dead-window", until: t - 1 });
     assert.deepEqual(await a.client.listAssignedTasks(), []);
     assert.equal(cloud.refreshes(), 1);
-    assert.equal(await leases.read(), undefined, "released after the refresh");
+    assert.equal(await leases.read(""), undefined, "released after the refresh");
 
     // Live when we arrive, held by a window that never finishes: waited out
     // on the injected clock, then taken over.
     await a.session.store({ mode: "supabase", userId: "u1" }, "stale-again");
-    await leases.write({ owner: "dead-window", until: t + 5_000 });
+    await leases.write("", { owner: "dead-window", until: t + 5_000 });
     const before = t;
     assert.deepEqual(await a.client.listAssignedTasks(), []);
     assert.equal(cloud.refreshes(), 2);
@@ -726,7 +709,7 @@ function replicatedWindows(base: string, deliveryMs: number) {
     const state: StorageLike = { get: (key) => stateCopy.get(key), update: (key, value) => stateCopy.set(key, value) };
     const leases: LeaseStorageLike = {
       read: async () => leaseCopy.get<RefreshLease>("lease"),
-      write: (lease) => leaseCopy.set("lease", lease),
+      write: (_scope, lease) => leaseCopy.set("lease", lease),
     };
     const lost: string[] = [];
     const session = new SessionStore(secrets, state, leases);
@@ -814,13 +797,13 @@ test("a file-backed lease round-trips, and anything unreadable is no lease", asy
     },
   };
   const leases = fileLeaseStorage(store);
-  assert.equal(await leases.read(), undefined);
-  await leases.write({ owner: "w1", until: 5 });
-  assert.deepEqual(await leases.read(), { owner: "w1", until: 5 });
-  await leases.write(undefined);
-  assert.equal(await leases.read(), undefined);
+  assert.equal(await leases.read(""), undefined);
+  await leases.write("", { owner: "w1", until: 5 });
+  assert.deepEqual(await leases.read(""), { owner: "w1", until: 5 });
+  await leases.write("", undefined);
+  assert.equal(await leases.read(""), undefined);
   files.set("refresh-lease.json", "{not json");
-  assert.equal(await leases.read(), undefined);
+  assert.equal(await leases.read(""), undefined);
 
   // A store that throws costs the lease, never the session.
   const broken: LeaseStorageLike = {
