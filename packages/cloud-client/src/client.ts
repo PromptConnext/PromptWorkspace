@@ -177,14 +177,18 @@ export class CloudClient {
   }
 
   private async doRefresh(rejectedAccess?: string): Promise<string | null> {
+    // Every session read and write below uses the environment the refresh
+    // started in: a settings change midway must not store this environment's
+    // rotated pair under the next one, or sign the next one out.
+    const scope = this.deps.session.currentScope();
     // Another window may have refreshed since this request was built: if the
     // stored access token is not the one that just got a 401, use it and leave
     // the refresh token alone. This removes most of the cross-window race.
-    const stored = await this.deps.session.accessToken();
+    const stored = await this.deps.session.accessToken(scope);
     if (rejectedAccess && stored && stored !== rejectedAccess) return stored;
 
-    if (!(await this.deps.session.refreshToken())) return null;
-    if (!this.deps.session.read()) return null;
+    if (!(await this.deps.session.refreshToken(scope))) return null;
+    if (!this.deps.session.read(scope)) return null;
 
     // One window refreshes at a time. If another holds the lease, wait for
     // the pair it stores (`adopt`). Otherwise refresh: holding the lease, or —
@@ -193,14 +197,14 @@ export class CloudClient {
     // own; `awaitRotatedSession` settles a collision. `failed` is the token
     // this window last had: anything else stored later is newer.
     const failed = rejectedAccess ?? stored;
-    const turn = await this.awaitRefreshTurn(failed);
+    const turn = await this.awaitRefreshTurn(scope, failed);
     if (turn.kind === "adopt") return turn.accessToken;
     if (turn.kind === "signed_out") return null;
     try {
-      return await this.refreshHoldingLease(failed);
+      return await this.refreshHoldingLease(scope, failed);
     } finally {
-      if ((await this.deps.session.readRefreshLease())?.owner === this.leaseOwner) {
-        await this.deps.session.writeRefreshLease(undefined);
+      if ((await this.deps.session.readRefreshLease(scope))?.owner === this.leaseOwner) {
+        await this.deps.session.writeRefreshLease(undefined, scope);
       }
     }
   }
@@ -216,6 +220,7 @@ export class CloudClient {
    * the lease (`no_lease`) rather than failing the request.
    */
   private async awaitRefreshTurn(
+    scope: string,
     failedAccess: string | undefined,
   ): Promise<
     | { kind: "lease" }
@@ -225,17 +230,17 @@ export class CloudClient {
   > {
     const deadline = this.now() + 2 * LEASE_MS;
     for (;;) {
-      const lease = await this.deps.session.readRefreshLease();
+      const lease = await this.deps.session.readRefreshLease(scope);
       const free = !lease || lease.owner === this.leaseOwner || lease.until <= this.now();
-      if (free && (await this.takeRefreshLease())) return { kind: "lease" };
+      if (free && (await this.takeRefreshLease(scope))) return { kind: "lease" };
 
-      const access = await this.deps.session.accessToken();
+      const access = await this.deps.session.accessToken(scope);
       if (access && access !== failedAccess) {
         this.deps.log.info("another window refreshed the session; using its token");
         return { kind: "adopt", accessToken: access };
       }
       // Signed out (by another window, or by us) while waiting.
-      if (!(await this.deps.session.refreshToken()) || !this.deps.session.read()) {
+      if (!(await this.deps.session.refreshToken(scope)) || !this.deps.session.read(scope)) {
         return { kind: "signed_out" };
       }
       if (this.now() >= deadline) {
@@ -246,37 +251,40 @@ export class CloudClient {
     }
   }
 
-  private async takeRefreshLease(): Promise<boolean> {
-    await this.deps.session.writeRefreshLease({
-      owner: this.leaseOwner,
-      until: this.now() + LEASE_MS,
-    });
+  private async takeRefreshLease(scope: string): Promise<boolean> {
+    await this.deps.session.writeRefreshLease(
+      { owner: this.leaseOwner, until: this.now() + LEASE_MS },
+      scope,
+    );
     await this.sleep(LEASE_SETTLE_MS);
-    const won = (await this.deps.session.readRefreshLease())?.owner === this.leaseOwner;
+    const won = (await this.deps.session.readRefreshLease(scope))?.owner === this.leaseOwner;
     if (!won) this.deps.log.info("lost the refresh lease to another window; waiting for its refresh");
     return won;
   }
 
-  private async refreshHoldingLease(failedAccess: string | undefined): Promise<string | null> {
+  private async refreshHoldingLease(
+    scope: string,
+    failedAccess: string | undefined,
+  ): Promise<string | null> {
     // Re-read under the lease: the previous holder may have just stored a
     // fresh pair, and spending its refresh token again would lose the
     // rotation we waited to avoid.
-    const stored = await this.deps.session.accessToken();
+    const stored = await this.deps.session.accessToken(scope);
     if (stored && stored !== failedAccess) return stored;
-    const refreshToken = await this.deps.session.refreshToken();
+    const refreshToken = await this.deps.session.refreshToken(scope);
     if (!refreshToken) return null;
-    const session = this.deps.session.read();
+    const session = this.deps.session.read(scope);
     if (!session) return null;
     try {
       const next = await this.supabaseRefresh(refreshToken);
-      await this.deps.session.store(session, next.token, next.refreshToken);
+      await this.deps.session.store(session, next.token, next.refreshToken, scope);
       return next.token;
     } catch (err) {
       if (err instanceof CloudRefreshInvalidError) {
         // Rejected, but not necessarily gone: another window may have won the
         // rotation and stored the new pair. Only a rejection of the token that
         // is still the stored one is definitive.
-        const rotation = await this.awaitRotatedSession(refreshToken, failedAccess);
+        const rotation = await this.awaitRotatedSession(scope, refreshToken, failedAccess);
         if (rotation.rotated) {
           this.deps.log.info("refresh lost the rotation to another window; using its session");
           return rotation.accessToken;
@@ -286,7 +294,7 @@ export class CloudClient {
         this.deps.log.warn(`refresh rejected, signing out: ${err.message}`);
         // Compare-and-clear: sign out only if the stored token is still the
         // rejected one, read immediately before deleting.
-        await this.deps.session.clearIfRefreshToken(refreshToken);
+        await this.deps.session.clearIfRefreshToken(refreshToken, scope);
       } else {
         this.deps.log.info(`refresh failed (offline?): ${String(err)}`);
       }
@@ -311,15 +319,16 @@ export class CloudClient {
    * `rotated: false` means the token never changed: the rejection is real.
    */
   private async awaitRotatedSession(
+    scope: string,
     rejected: string,
     staleAccess?: string,
   ): Promise<{ rotated: true; accessToken: string | null } | { rotated: false }> {
     let rotated = false;
     for (let look = 0; look < ROTATION_LOOKS; look++) {
-      const current = await this.deps.session.refreshToken();
+      const current = await this.deps.session.refreshToken(scope);
       if (current && current !== rejected) {
         rotated = true;
-        const access = await this.deps.session.accessToken();
+        const access = await this.deps.session.accessToken(scope);
         if (access && access !== staleAccess) return { rotated: true, accessToken: access };
       }
       if (look < ROTATION_LOOKS - 1) await this.sleep(ROTATION_LOOK_MS);

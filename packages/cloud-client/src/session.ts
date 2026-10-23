@@ -180,21 +180,28 @@ export class SessionStore {
     this.scope = scope;
   }
 
-  private key(base: string): string {
-    const scope = this.scope();
+  /** The environment this store reads and writes right now. A caller that
+   *  spans awaits (a token refresh) captures it once and passes it to the
+   *  methods below, so a settings change midway cannot split its reads and
+   *  writes across two environments. Every `scope` parameter defaults to it. */
+  currentScope(): string {
+    return this.scope();
+  }
+
+  private key(base: string, scope: string): string {
     return scope ? `${base}@${scope}` : base;
   }
 
-  read(): CloudSession | null {
-    return this.state.get<CloudSession>(this.key(SESSION_KEY)) ?? null;
+  read(scope = this.scope()): CloudSession | null {
+    return this.state.get<CloudSession>(this.key(SESSION_KEY, scope)) ?? null;
   }
 
-  async accessToken(): Promise<string | undefined> {
-    return this.secrets.get(this.key(ACCESS_SECRET));
+  async accessToken(scope = this.scope()): Promise<string | undefined> {
+    return this.secrets.get(this.key(ACCESS_SECRET, scope));
   }
 
-  async refreshToken(): Promise<string | undefined> {
-    return this.secrets.get(this.key(REFRESH_SECRET));
+  async refreshToken(scope = this.scope()): Promise<string | undefined> {
+    return this.secrets.get(this.key(REFRESH_SECRET, scope));
   }
 
   /** Emit `read()` under the current scope; call after a settings change. */
@@ -213,22 +220,26 @@ export class SessionStore {
     const access = await this.secrets.get(ACCESS_SECRET);
     if (record.mode === "supabase" && (!access || issuerHost(access) !== scope)) return false;
     const refresh = await this.secrets.get(REFRESH_SECRET);
-    await this.store(record, access, refresh);
+    await this.store(record, access, refresh, scope);
     await this.secrets.delete(ACCESS_SECRET);
     await this.secrets.delete(REFRESH_SECRET);
     await this.state.update(SESSION_KEY, undefined);
     return true;
   }
 
+  /** Listeners hear only about the environment the window is on now: a
+   *  refresh that finishes after a settings change still lands in its own
+   *  environment, but must not look like a sign-in to the new one. */
   async store(
     session: CloudSession,
     accessToken?: string,
     refreshToken?: string,
+    scope = this.scope(),
   ): Promise<void> {
-    if (accessToken) await this.secrets.store(this.key(ACCESS_SECRET), accessToken);
-    if (refreshToken) await this.secrets.store(this.key(REFRESH_SECRET), refreshToken);
-    await this.state.update(this.key(SESSION_KEY), session);
-    this.emit(session);
+    if (accessToken) await this.secrets.store(this.key(ACCESS_SECRET, scope), accessToken);
+    if (refreshToken) await this.secrets.store(this.key(REFRESH_SECRET, scope), refreshToken);
+    await this.state.update(this.key(SESSION_KEY, scope), session);
+    if (scope === this.scope()) this.emit(session);
   }
 
   /** Callers must also drop the task cache. The pending-write queue is
@@ -236,30 +247,30 @@ export class SessionStore {
    *  environment and account that made it, so one kept through an involuntary
    *  clear never flushes under the next user. `extension.ts` wires that; see
    *  onDidChange. */
-  async clear(): Promise<void> {
-    await this.secrets.delete(this.key(ACCESS_SECRET));
-    await this.secrets.delete(this.key(REFRESH_SECRET));
-    await this.state.update(this.key(SESSION_KEY), undefined);
-    this.emit(null);
+  async clear(scope = this.scope()): Promise<void> {
+    await this.secrets.delete(this.key(ACCESS_SECRET, scope));
+    await this.secrets.delete(this.key(REFRESH_SECRET, scope));
+    await this.state.update(this.key(SESSION_KEY, scope), undefined);
+    if (scope === this.scope()) this.emit(null);
   }
 
   /** Sign out only if the stored refresh token is still `rejected`, read
    *  immediately before deleting. Every editor window shares these secrets, so
    *  an unconditional `clear()` after a rejection can delete the session a
    *  concurrent window has just stored. Returns whether it cleared. */
-  async clearIfRefreshToken(rejected: string): Promise<boolean> {
-    const current = await this.secrets.get(this.key(REFRESH_SECRET));
+  async clearIfRefreshToken(rejected: string, scope = this.scope()): Promise<boolean> {
+    const current = await this.secrets.get(this.key(REFRESH_SECRET, scope));
     if (current !== undefined && current !== rejected) return false;
-    await this.clear();
+    await this.clear(scope);
     return true;
   }
 
   /** The refresh lease (see LeaseStorageLike). There is no compare-and-set
    *  across windows, so CloudClient writes, waits a moment and reads back
    *  before trusting it holds the lease — and survives being wrong. */
-  async readRefreshLease(): Promise<RefreshLease | undefined> {
+  async readRefreshLease(scope = this.scope()): Promise<RefreshLease | undefined> {
     try {
-      return await this.leases.read(this.scope());
+      return await this.leases.read(scope);
     } catch {
       return undefined;
     }
@@ -267,9 +278,9 @@ export class SessionStore {
 
   /** Never throws: a lease that cannot be written (two windows renaming the
    *  same temp file) only costs the de-duplication, never the refresh. */
-  async writeRefreshLease(lease: RefreshLease | undefined): Promise<void> {
+  async writeRefreshLease(lease: RefreshLease | undefined, scope = this.scope()): Promise<void> {
     try {
-      await this.leases.write(this.scope(), lease);
+      await this.leases.write(scope, lease);
     } catch {
       /* best-effort by design */
     }

@@ -827,3 +827,57 @@ test("hasRefreshToken reads whether the session can still be refreshed", async (
   await session.clearIfRefreshToken("r1");
   assert.equal(await client.hasRefreshToken(), false);
 });
+
+/** A window whose environment setting changes while its refresh is on the
+ *  wire. `fetch` flips the scope from A to B on the auth call. */
+function rescopedMidRefresh(refreshStatus: number) {
+  const secrets = memorySecrets();
+  const state = memoryState();
+  let scope = "a.supabase.co";
+  const session = new SessionStore(secrets, state, undefined, () => scope);
+  const client = new CloudClient({
+    session,
+    config: () => ({ apiUrl: "http://api", supabaseUrl: "http://sb", supabaseAnonKey: "anon" }),
+    fetch: async (input) => {
+      if (String(input).includes("/auth/v1/token")) {
+        scope = "b.supabase.co";
+        return refreshStatus === 200
+          ? new Response(JSON.stringify({ access_token: "access-1", refresh_token: "r1" }), {
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(JSON.stringify({ error: "invalid_grant" }), { status: refreshStatus });
+      }
+      return new Response(JSON.stringify({ detail: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    log: silentLog,
+  });
+  return { client, session, secrets, state, setScope: (s: string) => (scope = s) };
+}
+
+test("a refresh stores the rotated pair under the environment it started in", async () => {
+  const { client, session, secrets, setScope } = rescopedMidRefresh(200);
+  await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+  await client.listAssignedTasks().catch(() => undefined);
+  assert.equal(await secrets.get("promptworkspace.cloud.access@a.supabase.co"), "access-1");
+  assert.equal(await secrets.get("promptworkspace.cloud.refresh@a.supabase.co"), "r1");
+  assert.equal(await secrets.get("promptworkspace.cloud.access@b.supabase.co"), undefined);
+  assert.equal(await secrets.get("promptworkspace.cloud.refresh@b.supabase.co"), undefined);
+  assert.equal(session.read(), null, "B has no session");
+  setScope("a.supabase.co");
+  assert.deepEqual(session.read(), { mode: "supabase", userId: "u1" });
+});
+
+test("a refresh rejected after a scope change signs out the environment it started in", async () => {
+  const { client, session, setScope } = rescopedMidRefresh(400);
+  setScope("b.supabase.co");
+  await session.store({ mode: "supabase", userId: "u2" }, "b-access", "b-refresh");
+  setScope("a.supabase.co");
+  await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+  await client.listAssignedTasks().catch(() => undefined);
+  assert.deepEqual(session.read(), { mode: "supabase", userId: "u2" }, "B's session survives");
+  setScope("a.supabase.co");
+  assert.equal(session.read(), null, "A's rejected session is gone");
+});
