@@ -34,6 +34,7 @@ def test_verify_signature_accepts_good_rejects_bad_and_missing():
     assert not verify_signature("s3cret", body + b" ", good)
     assert not verify_signature("s3cret", body, None)
     assert not verify_signature("s3cret", body, "")
+    assert verify_signature("s3cret", body, "\u00e9\u00ff") is False
 
 
 def test_notifier_pushes_built_text_to_linked_group_in_workspace_language():

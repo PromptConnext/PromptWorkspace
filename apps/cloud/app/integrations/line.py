@@ -93,7 +93,8 @@ class RecordingLineClient:
 
 
 def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
-    if not signature:
+    # compare_digest raises TypeError on non-ASCII str; a header is untrusted.
+    if not signature or not signature.isascii():
         return False
     digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
     return hmac.compare_digest(base64.b64encode(digest).decode(), signature)
