@@ -154,6 +154,29 @@ def discussion(project: str, author: str, about: str, link: str, lang: Lang) -> 
     )
 
 
+def _names(authors: list[str], cap: int = 3) -> str:
+    shown = ", ".join(_v(a) for a in authors[:cap])
+    return f"{shown}, +{len(authors) - cap}" if len(authors) > cap else shown
+
+
+def discussion_batch(
+    project: str, count: int, about: str, authors: list[str], link: str, lang: Lang
+) -> str:
+    """Several comments the throttle held back, reported in one notice."""
+    who = _names(authors)
+    if lang == "th":
+        return _msg(
+            project,
+            f"มีความคิดเห็นใหม่ {count} รายการใน{_v(about)} จาก {who} อาจมีคำถามที่ต้องการคำตอบ",
+            f"เปิดดู: {_v(link)}",
+        )
+    return _msg(
+        project,
+        f"{count} new comments on {_v(about)} from {who}. Someone may need to answer.",
+        f"Open: {_v(link)}",
+    )
+
+
 def linked(project: str, lang: Lang) -> str:
     name = _v(project)
     if lang == "th":

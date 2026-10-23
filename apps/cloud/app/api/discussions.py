@@ -102,21 +102,34 @@ def _notify_line(
     request: Request, project: Project, user: User, discussion: Discussion, repo: Repository
 ) -> None:
     state = request.app.state
-    if not state.discussion_throttle.allow(project.id, discussion.parent_node_id, utcnow()):
+    notifier = state.line_notifier
+    # Nothing to send: read nothing more and leave the window untouched.
+    if not notifier.enabled:
         return
-    members = repo.list_members(project.workspace_id)
-    author = next((m.email for m in members if m.user_id == user.id and m.email), user.email)
-    kind, ref, title = _about(
-        repo, project.id, discussion.parent_node_type, discussion.parent_node_id
+    # One cheap read on the request thread, so a comment made while the project
+    # is unlinked never uses up the window. The throttle stays here too (rather
+    # than on the two-thread worker) so it sees comments in request order.
+    if repo.get_project_line_link(project.id) is None:
+        return
+    burst = state.discussion_throttle.allow(
+        project.id, discussion.parent_node_id, user.id, utcnow()
     )
-    link = f"{state.settings.web_app_url}/w/{project.workspace_id}/p/{project.id}?tab=discussion"
-    state.line_notifier.notify_project(
-        project.id,
-        lambda lang: line_notices.discussion(
-            project.name,
-            author or "Someone",
-            line_notices.about_label(kind, ref, title, lang),
-            link,
-            lang,
-        ),
-    )
+    if burst is None:
+        return
+    web = state.settings.web_app_url.rstrip("/")
+    link = f"{web}/w/{project.workspace_id}/p/{project.id}?tab=discussion"
+    node_type, node_id = discussion.parent_node_type, discussion.parent_node_id
+
+    def build(lang: line_notices.Lang) -> str:
+        # Runs on the LINE worker: these lookups stay off the request thread.
+        emails = {m.user_id: m.email for m in repo.list_members(project.workspace_id)}
+        emails[user.id] = emails.get(user.id) or user.email
+        authors = [emails[a] for a in burst.authors if emails.get(a)] or ["Someone"]
+        about = line_notices.about_label(*_about(repo, project.id, node_type, node_id), lang)
+        if burst.count == 1:
+            return line_notices.discussion(project.name, authors[0], about, link, lang)
+        return line_notices.discussion_batch(
+            project.name, burst.count, about, authors, link, lang
+        )
+
+    notifier.notify_project(project.id, build)

@@ -274,20 +274,95 @@ def test_discussion_on_spec_names_the_specification(client, project, line):
     assert "commented on the specification" in text
 
 
-def test_discussion_burst_on_one_node_pushes_once_per_10_minutes(client, project, line):
-    from app.delivery.line_throttle import DiscussionThrottle
+def _at(monkeypatch, when):
+    monkeypatch.setattr("app.api.discussions.utcnow", lambda: when)
 
+
+def test_discussion_burst_is_summarised_by_the_next_send(client, project, line, monkeypatch):
     tid = _task(client, project)
-    throttle = DiscussionThrottle()
     t0 = utcnow()
 
-    assert throttle.allow(project, tid, t0)
-    assert not throttle.allow(project, tid, t0 + timedelta(minutes=9, seconds=59))
-    assert throttle.allow(project, tid, t0 + timedelta(minutes=10))
-
-    for _ in range(3):
-        _comment(client, project, "tasks", tid)
+    _at(monkeypatch, t0)
+    _comment(client, project, "tasks", tid)
+    _at(monkeypatch, t0 + timedelta(minutes=1))
+    _comment(client, project, "tasks", tid, headers=ALICE)
+    _comment(client, project, "tasks", tid)
     assert len(line.pushed) == 1
+
+    _at(monkeypatch, t0 + timedelta(minutes=10))
+    _comment(client, project, "tasks", tid)
+
+    ((_, first), (_, second)) = line.pushed
+    assert "bob@x.com commented on T012 Book a slot" in first
+    assert ("3 new comments on T012 Book a slot from "
+            "alice@promptworkspace.local, bob@x.com.") in second
+    assert "0812345678" not in second
+
+
+def test_comment_while_unlinked_does_not_use_up_the_window(client, project, line):
+    tid = _task(client, project)
+    repo = client.app.state.repository
+    repo.delete_project_line_link(project)
+
+    _comment(client, project, "tasks", tid)
+    _link(repo, project)
+    _comment(client, project, "tasks", tid)
+
+    ((_, text),) = line.pushed
+    assert "bob@x.com commented on T012 Book a slot" in text
+
+
+def test_discussion_with_line_off_reads_nothing_more(client, project, monkeypatch):
+    client.app.state.line_notifier = LineNotifier(
+        None, client.app.state.repository, InlineExecutor())
+    tid = _task(client, project)
+    repo = client.app.state.repository
+    reads: list[str] = []
+    for name in ("list_members", "get_project_line_link"):
+        real = getattr(repo, name)
+        monkeypatch.setattr(repo, name, lambda *a, _n=name, _r=real: reads.append(_n) or _r(*a))
+    allow = client.app.state.discussion_throttle.allow
+    monkeypatch.setattr(client.app.state.discussion_throttle, "allow",
+                        lambda *a: reads.append("throttle") or allow(*a))
+
+    assert _comment(client, project, "tasks", tid).status_code == 201
+    assert reads == []
+
+
+def test_discussion_lookups_run_on_the_worker(client, project, monkeypatch):
+    held: list = []
+
+    class HeldExecutor(Executor):
+        def submit(self, fn, /, *args, **kwargs):
+            held.append((fn, args))
+            return Future()
+
+    recorder = RecordingLineClient()
+    repo = client.app.state.repository
+    client.app.state.line_notifier = LineNotifier(recorder, repo, HeldExecutor())
+    tid = _task(client, project)
+    calls: list[str] = []
+    real = repo.list_members
+    monkeypatch.setattr(repo, "list_members", lambda *a: calls.append("m") or real(*a))
+
+    _comment(client, project, "tasks", tid)
+    assert calls == [] and len(held) == 1
+
+    fn, args = held[0]
+    fn(*args)
+    assert calls == ["m"]
+    ((_, text),) = recorder.pushed
+    assert "bob@x.com commented on T012 Book a slot" in text
+
+
+def test_discussion_link_survives_a_trailing_slash(client, project, line):
+    client.app.state.settings.web_app_url = "https://w.example/"
+    tid = _task(client, project)
+
+    _comment(client, project, "tasks", tid)
+
+    ((_, text),) = line.pushed
+    assert "https://w.example/w/" in text and "example//w" not in text
 
 
 def test_comments_on_two_nodes_push_twice(client, project, line):

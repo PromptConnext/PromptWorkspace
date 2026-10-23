@@ -114,6 +114,22 @@ def test_discussion():
     )
 
 
+def test_discussion_batch():
+    assert ln.discussion_batch("Acme", 3, "T-12 Login page", ["Bo", "Ann"], L, "en") == (
+        f"{H}\n3 new comments on T-12 Login page from Bo, Ann. Someone may need to answer."
+        f"\nOpen: {L}"
+    )
+    assert ln.discussion_batch("Acme", 3, "แผนงาน", ["Bo", "Ann"], L, "th") == (
+        f"{H}\nมีความคิดเห็นใหม่ 3 รายการในแผนงาน จาก Bo, Ann อาจมีคำถามที่ต้องการคำตอบ"
+        f"\nเปิดดู: {L}"
+    )
+
+
+def test_discussion_batch_names_three_authors_then_counts_the_rest():
+    text = ln.discussion_batch("Acme", 6, "the plan", ["A", "B", "C", "D", "E"], L, "en")
+    assert "6 new comments on the plan from A, B, C, +2." in text
+
+
 def test_about_labels():
     assert ln.about_label("task", "T-1", "Hi", "en") == "T-1 Hi"
     assert ln.about_label("task", "T-1", "Hi", "th") == "T-1 Hi"
