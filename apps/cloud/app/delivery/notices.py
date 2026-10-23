@@ -4,7 +4,7 @@ which may hold personal data."""
 
 from __future__ import annotations
 
-from app.models.schemas import Decision, WorkspaceMember
+from app.models.schemas import Decision, ProjectRole, WorkspaceMember
 
 HAT_LABEL = {"business_owner": "business owner", "tech_steward": "tech steward"}
 KIND_LABEL = {"intent_approval": "intent", "plan_approval": "delivery plan"}
@@ -15,6 +15,15 @@ def _line(text: str) -> str:
     """One header-safe line: CR/LF in a name would make EmailMessage refuse
     every subject."""
     return text.replace("\r", " ").replace("\n", " ")
+
+
+def line_who(
+    decision: Decision, roles: list[ProjectRole], members: list[WorkspaceMember]
+) -> str | None:
+    """The one person a LINE notice names: the routed hat's holder while they
+    are a member. None means the admins decide (any-admin wording)."""
+    holder = next((r.user_id for r in roles if r.hat == decision.routed_hat), None)
+    return next((m.email for m in members if m.user_id == holder and m.email), None)
 
 
 def decision_link(web_app_url: str, decision: Decision) -> str:

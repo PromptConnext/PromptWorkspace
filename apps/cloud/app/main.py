@@ -117,7 +117,7 @@ async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
         try:
             result = await asyncio.to_thread(
                 sweep_decisions, app.state.repository, app.state.decision_mailer,
-                settings, utcnow())
+                settings, utcnow(), app.state.line_notifier)
             if result.expired or result.reminded:
                 logger.info("Decision sweep: %s expired, %s reminded", *result)
         except Exception:  # noqa: BLE001 - the sweep must never crash the app
