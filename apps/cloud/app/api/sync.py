@@ -1215,7 +1215,7 @@ def set_task_status(
             link = f"{web}/w/{project.workspace_id}/p/{project_id}?tab=tasks&task={task_id}"
             request.app.state.line_notifier.notify_project(project_id, partial(
                 line_notices.ready_to_verify, project.name,
-                updated.feature_tag or "", updated.title, link))
+                (updated.feature_tag or "").removesuffix(" [P]"), updated.title, link))
         except Exception:
             logger.exception("ready-to-verify LINE notice failed, project=%s task=%s",
                              project_id, task_id)

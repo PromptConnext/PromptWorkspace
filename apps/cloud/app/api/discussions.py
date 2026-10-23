@@ -88,7 +88,8 @@ def _about(
     """(kind, ref, title) for `about_label`; no kind means "the project"."""
     node = repo.get_node(project_id, node_type, node_id)
     if node_type == "tasks" and isinstance(node, Task):
-        return "task", node.feature_tag, node.title
+        # "T012 [P]" carries the parallel marker; the reference is "T012".
+        return "task", (node.feature_tag or "").removesuffix(" [P]"), node.title
     if node_type == "spec_documents":
         return "spec", None, None
     stage = getattr(node, "stage", None) if node_type == "stage_documents" else None

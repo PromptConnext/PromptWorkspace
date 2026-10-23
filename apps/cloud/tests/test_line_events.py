@@ -298,3 +298,23 @@ def test_comments_on_two_nodes_push_twice(client, project, line):
     _comment(client, project, "tasks", second)
 
     assert len(line.pushed) == 2
+
+
+def test_parallel_task_ready_to_verify_drops_the_p_marker(client, project, line):
+    tid = _task(client, project, tag="T012 [P]")
+
+    _status(client, project, tid, "implemented")
+
+    ((_, text),) = line.pushed
+    assert "T012 Book a slot is implemented" in text
+    assert "[P]" not in text
+
+
+def test_parallel_task_discussion_drops_the_p_marker(client, project, line):
+    tid = _task(client, project, tag="T012 [P]")
+
+    _comment(client, project, "tasks", tid)
+
+    ((_, text),) = line.pushed
+    assert "commented on T012 Book a slot" in text
+    assert "[P]" not in text
