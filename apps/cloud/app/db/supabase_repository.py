@@ -57,10 +57,12 @@ from app.models.schemas import (
     GraphUpsertRequest,
     Invitation,
     InvitationStatus,
+    LineLinkCode,
     ModelConnection,
     PolicyScope,
     Project,
     ProjectGraph,
+    ProjectLineLink,
     ProjectRole,
     PullRequest,
     RagChunkHit,
@@ -142,6 +144,8 @@ _MISSING_COLUMN_CODES = frozenset({"PGRST204", "42703"})
 _UNIQUE_VIOLATION = "23505"
 _REPO_ANALYSES = "pw_repo_analyses"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
+_LINE_LINKS = "pw_project_line_links"
+_LINE_CODES = "pw_line_link_codes"
 _WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
 _DEPLOYMENTS = "pw_deployments"
 _DEPLOYMENT_TASKS = "pw_deployment_tasks"
@@ -211,6 +215,11 @@ _SERVICE_ONLY_TABLES = frozenset(
         "pw_delivery_changes",
         "pw_decisions",
         "pw_project_roles",
+        # Migration 0010 (plan 0032): born service-only. A LINE group id is
+        # the address notifications go to; a member must not read another
+        # project's. Every rule lives in the LINE routes.
+        "pw_project_line_links",
+        "pw_line_link_codes",
     }
 )
 
@@ -328,6 +337,7 @@ class SupabaseRepository(Repository):
         git_config: dict | None = None,
         integration_config: dict | None = None,
         rag_index_pmo_discussions: bool | None = None,
+        language: str | None = None,
     ) -> Workspace:
         patch: dict = {"updated_at": utcnow().isoformat()}
         if name is not None:
@@ -338,6 +348,8 @@ class SupabaseRepository(Repository):
             patch["integration_config"] = integration_config
         if rag_index_pmo_discussions is not None:
             patch["rag_index_pmo_discussions"] = rag_index_pmo_discussions
+        if language is not None:
+            patch["language"] = language
         self._table(_WORKSPACES).update(patch).eq("id", workspace_id).execute()
         ws = self.get_workspace(workspace_id)
         if ws is None:
@@ -1955,6 +1967,37 @@ class SupabaseRepository(Repository):
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
         self._table(_REPO_ANALYSES).upsert(_dump(stored), on_conflict="project_id").execute()
         return stored
+
+    # -- LINE notifications (plan 0032) ----------------------------------- #
+    def get_project_line_link(self, project_id: str) -> ProjectLineLink | None:
+        res = self._table(_LINE_LINKS).select("*").eq("project_id", project_id).limit(1).execute()
+        rows = res.data or []
+        return ProjectLineLink(**rows[0]) if rows else None
+
+    def set_project_line_link(self, link: ProjectLineLink) -> ProjectLineLink:
+        self._table(_LINE_LINKS).upsert(_dump(link), on_conflict="project_id").execute()
+        return link
+
+    def delete_project_line_link(self, project_id: str) -> bool:
+        res = self._table(_LINE_LINKS).delete().eq("project_id", project_id).execute()
+        return bool(res.data)
+
+    def delete_line_links_for_group(self, group_id: str) -> int:
+        res = self._table(_LINE_LINKS).delete().eq("group_id", group_id).execute()
+        return len(res.data or [])
+
+    def put_line_link_code(self, code: LineLinkCode) -> None:
+        self._table(_LINE_CODES).delete().eq("project_id", code.project_id).execute()
+        self._table(_LINE_CODES).insert(_dump(code)).execute()
+
+    def take_line_link_code(self, code: str, now: datetime) -> LineLinkCode | None:
+        # Delete-returning is the burn: of two racing takers only one gets the row.
+        res = self._table(_LINE_CODES).delete().eq("code", code).execute()
+        rows = res.data or []
+        if not rows:
+            return None
+        found = LineLinkCode(**rows[0])
+        return None if found.expires_at <= now else found
 
 
 def _dump(model) -> dict:

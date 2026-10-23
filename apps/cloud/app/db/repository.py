@@ -39,10 +39,12 @@ from app.models.schemas import (
     GraphUpsertRequest,
     Invitation,
     InvitationStatus,
+    LineLinkCode,
     ModelConnection,
     PolicyScope,
     Project,
     ProjectGraph,
+    ProjectLineLink,
     ProjectRole,
     PullRequest,
     RagChunk,
@@ -150,6 +152,7 @@ class Repository(abc.ABC):
         git_config: dict | None = None,
         integration_config: dict | None = None,
         rag_index_pmo_discussions: bool | None = None,
+        language: str | None = None,
     ) -> Workspace: ...
 
     @abc.abstractmethod
@@ -861,6 +864,32 @@ class Repository(abc.ABC):
         """Replace the project's one current analysis. `updated_at` is stamped
         here, not trusted from the caller."""
 
+    # -- LINE notifications (plan 0032) ----------------------------------- #
+    @abc.abstractmethod
+    def get_project_line_link(self, project_id: str) -> ProjectLineLink | None: ...
+
+    @abc.abstractmethod
+    def set_project_line_link(self, link: ProjectLineLink) -> ProjectLineLink:
+        """Upsert by project: linking again replaces the old group."""
+
+    @abc.abstractmethod
+    def delete_project_line_link(self, project_id: str) -> bool:
+        """True when a link existed."""
+
+    @abc.abstractmethod
+    def delete_line_links_for_group(self, group_id: str) -> int:
+        """Drop every project's link to a group (the bot left it). Returns the count."""
+
+    @abc.abstractmethod
+    def put_line_link_code(self, code: LineLinkCode) -> None:
+        """Store a pending code, first deleting any other code for its project."""
+
+    @abc.abstractmethod
+    def take_line_link_code(self, code: str, now: datetime) -> LineLinkCode | None:
+        """Return and delete the code if unexpired at `now`. An expired code is
+        deleted and None returned."""
+
+
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
 
@@ -913,6 +942,9 @@ class InMemoryRepository(Repository):
         self._receipts: dict[str, list[Receipt]] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
+        # project_id -> link; code -> pending code (plan 0032)
+        self._line_links: dict[str, ProjectLineLink] = {}
+        self._line_codes: dict[str, LineLinkCode] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -944,6 +976,7 @@ class InMemoryRepository(Repository):
         git_config: dict | None = None,
         integration_config: dict | None = None,
         rag_index_pmo_discussions: bool | None = None,
+        language: str | None = None,
     ) -> Workspace:
         ws = self._workspaces[workspace_id]
         if name is not None:
@@ -954,6 +987,8 @@ class InMemoryRepository(Repository):
             ws.integration_config = integration_config
         if rag_index_pmo_discussions is not None:
             ws.rag_index_pmo_discussions = rag_index_pmo_discussions
+        if language is not None:
+            ws.language = language
         ws.updated_at = utcnow()
         return ws
 
@@ -2026,6 +2061,35 @@ class InMemoryRepository(Repository):
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
         self._repo_analyses[analysis.project_id] = stored
         return copy.deepcopy(stored)
+
+    def get_project_line_link(self, project_id: str) -> ProjectLineLink | None:
+        link = self._line_links.get(project_id)
+        return link.model_copy() if link else None
+
+    def set_project_line_link(self, link: ProjectLineLink) -> ProjectLineLink:
+        self._line_links[link.project_id] = link.model_copy()
+        return link.model_copy()
+
+    def delete_project_line_link(self, project_id: str) -> bool:
+        return self._line_links.pop(project_id, None) is not None
+
+    def delete_line_links_for_group(self, group_id: str) -> int:
+        gone = [pid for pid, link in self._line_links.items() if link.group_id == group_id]
+        for pid in gone:
+            del self._line_links[pid]
+        return len(gone)
+
+    def put_line_link_code(self, code: LineLinkCode) -> None:
+        self._line_codes = {
+            k: v for k, v in self._line_codes.items() if v.project_id != code.project_id
+        }
+        self._line_codes[code.code] = code.model_copy()
+
+    def take_line_link_code(self, code: str, now: datetime) -> LineLinkCode | None:
+        found = self._line_codes.pop(code, None)
+        if found is None or found.expires_at <= now:
+            return None
+        return found
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
