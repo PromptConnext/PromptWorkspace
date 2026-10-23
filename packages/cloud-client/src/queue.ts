@@ -65,6 +65,13 @@ export class StatusQueue {
 
   async load(): Promise<void> {
     if (this.loaded) return;
+    await this.reload();
+  }
+
+  /** Every window of one editor profile shares the queue file, so each write
+   *  starts from what is on disk now, not from this window's last read. Saving
+   *  a stale copy would erase whatever another window queued since. */
+  private async reload(): Promise<void> {
     this.entries = (await this.deps.load()) ?? [];
     this.loaded = true;
   }
@@ -88,7 +95,7 @@ export class StatusQueue {
   async enqueue(
     entry: Omit<QueueEntry, "id" | "enqueuedAt" | "attempts" | "nextAttemptAt">,
   ): Promise<void> {
-    await this.load();
+    await this.reload();
     const now = this.deps.now();
     const existing = this.entries.findIndex(
       (e) =>
@@ -124,11 +131,10 @@ export class StatusQueue {
     flusher: QueueFlusher,
     belongs?: (e: QueueEntry) => boolean,
   ): Promise<{ sent: number; failed: number }> {
-    await this.load();
+    await this.reload();
     const now = this.deps.now();
-    let sent = 0;
-    let failed = 0;
-    const survivors: QueueEntry[] = [];
+    const sent = new Set<string>();
+    const failed = new Map<string, QueueEntry>();
 
     for (const entry of this.entries) {
       if (
@@ -136,16 +142,14 @@ export class StatusQueue {
         entry.attempts >= MAX_ATTEMPTS ||
         entry.nextAttemptAt > now
       ) {
-        survivors.push(entry);
         continue;
       }
       try {
         await flusher(entry);
-        sent += 1;
+        sent.add(entry.id);
       } catch (err) {
-        failed += 1;
         const attempts = entry.attempts + 1;
-        survivors.push({
+        failed.set(entry.id, {
           ...entry,
           attempts,
           nextAttemptAt: now + (BACKOFF_MS[attempts - 1] ?? 0),
@@ -156,14 +160,20 @@ export class StatusQueue {
       }
     }
 
-    this.entries = survivors;
+    // Merge by id into the file as it is now: the sends took time, and
+    // another window (or this one) may have queued or superseded entries
+    // meanwhile. A superseded entry has a new id, so it is kept.
+    await this.reload();
+    this.entries = this.entries
+      .filter((e) => !sent.has(e.id))
+      .map((e) => failed.get(e.id) ?? e);
     await this.persist();
-    return { sent, failed };
+    return { sent: sent.size, failed: failed.size };
   }
 
   /** Drop a parked entry's attempt count so an explicit retry actually runs. */
   async retryAll(): Promise<void> {
-    await this.load();
+    await this.reload();
     const now = this.deps.now();
     this.entries = this.entries.map((e) => ({ ...e, attempts: 0, nextAttemptAt: now }));
     await this.persist();
@@ -171,7 +181,7 @@ export class StatusQueue {
 
   /** Remove the entries `predicate` matches; returns how many went. */
   async drop(predicate: (e: QueueEntry) => boolean): Promise<number> {
-    await this.load();
+    await this.reload();
     const before = this.entries.length;
     this.entries = this.entries.filter((e) => !predicate(e));
     await this.persist();
