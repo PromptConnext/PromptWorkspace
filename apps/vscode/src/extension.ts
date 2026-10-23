@@ -395,6 +395,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // out can close now.
         void queue
           .drop((e) => e.scope === scope() && e.userId !== undefined && e.userId !== current.userId)
+          // A rescope or the drop changes the count even when nothing is due.
+          .then(() => refreshStatusBar())
           .then(() => store.refresh())
           .then(() => writer.flush())
           .then(() => watcher?.scanAll());
