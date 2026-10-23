@@ -90,10 +90,11 @@ export class TaskStore {
    *  status write completing), and three identical requests help nobody. */
   refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing;
-    this.refreshing = this.doRefresh().finally(() => {
-      this.refreshing = null;
+    const run: Promise<void> = this.doRefresh().finally(() => {
+      if (this.refreshing === run) this.refreshing = null;
     });
-    return this.refreshing;
+    this.refreshing = run;
+    return run;
   }
 
   async refreshOnFocus(): Promise<void> {
@@ -110,6 +111,18 @@ export class TaskStore {
     entry.task.status = status;
     this.emitter.fire();
     return previous;
+  }
+
+  /** See RosterStore.rescope: the same swap, for the same reason. */
+  async rescope(): Promise<void> {
+    this.generation += 1;
+    this.refreshing = null;
+    this.tasks = [];
+    this.lastRefreshedAt = 0;
+    this.lastError = null;
+    this.lastErrorWasAuth = false;
+    await this.loadFromCache();
+    this.emitter.fire();
   }
 
   async clear(): Promise<void> {

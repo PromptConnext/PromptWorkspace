@@ -16,7 +16,12 @@ import {
 } from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
 import { PRODUCTION_DEFAULTS, taskRefFromBranch } from "@promptworkspace/cloud-client";
-import { SessionStore, environmentScope, fileLeaseStorage } from "@promptworkspace/cloud-client";
+import {
+  SessionStore,
+  environmentScope,
+  fileLeaseStorage,
+  scopedFileName,
+} from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
@@ -79,10 +84,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log,
   });
 
-  const cache = new JsonCache(createFileStore(context.globalStorageUri));
+  // Tasks, roster and git state are one environment's data, so their files
+  // are keyed by scope like the session (`tasks@<host>.json`): a develop
+  // window offline must not show trust's tasks, and signing out of one
+  // environment must not delete the files another window reads. The queue is
+  // the exception, shared on purpose: each entry records its own owner.
+  const files = createFileStore(context.globalStorageUri);
+  const cache = new JsonCache(files, (name) => scopedFileName(name, scope()));
+  const queueFile = new JsonCache(files);
   const queue = new StatusQueue({
-    load: () => cache.read<QueueEntry[]>(CACHE_FILES.queue),
-    save: (entries) => cache.write(CACHE_FILES.queue, entries),
+    load: () => queueFile.read<QueueEntry[]>(CACHE_FILES.queue),
+    save: (entries) => queueFile.write(CACHE_FILES.queue, entries),
     now: () => Date.now(),
     newId: () => randomUUID(),
   });
@@ -460,6 +472,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         event.affectsConfiguration("promptworkspace.cloudApiUrl") ||
         event.affectsConfiguration("promptworkspace.supabaseUrl")
       ) {
+        // The caches' file names have already moved with the setting; swap
+        // what the stores hold before the session listener refreshes them.
+        watcher?.rescope();
+        await Promise.all([store.rescope(), roster.rescope()]);
         await session.adoptLegacySession();
         session.rescope();
       }
