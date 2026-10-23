@@ -67,15 +67,30 @@ export class RosterStore {
 
   refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing;
-    this.refreshing = this.doRefresh().finally(() => {
-      this.refreshing = null;
+    const run: Promise<void> = this.doRefresh().finally(() => {
+      if (this.refreshing === run) this.refreshing = null;
     });
-    return this.refreshing;
+    this.refreshing = run;
+    return run;
   }
 
   async refreshOnFocus(): Promise<void> {
     if (Date.now() - this.lastRefreshedAt < FOCUS_REFRESH_THROTTLE_MS) return;
     await this.refresh();
+  }
+
+  /** The window now points at another environment (the cache's file names
+   *  follow it): forget this one's roster without deleting its file, drop any
+   *  refresh still answering for it, and paint the new one's cache. */
+  async rescope(): Promise<void> {
+    this.generation += 1;
+    this.refreshing = null;
+    this.entries = [];
+    this.lastRefreshedAt = 0;
+    this.lastError = null;
+    this.lastErrorWasAuth = false;
+    await this.loadFromCache();
+    this.emit();
   }
 
   async clear(): Promise<void> {

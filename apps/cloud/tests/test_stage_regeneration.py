@@ -48,6 +48,8 @@ TWO_TASKS = (
     "- [ ] T002 Persist the payment record\n"
 )
 
+FOUR_TASKS = THREE_TASKS + "- [ ] T004 Email the settlement report\n"
+
 
 class _StubProvider:
     """Returns a fixed document, so a test can decide exactly which checklist
@@ -166,6 +168,18 @@ def test_regenerating_tasks_reuses_the_same_rows_and_collides_with_nothing(clien
     # first generation created — the whole point of matching by reference.
     assert {t.feature_tag: t.id for t in tasks} == before
     assert len(tasks) == 3
+
+
+def test_regeneration_reports_retired_refs(client: TestClient):
+    pid = _bootstrap(client)
+    _planned(client, pid)
+    _generate(client, pid, "tasks", TASKS_INPUT, FOUR_TASKS)
+
+    res = _generate(client, pid, "tasks", TASKS_INPUT, TWO_TASKS)
+    assert res.status_code == 200, res.text
+    payload = _done(res)
+    assert payload["retired_count"] == 2
+    assert payload["retired_refs"] == ["T003", "T004"]
 
 
 def test_a_dropped_task_is_tombstoned_with_its_status_assignee_and_evidence(client: TestClient):

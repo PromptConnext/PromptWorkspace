@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace } from "@/lib/workspace";
+import { InboxLink } from "@/components/InboxLink";
 import { NewWorkspaceDialog } from "@/components/NewWorkspaceDialog";
 import {
   Select,
@@ -17,9 +18,12 @@ import {
 
 export function TopBar({
   crumbs,
+  inboxWorkspaceId,
 }: {
   /** `loading` shows a placeholder bar in place of a label not known yet. */
   crumbs?: { label: string; href?: string; loading?: boolean }[];
+  /** When set, the bar shows an Inbox link for this workspace. */
+  inboxWorkspaceId?: string;
 }) {
   const { user, signOut } = useAuth();
   const { memberships, activeWorkspace, setActiveWorkspace, clearActiveWorkspace, createWorkspace } =
@@ -129,6 +133,7 @@ export function TopBar({
         ))}
       </nav>
       <div className="flex shrink-0 items-center gap-3 text-sm text-slate-500">
+        {inboxWorkspaceId && <InboxLink workspaceId={inboxWorkspaceId} />}
         <span className="hidden max-w-[16rem] truncate md:inline" title={user?.email}>
           {user?.email}
         </span>

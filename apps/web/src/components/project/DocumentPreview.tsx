@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { fetchDocumentContent } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DocumentOut } from "@/lib/types";
@@ -87,7 +88,7 @@ export function DocumentPreview({
 
       {text !== null && (
         <div className="prose prose-sm max-h-[70vh] max-w-none overflow-auto p-3 text-slate-800">
-          <ReactMarkdown>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       )}
     </div>

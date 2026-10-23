@@ -78,4 +78,12 @@ describe("MarkdownEditor", () => {
     render(<MarkdownEditor value="# Hello" onChange={vi.fn()} onSave={vi.fn()} error="save failed" />);
     expect(screen.getByText("save failed")).toBeInTheDocument();
   });
+
+  it("renders a markdown table as a table", () => {
+    render(
+      <MarkdownEditor value={"| A | B |\n|---|---|\n| 1 | 2 |"} onChange={vi.fn()} onSave={vi.fn()} />,
+    );
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "2" })).toBeInTheDocument();
+  });
 });

@@ -32,12 +32,19 @@ interface Envelope<T> {
 
 export class JsonCache {
   private readonly store: FileStoreLike;
+  private readonly nameFor: (name: string) => string;
 
-  constructor(store: FileStoreLike) {
+  /** `nameFor` maps a logical name to the file actually used, read on every
+   *  call. apps/vscode keys its per-account files by environment with it
+   *  (`scopedFileName`), so a develop window and a trust window never read,
+   *  write or clear each other's. The default uses the name as is. */
+  constructor(store: FileStoreLike, nameFor: (name: string) => string = (name) => name) {
     this.store = store;
+    this.nameFor = nameFor;
   }
 
-  async read<T>(name: string): Promise<T | undefined> {
+  async read<T>(logicalName: string): Promise<T | undefined> {
+    const name = this.nameFor(logicalName);
     const raw = await this.store.read(name);
     if (raw === undefined) return undefined;
     try {
@@ -57,12 +64,12 @@ export class JsonCache {
 
   async write<T>(name: string, data: T): Promise<void> {
     const envelope: Envelope<T> = { schemaVersion: CACHE_SCHEMA_VERSION, data };
-    await this.store.write(name, JSON.stringify(envelope));
+    await this.store.write(this.nameFor(name), JSON.stringify(envelope));
   }
 
   async clear(names: string[]): Promise<void> {
     for (const name of names) {
-      await this.store.delete(name).catch(() => undefined);
+      await this.store.delete(this.nameFor(name)).catch(() => undefined);
     }
   }
 }

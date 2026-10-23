@@ -424,6 +424,13 @@ export class GitWatcher {
     return this.store.all()[0]?.task.assigned_user_id ?? undefined;
   }
 
+  /** The window now points at another environment, whose task ids this
+   *  state knows nothing about: read that environment's file on next use. */
+  rescope(): void {
+    this.state = {};
+    this.loaded = false;
+  }
+
   private async loadState(): Promise<void> {
     if (this.loaded) return;
     this.state = (await this.cache.read<GitStateFile>(CACHE_FILES.gitState)) ?? {};

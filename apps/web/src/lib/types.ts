@@ -403,6 +403,8 @@ export interface GenerateDoneEvent {
   // Tasks this generation tombstoned — dropped from the checklist, or an
   // existing duplicate reference this generation consolidated. `tasks` only.
   retired_count?: number;
+  // Their references (T003), in order — null on an older server.
+  retired_refs?: string[] | null;
   // The model stopped at its output limit — the document is real but cut off.
   truncated?: boolean;
   // Notices on a generation that succeeded (an imported project's `tasks` only
@@ -461,6 +463,7 @@ export interface StageDocumentSaved extends StageDocumentOut {
   // Tasks this save tombstoned — dropped from the checklist, or an existing
   // duplicate reference this save consolidated. `tasks` only.
   retired_count?: number | null;
+  retired_refs?: string[] | null;
 }
 
 // Plan 0027: the read of an imported repository the Plan and Tasks stages
@@ -788,4 +791,6 @@ export interface InboxItem {
   project_name: string;
   workspace_id: string;
   workspace_name: string;
+  /** Who sent a request back; set only on the caller's own sent-back items. */
+  resolver_email?: string | null;
 }

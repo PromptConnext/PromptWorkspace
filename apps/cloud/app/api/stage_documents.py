@@ -51,6 +51,7 @@ class StageDocumentSaved(StageDocumentOut):
     # Tasks this save tombstoned — dropped from the checklist, or an
     # existing duplicate reference this save consolidated. `tasks` only.
     retired_count: int | None = None
+    retired_refs: list[str] | None = None
 
 
 class StageDocumentUpdate(BaseModel):
@@ -107,4 +108,5 @@ def update_stage_document(
         projection=applied.projection,
         error=applied.error,
         retired_count=applied.retired_count,
+        retired_refs=applied.retired_refs,
     )

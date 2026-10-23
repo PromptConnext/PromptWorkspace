@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { JsonCache, CACHE_FILES, type FileStoreLike } from "@promptworkspace/cloud-client";
+import { JsonCache, CACHE_FILES, scopedFileName, type FileStoreLike } from "@promptworkspace/cloud-client";
 import { RosterStore } from "../../src/projects/rosterStore.ts";
 
 function memoryStore() {
@@ -242,4 +242,45 @@ test("a 401 after the session or its refresh token is gone is an auth failure", 
     await roster.refresh();
     assert.equal(roster.lastRefreshAuthFailed, true);
   }
+});
+
+test("rescope swaps to the new environment's cache and drops a refresh started before it", async () => {
+  const { store } = memoryStore();
+  let scope = "a.example";
+  const cache = new JsonCache(store, (name) => scopedFileName(name, scope));
+  let release: () => void = () => {};
+  let slow = false;
+  const roster = new RosterStore(
+    fakeClient({
+      listWorkspaces: async () => {
+        if (slow) await new Promise<void>((r) => (release = r));
+        return [{ id: "w1", name: scope === "a.example" ? "Acme" : "Beta" }];
+      },
+    }),
+    cache,
+    silentLog,
+  );
+  await roster.refresh();
+  assert.equal(roster.all()[0].workspace.name, "Acme");
+
+  slow = true;
+  const inFlight = roster.refresh();
+  scope = "b.example";
+  await roster.rescope();
+  assert.deepEqual(roster.all(), [], "B has no cache yet");
+  assert.equal(roster.refreshedAt, 0);
+  release();
+  await inFlight;
+  assert.deepEqual(roster.all(), [], "A's late answer is not shown under B");
+  assert.equal(await cache.read(CACHE_FILES.roster), undefined, "nor written to B's file");
+
+  // A refresh asked for after the rescope really runs, rather than joining
+  // the one that started under A.
+  slow = false;
+  await roster.refresh();
+  assert.equal(roster.all()[0].workspace.name, "Beta");
+
+  scope = "a.example";
+  await roster.rescope();
+  assert.equal(roster.all()[0].workspace.name, "Acme", "A's cache is still there");
 });

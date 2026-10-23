@@ -35,6 +35,7 @@ import { useDecisionsData } from "./DeliveryOverview";
 import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
+import { retiredLabel } from "./retiredLabel";
 import type {
   DocumentOut,
   Project,
@@ -285,6 +286,7 @@ function StageSection({
   // both null until this session writes something, same as docProjection.
   const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
+  const [docRetiredRefs, setDocRetiredRefs] = useState<string[] | null>(null);
 
   // Reported once the document has loaded, so every later change of stamp is
   // a save or a regeneration (the Planner refreshes the docs banner on those).
@@ -328,6 +330,7 @@ function StageSection({
       setDocUpdatedAt(result.updated_at ?? null);
       setDocProjection(result.projection ?? null);
       setDocRetiredCount(result.retired_count ?? null);
+      setDocRetiredRefs(result.retired_refs ?? null);
       onDocPresence?.(stage, result.content.trim().length > 0);
       if (result.projection === "current") onGraphChange?.();
     }
@@ -366,6 +369,7 @@ function StageSection({
       setDocProjection(doc.projection);
       setDocProjectionError(doc.error ?? null);
       setDocRetiredCount(doc.retired_count ?? null);
+      setDocRetiredRefs(doc.retired_refs ?? null);
       onDocPresence?.(stage, doc.content.trim().length > 0);
       if (doc.projection === "current") onGraphChange?.();
     } catch (err) {
@@ -500,7 +504,8 @@ function StageSection({
               {result.task_count !== undefined
                 ? `${result.task_count} tasks on the board`
                 : "Saved as a draft"}
-              {Boolean(result.retired_count) && `, ${result.retired_count} retired`}
+              {Boolean(result.retired_count) &&
+                `, ${retiredLabel(result.retired_count ?? 0, result.retired_refs)}`}
               {result.saved === false && " — couldn't be saved; copy this text before leaving"}
             </p>
           )}
@@ -529,7 +534,7 @@ function StageSection({
               Last saved {new Date(docUpdatedAt).toLocaleString()}
               {docProjection === "current" &&
                 Boolean(docRetiredCount) &&
-                ` — ${docRetiredCount} task${docRetiredCount === 1 ? "" : "s"} retired`}
+                ` — ${retiredLabel(docRetiredCount ?? 0, docRetiredRefs)}`}
             </p>
           )}
           {/* "Last saved" used to be the only signal either write path gave,

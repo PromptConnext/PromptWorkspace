@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_ATTEMPTS, StatusQueue, type QueueEntry } from "../src/queue.ts";
+import { MAX_ATTEMPTS, StatusQueue, belongsTo, type QueueEntry } from "../src/queue.ts";
 
 function makeQueue(startAt = 1_000) {
   let saved: QueueEntry[] = [];
@@ -143,4 +143,115 @@ test("clear drops everything (sign-out must not leak writes to the next user)", 
   await queue.clear();
   assert.equal(queue.size(), 0);
   assert.deepEqual(saved(), []);
+});
+
+test("flush skips entries that belong to another environment", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  const seen: string[] = [];
+  const result = await queue.flush(async (e) => {
+    seen.push(e.taskId);
+  }, belongsTo("a", "u1"));
+  assert.deepEqual(seen, ["t1"]);
+  assert.equal(result.sent, 1);
+  assert.equal(queue.size(), 1);
+  assert.equal(queue.list()[0].scope, "b");
+  assert.equal(queue.list()[0].attempts, 0);
+});
+
+test("entries without an owner belong to every owner", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented" });
+  const result = await queue.flush(async () => {}, belongsTo("a", "u1"));
+  assert.equal(result.sent, 1);
+  assert.equal(queue.size(), 0);
+});
+
+test("drop removes another user's entries and reports the count", async () => {
+  const { queue, saved } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  const dropped = await queue.drop(
+    (e) => e.scope === "a" && e.userId !== undefined && e.userId !== "u2",
+  );
+  assert.equal(dropped, 1);
+  assert.equal(queue.size(), 1);
+  assert.equal(saved()[0].scope, "b");
+});
+
+test("the same task on two environments queues twice", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a" });
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "b" });
+  assert.equal(queue.size(), 2);
+});
+
+test("count filters by owner", async () => {
+  const { queue } = makeQueue();
+  await queue.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await queue.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b", userId: "u1" });
+  assert.equal(queue.count(), 2);
+  assert.equal(queue.count(belongsTo("a", "u1")), 1);
+});
+
+/** Two windows over one queue file. The file holds JSON, as on disk, so
+ *  neither queue can see the other's in-memory array. */
+function twoWindowQueues() {
+  let file = "[]";
+  let seq = 0;
+  const make = (name: string) =>
+    new StatusQueue({
+      load: async () => JSON.parse(file) as QueueEntry[],
+      save: async (entries) => {
+        file = JSON.stringify(entries);
+      },
+      now: () => 1_000,
+      newId: () => `${name}-${(seq += 1)}`,
+    });
+  const a = make("a");
+  const b = make("b");
+  return { a, b, file: () => JSON.parse(file) as QueueEntry[] };
+}
+
+test("a drop in one window keeps an entry another window queued later", async () => {
+  const { a, b, file } = twoWindowQueues();
+  await b.load();
+  await a.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await b.drop((e) => e.scope === "b");
+  assert.deepEqual(file().map((e) => e.taskId), ["t1"]);
+});
+
+test("a flush in one window keeps an entry another window queued later", async () => {
+  const { a, b, file } = twoWindowQueues();
+  await b.load();
+  await a.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a", userId: "u1" });
+  await b.flush(async () => {}, belongsTo("b", "u1"));
+  assert.deepEqual(file().map((e) => e.taskId), ["t1"]);
+});
+
+test("an enqueue in one window keeps an entry another window queued later", async () => {
+  const { a, b, file } = twoWindowQueues();
+  await b.load();
+  await a.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "a" });
+  await b.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "b" });
+  assert.deepEqual(file().map((e) => e.taskId).sort(), ["t1", "t2"]);
+});
+
+test("an entry queued while a flush is in flight survives the flush", async () => {
+  const { a, b, file } = twoWindowQueues();
+  await b.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "b" });
+  await b.flush(async () => {
+    await a.enqueue({ projectId: "p", taskId: "t2", status: "implemented", scope: "a" });
+  }, belongsTo("b", undefined));
+  assert.deepEqual(file().map((e) => e.taskId), ["t2"]);
+});
+
+test("a write superseded while its flush was in flight is kept", async () => {
+  const { a, b, file } = twoWindowQueues();
+  await b.enqueue({ projectId: "p", taskId: "t1", status: "implemented", scope: "s" });
+  await b.flush(async () => {
+    await a.enqueue({ projectId: "p", taskId: "t1", status: "in_progress", scope: "s" });
+  });
+  assert.deepEqual(file().map((e) => e.status), ["in_progress"]);
 });

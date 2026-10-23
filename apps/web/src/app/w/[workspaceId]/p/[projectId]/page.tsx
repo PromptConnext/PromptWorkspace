@@ -235,6 +235,7 @@ function ProjectWorkspace({
   return (
     <>
       <TopBar
+        inboxWorkspaceId={workspaceId}
         crumbs={[
           { label: workspaceName, href: `/w/${workspaceId}` },
           { label: graph?.project.name ?? "Project", loading: loading && !graph },

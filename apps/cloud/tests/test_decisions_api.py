@@ -1091,6 +1091,18 @@ def test_me_decisions_include_mine_returns_changes_requested(client, project):
     assert [i["decision"]["status"] for i in again] == []
 
 
+def test_include_mine_names_the_resolver(client, project):
+    did = _request(client, project, "intent_approval").json()["id"]
+    _resolve(client, project, did, outcome="rejected", rationale="Add cancellations.")
+
+    workspace = client.app.state.repository.get_project(project).workspace_id
+    alice = next(m for m in client.app.state.repository.list_members(workspace)
+                 if m.user_id == "alice")
+    (item,) = client.get("/me/decisions?include_mine=true", headers=BOB).json()
+    assert alice.email
+    assert item["resolver_email"] == alice.email
+
+
 def test_resolve_changes_requested_emails_requester(client, project, mailer):
     did = _request(client, project, "intent_approval").json()["id"]
     mailer.sent.clear()

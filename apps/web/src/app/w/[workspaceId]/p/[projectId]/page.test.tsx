@@ -22,8 +22,17 @@ vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock("@/components/TopBar", () => ({
-  TopBar: ({ crumbs }: { crumbs: { label: string; loading?: boolean }[] }) => (
-    <nav aria-label="crumbs">{crumbs.map((c) => (c.loading ? "[skeleton]" : c.label)).join(" / ")}</nav>
+  TopBar: ({
+    crumbs,
+    inboxWorkspaceId,
+  }: {
+    crumbs: { label: string; loading?: boolean }[];
+    inboxWorkspaceId?: string;
+  }) => (
+    <>
+      <nav aria-label="crumbs">{crumbs.map((c) => (c.loading ? "[skeleton]" : c.label)).join(" / ")}</nav>
+      {inboxWorkspaceId && <a href={`/w/${inboxWorkspaceId}/inbox`}>Inbox</a>}
+    </>
   ),
 }));
 vi.mock("@/components/PresenceBar", () => ({ PresenceBar: () => null }));
@@ -96,6 +105,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("project page tab URL sync", () => {
+  it("project top bar links to the Inbox", () => {
+    render(
+      <ProjectPage
+        params={Promise.resolve({ workspaceId: "w1", projectId: "p1" })}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/w/w1/inbox");
+  });
+
   it("defaults to Planner and treats unknown slugs as Planner", () => {
     search = "tab=bogus";
     render(

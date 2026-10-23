@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Draft, 2026-10-17. Branch `fix/e2e-walkthrough-0030`, cut from `feature/trust-outcome` (the decision code these fixes touch exists only there).
+**Status:** Complete, 2026-10-19. Merged into `feature/trust-outcome` via PR #18 (`98b0667`) and checked on the trust environment on 2026-10-18 and 2026-10-19. What the walkthrough found next is plan 0031. Branch `fix/e2e-walkthrough-0030`, cut from `feature/trust-outcome` (the decision code these fixes touch exists only there).
 
 **Goal:** Fix the gaps a three-role walkthrough (BA, Tech Lead, Developer in Cursor with Claude Code) found on the trust environment, so one task can travel from intent to Verified without workarounds.
 
@@ -402,9 +402,9 @@ The installed Cursor/VS Code build is a hand-patched staging VSIX from 2026-10-0
 
 ## Closing
 
-- [ ] Run every suite: `cd apps/cloud && pytest -q && ruff check .`; `pnpm --dir apps/web typecheck && pnpm --dir apps/web test`; `pnpm --dir apps/vscode typecheck && pnpm --dir apps/vscode test`; `pnpm --dir packages/cloud-client test`.
-- [ ] Re-run the walkthrough on the trust environment after deploying the branch there (plan with inner fences comes back whole; T029-style gaps warn; intent gate; plan approval shows three documents; requester inbox; Start Task notification; link before repository).
-- [ ] Update plan 0029 §13: item 14 done; add a row "Plan 0030 deferred items" pointing to the Deferred list below.
+- [x] Run every suite: `cd apps/cloud && pytest -q && ruff check .`; `pnpm --dir apps/web typecheck && pnpm --dir apps/web test`; `pnpm --dir apps/vscode typecheck && pnpm --dir apps/vscode test`; `pnpm --dir packages/cloud-client test`.
+- [x] Re-run the walkthrough on the trust environment after deploying the branch there (plan with inner fences comes back whole; T029-style gaps warn; intent gate; plan approval shows three documents; requester inbox; Start Task notification; link before repository).
+- [x] Update plan 0029 §13: item 14 done; add a row "Plan 0030 deferred items" pointing to the Deferred list below.
 
 ### Deploying this branch
 

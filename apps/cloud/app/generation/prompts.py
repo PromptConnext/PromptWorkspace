@@ -65,6 +65,14 @@ NO_CI_FIRST_TASK_RULE = (
     "tasks build on that result."
 )
 
+# An acceptance criterion cited `project_structure.md` (walkthrough 2026-10-18,
+# T001) — a file no plan, repository or earlier task had. Applies to both the
+# greenfield and the imported-repository tasks stage.
+TASKS_AC_FILES_RULE = (
+    "An acceptance criterion may name a file only if the plan names it, the repository has it, "
+    "or an earlier task creates it. Otherwise describe the outcome without a file name."
+)
+
 # A rebrand task named files the old name was not in (finding #54); the
 # segment is built in app/api/generation.py::_occurrences_segment.
 REPO_OCCURRENCES_RULE = (
@@ -184,6 +192,7 @@ def driver_prompt(
             "acceptance scenarios and requirements for that task's user story. Each criterion "
             "states a verifiable behaviour or artifact; never restate the task title."
         )
+        lines.append(TASKS_AC_FILES_RULE)
         lines.append(
             "Keep the template's phase headings exactly as `## Phase <number>: <name>`, one per "
             "phase, with every task line under its phase. User-story phases are named "

@@ -383,3 +383,88 @@ def test_missing_task_refs_ignores_a_wildly_sparse_list():
     assert missing_task_refs(["T1", "T99999999"]) == []
     assert missing_task_refs(["T0001", "T1002"]) == []
     assert len(missing_task_refs(["T0001", "T1000"])) == 50
+
+
+def test_drops_option_labels_inside_the_project_tree_fence():
+    doc = (
+        "## Project Structure\n\n"
+        "```text\n"
+        '# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)\n'
+        "backend/\n"
+        "# comment\n"
+        "```"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "backend/" in out
+    assert "# comment" in out
+    assert "Option 2:" not in out
+
+
+def test_drops_branch_and_spec_header_line():
+    doc = (
+        "# Implementation Plan: Clinic\n\n"
+        "**Branch**: `001-clinic` | **Date**: 2026-10-18 | "
+        "**Spec**: https://example.com/specs/001\n\n"
+        "## Summary\n\n"
+        "**Branch**: `keep-me`\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "example.com" not in out
+    assert "`001-clinic`" not in out
+    assert "**Branch**: `keep-me`" in out
+
+
+def test_drops_fill_only_if_note():
+    doc = (
+        "## Complexity Tracking\n\n"
+        "> **Fill ONLY if Constitution Check has violations that must be justified**\n\n"
+        "| Violation | Why |\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Fill ONLY" not in out
+    assert "| Violation | Why |" in out
+
+
+def test_drops_path_conventions_section():
+    doc = (
+        "## Format\n\nText.\n\n"
+        "## Path Conventions\n\n"
+        "- **Single project**: `src/`, `tests/` at repository root\n"
+        "- **Web app**: `backend/src/`, `frontend/src/`\n"
+        "- **Mobile**: `api/src/`, `ios/src/` or `android/src/`\n"
+        "- Paths shown below assume single project\n\n"
+        "## Phase 1: Setup\n\nWork.\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Path Conventions" not in out
+    assert "Single project" not in out
+    assert "assume single project" not in out
+    assert "## Phase 1: Setup" in out
+    assert "## Format" in out
+
+
+def test_unwraps_optional_tests_heading():
+    doc = "### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️\n\n- [ ] T001 x"
+    out = strip_spec_kit_boilerplate(doc)
+    assert out.startswith("### Tests for User Story 2\n")
+    assert "OPTIONAL" not in out
+
+
+def test_drops_parallel_example_section():
+    doc = (
+        "## Notes\n\nKeep.\n\n"
+        "## Parallel Example: User Story 1\n\n"
+        "```bash\n"
+        "# Launch all tests\n"
+        '## not a heading inside fence\n'
+        'Task: "Contract test"\n'
+        "```\n\n"
+        "Trailing prose.\n\n"
+        "## Implementation Strategy\n\nGo.\n"
+    )
+    out = strip_spec_kit_boilerplate(doc)
+    assert "Parallel Example" not in out
+    assert "Launch all tests" not in out
+    assert "Trailing prose" not in out
+    assert "Keep." in out
+    assert "## Implementation Strategy" in out

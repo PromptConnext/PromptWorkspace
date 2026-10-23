@@ -55,7 +55,7 @@ export async function startTask(
   const branch = ref ? branchNameForTask(ref, task.title) : undefined;
   let choice: GitChoice | undefined;
   if (ref && root && branch) {
-    choice = await askGitChoice(ref, branch);
+    choice = await askGitChoice(ref, branch, deps, root);
     if (!choice) return;
   }
 
@@ -163,14 +163,22 @@ async function claim(entry: AssignedTask, deps: StartTaskDeps): Promise<boolean>
 
 /** One prompt, three answers. Two prompts for two carriers reads as nagging
  *  for a gesture that is supposed to remove friction. */
-async function askGitChoice(ref: string, branch: string): Promise<GitChoice | undefined> {
+async function askGitChoice(
+  ref: string,
+  branch: string,
+  deps: StartTaskDeps,
+  root: vscode.Uri,
+): Promise<GitChoice | undefined> {
+  // The same lookup ensureTaskBranch makes, so the label names what will happen.
+  const where = await deps.git.findBranch(root, branch);
+  const exists = where === "local" || where === "remote";
   const picked = await vscode.window.showQuickPick(
     [
       {
-        label: `$(git-branch) Work on branch ${branch}`,
-        detail:
-          `Created and checked out (or checked out, if it exists). Every commit on it ` +
-          `counts toward ${ref}, however the message is worded.`,
+        label: exists
+          ? `$(git-branch) Switch to branch ${branch}`
+          : `$(git-branch) Create and switch to branch ${branch}`,
+        detail: `Every commit on it counts toward ${ref}, however the message is worded.`,
         choice: "branch" as const,
       },
       {

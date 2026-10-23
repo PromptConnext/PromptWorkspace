@@ -185,6 +185,16 @@ _HEADER_BOILERPLATE_RE = re.compile(
     r"^[ \t]*\*\*(?:Input|Prerequisites)\*\*[ \t]*:"
     r"|^[ \t]*\*\*Tests\*\*[ \t]*:.*\bOPTIONAL\b"
 )
+# Header line carrying the template's `**Branch**` / `**Spec**` placeholders.
+_HEADER_BRANCH_RE = re.compile(r"^[ \t]*\*\*Branch\*\*[ \t]*:")
+_FILL_ONLY_RE = re.compile(r"^[ \t]*>[ \t]*\*\*Fill ONLY\b")
+# Whole template sections a model reproduces; dropped up to the next `## `.
+_DROPPED_SECTION_RE = re.compile(r"^##[ \t]+(?:Path Conventions\b|Parallel Example\b)")
+# The project-tree option labels inside the plan's fenced layout.
+_OPTION_LABEL_RE = re.compile(r"^#\s*(?:\[REMOVE IF UNUSED\]\s*)?Option \d+:")
+_OPTIONAL_TESTS_HEADING_RE = re.compile(
+    r"^(###[ \t]+Tests for User Story \d+)[ \t]*\(OPTIONAL\b[^)]*\).*$"
+)
 # A reference to the Spec Kit feature folder's spec, plan or tasks
 # (`/specs/001-name/plan.md`, `specs/001/spec.md`). The seeded views of those
 # three sit together in one folder (docs/, or docs/promptworkspace/ in an
@@ -214,24 +224,41 @@ def strip_spec_kit_boilerplate(content: str) -> str:
     `**Feature Branch**` line, the "Example of marking unclear requirements"
     block (its line and the template's two example items), lines naming `[GUIDANCE_FILE]`,
     the header `**Input**` / `**Prerequisites**` / "Tests are OPTIONAL" lines,
-    and `/specs/NNN-name/{spec,plan,tasks}.md` references, which become "the
-    specification", "the plan" and "the task list". Fenced code is untouched."""
+    the header `**Branch**` line, the "Fill ONLY if Constitution Check" note,
+    the `## Path Conventions` and `## Parallel Example` sections, the "(OPTIONAL ...)"
+    suffix on `### Tests for User Story N` headings, `# Option N:` labels
+    inside the project-tree fence, and `/specs/NNN-name/{spec,plan,tasks}.md`
+    references, which become "the specification", "the plan" and "the task
+    list". Other fenced code is untouched."""
     out: list[str] = []
     in_fence = False
     in_header = True
     skipping_example = False
+    skipping_section = False
     dropped_item = False
     for line in content.split("\n"):
+        if skipping_section:
+            # Fences in a dropped section go with it; a `## ` inside one does not end it.
+            if _FENCE_RE.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence or not line.startswith("## "):
+                continue
+            skipping_section = False
         if _FENCE_RE.match(line):
             in_fence = not in_fence
             skipping_example = False
             out.append(line)
             continue
         if in_fence:
-            out.append(line)
+            if not _OPTION_LABEL_RE.match(line):
+                out.append(line)
             continue
         if line.startswith("## "):
             in_header = False
+        if _DROPPED_SECTION_RE.match(line):
+            skipping_section = True
+            continue
         if skipping_example:
             if _UNCLEAR_EXAMPLE_ITEM_RE.match(line):
                 dropped_item = True
@@ -245,8 +272,11 @@ def strip_spec_kit_boilerplate(content: str) -> str:
             continue
         if _SPEC_KIT_FEATURE_BRANCH_RE.match(line) or "[GUIDANCE_FILE]" in line:
             continue
-        if in_header and _HEADER_BOILERPLATE_RE.match(line):
+        if in_header and (_HEADER_BOILERPLATE_RE.match(line) or _HEADER_BRANCH_RE.match(line)):
             continue
+        if _FILL_ONLY_RE.match(line):
+            continue
+        line = _OPTIONAL_TESTS_HEADING_RE.sub(r"\1", line)
         out.append(_SPECS_REF_TICKED_RE.sub(lambda m: _DOC_NAME[m.group(1)], line))
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 

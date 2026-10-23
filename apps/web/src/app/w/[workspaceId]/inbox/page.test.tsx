@@ -75,6 +75,21 @@ describe("Inbox", () => {
     expect(screen.getByText(/Nothing is waiting on you/)).toBeInTheDocument();
   });
 
+  it("names who sent the decision back and when", () => {
+    items = [
+      {
+        project_id: "p1", project_name: "Clinic booking", workspace_id: "w1", workspace_name: "WS",
+        resolver_email: "b@x.com",
+        decision: {
+          id: "d2", status: "rejected", title: "Approve the intent", rationale: "Add cancellations.",
+          created_at: "2026-10-04T08:00:00Z", resolved_at: "2026-10-05T09:00:00Z",
+        },
+      },
+    ];
+    render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);
+    expect(screen.getByText(/^Sent back by b@x\.com on/)).toBeInTheDocument();
+  });
+
   it("has no Sent back section when nothing was sent back", () => {
     items = [];
     render(<InboxPage params={Promise.resolve({ workspaceId: "w1" })} />);

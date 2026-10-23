@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Mode = "raw" | "preview";
 
@@ -101,7 +102,7 @@ export function MarkdownEditor({
             aria-label={label}
             className="prose prose-sm min-h-[24rem] max-w-none text-slate-800"
           >
-            <ReactMarkdown>{value}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
           </div>
         )}
       </div>

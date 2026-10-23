@@ -11,12 +11,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { CloudClient } from "../src/client.ts";
 import { CloudHttpError, CloudNotLoggedInError } from "../src/errors.ts";
+import { memorySecrets, memoryState } from "./helpers.ts";
 import {
   SessionStore,
   fileLeaseStorage,
   type LeaseStorageLike,
   type RefreshLease,
-  type SecretsLike,
   type StorageLike,
 } from "../src/session.ts";
 
@@ -32,34 +32,6 @@ async function withServer(handler: Handler, fn: (base: string) => Promise<void>)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-}
-
-function memorySecrets(): SecretsLike {
-  const values = new Map<string, string>();
-  return {
-    async get(key) {
-      return values.get(key);
-    },
-    async store(key, value) {
-      values.set(key, value);
-    },
-    async delete(key) {
-      values.delete(key);
-    },
-  };
-}
-
-function memoryState(): StorageLike {
-  const values = new Map<string, unknown>();
-  return {
-    get<T>(key: string) {
-      return values.get(key) as T | undefined;
-    },
-    async update(key, value) {
-      if (value === undefined) values.delete(key);
-      else values.set(key, value);
-    },
-  };
 }
 
 const silentLog = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -523,7 +495,7 @@ function sharedLeases(): LeaseStorageLike {
     async read() {
       return cell.lease;
     },
-    async write(lease) {
+    async write(_scope, lease) {
       cell.lease = lease;
     },
   };
@@ -531,12 +503,12 @@ function sharedLeases(): LeaseStorageLike {
 
 /** Two "windows": separate clients and SessionStores over one shared secret
  *  store, one shared state store and one shared lease store. */
-function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}) {
+function twoWindows(base: string, opts: { now?: () => number; sleep?: (ms: number) => Promise<void>; scope?: string } = {}) {
   const secrets = memorySecrets();
   const state = memoryState();
   const leases = sharedLeases();
   const make = () => {
-    const session = new SessionStore(secrets, state, leases);
+    const session = new SessionStore(secrets, state, leases, () => opts.scope ?? "");
     const client = new CloudClient({
       session,
       config: () => ({ apiUrl: base, supabaseUrl: base, supabaseAnonKey: "anon-key" }),
@@ -607,6 +579,17 @@ test("two clients over one store make one refresh call", async () => {
   });
 });
 
+test("two windows on one environment still share one session", async () => {
+  const cloud = rotatingCloud();
+  await withServer(cloud.handler, async (base) => {
+    const { a, b } = twoWindows(base, { scope: "abc.supabase.co" });
+    await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+    await Promise.all([a.client.listAssignedTasks(), b.client.listAssignedTasks()]);
+    assert.equal(cloud.refreshes(), 1);
+    assert.equal(await b.session.refreshToken(), "r1");
+  });
+});
+
 test("an expired lease is taken over", async () => {
   // A window that crashed mid-refresh leaves its lease behind. It must expire,
   // or one dead window stops every other window from ever refreshing.
@@ -622,15 +605,15 @@ test("an expired lease is taken over", async () => {
     await a.session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
 
     // Already expired: taken at once.
-    await leases.write({ owner: "dead-window", until: t - 1 });
+    await leases.write("", { owner: "dead-window", until: t - 1 });
     assert.deepEqual(await a.client.listAssignedTasks(), []);
     assert.equal(cloud.refreshes(), 1);
-    assert.equal(await leases.read(), undefined, "released after the refresh");
+    assert.equal(await leases.read(""), undefined, "released after the refresh");
 
     // Live when we arrive, held by a window that never finishes: waited out
     // on the injected clock, then taken over.
     await a.session.store({ mode: "supabase", userId: "u1" }, "stale-again");
-    await leases.write({ owner: "dead-window", until: t + 5_000 });
+    await leases.write("", { owner: "dead-window", until: t + 5_000 });
     const before = t;
     assert.deepEqual(await a.client.listAssignedTasks(), []);
     assert.equal(cloud.refreshes(), 2);
@@ -726,7 +709,7 @@ function replicatedWindows(base: string, deliveryMs: number) {
     const state: StorageLike = { get: (key) => stateCopy.get(key), update: (key, value) => stateCopy.set(key, value) };
     const leases: LeaseStorageLike = {
       read: async () => leaseCopy.get<RefreshLease>("lease"),
-      write: (lease) => leaseCopy.set("lease", lease),
+      write: (_scope, lease) => leaseCopy.set("lease", lease),
     };
     const lost: string[] = [];
     const session = new SessionStore(secrets, state, leases);
@@ -814,13 +797,13 @@ test("a file-backed lease round-trips, and anything unreadable is no lease", asy
     },
   };
   const leases = fileLeaseStorage(store);
-  assert.equal(await leases.read(), undefined);
-  await leases.write({ owner: "w1", until: 5 });
-  assert.deepEqual(await leases.read(), { owner: "w1", until: 5 });
-  await leases.write(undefined);
-  assert.equal(await leases.read(), undefined);
+  assert.equal(await leases.read(""), undefined);
+  await leases.write("", { owner: "w1", until: 5 });
+  assert.deepEqual(await leases.read(""), { owner: "w1", until: 5 });
+  await leases.write("", undefined);
+  assert.equal(await leases.read(""), undefined);
   files.set("refresh-lease.json", "{not json");
-  assert.equal(await leases.read(), undefined);
+  assert.equal(await leases.read(""), undefined);
 
   // A store that throws costs the lease, never the session.
   const broken: LeaseStorageLike = {
@@ -843,4 +826,58 @@ test("hasRefreshToken reads whether the session can still be refreshed", async (
   assert.equal(await client.hasRefreshToken(), true);
   await session.clearIfRefreshToken("r1");
   assert.equal(await client.hasRefreshToken(), false);
+});
+
+/** A window whose environment setting changes while its refresh is on the
+ *  wire. `fetch` flips the scope from A to B on the auth call. */
+function rescopedMidRefresh(refreshStatus: number) {
+  const secrets = memorySecrets();
+  const state = memoryState();
+  let scope = "a.supabase.co";
+  const session = new SessionStore(secrets, state, undefined, () => scope);
+  const client = new CloudClient({
+    session,
+    config: () => ({ apiUrl: "http://api", supabaseUrl: "http://sb", supabaseAnonKey: "anon" }),
+    fetch: async (input) => {
+      if (String(input).includes("/auth/v1/token")) {
+        scope = "b.supabase.co";
+        return refreshStatus === 200
+          ? new Response(JSON.stringify({ access_token: "access-1", refresh_token: "r1" }), {
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(JSON.stringify({ error: "invalid_grant" }), { status: refreshStatus });
+      }
+      return new Response(JSON.stringify({ detail: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    log: silentLog,
+  });
+  return { client, session, secrets, state, setScope: (s: string) => (scope = s) };
+}
+
+test("a refresh stores the rotated pair under the environment it started in", async () => {
+  const { client, session, secrets, setScope } = rescopedMidRefresh(200);
+  await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+  await client.listAssignedTasks().catch(() => undefined);
+  assert.equal(await secrets.get("promptworkspace.cloud.access@a.supabase.co"), "access-1");
+  assert.equal(await secrets.get("promptworkspace.cloud.refresh@a.supabase.co"), "r1");
+  assert.equal(await secrets.get("promptworkspace.cloud.access@b.supabase.co"), undefined);
+  assert.equal(await secrets.get("promptworkspace.cloud.refresh@b.supabase.co"), undefined);
+  assert.equal(session.read(), null, "B has no session");
+  setScope("a.supabase.co");
+  assert.deepEqual(session.read(), { mode: "supabase", userId: "u1" });
+});
+
+test("a refresh rejected after a scope change signs out the environment it started in", async () => {
+  const { client, session, setScope } = rescopedMidRefresh(400);
+  setScope("b.supabase.co");
+  await session.store({ mode: "supabase", userId: "u2" }, "b-access", "b-refresh");
+  setScope("a.supabase.co");
+  await session.store({ mode: "supabase", userId: "u1" }, "stale", "r0");
+  await client.listAssignedTasks().catch(() => undefined);
+  assert.deepEqual(session.read(), { mode: "supabase", userId: "u2" }, "B's session survives");
+  setScope("a.supabase.co");
+  assert.equal(session.read(), null, "A's rejected session is gone");
 });

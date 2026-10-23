@@ -61,6 +61,12 @@ function InboxView({ workspaceId }: { workspaceId: string }) {
                   >
                     <span className="text-sm font-medium text-slate-900">{item.decision.title}</span>
                     <p className="mt-1 text-xs text-slate-500">{item.project_name}</p>
+                    {item.decision.resolved_at && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.resolver_email ? `Sent back by ${item.resolver_email} on ` : "Sent back on "}
+                        {new Date(item.decision.resolved_at).toLocaleString()}
+                      </p>
+                    )}
                     {item.decision.rationale && (
                       <p className="mt-2 text-sm text-slate-700">{item.decision.rationale}</p>
                     )}

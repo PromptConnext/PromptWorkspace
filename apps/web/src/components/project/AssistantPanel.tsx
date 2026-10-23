@@ -13,6 +13,7 @@ import Link from "next/link";
 import { Component, memo, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { getStageDocument, listDocuments } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useNodeLabels } from "@/lib/node-labels";
@@ -82,7 +83,7 @@ class MarkdownErrorBoundary extends Component<
 const AssistantAnswer = memo(function AssistantAnswer({ answer }: { answer: string }) {
   return (
     <div className={ANSWER_CLASSNAME}>
-      <ReactMarkdown skipHtml components={MARKDOWN_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={MARKDOWN_COMPONENTS}>
         {answer}
       </ReactMarkdown>
     </div>

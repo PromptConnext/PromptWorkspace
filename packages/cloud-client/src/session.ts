@@ -49,22 +49,35 @@ export interface RefreshLease {
  *  sign-out. apps/vscode injects a small file of its own in the extension's
  *  global storage directory (see `fileLeaseStorage`). */
 export interface LeaseStorageLike {
-  read(): PromiseLike<RefreshLease | undefined>;
-  write(lease: RefreshLease | undefined): PromiseLike<void>;
+  read(scope: string): PromiseLike<RefreshLease | undefined>;
+  write(scope: string, lease: RefreshLease | undefined): PromiseLike<void>;
 }
 
 /** The default: a lease only this process sees. Correct for a single process
  *  (apps/mcp), where it reduces to the in-process refresh coalescing. */
 export function memoryLeaseStorage(): LeaseStorageLike {
-  let current: RefreshLease | undefined;
+  const current = new Map<string, RefreshLease>();
   return {
-    async read() {
-      return current;
+    async read(scope) {
+      return current.get(scope);
     },
-    async write(lease) {
-      current = lease;
+    async write(scope, lease) {
+      if (lease) current.set(scope, lease);
+      else current.delete(scope);
     },
   };
+}
+
+/** `tasks.json` -> `tasks@<scope>.json`, for files that hold one
+ *  environment's data. A scope is a host and may carry a port
+ *  (`localhost:8080` in stub mode), and `:` in a Windows file name opens an
+ *  NTFS alternate data stream, so anything outside `[A-Za-z0-9._-]` becomes
+ *  `_`. An empty scope keeps the bare name. */
+export function scopedFileName(name: string, scope: string): string {
+  if (!scope) return name;
+  const safe = scope.replace(/[^A-Za-z0-9._-]/g, "_");
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}@${safe}${name.slice(dot)}` : `${name}@${safe}`;
 }
 
 /** A lease kept in its own file, through the same atomic write-then-rename
@@ -74,11 +87,11 @@ export function memoryLeaseStorage(): LeaseStorageLike {
  *  key travels with it. Anything unreadable is "no lease". */
 export function fileLeaseStorage(
   files: { read(name: string): Promise<string | undefined>; write(name: string, contents: string): Promise<void> },
-  name = "refresh-lease.json",
 ): LeaseStorageLike {
+  const nameFor = (scope: string) => scopedFileName("refresh-lease.json", scope);
   return {
-    async read() {
-      const raw = await files.read(name).catch(() => undefined);
+    async read(scope) {
+      const raw = await files.read(nameFor(scope)).catch(() => undefined);
       if (!raw) return undefined;
       try {
         const lease = JSON.parse(raw) as RefreshLease | null;
@@ -89,8 +102,8 @@ export function fileLeaseStorage(
         return undefined;
       }
     },
-    async write(lease) {
-      await files.write(name, JSON.stringify(lease ?? null));
+    async write(scope, lease) {
+      await files.write(nameFor(scope), JSON.stringify(lease ?? null));
     },
   };
 }
@@ -103,82 +116,161 @@ const SESSION_KEY = "promptworkspace.cloud.session";
  *  is never verified here, and must never be trusted for one. Ported verbatim
  *  in intent from cloudClient.ts::emailFromAccessToken. */
 export function emailFromAccessToken(token: string): string | undefined {
+  const email = jwtClaims(token)?.email;
+  return typeof email === "string" ? email : undefined;
+}
+
+/** Decode a JWT payload without verifying it. Display and routing only. */
+function jwtClaims(token: string): Record<string, unknown> | undefined {
   const payload = token.split(".")[1];
   if (!payload) return undefined;
   try {
     const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return typeof json.email === "string" ? json.email : undefined;
+    return json && typeof json === "object" ? json : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** The host of the token's `iss` claim. Like `emailFromAccessToken`, never an
+ *  auth decision: it only says which environment a stored token came from. */
+export function issuerHost(accessToken: string): string | undefined {
+  const iss = jwtClaims(accessToken)?.iss;
+  if (typeof iss !== "string") return undefined;
+  try {
+    return new URL(iss).host.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Which environment a window points at: the Supabase host, else the API host,
+ *  else "" (the unscoped 0.3.0 keys). Windows on different environments must
+ *  not share a session, or one's refresh would clear the other's. */
+export function environmentScope(cfg: { supabaseUrl: string; apiUrl: string }): string {
+  for (const url of [cfg.supabaseUrl, cfg.apiUrl]) {
+    try {
+      const host = new URL(url).host.toLowerCase();
+      if (host) return host;
+    } catch {
+      /* try the next one */
+    }
+  }
+  return "";
 }
 
 export class SessionStore {
   private readonly secrets: SecretsLike;
   private readonly state: StorageLike;
   private readonly leases: LeaseStorageLike;
+  private readonly scope: () => string;
   private readonly listeners = new Set<(s: CloudSession | null) => void>();
 
+  /** `scope` names the environment; read on every call so a settings change
+   *  takes effect without a new store. Empty keeps the bare 0.3.0 keys. */
   constructor(
     secrets: SecretsLike,
     state: StorageLike,
     leases: LeaseStorageLike = memoryLeaseStorage(),
+    scope: () => string = () => "",
   ) {
     this.secrets = secrets;
     this.state = state;
     this.leases = leases;
+    this.scope = scope;
   }
 
-  read(): CloudSession | null {
-    return this.state.get<CloudSession>(SESSION_KEY) ?? null;
+  /** The environment this store reads and writes right now. A caller that
+   *  spans awaits (a token refresh) captures it once and passes it to the
+   *  methods below, so a settings change midway cannot split its reads and
+   *  writes across two environments. Every `scope` parameter defaults to it. */
+  currentScope(): string {
+    return this.scope();
   }
 
-  async accessToken(): Promise<string | undefined> {
-    return this.secrets.get(ACCESS_SECRET);
+  private key(base: string, scope: string): string {
+    return scope ? `${base}@${scope}` : base;
   }
 
-  async refreshToken(): Promise<string | undefined> {
-    return this.secrets.get(REFRESH_SECRET);
+  read(scope = this.scope()): CloudSession | null {
+    return this.state.get<CloudSession>(this.key(SESSION_KEY, scope)) ?? null;
   }
 
+  async accessToken(scope = this.scope()): Promise<string | undefined> {
+    return this.secrets.get(this.key(ACCESS_SECRET, scope));
+  }
+
+  async refreshToken(scope = this.scope()): Promise<string | undefined> {
+    return this.secrets.get(this.key(REFRESH_SECRET, scope));
+  }
+
+  /** Emit `read()` under the current scope; call after a settings change. */
+  rescope(): void {
+    this.emit(this.read());
+  }
+
+  /** Move a pre-scoping session under the current scope, but only into the
+   *  environment that minted it: a supabase record whose token was issued by
+   *  another host stays put for that host's window to adopt. */
+  async adoptLegacySession(): Promise<boolean> {
+    const scope = this.scope();
+    if (!scope || this.read()) return false;
+    const record = this.state.get<CloudSession>(SESSION_KEY);
+    if (!record) return false;
+    const access = await this.secrets.get(ACCESS_SECRET);
+    if (record.mode === "supabase" && (!access || issuerHost(access) !== scope)) return false;
+    const refresh = await this.secrets.get(REFRESH_SECRET);
+    await this.store(record, access, refresh, scope);
+    await this.secrets.delete(ACCESS_SECRET);
+    await this.secrets.delete(REFRESH_SECRET);
+    await this.state.update(SESSION_KEY, undefined);
+    return true;
+  }
+
+  /** Listeners hear only about the environment the window is on now: a
+   *  refresh that finishes after a settings change still lands in its own
+   *  environment, but must not look like a sign-in to the new one. */
   async store(
     session: CloudSession,
     accessToken?: string,
     refreshToken?: string,
+    scope = this.scope(),
   ): Promise<void> {
-    if (accessToken) await this.secrets.store(ACCESS_SECRET, accessToken);
-    if (refreshToken) await this.secrets.store(REFRESH_SECRET, refreshToken);
-    await this.state.update(SESSION_KEY, session);
-    this.emit(session);
+    if (accessToken) await this.secrets.store(this.key(ACCESS_SECRET, scope), accessToken);
+    if (refreshToken) await this.secrets.store(this.key(REFRESH_SECRET, scope), refreshToken);
+    await this.state.update(this.key(SESSION_KEY, scope), session);
+    if (scope === this.scope()) this.emit(session);
   }
 
-  /** Callers must also drop the task cache and the pending-write queue: a
-   *  queued status write belongs to the identity that made it and must never
-   *  flush under the next user. `extension.ts` wires that; see onDidChange. */
-  async clear(): Promise<void> {
-    await this.secrets.delete(ACCESS_SECRET);
-    await this.secrets.delete(REFRESH_SECRET);
-    await this.state.update(SESSION_KEY, undefined);
-    this.emit(null);
+  /** Callers must also drop the task cache. The pending-write queue is
+   *  dropped only on a sign-out the user asked for: each entry records the
+   *  environment and account that made it, so one kept through an involuntary
+   *  clear never flushes under the next user. `extension.ts` wires that; see
+   *  onDidChange. */
+  async clear(scope = this.scope()): Promise<void> {
+    await this.secrets.delete(this.key(ACCESS_SECRET, scope));
+    await this.secrets.delete(this.key(REFRESH_SECRET, scope));
+    await this.state.update(this.key(SESSION_KEY, scope), undefined);
+    if (scope === this.scope()) this.emit(null);
   }
 
   /** Sign out only if the stored refresh token is still `rejected`, read
    *  immediately before deleting. Every editor window shares these secrets, so
    *  an unconditional `clear()` after a rejection can delete the session a
    *  concurrent window has just stored. Returns whether it cleared. */
-  async clearIfRefreshToken(rejected: string): Promise<boolean> {
-    const current = await this.secrets.get(REFRESH_SECRET);
+  async clearIfRefreshToken(rejected: string, scope = this.scope()): Promise<boolean> {
+    const current = await this.secrets.get(this.key(REFRESH_SECRET, scope));
     if (current !== undefined && current !== rejected) return false;
-    await this.clear();
+    await this.clear(scope);
     return true;
   }
 
   /** The refresh lease (see LeaseStorageLike). There is no compare-and-set
    *  across windows, so CloudClient writes, waits a moment and reads back
    *  before trusting it holds the lease — and survives being wrong. */
-  async readRefreshLease(): Promise<RefreshLease | undefined> {
+  async readRefreshLease(scope = this.scope()): Promise<RefreshLease | undefined> {
     try {
-      return await this.leases.read();
+      return await this.leases.read(scope);
     } catch {
       return undefined;
     }
@@ -186,9 +278,9 @@ export class SessionStore {
 
   /** Never throws: a lease that cannot be written (two windows renaming the
    *  same temp file) only costs the de-duplication, never the refresh. */
-  async writeRefreshLease(lease: RefreshLease | undefined): Promise<void> {
+  async writeRefreshLease(lease: RefreshLease | undefined, scope = this.scope()): Promise<void> {
     try {
-      await this.leases.write(lease);
+      await this.leases.write(scope, lease);
     } catch {
       /* best-effort by design */
     }

@@ -3,7 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { JsonCache, type FileStoreLike } from "../src/cache.ts";
+import { CACHE_FILES, JsonCache, type FileStoreLike } from "../src/cache.ts";
+import { scopedFileName } from "../src/session.ts";
 
 function memoryStore(seed: Record<string, string> = {}) {
   const files = new Map(Object.entries(seed));
@@ -56,4 +57,21 @@ test("clear removes every named file", async () => {
   await cache.write("queue.json", []);
   await cache.clear(["tasks.json", "queue.json", "absent.json"]);
   assert.equal(files.size, 0);
+});
+
+test("a cache with a name mapper keeps each environment's files apart", async () => {
+  const { store, files } = memoryStore();
+  let scope = "a.supabase.co";
+  const cache = new JsonCache(store, (name) => scopedFileName(name, scope));
+  await cache.write(CACHE_FILES.tasks, [{ id: "a-task" }]);
+  assert.ok(files.has("tasks@a.supabase.co.json"));
+
+  scope = "localhost:8080";
+  assert.equal(await cache.read(CACHE_FILES.tasks), undefined, "another environment reads nothing");
+  await cache.write(CACHE_FILES.tasks, [{ id: "local-task" }]);
+  await cache.clear([CACHE_FILES.tasks]);
+  assert.equal(files.has("tasks@localhost_8080.json"), false, "clear removes only this scope's file");
+
+  scope = "a.supabase.co";
+  assert.deepEqual(await cache.read(CACHE_FILES.tasks), [{ id: "a-task" }]);
 });

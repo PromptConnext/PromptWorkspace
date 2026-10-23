@@ -10,13 +10,19 @@ import {
   CONNECTED,
   cachedLabel,
   connectionState,
+  queueStatusItem,
   type Connection,
   type ConnectionKind,
   type FolderLink,
 } from "./auth/status.ts";
 import { CloudClient } from "@promptworkspace/cloud-client";
 import { PRODUCTION_DEFAULTS, taskRefFromBranch } from "@promptworkspace/cloud-client";
-import { SessionStore, fileLeaseStorage } from "@promptworkspace/cloud-client";
+import {
+  SessionStore,
+  environmentScope,
+  fileLeaseStorage,
+  scopedFileName,
+} from "@promptworkspace/cloud-client";
 import {
   TASK_STATUSES,
   TASK_STATUS_LABELS,
@@ -37,8 +43,8 @@ import { linkCandidatesFrom, pickerCandidatesFrom } from "./projects/roster.ts";
 import { RosterStore } from "./projects/rosterStore.ts";
 import { RosterTreeProvider, ProjectTreeNode, type RosterNode } from "./projects/rosterTree.ts";
 import { ALL_CACHE_FILES, CACHE_FILES, JsonCache, type FileStoreLike } from "@promptworkspace/cloud-client";
-import { buildTaskContext, taskWebUrl } from "./tasks/copyContext.ts";
-import { StatusQueue, type QueueEntry } from "@promptworkspace/cloud-client";
+import { buildTaskContext, copiedMessage, taskWebUrl } from "./tasks/copyContext.ts";
+import { StatusQueue, belongsTo, type QueueEntry } from "@promptworkspace/cloud-client";
 import { startTask } from "./tasks/startTask.ts";
 import { StatusWriter } from "./tasks/statusWriter.ts";
 import { TaskStore } from "./tasks/taskStore.ts";
@@ -52,11 +58,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // The refresh lease (#50a) gets a file of its own rather than a globalState
   // key: globalState is one blob per extension, and a lease written from a
   // window with a stale copy would revert another window's session key.
+  // Session and lease are keyed by the environment this window's settings
+  // point at, so a develop window and a trust window each keep their own.
+  const scope = () => environmentScope(readConfig());
   const session = new SessionStore(
     context.secrets,
     context.globalState,
     fileLeaseStorage(createFileStore(context.globalStorageUri)),
+    scope,
   );
+  await session.adoptLegacySession();
+  // The account this window was last signed in as: queued writes stay counted
+  // (and are dropped on an explicit sign-out) under it after the session goes.
+  let lastUserId = session.read()?.userId;
   const client = new CloudClient({
     session,
     config: () => {
@@ -71,10 +85,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log,
   });
 
-  const cache = new JsonCache(createFileStore(context.globalStorageUri));
+  // Tasks, roster and git state are one environment's data, so their files
+  // are keyed by scope like the session (`tasks@<host>.json`): a develop
+  // window offline must not show trust's tasks, and signing out of one
+  // environment must not delete the files another window reads. The queue is
+  // the exception, shared on purpose: each entry records its own owner.
+  const files = createFileStore(context.globalStorageUri);
+  const cache = new JsonCache(files, (name) => scopedFileName(name, scope()));
+  const queueFile = new JsonCache(files);
   const queue = new StatusQueue({
-    load: () => cache.read<QueueEntry[]>(CACHE_FILES.queue),
-    save: (entries) => cache.write(CACHE_FILES.queue, entries),
+    load: () => queueFile.read<QueueEntry[]>(CACHE_FILES.queue),
+    save: (entries) => queueFile.write(CACHE_FILES.queue, entries),
     now: () => Date.now(),
     newId: () => randomUUID(),
   });
@@ -82,17 +103,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const store = new TaskStore(client, cache, log);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 5);
-  statusBar.command = "promptworkspace.flushQueue";
+  // Only this environment's and this account's writes: the queue file is
+  // shared by every window.
+  const queued = () => queue.count(belongsTo(scope(), session.read()?.userId ?? lastUserId));
   const refreshStatusBar = () => {
-    if (queue.size() === 0) {
+    const item = queueStatusItem(queued(), session.read() !== null);
+    if (!item) {
       statusBar.hide();
       return;
     }
-    statusBar.text = `$(cloud-upload) PromptWorkspace: ${queue.size()} pending`;
-    statusBar.tooltip = "Task updates waiting to reach the cloud. Click to retry.";
+    statusBar.text = item.text;
+    statusBar.tooltip = item.tooltip;
+    statusBar.command = item.command;
     statusBar.show();
   };
-  const writer = new StatusWriter(client, store, queue, log, refreshStatusBar);
+  const writer = new StatusWriter(client, store, queue, log, refreshStatusBar, () => ({
+    scope: scope(),
+    userId: session.read()?.userId,
+  }));
 
   const docs = new RepoDocs(client, log);
   const git = await createGitBridge(log);
@@ -245,6 +273,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const notified = new Set<ConnectionKind>();
   // Set by the Sign Out command: a sign-out the user asked for is not news.
   let signingOut = false;
+  // Starts running now, keyed project_id:task_id (see promptworkspace.startTask).
+  const startsInFlight = new Set<string>();
   let signedInContext: boolean | undefined;
   const folderLinks = (linkable: ReturnType<typeof candidates>): FolderLink[] =>
     (vscode.workspace.workspaceFolders ?? [])
@@ -270,6 +300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       {
         stored: session.read() !== null,
         authFailed: store.lastRefreshAuthFailed || roster.lastRefreshAuthFailed,
+        queued: queued(),
       },
       { cached: store.all().length > 0 || roster.all().length > 0, linkable: linkable.length },
       folderLinks(linkable),
@@ -373,15 +404,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       renderConnection();
       if (current) {
         signingOut = false;
-        // Then look at git again: commits held while signed out can close now.
-        void store.refresh().then(() => writer.flush()).then(() => watcher?.scanAll());
+        lastUserId = current.userId;
+        // Writes another account queued in this environment can never be
+        // sent by this one. Then look at git again: commits held while signed
+        // out can close now.
+        void queue
+          .drop((e) => e.scope === scope() && e.userId !== undefined && e.userId !== current.userId)
+          // A rescope or the drop changes the count even when nothing is due.
+          .then(() => refreshStatusBar())
+          .then(() => store.refresh())
+          .then(() => writer.flush())
+          .then(() => watcher?.scanAll());
         void roster.refresh();
       } else {
-        void Promise.all([store.clear(), roster.clear()]).finally(() => {
+        // Only a sign-out the user asked for discards their queued writes;
+        // one they did not ask for (a refused refresh, another window, a
+        // settings change to an environment with no session) keeps them for
+        // the next sign-in. Dropped before the stores clear, so the render
+        // their change events trigger already counts the shorter queue.
+        const explicit = signingOut;
+        void (async () => {
+          if (explicit) await queue.drop(belongsTo(scope(), lastUserId));
+          refreshStatusBar();
+          await Promise.all([store.clear(), roster.clear()]);
+        })().finally(() => {
           signingOut = false;
         });
         void clearCloneState(context.globalState);
-        void queue.clear().then(refreshStatusBar);
         // Otherwise a folder user A declined to link stays declined for user
         // B in the same window session — `promptedFolders` has no other way
         // to learn the account changed.
@@ -418,6 +467,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // editor switch, because the underlying question — "which project is this
     // folder now" — is identical either way.
     vscode.workspace.onDidChangeConfiguration(async (event) => {
+      // Pointing the window at another environment switches to that
+      // environment's session; `rescope` emits it (or null) to the listener.
+      if (
+        event.affectsConfiguration("promptworkspace.cloudApiUrl") ||
+        event.affectsConfiguration("promptworkspace.supabaseUrl")
+      ) {
+        // The caches' file names have already moved with the setting; swap
+        // what the stores hold before the session listener refreshes them.
+        watcher?.rescope();
+        await Promise.all([store.rescope(), roster.rescope()]);
+        // An adoption stores, and so already emits, the session; a second
+        // emit from `rescope` would start a second refresh chain.
+        if (!(await session.adoptLegacySession())) session.rescope();
+      }
       if (!event.affectsConfiguration("promptworkspace.projectId")) return;
       await reactToActiveProjectChange();
     }),
@@ -442,9 +505,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       signIn.withCode(),
     ),
     vscode.commands.registerCommand("promptworkspace.signOut", async () => {
-      if (queue.size() > 0) {
+      const pending = queued();
+      if (pending > 0) {
         const choice = await vscode.window.showWarningMessage(
-          `${queue.size()} task update(s) have not reached the cloud yet. ` +
+          `${pending} task update(s) have not reached the cloud yet. ` +
             "Signing out discards them.",
           { modal: true },
           "Sign out anyway",
@@ -521,14 +585,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           .repositories()
           .find((r) => link.projectIdForRepoRoot(r.root) === entry.project_id);
         const { webUrl } = readConfig();
-        await vscode.env.clipboard.writeText(
-          await buildTaskContext(entry, client, docs, log, {
-            branch: repo?.head?.name,
-            webUrl: webUrl ? taskWebUrl(webUrl, entry) : undefined,
-          }),
+        const context = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Copying task context…",
+          },
+          () =>
+            buildTaskContext(entry, client, docs, log, {
+              branch: repo?.head?.name,
+              webUrl: webUrl ? taskWebUrl(webUrl, entry) : undefined,
+            }),
         );
+        await vscode.env.clipboard.writeText(context.text);
         void vscode.window.showInformationMessage(
-          `Copied context for ${entry.task.feature_tag ?? entry.task.title}.`,
+          copiedMessage(
+            entry.task.feature_tag ?? entry.task.title,
+            context.missing,
+            context.signedOut,
+          ),
         );
       },
     ),
@@ -537,16 +611,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       async (node?: TreeNode) => {
         const entry = taskFromNode(node);
         if (!entry) return;
-        await startTask(entry, {
-          assign: (projectId, taskId, userId) =>
-            client.assignTask(projectId, taskId, userId),
-          writer,
-          git,
-          link,
-          currentUserId: () => session.read()?.userId,
-          log,
-        });
-        await store.refresh();
+        // A second invocation while the first is still at the picker or
+        // writing must not run a second start (two branch switches, two logs).
+        const key = `${entry.project_id}:${entry.task.id}`;
+        if (startsInFlight.has(key)) {
+          log.info(`start already running for ${entry.task.feature_tag ?? entry.task.id}`);
+          return;
+        }
+        startsInFlight.add(key);
+        try {
+          await startTask(entry, {
+            assign: (projectId, taskId, userId) =>
+              client.assignTask(projectId, taskId, userId),
+            writer,
+            git,
+            link,
+            currentUserId: () => session.read()?.userId,
+            log,
+          });
+          await store.refresh();
+        } finally {
+          startsInFlight.delete(key);
+        }
       },
     ),
     vscode.commands.registerCommand(
