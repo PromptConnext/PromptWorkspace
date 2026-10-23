@@ -68,6 +68,18 @@ export function memoryLeaseStorage(): LeaseStorageLike {
   };
 }
 
+/** `tasks.json` -> `tasks@<scope>.json`, for files that hold one
+ *  environment's data. A scope is a host and may carry a port
+ *  (`localhost:8080` in stub mode), and `:` in a Windows file name opens an
+ *  NTFS alternate data stream, so anything outside `[A-Za-z0-9._-]` becomes
+ *  `_`. An empty scope keeps the bare name. */
+export function scopedFileName(name: string, scope: string): string {
+  if (!scope) return name;
+  const safe = scope.replace(/[^A-Za-z0-9._-]/g, "_");
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}@${safe}${name.slice(dot)}` : `${name}@${safe}`;
+}
+
 /** A lease kept in its own file, through the same atomic write-then-rename
  *  file store the JSON cache uses. Every window of one editor profile shares
  *  the extension's global storage directory, and a file is visible to all of
@@ -76,8 +88,7 @@ export function memoryLeaseStorage(): LeaseStorageLike {
 export function fileLeaseStorage(
   files: { read(name: string): Promise<string | undefined>; write(name: string, contents: string): Promise<void> },
 ): LeaseStorageLike {
-  // A scope is a host, so it is safe in a file name.
-  const nameFor = (scope: string) => (scope ? `refresh-lease@${scope}.json` : "refresh-lease.json");
+  const nameFor = (scope: string) => scopedFileName("refresh-lease.json", scope);
   return {
     async read(scope) {
       const raw = await files.read(nameFor(scope)).catch(() => undefined);

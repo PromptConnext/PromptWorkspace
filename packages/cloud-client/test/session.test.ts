@@ -9,6 +9,7 @@ import {
   fileLeaseStorage,
   issuerHost,
   memoryLeaseStorage,
+  scopedFileName,
 } from "../src/session.ts";
 import { memorySecrets, memoryState } from "./helpers.ts";
 
@@ -126,4 +127,27 @@ test("leases are per scope", async () => {
   await file.write("", { owner: "w2", until: 6 });
   assert.deepEqual([...files.keys()].sort(), ["refresh-lease.json", "refresh-lease@a.supabase.co.json"]);
   assert.equal(await file.read("b.supabase.co"), undefined);
+});
+
+test("scopedFileName keeps a scope safe in a file name on every platform", () => {
+  assert.equal(scopedFileName("tasks.json", ""), "tasks.json");
+  assert.equal(scopedFileName("tasks.json", "a.supabase.co"), "tasks@a.supabase.co.json");
+  // `:` names an NTFS alternate data stream; a stub scope carries a port.
+  assert.equal(scopedFileName("tasks.json", "localhost:8080"), "tasks@localhost_8080.json");
+  assert.equal(scopedFileName("tasks.json", "[::1]:8080"), "tasks@___1__8080.json");
+});
+
+test("a lease file name never carries a colon", async () => {
+  const files = new Map<string, string>();
+  const file = fileLeaseStorage({
+    async read(name) {
+      return files.get(name);
+    },
+    async write(name, contents) {
+      files.set(name, contents);
+    },
+  });
+  await file.write("localhost:8080", { owner: "w1", until: 5 });
+  assert.deepEqual([...files.keys()], ["refresh-lease@localhost_8080.json"]);
+  assert.deepEqual(await file.read("localhost:8080"), { owner: "w1", until: 5 });
 });
