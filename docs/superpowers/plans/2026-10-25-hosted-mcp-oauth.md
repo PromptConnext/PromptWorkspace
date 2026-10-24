@@ -29,7 +29,7 @@
 
 1. A `redirect_uri` of `http://localhost.evil.com/callback` or `http://localhost@evil.com/` must not pass loopback matching; test in Task 6.
 2. A CIMD `client_id` whose hostname resolves to `127.0.0.1`, `::1`, `::ffff:10.0.0.1` or `169.254.169.254` must be refused before any connection; test in Task 5.
-3. Approving a request from a browser without the `pw_oauth_req` cookie, or with a cookie for a different request, must be refused; test in Task 6.
+3. Approving a request requires the user's bearer (never a cookie), and a decided request cannot be approved again; test in Task 6.
 4. A refresh token presented 31 s after it was rotated must revoke the whole family and the family's access tokens must fail at `/mcp` within 30 s; tests in Tasks 7 and 8.
 5. `/mcp` must reject a valid Supabase JWT (wrong `aud`) and a PromptWorkspace token whose `aud` is the trust URL when the server runs as production; test in Task 8.
 
@@ -126,7 +126,7 @@ git commit -am "feat(cloud): OAuth settings, ES256 signing keys, access token is
   ```python
   OAuthClientKind = Literal["preregistered", "cimd", "dcr"]
   class OAuthClient(BaseModel): client_id: str; kind: OAuthClientKind; client_name: str = ""; redirect_uris: list[str]; client_uri: str | None = None; logo_uri: str | None = None; token_endpoint_auth_method: Literal["none"] = "none"; metadata: dict = {}; created_at: datetime; last_used_at: datetime | None = None
-  class OAuthRequest(BaseModel): request_id: str = new_id(); client_id: str; redirect_uri: str; code_challenge: str; resource: str; scope: str; state: str | None; browser_binding_hash: str; created_at; expires_at; approved_user_id: str | None = None; approved_at: datetime | None = None; denied_at: datetime | None = None
+  class OAuthRequest(BaseModel): request_id: str = new_id(); client_id: str; redirect_uri: str; code_challenge: str; resource: str; scope: str; state: str | None; created_at; expires_at; approved_user_id: str | None = None; approved_at: datetime | None = None; denied_at: datetime | None = None
   class OAuthCode(BaseModel): code_hash: str; request_id: str; family_id: str; client_id: str; user_id: str; redirect_uri: str; code_challenge: str; resource: str; scope: str; expires_at; used_at: datetime | None = None
   class OAuthRefreshToken(BaseModel): token_hash: str; family_id: str; client_id: str; user_id: str; scope: str; resource: str; issued_at; expires_at; rotated_to_hash: str | None = None; rotated_at: datetime | None = None; revoked_at: datetime | None = None; last_used_at: datetime | None = None; user_agent: str | None = None
   class OAuthFamily(BaseModel): family_id: str; client_id: str; user_id: str; created_at; revoked_at: datetime | None = None; revoked_reason: str | None = None
@@ -287,19 +287,19 @@ git commit -am "feat(cloud): dynamic client registration and SSRF-safe client ID
 - Produces:
   ```python
   GET /oauth/authorize?response_type=code&client_id&redirect_uri&code_challenge&code_challenge_method=S256&resource&scope=mcp&state
-     -> 302 to f"{web_app_url}/oauth/consent?request={request_id}" with Set-Cookie: pw_oauth_req=<token_urlsafe(32)>; HttpOnly; Secure (when public_api_url is https); SameSite=Lax; Path=/oauth; Max-Age=600
+     -> 302 to f"{web_app_url}/oauth/consent?request={request_id}" (no cookie: per the 2026-10-25 ruling the client's state check is the cross-browser defense)
      -> before a valid client+redirect: 400 text/html page (template string in app/oauth/pages.py) naming the error; never a redirect
      -> after a valid client+redirect but bad other params: 302 redirect_uri?error=invalid_request|invalid_scope|unsupported_response_type&error_description&state&iss
   GET /oauth/authorize/{request_id}  (Depends get_current_user)  -> ConsentView {client_name, client_uri, logo_uri, vendor: str|None, verified: bool, redirect_host: str, loopback: bool, scopes: ["mcp"], account_email: str, workspaces: [{id,name}], expires_at}
      404 request_not_found when missing/expired/decided
-  POST /oauth/authorize/{request_id}/approve (get_current_user; Cookie pw_oauth_req) -> ConsentDecisionOut {redirect_to: str}
-     403 browser_mismatch when cookie missing or sha256(cookie) != browser_binding_hash; 404 as above
+  POST /oauth/authorize/{request_id}/approve (get_current_user) -> ConsentDecisionOut {redirect_to: str}
+     404 as above; 409 request_decided when already approved or denied
      mints family_id (new_id), code raw=token_urlsafe(32), stores OAuthCode(code_hash, ..., expires_at=now+300s), marks request approved, puts OAuthFamily; redirect_to = redirect_uri + "?code=…&state=…&iss=<public_api_url>" (omit state when None)
   POST /oauth/authorize/{request_id}/deny  -> ConsentDecisionOut {redirect_to: redirect_uri?error=access_denied&state&iss}
   ```
-  `GET /oauth/authorize` must not require auth. CORS for `/oauth/authorize/{id}` and the approve/deny routes is the existing global middleware (web origin, credentials allowed), which is what lets the cookie travel.
+  `GET /oauth/authorize` must not require auth. CORS for `/oauth/authorize/{id}` and the approve/deny routes is the existing global middleware (web origin).
 
-- [ ] **Step 1: Write failing tests**: happy path end to end up to the redirect URL (parse `code`, `state`, `iss`); each validation branch; Review Focus 3 (no cookie → 403; cookie from another request → 403); `resource` mismatch → redirect with `invalid_request`; `code_challenge_method=plain` → `invalid_request`; CIMD client resolved via a monkeypatched `fetch_client_metadata`; consent view shows `verified=True` for a Claude.ai redirect and `False` with `redirect_host` for an unknown HTTPS host; deny path; expired request → 404; approving twice → 404.
+- [ ] **Step 1: Write failing tests**: happy path end to end up to the redirect URL (parse `code`, `state`, `iss`); each validation branch; Review Focus 3 (approve without a bearer → 401; approve twice → 409; a decided request's view → 404); `resource` mismatch → redirect with `invalid_request`; `code_challenge_method=plain` → `invalid_request`; CIMD client resolved via a monkeypatched `fetch_client_metadata`; consent view shows `verified=True` for a Claude.ai redirect and `False` with `redirect_host` for an unknown HTTPS host; deny path; expired request → 404; approving twice → 404.
 
 - [ ] **Step 2: Run, expect failures**
 
@@ -452,7 +452,7 @@ git commit -am "feat(cloud): hosted planning tools with shared repo URL matching
 - Produces:
   ```ts
   export function safeNext(raw: string | null): string   // "/" unless raw matches /^\/(?![\/\\])/ and contains no "\\" and no ":" before the first "/" segment
-  // consent page: reads ?request=, RequireAuth (login returns via ?next=/oauth/consent?request=…), GET consent view with credentials: "include", renders: verified badge or "Unverified — redirects to <host>" first line, client name/logo, scopes sentence, workspaces list, account email, Approve/Deny; on approve navigates to redirect_to (window.location.assign)
+  // consent page: reads ?request=, RequireAuth (login returns via ?next=/oauth/consent?request=…), GET consent view with the Supabase bearer, renders: verified badge or "Unverified — redirects to <host>" first line, client name/logo, scopes sentence, workspaces list, account email, Approve/Deny; on approve navigates to redirect_to (window.location.assign)
   // ConnectSnippets props { apiUrl: string }: Claude Code command, Cursor deeplink (cursor://anysphere.cursor-deeplink/mcp/install?name=promptworkspace&config=<base64 {"url": apiUrl+"/mcp"}>) and JSON, "Custom connector URL" for Claude.ai / ChatGPT; copy buttons
   // account/agents page: table of grants with Revoke, "Revoke all"
   // reset-password page: after a successful reset calls revokeAllOauthGrants(); the TopBar "Sign out everywhere" (if present) does the same, else add the call to the existing sign-out handler behind a confirm
@@ -460,7 +460,7 @@ git commit -am "feat(cloud): hosted planning tools with shared repo URL matching
   ```
   `next.config.ts` `headers()` returns for `/oauth/consent`: `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`.
 
-- [ ] **Step 1: Write failing tests**: reset-password success triggers `DELETE /me/oauth-grants`; `safeNext` rejects `//evil`, `/\evil`, `/\\evil`, `javascript:` and accepts `/w/x`, `/oauth/consent?request=1`; consent page renders verified and unverified variants, approve calls the API with `credentials: "include"` and navigates; agents page lists and revokes; snippets render the three forms with the API URL; checklist step 1 shows the new copy and no longer mentions `promptworkspace-mcp login`.
+- [ ] **Step 1: Write failing tests**: reset-password success triggers `DELETE /me/oauth-grants`; `safeNext` rejects `//evil`, `/\evil`, `/\\evil`, `javascript:` and accepts `/w/x`, `/oauth/consent?request=1`; consent page renders verified and unverified variants, approve calls the API with the bearer and navigates; agents page lists and revokes; snippets render the three forms with the API URL; checklist step 1 shows the new copy and no longer mentions `promptworkspace-mcp login`.
 
 - [ ] **Step 2: Run, expect failures**
 
@@ -512,7 +512,7 @@ pnpm --dir apps/web typecheck && pnpm --dir apps/web test
 
 - [ ] **Step 2: End-to-end against the in-memory cloud with a real OAuth client**
 
-Start `MCP_ENABLED=1 MCP_OAUTH_SIGNING_KEY="$(openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt)" PUBLIC_API_URL=http://localhost:8080 WEB_APP_URL=http://localhost:3000 DATA_BACKEND=memory AUTH_MODE=stub uvicorn app.main:app --port 8080`. Script (Python, `mcp` SDK client with its `OAuthClientProvider`, loopback redirect server on a random port): discover → register via DCR → open authorize URL → simulate consent by calling `GET /oauth/authorize/{id}` and `POST …/approve` with `X-User-Id: alice` and the `pw_oauth_req` cookie captured from the 302 → exchange code → `list_tools` → `list_my_tasks`. Then `claude mcp add --transport http pw-local http://localhost:8080/mcp` and complete the flow in a real browser against the stub web app if `pnpm web` is running; record what each step returned.
+Start `MCP_ENABLED=1 MCP_OAUTH_SIGNING_KEY="$(openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt)" PUBLIC_API_URL=http://localhost:8080 WEB_APP_URL=http://localhost:3000 DATA_BACKEND=memory AUTH_MODE=stub uvicorn app.main:app --port 8080`. Script (Python, `mcp` SDK client with its `OAuthClientProvider`, loopback redirect server on a random port): discover → register via DCR → open authorize URL → simulate consent by calling `GET /oauth/authorize/{id}` and `POST …/approve` with `X-User-Id: alice` → exchange code → `list_tools` → `list_my_tasks`. Then `claude mcp add --transport http pw-local http://localhost:8080/mcp` and complete the flow in a real browser against the stub web app if `pnpm web` is running; record what each step returned.
 
 - [ ] **Step 3: Placeholder grep**
 
