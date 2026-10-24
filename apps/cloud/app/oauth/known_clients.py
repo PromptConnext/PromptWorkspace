@@ -1,4 +1,11 @@
-"""Redirect-URI based attribution of OAuth clients to known vendors."""
+"""Redirect-URI based attribution of OAuth clients to known vendors.
+
+A client is attributed to a vendor (and shown as Verified on the consent
+page) only when every redirect URI it registered is one of that vendor's
+exact callback URIs, or loopback for vendors whose desktop clients use one.
+Exact strings, never hosts or prefixes: a host match would mark any path on
+the vendor's domain, including ones the vendor does not control as a
+callback, as verified."""
 
 from __future__ import annotations
 
@@ -9,20 +16,36 @@ from urllib.parse import urlparse
 @dataclass(frozen=True)
 class KnownClient:
     vendor: str
-    redirect_hosts: frozenset[str]
+    redirect_uris: frozenset[str]
     loopback: bool
-    exact_uris: frozenset[str] = frozenset()
 
 
 KNOWN: tuple[KnownClient, ...] = (
-    KnownClient("Claude", frozenset({"claude.ai", "claude.com"}), True),
+    KnownClient(
+        "Claude",
+        frozenset(
+            {
+                "https://claude.ai/api/mcp/auth_callback",
+                "https://claude.com/api/mcp/auth_callback",
+            }
+        ),
+        True,
+    ),
     KnownClient(
         "Cursor",
-        frozenset({"www.cursor.com"}),
+        frozenset(
+            {
+                "https://www.cursor.com/agents/mcp/oauth/callback",
+                "cursor://anysphere.cursor-mcp/oauth/callback",
+            }
+        ),
         True,
-        frozenset({"cursor://anysphere.cursor-mcp/oauth/callback"}),
     ),
-    KnownClient("ChatGPT", frozenset({"chatgpt.com"}), False),
+    KnownClient(
+        "ChatGPT",
+        frozenset({"https://chatgpt.com/connector_platform_oauth_redirect"}),
+        False,
+    ),
 )
 
 
@@ -39,16 +62,6 @@ def _is_loopback(uri: str) -> bool:
         return False
 
 
-def _host(uri: str) -> str | None:
-    try:
-        p = urlparse(uri)
-        if p.scheme != "https" or p.username is not None or p.password is not None:
-            return None
-        return p.hostname
-    except ValueError:
-        return None
-
-
 def classify(redirect_uris: list[str]) -> tuple[str | None, bool]:
     """Return (vendor, verified). All-loopback gives ("loopback", True)."""
     if not redirect_uris:
@@ -57,9 +70,7 @@ def classify(redirect_uris: list[str]) -> tuple[str | None, bool]:
         return "loopback", True
     for client in KNOWN:
         if all(
-            _is_loopback(u) and client.loopback
-            or u in client.exact_uris
-            or _host(u) in client.redirect_hosts
+            u in client.redirect_uris or (client.loopback and _is_loopback(u))
             for u in redirect_uris
         ):
             return client.vendor, True
