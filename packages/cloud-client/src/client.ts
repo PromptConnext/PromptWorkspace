@@ -10,7 +10,21 @@
 import { CloudHttpError, CloudNotConfiguredError, CloudNotLoggedInError, CloudRefreshInvalidError } from "./errors.ts";
 import type { CloudSession, SessionStore } from "./session.ts";
 import { emailFromAccessToken } from "./session.ts";
-import type { AssignedTask, CloudProject, ProjectGraph, StageDocument, Task, TaskStatus, TaskStatusUpdate, Workspace } from "./types.ts";
+import type {
+  AgentRepoAnalysisIn,
+  AssignedTask,
+  CloudProject,
+  PlanningBrief,
+  ProjectGraph,
+  RepoAnalysisOut,
+  StageDocument,
+  StageDraftIn,
+  StageDraftOut,
+  Task,
+  TaskStatus,
+  TaskStatusUpdate,
+  Workspace,
+} from "./types.ts";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -437,12 +451,24 @@ export class CloudClient {
     );
   }
 
+  /** What a local agent needs to plan an imported project before
+   *  `repo_created`: instructions, templates, PRDs, the baseline and the
+   *  drafts already submitted. 409 `repo_not_imported` | `repo_already_created`
+   *  when there is nothing to plan. */
+  getPlanningBrief(projectId: string): Promise<PlanningBrief> {
+    return this.cloudFetch<PlanningBrief>(`/projects/${projectId}/planning-brief`);
+  }
+
   // ------------------------------------------------------------------ writes
   //
   // ADR 0020 decision 2: a task client writes exactly three things upward, each
   // through a purpose-built endpoint. There is no full-graph push here and
   // there must never be one — `PUT /sync/projects/{id}/graph` would let this
   // extension overwrite the requirements and specs the cloud authored.
+  //
+  // The two planning POSTs at the end are not graph writes either: one stores
+  // a repo-analysis row, the other a pending stage draft that becomes a stage
+  // document only when a human accepts it in the web app.
 
   patchTaskStatus(
     projectId: string,
@@ -479,6 +505,27 @@ export class CloudClient {
         parent_node_id: parentNodeId,
         body,
       }),
+    });
+  }
+
+  /** The local agent's repository snapshot and baseline. Admin-only (403
+   *  `admin_required`); writes the analysis row, never the graph. */
+  postAgentRepoAnalysis(
+    projectId: string,
+    body: AgentRepoAnalysisIn,
+  ): Promise<RepoAnalysisOut> {
+    return this.cloudFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis/agent`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** One stage's Markdown, stored as a pending draft for human review. The
+   *  response's `warnings` are what the agent should fix and resubmit. */
+  postStageDraft(projectId: string, body: StageDraftIn): Promise<StageDraftOut> {
+    return this.cloudFetch<StageDraftOut>(`/projects/${projectId}/stage-drafts`, {
+      method: "POST",
+      body: JSON.stringify(body),
     });
   }
 }

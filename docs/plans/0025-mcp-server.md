@@ -1,6 +1,6 @@
 # Plan 0025 — The MCP server
 
-**Date:** 2026-09-12 · **Status:** M1 implemented 2026-09-20 (`packages/pz-cloud` extraction, `apps/mcp` stdio server, `list_my_tasks` + `get_task`) · M2 implemented 2026-09-20 (workspace-root resolution from the git remote, `get_project_rules`) · M3 implemented 2026-09-20 (`close_task`: status PATCH with a file-backed retry queue, HEAD-commit artifact) · M4 open (HTTP transport, device-code auth) — launch-blocking milestones done · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md)
+**Date:** 2026-09-12 · **Status:** M1 implemented 2026-09-20 (`packages/pz-cloud` extraction, `apps/mcp` stdio server, `list_my_tasks` + `get_task`) · M2 implemented 2026-09-20 (workspace-root resolution from the git remote, `get_project_rules`) · M3 implemented 2026-09-20 (`close_task`: status PATCH with a file-backed retry queue, HEAD-commit artifact) · M4 open (HTTP transport, device-code auth) — launch-blocking milestones done · amended 2026-10-24: three planning tools (start_planning, submit_repo_analysis, submit_stage_draft) for imported projects, see [docs/superpowers/specs/2026-10-24-local-agent-brownfield-planning-design.md](../superpowers/specs/2026-10-24-local-agent-brownfield-planning-design.md) · **ADR:** [0019](../decisions/0019-desktop-as-vscode-extension.md)
 
 ADR 0019 made two decisions about the developer surface. Decision 1 built a VS Code extension; decision 3 named an MCP server as the portable floor beneath it, because MCP is the one AI-integration protocol honoured across VS Code, Cursor, Windsurf, Claude Code, Theia and the JetBrains assistants. Decision 5 then made the server load-bearing rather than decorative: our job is "supplying context and receiving outcomes," through `lm.registerTool` on VS Code "and through the MCP server everywhere."
 
@@ -10,7 +10,7 @@ Half of that shipped. `apps/vscode/src` is 4,825 lines across 31 modules and doe
 
 ## 1. What it is, and what it is not
 
-One small server over the same cloud API, speaking MCP, with four tools and no user interface of its own.
+One small server over the same cloud API, speaking MCP, with a deliberately small tool set (four at first, see the 2026-10-24 amendment) and no user interface of its own.
 
 - **`list_my_tasks`** — the caller's assigned tasks across every project, from `GET /me/tasks` (`apps/cloud/app/api/me.py:26`). Optional `workspace_id` and `status` filters; the endpoint defaults to the two open states (`apps/cloud/app/api/me.py:23`).
 - **`get_task`** — one task with its acceptance criteria, the relevant spec excerpt, and the project and repository it belongs to. This is the payload `apps/vscode/src/tasks/copyContext.ts:17` already assembles for the clipboard, returned as text instead of copied.
@@ -68,3 +68,13 @@ Publish to npm as a scoped package and document the one JSON block a developer p
 ## 7. Gating
 
 This plan is downstream of [plan 0011](./0011-desktop-decision-gate.md), and the branch chosen there changes its urgency rather than its content. Under **Branch A (retire)** it becomes a release prerequisite sequenced ahead of the `apps/desktop` deletion — that plan's §4 says so directly, because deleting the shells removes the last thing a non-VS-Code developer could have installed. Under **Branch B (fund)** the shell keeps serving those developers in the interim, and this plan competes for the same effort as the rebuild and the operational floor. Plan 0011 recommends Branch A with this plan first; on that reading M1 through M3 are launch-blocking and M4 is not.
+
+---
+
+## Amendment 2026-10-24 — planning tools
+
+Three tools were added for projects imported from an existing repository (plan 0027): `start_planning`, `submit_repo_analysis` and `submit_stage_draft`. The reason is that planning an imported project against its code is better done by the agent already sitting in the importer's clone, which can read the whole tree, than by a cloud snapshot summarised through Typhoon. `start_planning` reads a brief from `GET /projects/{id}/planning-brief`; `submit_repo_analysis` posts the agent's snapshot and baseline to `POST /projects/{id}/repo-analysis/agent`; `submit_stage_draft` posts one stage's Markdown to `POST /projects/{id}/stage-drafts`. The design, including why drafts get their own table, is in the [local-agent brownfield planning design](../superpowers/specs/2026-10-24-local-agent-brownfield-planning-design.md).
+
+The four-tool ceiling in §1 is lifted for exactly two things: planning reads, and planning writes that stop short of the task graph. The codebase baseline (`pw_repo_analyses`, marked agent-sourced) is admin-only and live on submit: it opens the `repo_analysis_required` gate for the plan and tasks stages straight away, as a baseline the cloud wrote would. Stage drafts (`pw_stage_drafts`) land pending; one becomes the stage document only when someone who may author that stage accepts it in the Planner, which is the per-stage rule the rest of the product uses: members for `specify` and `tasks`, admins for `constitution` and `plan`. Nothing the tools submit reaches the task graph until that human accepts a draft through the web. That is why the lift does not change what the server is for: it still supplies context and receives outcomes, and a draft is an outcome offered for review.
+
+The prohibitions in §1 stand unchanged. The server never calls `PUT /sync/projects/{id}/graph`, and it has no claim tool and will not get one. The planning tools cannot approximate either: they have no route to a task row, and accepting a draft is a web action the importer's agent cannot take.

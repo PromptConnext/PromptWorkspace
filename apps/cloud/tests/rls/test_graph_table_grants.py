@@ -240,6 +240,59 @@ def test_member_cannot_write_a_repo_analysis_directly(
     _denied(read)
 
 
+def test_member_cannot_touch_stage_drafts_directly(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Migration 0012: `pw_stage_drafts` is born service-only (RLS on, no
+    policy, grants revoked from `authenticated` and `anon`). A draft is an
+    agent's proposed stage markdown awaiting a reviewer's accept, so a member
+    inserting, rewriting or deleting one straight through PostgREST would
+    bypass that review. Every verb must answer 42501, and the table must
+    stay empty."""
+    headers = target.user_headers(fixture.member.access_token)
+    scope = {"project_id": f"eq.{fixture.project_id}"}
+
+    _denied(
+        http.post(
+            f"{target.rest}/pw_stage_drafts",
+            headers=headers,
+            json={
+                "project_id": fixture.project_id,
+                "workspace_id": fixture.workspace_id,
+                "stage": "plan",
+                "markdown": "# planted by a member, around the API",
+                "source": "agent",
+                "status": "pending",
+                "created_by": fixture.member.id,
+            },
+        )
+    )
+    _denied(
+        http.patch(
+            f"{target.rest}/pw_stage_drafts",
+            headers=headers,
+            params=scope,
+            json={"status": "approved"},
+        )
+    )
+    _denied(http.delete(f"{target.rest}/pw_stage_drafts", headers=headers, params=scope))
+    _denied(
+        http.get(
+            f"{target.rest}/pw_stage_drafts",
+            headers=headers,
+            params={**scope, "select": "*"},
+        )
+    )
+
+    check = http.get(
+        f"{target.rest}/pw_stage_drafts",
+        headers=target.service_headers(),
+        params={**scope, "select": "*"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [], "a member's direct stage-draft write landed"
+
+
 def test_member_cannot_write_stage_inputs_directly(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:

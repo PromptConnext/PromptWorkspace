@@ -15,7 +15,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -1308,6 +1308,11 @@ class DocumentOut(BaseModel):
     updated_at: datetime
 
 
+# Which door wrote a stage document: a generation, the editor, or an accepted
+# agent draft.
+StageDocumentSource = Literal["generated", "manual", "agent"]
+
+
 class StageDocument(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str
@@ -1320,6 +1325,8 @@ class StageDocument(BaseModel):
     # worker's duck-typed tombstone check (`node.deleted_at`), shared with
     # every other node_type, works unmodified for this one too.
     deleted_at: datetime | None = None
+    # Provenance: None for rows written before migration 0012.
+    source: StageDocumentSource | None = None
 
 
 class StageInputs(BaseModel):
@@ -1572,6 +1579,85 @@ class RepoAnalysis(BaseModel):
     status: RepoAnalysisStatus = "snapshot_ready"
     created_by: str
     updated_at: datetime = Field(default_factory=utcnow)
+    # Who wrote the baseline: the managed model ("cloud") or a local coding
+    # agent ("agent"), and which model the agent reported.
+    source: Literal["cloud", "agent"] = "cloud"
+    model: str | None = None
+
+
+DraftSource = Literal["agent"]
+StageDraftStatus = Literal["pending", "rejected"]
+
+
+class StageDraft(BaseModel):
+    """A planning document a local coding agent submitted, awaiting a
+    decision from someone who may author that stage. One row per (project,
+    stage); a new submission replaces the old one."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    stage: Literal["constitution", "specify", "plan", "tasks"]
+    markdown: str
+    source: DraftSource = "agent"
+    model: str | None = None
+    status: StageDraftStatus = "pending"
+    rejection_note: str | None = None
+    last_error: str | None = None
+    # sha256 of the predecessor stage's content this draft was written
+    # against: its pending draft at submit time if there was one, else its
+    # stored document, else "". None for constitution (no predecessor).
+    predecessor_fingerprint: str | None = None
+    created_by: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class StageDraftIn(BaseModel):
+    """What a local agent submits for one stage. Stored exactly as received;
+    it becomes the stage document only when a human accepts it."""
+
+    stage: Literal["constitution", "specify", "plan", "tasks"]
+    markdown: str = Field(min_length=1, max_length=100_000)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class StageDraftWarning(BaseModel):
+    code: Literal[
+        "missing_task_numbers", "unmarked_new_paths", "no_task_lines", "empty_document"
+    ]
+    items: list[Any]
+
+
+class StageDraftOut(BaseModel):
+    id: str
+    project_id: str
+    stage: str
+    markdown: str
+    source: str
+    model: str | None
+    status: StageDraftStatus
+    stale: bool
+    rejection_note: str | None
+    last_error: str | None
+    created_by: str
+    created_at: datetime
+    # Only the submit response carries warnings: they are what the agent
+    # must fix before submitting again. Everywhere else this is empty.
+    warnings: list[StageDraftWarning] = []
+
+
+class StageDraftAcceptIn(BaseModel):
+    # The draft the human read. A draft resubmitted since has a new id, and
+    # accepting it unseen is refused with 409 `draft_changed`.
+    draft_id: str = Field(min_length=1, max_length=64)
+    # The reviewer's edited text from the stage editor. When given and not
+    # blank it is applied instead of the draft's own markdown.
+    markdown: str | None = Field(default=None, max_length=100_000)
+
+
+class StageDraftRejectIn(BaseModel):
+    draft_id: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=2_000)
 
 
 class RepoAnalysisOut(BaseModel):
@@ -1592,6 +1678,26 @@ class RepoAnalysisOut(BaseModel):
     # be checked (GitHub unreachable, token missing) or there is nothing to
     # compare — "unknown" is not the same fact as "fresh".
     stale: bool | None = None
+
+
+class AgentRepoAnalysisIn(BaseModel):
+    """A snapshot and baseline a local coding agent wrote from its own
+    checkout, posted instead of the cloud reading the repository itself."""
+
+    default_branch: str = Field(min_length=1, max_length=200)
+    # A full commit id as `git rev-parse` prints it: 40 lowercase hex (SHA-1)
+    # or 64 (SHA-256). An abbreviation could never match the branch head the
+    # staleness check compares it with.
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+    paths: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=50_000
+    )
+    file_count: int = Field(ge=0)
+    tree_truncated: bool = False
+    stack: RepoStack = Field(default_factory=RepoStack)
+    tree_summary: str = Field(default="", max_length=20_000)
+    baseline: str = Field(min_length=1, max_length=100_000)
+    model: str | None = Field(default=None, max_length=200)
 
 
 class RepoAnalysisBaselineUpdate(BaseModel):

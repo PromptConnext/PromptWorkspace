@@ -10,6 +10,7 @@ Endpoints:
   POST  /projects/{id}/repo-analysis     admin — snapshot, then stream the baseline (SSE)
   GET   /projects/{id}/repo-analysis     member — the stored analysis, with `stale`
   PATCH /projects/{id}/repo-analysis     admin — edit the baseline by hand
+  POST  /projects/{id}/repo-analysis/agent  admin — store an analysis a local agent wrote
 
 Admin-only on both writes because the analysis is Tech Lead input: it decides
 what the plan is written against, and `plan` is already an admin-only stage
@@ -37,15 +38,25 @@ from app.deployments.preview_url import repo_full_name_from_url
 from app.generation.parsing import extract_document, parse_files, strip_thinking
 from app.generation.prompts import codebase_baseline_prompt, codebase_baseline_user_content
 from app.generation.service import HttpGenerationProvider
-from app.imports.snapshot import MAX_SKIPPED, build_snapshot
+from app.imports.snapshot import (
+    MAX_PATHS,
+    MAX_SKIPPED,
+    build_snapshot,
+    detect_stack,
+    filter_paths,
+    listed_paths,
+    summarize_tree,
+)
 from app.integrations.github import GithubWriteError
 from app.integrations.github_auth import resolve_token
 from app.models.schemas import (
+    AgentRepoAnalysisIn,
     GenerationRun,
     Project,
     RepoAnalysis,
     RepoAnalysisBaselineUpdate,
     RepoAnalysisOut,
+    RepoSnapshot,
     Role,
 )
 from app.rag.budget import estimate_tokens
@@ -392,4 +403,55 @@ def update_repository_baseline(
             }
         )
     )
+    return _out(project, stored)
+
+
+@router.post("/projects/{project_id}/repo-analysis/agent", response_model=RepoAnalysisOut)
+def submit_agent_analysis(
+    project_id: str,
+    body: AgentRepoAnalysisIn,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> RepoAnalysisOut:
+    """Store an analysis a local coding agent wrote from its own checkout,
+    replacing any previous one. No GitHub access and no model budget are
+    involved. The path list is the agent's claim, so it is filtered here the
+    same way the cloud's own snapshot is: secret-shaped and vendored paths
+    never reach the stored snapshot."""
+    project = require_project(repo, project_id, user)
+    require_admin(repo, project.workspace_id, user)
+    if not project.is_imported:
+        raise HTTPException(status_code=409, detail="repo_not_imported")
+    if project.lifecycle_status == "repo_created":
+        raise HTTPException(status_code=409, detail="repo_already_created")
+
+    kept = filter_paths(body.paths)
+    # `file_count` counts the same files as `paths`; the ones filtered out
+    # here leave the count too, or the listing would never read as complete
+    # and the "path not marked (new)" warning could never fire.
+    file_count = max(0, body.file_count - (len(set(body.paths)) - len(set(kept))))
+    stack = body.stack if body.stack.manifests or body.stack.runtime else detect_stack(kept)
+    snapshot = RepoSnapshot(
+        commit_sha=body.commit_sha,
+        default_branch=body.default_branch,
+        file_count=file_count,
+        tree_truncated=body.tree_truncated,
+        tree_summary=body.tree_summary or summarize_tree(kept),
+        stack=stack,
+        paths=listed_paths(kept)[:MAX_PATHS],
+    )
+    stored = repo.upsert_repo_analysis(
+        RepoAnalysis(
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+            commit_sha=body.commit_sha,
+            snapshot=snapshot,
+            baseline=body.baseline.strip(),
+            status="baseline_ready",
+            source="agent",
+            model=body.model,
+            created_by=user.id,
+        )
+    )
+    _stale_cache.pop(project_id, None)
     return _out(project, stored)

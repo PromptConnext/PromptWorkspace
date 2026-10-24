@@ -3,10 +3,14 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  acceptStageDraft,
+  ApiError,
   apiFetch,
   getRepoAnalysis,
   getStageDocument,
   listDocuments,
+  listStageDrafts,
+  rejectStageDraft,
   startTechReview,
   updateStageDocument,
 } from "@/lib/api";
@@ -36,12 +40,14 @@ import { CreateRepositoryPanel } from "./CreateRepositoryPanel";
 import { CODEBASE_ANALYSIS_ANCHOR, CodebaseAnalysisPanel } from "./CodebaseAnalysisPanel";
 import { DEPLOY_WORKFLOW_PATH, hasDeploymentTemplate, hasPolicyScope, SEEDED_FILES } from "./seedFiles";
 import { retiredLabel } from "./retiredLabel";
+import { StageDraftBanner } from "./StageDraftBanner";
 import type {
   DocumentOut,
   Project,
   ProjectionState,
   RepoAnalysisOut,
   RepositoryDocsStatus,
+  StageDraftOut,
   StageKind,
   SyncDocsResult,
   WorkspaceMember,
@@ -191,16 +197,47 @@ const STAGE_ERROR_TEXT: Record<string, string> = {
   // Plan 0027: an imported project's plan and tasks wait on a codebase
   // baseline (app/api/generation.py). The section also offers the way there.
   repo_analysis_required:
-    "Analyze the repository first — this project was imported, so the plan and tasks are written " +
-    "against its existing code.",
+    "Waiting for the codebase baseline — this project was imported, so the plan and tasks are " +
+    "written against its code.",
 };
 
-// Plan 0027's gate, said before the request rather than after its 409.
+// Plan 0027's gate, said before the request rather than after its 409. The
+// baseline comes from the importer's local coding agent (start_planning over
+// MCP), not from a button here.
 const ANALYSIS_GATE_TEXT =
-  "Analyze the repository first — this project was imported, so the plan and tasks are written " +
-  "against its existing code. The analysis is on the Foundation tab.";
+  "Waiting for the codebase baseline — this project was imported, so the plan and tasks are " +
+  "written against its code. Your coding agent submits it through the start_planning flow.";
 const ANALYSIS_GATE_MEMBER_TEXT =
-  "Waiting on the codebase analysis — your Tech Lead runs it on the Foundation tab.";
+  "Waiting for the codebase baseline — this project was imported, so the plan and tasks are " +
+  "written against its code. A workspace admin's coding agent submits it.";
+
+// How often an agent-planned project rereads its baseline and drafts.
+const PLANNING_POLL_MS = 15_000;
+
+// The cloud refuses a draft accept with 403 when the caller may not author
+// the stage (app/api/_guards.py::require_stage_access).
+const DRAFT_FORBIDDEN_TEXT = "Only your Tech Lead can accept this draft.";
+
+// The draft-specific refusals of an accept or reject. Checked before the
+// stage's own error text, whose 409 copy names Generate, which an imported
+// project does not offer.
+const DRAFT_ERROR_TEXT: Record<string, string> = {
+  draft_changed: "This draft changed since you opened it — reloading.",
+  requirement_required: "Accept the specification draft first — the plan is written against it.",
+  spec_document_required: "Accept the plan draft first — tasks are broken down from it.",
+  intent_not_approved: INTENT_WAITING_TEXT,
+};
+
+// A refused accept or reject, in words. The 409s are the same ordering codes
+// generation answers, reworded for a draft to accept rather than a document
+// to generate. `analysisText` is the baseline-gate sentence for this viewer
+// (an admin's agent submits the baseline; a member waits for one).
+function draftErrorText(err: unknown, analysisText: string): string {
+  if (err instanceof ApiError && err.status === 403) return DRAFT_FORBIDDEN_TEXT;
+  const code = (err as Error).message;
+  if (code === "repo_analysis_required") return analysisText;
+  return DRAFT_ERROR_TEXT[code] ?? STAGE_ERROR_TEXT[code] ?? code;
+}
 
 // One stepper section. The input surface is stage-shaped: `specify` and `plan`
 // get a structured form (STAGE_FIELDS), `tasks` gets no input at all because
@@ -225,6 +262,12 @@ function StageSection({
   prefill,
   prefillHint,
   confirmReplace,
+  agentPlanned = false,
+  draft,
+  draftCanAct = false,
+  draftBlockedBy,
+  draftAnalysisText = ANALYSIS_GATE_TEXT,
+  onDraftsChange,
 }: {
   projectId: string;
   stage: StageKind;
@@ -264,6 +307,21 @@ function StageSection({
    *  already holds a copy of it (the project is at `repo_created`): the copy
    *  falls behind and has to be synced through a pull request. */
   confirmReplace?: string;
+  /** An imported project, planned by the importer's local coding agent: the
+   *  managed-model Generate and prefill controls are not offered; the editor
+   *  and Save stay. */
+  agentPlanned?: boolean;
+  /** The agent's draft for this stage, pending or rejected. */
+  draft?: StageDraftOut;
+  /** Whether the viewer may accept or reject `draft`. */
+  draftCanAct?: boolean;
+  /** Why `draft` cannot be accepted yet (a missing predecessor, or the
+   *  codebase baseline gate). */
+  draftBlockedBy?: string;
+  /** The baseline-gate sentence for this viewer, for a refused accept. */
+  draftAnalysisText?: string;
+  /** Called after an accept or reject, so the Planner rereads the drafts. */
+  onDraftsChange?: () => void;
 }) {
   const { authHeaders } = useAuth();
   const fields = STAGE_FIELDS[stage];
@@ -287,6 +345,19 @@ function StageSection({
   const [docProjectionError, setDocProjectionError] = useState<string | null>(null);
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
   const [docRetiredRefs, setDocRetiredRefs] = useState<string[] | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  // A pending draft is reviewed in the stage editor: its markdown is loaded
+  // there in place of the stored document, and Accept sends whatever the
+  // editor holds. Reset only when a different draft arrives, so a poll that
+  // rereads the same draft does not throw away the reviewer's edits.
+  const pendingDraft = draft?.status === "pending" ? draft : undefined;
+  const [draftText, setDraftText] = useState(pendingDraft?.markdown ?? "");
+  useEffect(() => {
+    if (pendingDraft) setDraftText(pendingDraft.markdown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDraft?.id]);
+  const editorText = pendingDraft ? draftText : docContent;
+  const setEditorText = pendingDraft ? setDraftText : setDocContent;
 
   // Reported once the document has loaded, so every later change of stamp is
   // a save or a regeneration (the Planner refreshes the docs banner on those).
@@ -360,7 +431,11 @@ function StageSection({
     setDocSaving(true);
     setDocError(null);
     try {
-      const doc = await updateStageDocument(projectId, stage, docContent, authHeaders());
+      // Save writes the stage document, as it always has — with a pending
+      // draft open, that is the editor's text; the draft itself is untouched
+      // and stays pending until it is accepted or rejected.
+      const doc = await updateStageDocument(projectId, stage, editorText, authHeaders());
+      setDocContent(doc.content);
       setDocUpdatedAt(doc.updated_at);
       // The save projects the document onto the graph server-side, so a
       // hand-written stage unlocks the next one without a reload — and says
@@ -379,6 +454,43 @@ function StageSection({
     }
   }
 
+  // Accepting a draft writes it as the stage document, so it lands the way a
+  // save does: same projection report, same graph refresh. A failed
+  // projection keeps the draft (it now carries last_error) and says why.
+  async function acceptDraft() {
+    if (!draft) return;
+    setDraftError(null);
+    try {
+      const doc = await acceptStageDraft(projectId, stage, draft.id, draftText, authHeaders());
+      setDocContent(doc.content);
+      setDocUpdatedAt(doc.updated_at);
+      setDocProjection(doc.projection);
+      setDocProjectionError(doc.error ?? null);
+      setDocRetiredCount(doc.retired_count ?? null);
+      setDocRetiredRefs(doc.retired_refs ?? null);
+      onDocPresence?.(stage, doc.content.trim().length > 0);
+      if (doc.projection === "current") onGraphChange?.();
+    } catch (err) {
+      setDraftError(draftErrorText(err, draftAnalysisText));
+    } finally {
+      onDraftsChange?.();
+    }
+  }
+
+  async function rejectDraft(note: string) {
+    if (!draft) return;
+    setDraftError(null);
+    try {
+      await rejectStageDraft(projectId, stage, draft.id, note, authHeaders());
+    } catch (err) {
+      setDraftError(draftErrorText(err, draftAnalysisText));
+      // The banner keeps the typed note when the reject did not land.
+      throw err;
+    } finally {
+      onDraftsChange?.();
+    }
+  }
+
   // `tasks` sends a fixed instruction instead of user text: the spec and plan
   // are injected server-side as context, so there is nothing left to ask.
   const userInput = fields ? composeStageInput(fields, answers) : TASKS_INPUT;
@@ -390,6 +502,13 @@ function StageSection({
   // Until the stage has a document, generating it is the thing to do here;
   // after that the tab's "Continue to …" takes over as the primary action.
   const hasDoc = docContent.trim().length > 0;
+  // The banner beside a disabled Accept already says the baseline gate is
+  // closed; the section does not say it a second time.
+  const gateInBanner =
+    Boolean(analysisGate) &&
+    pendingDraft !== undefined &&
+    draftCanAct &&
+    draftBlockedBy === analysisGate;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -397,15 +516,30 @@ function StageSection({
       <p className="mb-3 mt-1 text-xs text-slate-500">{blurb}</p>
       {helper && !readOnly && <p className="mb-3 text-xs text-slate-600">{helper}</p>}
       {note && <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{note}</p>}
+      {draft && (
+        <StageDraftBanner
+          draft={draft}
+          canAct={draftCanAct}
+          blockedBy={draftBlockedBy}
+          onAccept={acceptDraft}
+          onReject={rejectDraft}
+        />
+      )}
+      {draftError && (
+        <p role="alert" className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
+          {draftError}
+        </p>
+      )}
       {!readOnly && (
         <>
-          {blockedBy && (
+          {/* With a draft present the banner says it, beside the Accept it disables. */}
+          {blockedBy && !draft && (
             <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{blockedBy}</p>
           )}
           {recommendation && !blockedBy && (
             <p className="mb-3 rounded bg-sky-50 p-3 text-xs text-sky-900">{recommendation}</p>
           )}
-          {analysisGate && (
+          {analysisGate && !gateInBanner && (
             <div className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">
               <p>{analysisGate}</p>
               {onOpenAnalysis && (
@@ -419,7 +553,7 @@ function StageSection({
               )}
             </div>
           )}
-          {fields && (
+          {fields && !agentPlanned && (
             <div className="mb-3">
               <StageInputForm
                 projectId={projectId}
@@ -435,6 +569,7 @@ function StageSection({
               />
             </div>
           )}
+          {!agentPlanned && (
           <button
             type="button"
             disabled={
@@ -448,7 +583,8 @@ function StageSection({
           >
             {status === "generating" ? "Generating…" : buttonLabel}
           </button>
-          {!ready && !blockedBy && !analysisGate && (
+          )}
+          {!agentPlanned && !ready && !blockedBy && !analysisGate && (
             <p className="mt-2 text-xs text-slate-500">
               Fill in the fields marked * to generate.
             </p>
@@ -521,8 +657,8 @@ function StageSection({
             </p>
           )}
           <MarkdownEditor
-            value={docContent}
-            onChange={setDocContent}
+            value={editorText}
+            onChange={setEditorText}
             onSave={saveDoc}
             saving={docSaving}
             error={docError}
@@ -858,24 +994,93 @@ export function Planner({
   // too. Null while loading or after a failed read: neither locks anything,
   // and the cloud's own 409 repo_analysis_required still stands behind it.
   const [analysis, setAnalysis] = useState<RepoAnalysisOut | null>(null);
+  // The importer's coding agent's stage drafts awaiting review, read with the
+  // analysis and reread after every accept, reject or analysis change.
+  const [drafts, setDrafts] = useState<StageDraftOut[]>([]);
   const analysisApplies = Boolean(project.repo_url) && lifecycle !== "repo_created";
+  const draftsRead = useRef(0);
+  const refetchDrafts = useCallback(() => {
+    const read = ++draftsRead.current;
+    listStageDrafts(projectId, authHeaders())
+      .then((result) => {
+        if (read === draftsRead.current) setDrafts(result);
+      })
+      .catch(() => undefined);
+  }, [projectId, authHeaders]);
+  // Same sequence rule as the drafts: only the latest read lands, so a slow
+  // poll cannot overwrite a newer answer.
+  const analysisRead = useRef(0);
+  const refetchAnalysis = useCallback(() => {
+    const read = ++analysisRead.current;
+    getRepoAnalysis(projectId, authHeaders())
+      .then((result) => {
+        if (read === analysisRead.current) setAnalysis(result);
+      })
+      .catch(() => undefined);
+  }, [projectId, authHeaders]);
   useEffect(() => {
     if (!analysisApplies) {
       setAnalysis(null);
+      setDrafts([]);
       return;
     }
-    let cancelled = false;
-    getRepoAnalysis(projectId, authHeaders())
-      .then((result) => {
-        if (!cancelled) setAnalysis(result);
-      })
-      .catch(() => undefined);
+    refetchAnalysis();
+    refetchDrafts();
     return () => {
-      cancelled = true;
+      analysisRead.current++;
+      draftsRead.current++;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, analysisApplies]);
+  const onAnalysisChange = useCallback(
+    (next: RepoAnalysisOut) => {
+      setAnalysis(next);
+      refetchDrafts();
+    },
+    [refetchDrafts],
+  );
   const analysisRequired = analysis?.required === true;
+  // An imported project before repo_created is planned by the importer's local
+  // coding agent; the managed-model buttons are not offered on it.
+  const agentPlanned = analysisRequired;
+
+  // The baseline and drafts arrive from the importer's terminal sitting while
+  // this page is open, so reread both every 15 s until the tasks document
+  // exists — only while the page is visible, and once more on returning to it.
+  const pollPlanning = analysisRequired && docPresent.tasks !== true;
+  useEffect(() => {
+    if (!pollPlanning) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
+      refetchAnalysis();
+      refetchDrafts();
+    };
+    const start = () => {
+      if (timer === null && document.visibilityState === "visible") {
+        timer = setInterval(tick, PLANNING_POLL_MS);
+      }
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        tick();
+        start();
+      } else {
+        stop();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [pollPlanning, refetchAnalysis, refetchDrafts]);
   const analysisGate =
     analysisRequired && analysis?.status !== "baseline_ready"
       ? isTechLead
@@ -910,6 +1115,13 @@ export function Planner({
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
     const label = previous?.label ?? meta.requires;
+    // On an agent-planned project the predecessor arrives as a draft to
+    // accept, not a document to generate.
+    if (agentPlanned) {
+      return isTechLead || !ADMIN_ONLY_STAGES.includes(meta.requires)
+        ? `Waiting on ${label} — accept its draft first.`
+        : `Waiting on ${label} — your Tech Lead accepts it.`;
+    }
     // Telling a business user to "generate that document first" points them at
     // a stage only a Tech Lead may author, so name who does it instead.
     if (ADMIN_ONLY_STAGES.includes(meta.requires) && !isTechLead) {
@@ -917,6 +1129,10 @@ export function Planner({
     }
     return `Waiting on ${label} — generate it first.`;
   }
+
+  const stageDocsPresent: Partial<Record<StageKind, boolean>> = Object.fromEntries(
+    Object.entries(docPresent).map(([stage, present]) => [stage, Boolean(present)]),
+  );
 
   // What each tab's progress mark reads. Foundation's inputs are optional, so
   // it counts as done once either one is given.
@@ -1193,7 +1409,9 @@ export function Planner({
                   projectId={projectId}
                   analysis={analysis}
                   canEdit={isTechLead}
-                  onChange={setAnalysis}
+                  onChange={onAnalysisChange}
+                  drafts={drafts}
+                  stageDocsPresent={stageDocsPresent}
                 />
               )}
               <SourceDocuments
@@ -1247,6 +1465,15 @@ export function Planner({
                 prefill={PREFILLABLE_STAGES.includes(stage) ? prefillFor(stage) : undefined}
                 prefillHint={stage === "specify" ? specifyPrefillHint : undefined}
                 confirmReplace={readOnly && stage !== "tasks" ? REPLACE_CONFIRM : undefined}
+                agentPlanned={agentPlanned}
+                draft={drafts.find((d) => d.stage === stage)}
+                draftCanAct={isTechLead || !ADMIN_ONLY_STAGES.includes(stage)}
+                draftBlockedBy={
+                  blockedBy(meta) ??
+                  (stage === "plan" || stage === "tasks" ? analysisGate : undefined)
+                }
+                draftAnalysisText={isTechLead ? ANALYSIS_GATE_TEXT : ANALYSIS_GATE_MEMBER_TEXT}
+                onDraftsChange={refetchDrafts}
               />
             );
           })}

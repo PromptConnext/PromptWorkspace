@@ -156,16 +156,17 @@ def apply_stage_content(
     stage: str,
     content: str,
     *,
-    source: Literal["generated", "manual"],
+    source: Literal["generated", "manual", "agent"],
     actor_id: str,
     app: Any = None,
     user_input: str | None = None,
 ) -> StageApplyResult:
     """Save a stage's markdown and project it onto the project graph.
 
-    `source` says which route this came from — generated content carries the
-    author's prompt in `user_input`, which is what a Requirement's description
-    is written from and what titles a document with no H1; a manual edit has
+    `source` says which route this came from, and is recorded on the stage
+    document — generated content carries the author's prompt in `user_input`,
+    which is what a Requirement's description is written from and what titles
+    a document with no H1; a manual edit or an accepted agent draft has
     neither and falls back to the document's own text. `app` is the FastAPI
     application the RAG embed queue lives on; omitted (as in a unit test that
     has no app) nothing is enqueued.
@@ -175,7 +176,7 @@ def apply_stage_content(
     `projection="failed"` with `error` set rather than as an exception.
     """
     document = repo.upsert_stage_document(
-        project.id, project.workspace_id, stage, content, actor_id
+        project.id, project.workspace_id, stage, content, actor_id, source=source
     )
     _enqueue(app, project, "stage_documents", document.id)
 

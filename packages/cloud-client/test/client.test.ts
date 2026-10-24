@@ -881,3 +881,94 @@ test("a refresh rejected after a scope change signs out the environment it start
   setScope("a.supabase.co");
   assert.equal(session.read(), null, "A's rejected session is gone");
 });
+
+// ------------------------------------------------------- local-agent planning
+//
+// Two reads-then-writes for an imported project before `repo_created`. The
+// writes land a pending stage draft and a repo-analysis row; neither is the
+// graph push, and both carry their body as JSON.
+
+function recordingServer(reply: unknown, status = 200) {
+  const seen: { url?: string; method?: string; body?: unknown } = {};
+  const handler: Handler = (req, res) => {
+    seen.url = req.url;
+    seen.method = req.method;
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      seen.body = raw ? JSON.parse(raw) : undefined;
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(reply));
+    });
+  };
+  return { seen, handler };
+}
+
+test("getPlanningBrief reads the project's planning brief", async () => {
+  const brief = {
+    project_id: "p1",
+    project_name: "Uploader",
+    analysis_status: "none",
+    submittable_stages: ["constitution", "specify"],
+  };
+  const { seen, handler } = recordingServer(brief);
+  await withServer(handler, async (base) => {
+    const { client } = makeClient(base);
+    await client.signInStub("alice");
+    const got = await client.getPlanningBrief("p1");
+    assert.equal(seen.method, "GET");
+    assert.equal(seen.url, "/projects/p1/planning-brief");
+    assert.equal(got.project_name, "Uploader");
+    assert.deepEqual(got.submittable_stages, ["constitution", "specify"]);
+  });
+});
+
+test("postAgentRepoAnalysis posts the snapshot as JSON to the agent route", async () => {
+  const { seen, handler } = recordingServer({ status: "baseline_ready", commit_sha: "abc123" });
+  await withServer(handler, async (base) => {
+    const { client } = makeClient(base);
+    await client.signInStub("alice");
+    const got = await client.postAgentRepoAnalysis("p1", {
+      default_branch: "main",
+      commit_sha: "abc123",
+      paths: ["src/a.py"],
+      file_count: 1,
+      baseline: "# Baseline",
+    });
+    assert.equal(seen.method, "POST");
+    assert.equal(seen.url, "/projects/p1/repo-analysis/agent");
+    assert.deepEqual(seen.body, {
+      default_branch: "main",
+      commit_sha: "abc123",
+      paths: ["src/a.py"],
+      file_count: 1,
+      baseline: "# Baseline",
+    });
+    assert.equal(got.status, "baseline_ready");
+    assert.equal(got.commit_sha, "abc123");
+  });
+});
+
+test("postStageDraft posts one stage's markdown and returns the draft with warnings", async () => {
+  const draft = {
+    id: "d1",
+    stage: "tasks",
+    status: "pending",
+    stale: false,
+    warnings: [{ code: "missing_task_numbers", items: ["T003"] }],
+  };
+  const { seen, handler } = recordingServer(draft, 201);
+  await withServer(handler, async (base) => {
+    const { client } = makeClient(base);
+    await client.signInStub("alice");
+    const got = await client.postStageDraft("p1", { stage: "tasks", markdown: "- T001 x" });
+    assert.equal(seen.method, "POST");
+    assert.equal(seen.url, "/projects/p1/stage-drafts");
+    assert.deepEqual(seen.body, { stage: "tasks", markdown: "- T001 x" });
+    assert.equal(got.status, "pending");
+    assert.deepEqual(got.warnings, [{ code: "missing_task_numbers", items: ["T003"] }]);
+  });
+});

@@ -21,6 +21,7 @@ import type {
   RepoAnalysisOut,
   SeedPreview,
   StageDocumentOut,
+  StageDraftOut,
   StageDocumentSaved,
   StageInputsOut,
   StageKind,
@@ -468,6 +469,40 @@ export function patchRepoAnalysis(
   return apiFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ baseline }),
+  });
+}
+
+export function listStageDrafts(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<StageDraftOut[]>(`/projects/${projectId}/stage-drafts`, authHeaders);
+}
+
+// Both address the draft the reviewer opened by id: a draft the agent
+// replaced since is refused with 409 `draft_changed`, never applied unseen.
+// `markdown`, when given, is the reviewer's edited text and is applied in
+// place of the draft's own.
+export function acceptStageDraft(
+  projectId: string,
+  stage: StageKind,
+  draftId: string,
+  markdown: string | undefined,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDocumentSaved>(`/projects/${projectId}/stage-drafts/${stage}/accept`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify(markdown === undefined ? { draft_id: draftId } : { draft_id: draftId, markdown }),
+  });
+}
+
+export function rejectStageDraft(
+  projectId: string,
+  stage: StageKind,
+  draftId: string,
+  note: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDraftOut>(`/projects/${projectId}/stage-drafts/${stage}/reject`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ draft_id: draftId, note }),
   });
 }
 

@@ -102,6 +102,83 @@ export interface StageDocument {
   updated_at: string | null;
 }
 
+// ------------------------------------------------- local-agent planning
+//
+// Wire shapes for an imported project's planning before `repo_created`: the
+// brief a local agent reads, and the two things it may submit. Only the fields
+// a task client reads are typed on the responses.
+
+export type PlanningStage = "constitution" | "specify" | "plan" | "tasks";
+
+export const PLANNING_STAGES: PlanningStage[] = ["constitution", "specify", "plan", "tasks"];
+
+export type AnalysisStatus = "none" | "snapshot_ready" | "baseline_ready" | "failed";
+
+export interface PlanningBriefDraft {
+  stage: string;
+  status: "pending" | "rejected";
+  stale: boolean;
+  rejection_note: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface PlanningBrief {
+  project_id: string;
+  project_name: string;
+  project_description: string;
+  repo_url: string | null;
+  default_branch: string;
+  can_submit_analysis: boolean;
+  policy_context: string;
+  templates: Record<PlanningStage, string>;
+  prd_texts: { title: string; text: string }[];
+  analysis_status: AnalysisStatus;
+  /** Empty when no baseline has been submitted. */
+  baseline: string;
+  drafts: PlanningBriefDraft[];
+  submittable_stages: string[];
+  instructions: string;
+}
+
+export interface AgentRepoAnalysisIn {
+  default_branch: string;
+  commit_sha: string;
+  paths: string[];
+  file_count: number;
+  tree_truncated?: boolean;
+  stack?: { runtime?: string; manifests?: string[]; languages?: string[] };
+  tree_summary?: string;
+  baseline: string;
+  model?: string;
+}
+
+export interface RepoAnalysisOut {
+  status: AnalysisStatus;
+  commit_sha: string | null;
+}
+
+export interface StageDraftIn {
+  stage: PlanningStage;
+  markdown: string;
+  model?: string;
+}
+
+export interface StageDraftWarning {
+  code: "missing_task_numbers" | "unmarked_new_paths" | "no_task_lines" | "empty_document";
+  /** `missing_task_numbers`: refs such as `"T003"`. `unmarked_new_paths`:
+   *  `{ ref, path }` objects. `no_task_lines` and `empty_document`: empty. */
+  items: unknown[];
+}
+
+export interface StageDraftOut {
+  id: string;
+  stage: string;
+  status: "pending" | "rejected";
+  stale: boolean;
+  warnings: StageDraftWarning[];
+}
+
 export interface SpecDocument {
   id: string;
   project_id: string;

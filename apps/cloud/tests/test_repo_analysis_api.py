@@ -32,7 +32,7 @@ ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
 TOKEN = "github_pat_11ABCDEF_secretvalue"
 REPO = "acme/storyapp"
-HEAD = "c0ffee1"
+HEAD = "c0ffee1" + "0" * 33  # a full 40-hex sha, as git and GitHub report it
 
 README = "# Story App\n\nA storytelling app built on Express with a Postgres store."
 INJECTION = (
@@ -934,3 +934,103 @@ def test_a_search_capped_at_the_file_limit_is_not_logged_as_a_failure(
     _, user_content = client.app.state.generation_provider.calls[-1]
     assert "searched 2 of 3 files" in user_content.split("[repo_occurrences]", 1)[1]
     assert not [r for r in caplog.records if "occurrences" in r.getMessage()]
+
+
+def _agent_analysis(client: TestClient, pid: str, headers=ALICE, **over):
+    body = {
+        "default_branch": "main",
+        "commit_sha": HEAD,
+        "paths": ["README.md", "src/server.js"],
+        "file_count": 2,
+        "stack": {"runtime": "node", "manifests": ["package.json"], "languages": ["javascript"]},
+        "tree_summary": "src/ 1",
+        "baseline": "# Baseline\n\nExpress app.",
+        "model": "claude-opus-5-5",
+    }
+    body.update(over)
+    return client.post(f"/projects/{pid}/repo-analysis/agent", json=body, headers=headers)
+
+
+def test_agent_analysis_opens_the_gate_and_records_provenance(client: TestClient):
+    _, pid = _imported_project(client)
+    res = _agent_analysis(client, pid)
+    assert res.status_code == 200 and res.json()["status"] == "baseline_ready"
+    stored = client.app.state.repository.get_repo_analysis(pid)
+    assert (stored.source, stored.model, stored.commit_sha) == ("agent", "claude-opus-5-5", HEAD)
+    gated = _generate(client, pid, "plan")
+    if gated.status_code == 409:
+        assert gated.json()["detail"] != "repo_analysis_required"
+
+
+def test_agent_analysis_filters_secret_shaped_paths_server_side(client: TestClient):
+    _, pid = _imported_project(client)
+    _agent_analysis(
+        client,
+        pid,
+        paths=["README.md", ".env", "keys/deploy.pem", "node_modules/x.js"],
+        file_count=4,
+    )
+    snapshot = client.app.state.repository.get_repo_analysis(pid).snapshot
+    assert snapshot.paths == ["README.md"]
+    # The filtered-out paths leave the count too, so the listing still reads
+    # as complete and a path that is neither listed nor marked (new) is caught.
+    assert snapshot.file_count == 1
+    res = client.post(
+        f"/projects/{pid}/stage-drafts",
+        json={
+            "stage": "tasks",
+            "markdown": "## Phase 1: Docs\n- [ ] T001 Change `src/other.js`\n",
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 201, res.text
+    warnings = {w["code"]: w["items"] for w in res.json()["warnings"]}
+    assert warnings["unmarked_new_paths"] == [{"ref": "T001", "path": "src/other.js"}]
+
+
+def test_agent_analysis_is_admin_only_and_refused_for_scratch(client: TestClient):
+    _, pid = _imported_project(client)
+    assert _agent_analysis(client, pid, headers=BOB).status_code == 403
+    _, scratch = _scratch_project(client)
+    res = _agent_analysis(client, scratch)
+    assert res.status_code == 409 and res.json()["detail"] == "repo_not_imported"
+
+
+def test_agent_analysis_refused_after_repo_created(client: TestClient):
+    _, pid = _imported_project(client)
+    client.app.state.repository.update_project_lifecycle_status(pid, "repo_created")
+    res = _agent_analysis(client, pid)
+    assert res.status_code == 409 and res.json()["detail"] == "repo_already_created"
+
+
+def test_agent_analysis_rejects_an_over_long_baseline(client: TestClient):
+    _, pid = _imported_project(client)
+    assert _agent_analysis(client, pid, baseline="x" * 100_001).status_code == 422
+
+
+def test_agent_analysis_replaces_a_cloud_analysis_and_keeps_stale_working(
+    client: TestClient, monkeypatch
+):
+    now = _clock(monkeypatch)
+    _, pid = _imported_project(client)
+    _analyze(client, pid)
+    assert _agent_analysis(client, pid).status_code == 200
+    assert client.app.state.repository.get_repo_analysis(pid).source == "agent"
+
+    client.app.state.github_client.branch_heads[REPO] = "d00d2"
+    now[0] += repo_analysis_api._STALE_TTL_SECONDS + 1
+    got = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()
+    assert isinstance(got["stale"], bool)
+
+
+def test_agent_analysis_commit_sha_is_a_full_lowercase_hex_sha(client: TestClient):
+    _, pid = _imported_project(client)
+    for bad in ("c0ffee1", "C" * 40, "g" * 40, "a" * 41, "a" * 63):
+        assert _agent_analysis(client, pid, commit_sha=bad).status_code == 422, bad
+    assert _agent_analysis(client, pid, commit_sha="b" * 64).status_code == 200
+
+
+def test_agent_analysis_caps_each_path(client: TestClient):
+    _, pid = _imported_project(client)
+    long_path = "src/" + "a" * 1021
+    assert _agent_analysis(client, pid, paths=[long_path], file_count=1).status_code == 422

@@ -6,17 +6,22 @@
 // for one case — a workspace wanting a shared endpoint — which needs an OAuth
 // resource-server story rather than a pasted token.
 //
-// Four tools, and the ceiling is deliberate (plan 0025 §1): M4 adds transports
-// and reach, not vocabulary. Three read, and `close_task` writes exactly one
-// field through the one endpoint that takes it. Above all: this server never
-// touches `PUT /sync/projects/{id}/graph`. That is the same prohibition
-// packages/cloud-client/src/client.ts writes down for the same reason — a task
-// client with a full-graph push can overwrite the requirements and specs the
-// cloud authored. There is no task-claim or task-assignment tool either:
-// `/me/tasks` returns only tasks already assigned to the caller, so a claim tool
-// would have no caller, and `close_task` inherits that constraint: the cloud
-// refuses a status write on a task that is not the caller's, and that refusal is
-// reported rather than worked around.
+// Seven tools. The four of plan 0025 §1 keep their ceiling — M4 adds
+// transports and reach, not vocabulary: three read, and `close_task` writes
+// exactly one field through the one endpoint that takes it. The other three
+// (`start_planning`, `submit_repo_analysis`, `submit_stage_draft`) exist for
+// one situation only: an imported project before `repo_created`, where the
+// developer's own agent reads the clone and drafts the plan. They write only a
+// pending stage draft, which a human accepts or rejects in the web app, and the
+// project's repo-analysis row — never a stage document, never the graph.
+// Above all: this server never touches `PUT /sync/projects/{id}/graph`. That
+// is the same prohibition packages/cloud-client/src/client.ts writes down for
+// the same reason — a task client with a full-graph push can overwrite the
+// requirements and specs the cloud authored. There is no task-claim or
+// task-assignment tool either: `/me/tasks` returns only tasks already assigned
+// to the caller, so a claim tool would have no caller, and `close_task`
+// inherits that constraint: the cloud refuses a status write on a task that is
+// not the caller's, and that refusal is reported rather than worked around.
 //
 // The low-level `Server` rather than `McpServer`: the latter's `inputSchema`
 // takes a Zod shape, and adding Zod as a direct dependency of this app would
@@ -46,12 +51,14 @@ import {
   type TaskStatus,
 } from "@promptworkspace/cloud-client";
 import { createCloudContext, stderrLog } from "./cloud.ts";
-import { readGitHead, readGitRemotes } from "./gitRemotes.ts";
+import { readGitHead } from "./gitRemotes.ts";
+import { startPlanning, submitRepoAnalysis, submitStageDraft } from "./planning.ts";
 import { buildProjectRules } from "./projectRules.ts";
-import { listProjectCandidates, matchCandidates } from "./projectResolve.ts";
+import { resolveProject } from "./projectResolve.ts";
 import { resolveWorkspaceRoot } from "./repoDocs.ts";
 import { StatusWriter } from "./statusWriter.ts";
 import { buildTaskContext, summarizeTasks } from "./taskContext.ts";
+import { failure, optionalString, text } from "./toolResult.ts";
 
 export const SERVER_NAME = "promptworkspace";
 export const SERVER_VERSION = "0.1.0";
@@ -184,23 +191,132 @@ export const TOOLS: Tool[] = [
     // matters: a second call with a different status changes the answer.
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
+  {
+    name: "start_planning",
+    title: "Start planning an imported PromptWorkspace project",
+    description:
+      "For a project imported from an existing repository and not yet past " +
+      "repo creation: the planning brief — instructions, the four stage " +
+      "templates, policy context, PRDs, the codebase baseline and the drafts " +
+      "already submitted. Follow its instructions, then use submit_repo_analysis " +
+      "and submit_stage_draft. The project is resolved from the folder's git " +
+      "remote unless `project_id` says otherwise.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace_root: {
+          type: "string",
+          description:
+            "Absolute path to the developer's clone. Defaults to this server's " +
+            "working directory.",
+        },
+        project_id: {
+          type: "string",
+          description: "Use this project instead of resolving one from the folder's git remote.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "submit_repo_analysis",
+    title: "Submit the repository analysis for an imported project",
+    description:
+      "Store the repository snapshot and the codebase baseline you wrote from " +
+      "reading the clone. Workspace admins only. Opens the plan and tasks stages " +
+      "for drafts. Writes the project's analysis row, never the task graph.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace_root: {
+          type: "string",
+          description: "Absolute path to the developer's clone. Defaults to this server's working directory.",
+        },
+        project_id: {
+          type: "string",
+          description: "Use this project instead of resolving one from the folder's git remote.",
+        },
+        default_branch: { type: "string", description: "The branch the snapshot was read from." },
+        commit_sha: {
+          type: "string",
+          description:
+            "The full commit hash the snapshot was read at (40 lowercase hex characters, or 64 " +
+            "for a SHA-256 repository), e.g. `git rev-parse origin/<default_branch>` after a fetch.",
+        },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Repository-relative file paths, as listed in the clone.",
+        },
+        file_count: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Number of tracked files, counting the same files `paths` lists (e.g. `git ls-files | wc -l`). " +
+            "Equal to the length of `paths` unless the list was capped.",
+        },
+        tree_truncated: {
+          type: "boolean",
+          description: "True when `paths` lists fewer files than `file_count`.",
+        },
+        stack: {
+          type: "object",
+          properties: {
+            runtime: { type: "string" },
+            manifests: { type: "array", items: { type: "string" } },
+            languages: { type: "array", items: { type: "string" } },
+          },
+          additionalProperties: false,
+          description: "The detected runtime, manifest files and languages.",
+        },
+        tree_summary: { type: "string", description: "A short summary of the directory layout." },
+        baseline: {
+          type: "string",
+          description: "The codebase baseline in Markdown, at most 100,000 characters.",
+        },
+        model: { type: "string", description: "The model that wrote the baseline." },
+      },
+      required: ["default_branch", "commit_sha", "paths", "file_count", "baseline"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "submit_stage_draft",
+    title: "Submit a planning stage draft for review",
+    description:
+      "Submit one stage's Markdown (constitution, specify, plan or tasks) as a " +
+      "pending draft. A person accepts or rejects it in PromptWorkspace; nothing " +
+      "becomes a stage document until then. Fix any warnings returned and submit again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace_root: {
+          type: "string",
+          description: "Absolute path to the developer's clone. Defaults to this server's working directory.",
+        },
+        project_id: {
+          type: "string",
+          description: "Use this project instead of resolving one from the folder's git remote.",
+        },
+        stage: {
+          type: "string",
+          enum: ["constitution", "specify", "plan", "tasks"],
+          description: "The stage this draft is for.",
+        },
+        markdown: {
+          type: "string",
+          description: "The stage document in Markdown, at most 100,000 characters.",
+        },
+        model: { type: "string", description: "The model that wrote the draft." },
+      },
+      required: ["stage", "markdown"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
 ];
-
-function text(body: string): CallToolResult {
-  return { content: [{ type: "text", text: body }] };
-}
-
-function failure(body: string): CallToolResult {
-  return { content: [{ type: "text", text: body }], isError: true };
-}
-
-function optionalString(args: Record<string, unknown>, key: string): string | undefined {
-  const value = args[key];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`\`${key}\` must be a string.`);
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function optionalStatuses(args: Record<string, unknown>): TaskStatus[] | undefined {
   const value = args.status;
@@ -278,59 +394,9 @@ async function getProjectRules(
   log: LoggerLike,
   args: Record<string, unknown>,
 ): Promise<CallToolResult> {
-  const root = resolveWorkspaceRoot(optionalString(args, "workspace_root"));
-  const explicitId = optionalString(args, "project_id");
-  const candidates = await listProjectCandidates(client, log);
-
-  if (explicitId) {
-    const named = candidates.find((c) => c.projectId === explicitId);
-    if (!named) {
-      return failure(
-        `No PromptWorkspace project ${explicitId} is visible to you. Either the id is ` +
-          "wrong or you are not a member of its workspace.",
-      );
-    }
-    return text(await buildProjectRules(root, named, client, log));
-  }
-
-  const { isRepository, remotes } = await readGitRemotes(root);
-  if (!isRepository) {
-    return failure(
-      `${root} is not inside a git repository, so there is no remote to match a ` +
-        "PromptWorkspace project against. Pass workspace_root for the developer's " +
-        "clone, or project_id to name the project directly.",
-    );
-  }
-  if (remotes.length === 0) {
-    return failure(
-      `The git repository at ${root} has no remote, so it cannot be matched to a ` +
-        "PromptWorkspace project. Pass project_id to name the project directly.",
-    );
-  }
-
-  const matches = matchCandidates(remotes, candidates);
-  if (matches.length === 0) {
-    return failure(
-      `No PromptWorkspace project's repository matches the git remote of ${root} ` +
-        `(${remotes.join(", ")}). Check that this is the right clone, or pass ` +
-        "project_id to name the project directly.",
-    );
-  }
-  if (matches.length > 1) {
-    // A fork, or a monorepo holding several cloud projects. Guessing between
-    // them would hand the agent another project's rules and look like it
-    // worked, so the developer disambiguates — the same job apps/vscode's
-    // persisted `projectId` setting does when its own matcher returns several.
-    const listed = matches
-      .map((m) => `  - ${m.projectId}: ${m.projectName} (${m.workspaceName})`)
-      .join("\n");
-    return failure(
-      `${matches.length} PromptWorkspace projects share the git remote of ${root}. ` +
-        `Call get_project_rules again with project_id set to one of:\n${listed}`,
-    );
-  }
-
-  return text(await buildProjectRules(root, matches[0], client, log));
+  const resolved = await resolveProject(client, log, args, "get_project_rules");
+  if ("error" in resolved) return failure(resolved.error);
+  return text(await buildProjectRules(resolved.root, resolved.project, client, log));
 }
 
 const ARTIFACT_URI_CHARS = 100;
@@ -471,7 +537,10 @@ export function createServer(
         "project they are working in, and the one write that closes a task: its " +
         "status, with the commit that implemented it. Nothing else in the task " +
         "graph is writable from here — not a task's title, its acceptance " +
-        "criteria, its assignment, nor the requirements and specs above it.",
+        "criteria, its assignment, nor the requirements and specs above it. For an " +
+        "imported project still being planned, start_planning, submit_repo_analysis " +
+        "and submit_stage_draft let the agent draft the plan from the clone as " +
+        "pending drafts a person reviews in PromptWorkspace.",
     },
   );
 
@@ -493,6 +562,12 @@ export function createServer(
           return await getProjectRules(client, log, args);
         case "close_task":
           return await closeTask(client, writer, log, args);
+        case "start_planning":
+          return await startPlanning(client, log, args);
+        case "submit_repo_analysis":
+          return await submitRepoAnalysis(client, log, args);
+        case "submit_stage_draft":
+          return await submitStageDraft(client, log, args);
         default:
           return failure(`Unknown tool: ${request.params.name}`);
       }
