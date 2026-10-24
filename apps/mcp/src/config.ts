@@ -84,14 +84,22 @@ function readConfigFile(dir: string): Partial<McpConfig> {
   }
 }
 
+// The two Supabase values may be set to empty on purpose: no Supabase means the
+// cloud-client's stub auth mode (`CloudClient.mode()`), which is how the README
+// says to point this server at a local `AUTH_MODE=stub` cloud. So for those
+// keys an explicitly present empty string is a value, not an absence. An empty
+// API or web URL is never a usable configuration, so those still fall back.
+const EMPTY_IS_A_VALUE: ReadonlySet<keyof McpConfig> = new Set(["supabaseUrl", "supabaseAnonKey"]);
+
 /** Precedence, lowest to highest: built-in default, config file, environment. */
 export function readConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
   const file = readConfigFile(configDir(env));
   const pick = (key: keyof McpConfig): string => {
+    const emptyCounts = EMPTY_IS_A_VALUE.has(key);
     const fromEnv = env[ENV_KEYS[key]];
-    if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
+    if (typeof fromEnv === "string" && (fromEnv.trim() || emptyCounts)) return fromEnv.trim();
     const fromFile = file[key];
-    if (typeof fromFile === "string" && fromFile.trim()) return fromFile.trim();
+    if (typeof fromFile === "string" && (fromFile.trim() || emptyCounts)) return fromFile.trim();
     return DEFAULTS[key];
   };
   return {

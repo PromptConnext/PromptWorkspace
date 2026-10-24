@@ -149,6 +149,12 @@ copies. Point a develop/staging run at that stack by overriding all four (e.g.
 `PROMPTWORKSPACE_CLOUD_API_URL=https://promptworkspace-api.truthledgers.com`).
 Setting `supabaseUrl`/`supabaseAnonKey` to empty puts the client in the cloud's
 stub auth mode, which is local development only — a real deployment rejects it.
+Empty means an explicitly present empty value: `PROMPTWORKSPACE_SUPABASE_URL=`
+and `PROMPTWORKSPACE_SUPABASE_ANON_KEY=` in the environment, or `""` for both
+keys in `config.json`. Leaving them unset selects production. `login` then asks
+for a user id instead of opening the browser, and the cloud must be running with
+`AUTH_MODE=stub` (for example `DATA_BACKEND=memory AUTH_MODE=stub uvicorn
+app.main:app --port 8080` under `apps/cloud`).
 
 The config directory is `$XDG_CONFIG_HOME/promptworkspace-mcp` (falling back to
 `~/.config/promptworkspace-mcp`), or `%APPDATA%\promptworkspace-mcp` on Windows.
