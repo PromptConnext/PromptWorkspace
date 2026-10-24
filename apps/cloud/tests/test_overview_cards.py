@@ -24,13 +24,18 @@ def _project(**kw) -> Project:
     return Project(id="p1", name="P", workspace_id=WS, owner_id="u0", **kw)
 
 
-def _task(i, status=TaskStatus.todo, user=None, closed=False, days=1) -> TaskSummary:
+def _task(
+    i, status=TaskStatus.todo, user=None, closed=False, days=1, closed_days=None
+) -> TaskSummary:
+    if closed_days is None:
+        closed_days = days
     return TaskSummary(
         task_id=f"t{i}",
         project_id="p1",
         status=status,
         assigned_user_id=user,
         agent_closed=closed,
+        agent_closed_at=NOW - timedelta(days=closed_days) if closed else None,
         updated_at=NOW - timedelta(days=days),
     )
 
@@ -117,6 +122,12 @@ def test_agent_closed_30d():
     assert _card(tasks=tasks).agent_closed_30d == 1
 
 
+def test_agent_closed_30d_windows_on_the_close_not_the_edit():
+    # edited today, but the agent closed it 40 days ago
+    tasks = [_task(1, closed=True, days=0, closed_days=40)]
+    assert _card(tasks=tasks).agent_closed_30d == 0
+
+
 def test_live_url_and_policy_source():
     from app.models.schemas import DeploymentState
 
@@ -181,3 +192,9 @@ def test_required_hats_respected():
     checks = run_checks(_project(), [], [], _gov(required_hats=["tech_steward"]), NOW)
     ids = [c.id for c in checks]
     assert "hat_business_owner" not in ids and "hat_tech_steward" in ids
+
+
+def test_hat_checks_follow_spec_order_whatever_the_stored_order():
+    gov = _gov(required_hats=["tech_steward", "business_owner"])
+    ids = [c.id for c in run_checks(_project(), [], [], gov, NOW) if c.id.startswith("hat_")]
+    assert ids == ["hat_business_owner", "hat_tech_steward"]

@@ -84,3 +84,32 @@ describe("WorkspaceMap", () => {
     expect(screen.getByText("Nothing to map yet")).toBeInTheDocument();
   });
 });
+
+describe("WorkspaceMap names", () => {
+  it("labels a nameless member Unnamed member, not the raw id", () => {
+    const ghost = { ...m("u-raw-id", ""), email: "" } as WorkspaceMember;
+    const ov = { ...overview([]), members: [ghost] };
+    render(<WorkspaceMap overview={ov} workspaceId="w1" onSelectMember={() => {}} />);
+    expect(screen.getByLabelText("Unnamed member, member")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/u-raw-id/)).toBeNull();
+  });
+});
+
+describe("WorkspaceMap initials", () => {
+  it("a nameless member's avatar initial comes from Unnamed member, not the raw id", () => {
+    const ghost = { ...m("3f2b-raw-id", ""), email: "" } as WorkspaceMember;
+    const ov = { ...overview([]), members: [ghost] };
+    render(<WorkspaceMap overview={ov} workspaceId="w1" onSelectMember={() => {}} />);
+    const node = screen.getByLabelText("Unnamed member, member");
+    expect(node).toHaveTextContent("U");
+    expect(node.textContent).not.toContain("3");
+  });
+});
+
+describe("WorkspaceMap unknown project", () => {
+  it("a link to a project missing from the overview is not labelled with its id", () => {
+    const ov = overview([link({ kind: "hat", project_id: "p-gone-uuid", hat: "business_owner" })]);
+    render(<WorkspaceMap overview={ov} workspaceId="w1" onSelectMember={() => {}} />);
+    expect(screen.queryByLabelText(/p-gone-uuid/)).toBeNull();
+  });
+});

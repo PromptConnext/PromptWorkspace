@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Implemented 2026-10-24 on `feature/workspace-overview` (M1 to M4, Tasks 1 to 21). Closing checklist pending the trust walkthrough.
+**Status:** Implemented 2026-10-24 (M1 to M4, PR #20) and closed 2026-10-25 (M5). Closing checklist: trust walkthrough pending.
 
 **Goal:** A Tech Lead opens the workspace and sees, in one screen, who works on which project with what stack, which projects break the workspace's rules, how AI is being used, and can ask the workspace a question in plain words.
 
@@ -640,15 +640,71 @@ git commit -am "docs: plan 0033 shipped; backlog row 24; deployment checklist 00
 
 | Item | Where it goes |
 |---|---|
-| Organisation-custom policy templates (`ws:<uuid>`) | Plan 0023 / D5 |
-| Guardrail levels, autonomy level, budgets per project; `pw_workspace_governance` migrating into `pw_guardrails` | D3 |
-| Run identity beyond `agent.client` (run id, role profile version, model on receipts) | D2 |
-| Thai UI strings for the new screens | With a web i18n decision |
-| Live updates on the map | Needs the presence backplane |
-| Batch the overview and report per-project reads (`list_project_roles`, `list_decisions`, `get_repo_analysis`) into one query per table family, and an RPC for `latest_receipt_at` | Before `develop` → `main` |
+| Organisation-custom policy templates (`ws:<uuid>`) | Owned by plan 0023 / D5; not a follow-up of this plan |
+| Guardrail levels, autonomy level, budgets per project; `pw_workspace_governance` migrating into `pw_guardrails` | Owned by D3; not a follow-up of this plan |
+| Run identity beyond `agent.client` (run id, role profile version, model on receipts) | Owned by D2; not a follow-up of this plan |
+| Thai UI strings for the new screens | Owned by a web i18n decision; not a follow-up of this plan |
+| Live updates on the map | Owned by the presence backplane; not a follow-up of this plan |
 
 ## Closing
 
 - [ ] Walkthrough on trust as `kittisak.har` (admin) and `moonrinnn` (member): cards, map, governance page, scope inheritance on a new project, a task closed from Cursor via MCP showing "Closed via Cursor (MCP)", ask box with and without a model connection.
-- [ ] Migration 0011 applied to trust Supabase before deploy; `scripts/migrate.py status` prints `Pending (0)`.
+- [ ] Migration 0011 and 0013 (optional; the API falls back to a paged read without it) applied to trust Supabase before deploy; `scripts/migrate.py status` prints `Pending (0)`.
 - [ ] `gh pr checks` green on the PR into `feature/trust-outcome` before calling it mergeable.
+
+---
+
+## M5: Closing (2026-10-24, after PR #20 merged)
+
+Closes every code and docs follow-up plan 0033 left open, so the Deferred table holds only items owned by other plans. Branch `feature/0033-closing` off `feature/trust-outcome` at `c54a3b7`.
+
+### Task 22: One query per table family in the overview and report
+
+**Files:**
+- Create: `apps/cloud/migrations/0013_pw_latest_receipt_at.sql`
+- Modify: `apps/cloud/app/db/repository.py` (abstract + memory), `app/db/supabase_repository.py`, `app/api/overview.py` (overview route, `build_overview`, report route)
+- Test: `apps/cloud/tests/contract/test_overview_reads.py` (extend), `tests/test_overview_api.py` (extend)
+
+**Interfaces:**
+- Produces: `Repository.list_project_roles_for(project_ids: list[str]) -> dict[str, list[ProjectRole]]`, `Repository.list_decisions_for(project_ids: list[str]) -> dict[str, list[Decision]]` (newest first per project, same tolerance as `list_decisions`), `Repository.get_repo_analyses(project_ids: list[str]) -> dict[str, RepoAnalysis]` (only projects with an analysis). Every key for an input id is present in the first two (empty list when none). `latest_receipt_at` on Supabase calls RPC `pw_latest_receipt_at(p_project_ids uuid[])` returning `(project_id uuid, created_at timestamptz)`, falling back to the current paged read when the function is missing (undefined function → SQLSTATE 42883).
+- Migration `0013`: `create or replace function pw_latest_receipt_at(p_project_ids uuid[]) returns table (project_id uuid, created_at timestamptz) language sql stable security definer set search_path = public as $$ select project_id, max(created_at) from pw_receipts where project_id = any(p_project_ids) group by project_id $$;` plus `revoke all on function ... from public, anon, authenticated; grant execute on function ... to service_role;`. Header in the 0011 style; idempotent.
+
+- [x] **Step 1: Failing contract tests** `test_list_project_roles_for_groups_by_project`, `test_list_decisions_for_newest_first_per_project`, `test_get_repo_analyses_only_present`, `test_latest_receipt_at_matches_per_project_max` (seed two projects, three receipts).
+- [x] **Step 2: Fail. Step 3: Implement** on both adapters (Supabase: `in_("project_id", ids)` with `_paged`; roles table `pw_project_roles`, decisions `pw_decisions` with the existing snapshot/`DeliveryStoreUnavailable` tolerance factored so `list_decisions(project_id)` delegates to `list_decisions_for([project_id])[project_id]`; analyses `pw_repo_analyses`). Overview and report routes read each family once; `get_repo_analysis`, `list_project_roles`, `list_decisions` are no longer called inside the per-project loop. Add `test_overview_reads_each_family_once` using a counting wrapper around the memory repository (`unittest.mock.patch.object` with `wraps=`) asserting each of the three batched methods is called exactly once and the per-project methods zero times.
+- [x] **Step 4: PASS, ruff. Commit** `feat(cloud): overview and report read one query per table family; receipts RPC`
+
+### Task 23: RLS probe for the governance table
+
+**Files:**
+- Create: `apps/cloud/tests/rls/test_governance_table_grants.py`
+
+- [x] **Step 1: Write the probe** in the style of `tests/rls/test_tracker_integration_grants.py` using `Fixture`, `Target`, `INSUFFICIENT_PRIVILEGE` from `tests/rls/conftest.py`: `test_member_cannot_read_workspace_governance` (member JWT `GET /rest/v1/pw_workspace_governance?workspace_id=eq.<ws>` → SQLSTATE 42501) and `test_member_cannot_write_workspace_governance` (member JWT `POST` a row → 42501; service-role read shows no row). The file skips, naming the missing variable, without the `PROMPTWORKSPACE_RLS_*` env.
+- [x] **Step 2: Run** `pytest tests/rls/test_governance_table_grants.py -q` → skipped locally with the variable named. **Commit** `test(cloud): RLS probe for pw_workspace_governance`
+
+### Task 24: Cloud polish from the review ledger
+
+**Files:** `app/overview/checks.py`, `app/overview/cards.py`, `app/models/schemas.py` (`TaskSummary.agent_closed_at: datetime | None`), `app/db/repository.py` + Supabase (`list_tasks_summary` fills `agent_closed_at` = max `updated_at` of the task's agent artifacts), `app/overview/report.py`, `app/generation/managed.py`, `app/api/overview.py`; tests alongside.
+
+- [x] Hat checks iterate `("business_owner", "tech_steward")` filtered by `required_hats` (spec order), test with `required_hats` reversed.
+- [x] `agent_closed_30d` windows on `agent_closed_at`, not the task's `updated_at`; test: task edited today but agent-closed 40 days ago → 0.
+- [x] Report: "today" compares `created_at.astimezone(timezone.utc).date()`; `MANAGED_PROVIDER = "typhoon"` constant exported from `app/generation/managed.py` and used by the report; `by_stage.model` lists distinct models joined by ", " when a stage used more than one; tests.
+- [x] Governance PUT: the "Applies to N projects" count the web shows comes from the overview, so expose `inheriting_unfrozen: int` and `own_scope: list[str]` (names) in `GET /workspaces/{id}/governance` so the web stops deriving it; test.
+- [x] Commit `fix(cloud): check order, agent-closed window, usage report details`
+
+### Task 25: Web polish from the review ledger
+
+**Files:** `src/app/w/[workspaceId]/page.tsx`, `src/components/workspace/{UsagePanel,MemberPanel,WorkspaceMap,GovernancePanel}.tsx`, `src/lib/agentLabel.ts`, tests alongside.
+
+- [x] Home: when `overview.truncated`, a line "Showing the 200 most recently updated projects."
+- [x] UsagePanel: empty usage → "No AI runs in the last 30 days." under the heading; `<th scope="col">`.
+- [x] MemberPanel and WorkspaceMap: names through `memberFullName` (never a raw id); "In progress" heading → "Assigned".
+- [x] GovernancePanel: "Applies to N projects. M projects use their own scope." from the new governance fields (frozen inheriting projects excluded from N).
+- [x] `agentLabel`: `vscode:` with an empty name → "Closed via an editor".
+- [x] Tests for each; capped vitest; tsc. Commit `fix(web): truncation notice, empty usage state, names, assigned heading`
+
+### Task 26: Close the plan
+
+**Files:** this plan (Deferred table, Status), `docs/DEPLOYMENT.md` (0013 sentence; checklist "0004 through 0013"; smoke-check `schema_version` → `0013_pw_latest_receipt_at`), `.gitignore` (`.worktrees/`), `docs/plans/0029-agent-native-delivery.md` row 24 ("Deferred" → "no open items; other-plan items listed there").
+
+- [x] Deferred table keeps only rows owned by other plans, each reworded "Owned by <plan>; not a follow-up of this plan". Status: "Implemented 2026-10-24 (M1 to M5). Closing checklist: trust walkthrough pending."
+- [x] Commit `docs: plan 0033 closed; migration 0013 in deployment checks`

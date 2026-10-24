@@ -71,7 +71,11 @@ def build_card(
         },
         checks=run_checks(project, roles, decisions, governance, now),
         agent_closed_30d=sum(
-            1 for t in tasks if t.agent_closed and now - t.updated_at <= _AGENT_WINDOW
+            1
+            for t in tasks
+            if t.agent_closed
+            and t.agent_closed_at is not None
+            and now - t.agent_closed_at <= _AGENT_WINDOW
         ),
         last_activity_at=max(activity),
     )

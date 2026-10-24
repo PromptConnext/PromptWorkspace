@@ -4,12 +4,21 @@ any other failure still surfaces. Same posture as the stage-inputs store."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from postgrest.exceptions import APIError
 
 from app.db.repository import DeliveryStoreUnavailable
 from app.db.supabase_repository import _SERVICE_ONLY_TABLES, SupabaseRepository
-from app.models.schemas import Decision, DeliveryChange, StageDocument
+from app.models.schemas import (
+    Decision,
+    DeliveryChange,
+    ProjectRole,
+    RepoAnalysis,
+    RepoSnapshot,
+    StageDocument,
+)
 
 
 class _Result:
@@ -31,11 +40,18 @@ class _Query:
     def is_(self, *_a, **_k):
         return self
 
+    @property
+    def not_(self):
+        return self
+
     def in_(self, column, values):
         self._client.in_filters.append((self._table, column, list(values)))
         return self
 
     def order(self, *_a, **_k):
+        return self
+
+    def range(self, *_a, **_k):
         return self
 
     def limit(self, *_a, **_k):
@@ -273,5 +289,201 @@ def test_listing_decisions_reads_snapshots_by_project_not_by_every_id():
     client = _Client(rows=[row])
     decisions = _repo(client).list_decisions("p")
 
-    assert client.in_filters == []  # no URL that grows with the history
+    # Filtered by project only: no URL that grows with the history.
+    snapshot_filters = [f for f in client.in_filters if f[0] == "pw_decision_snapshots"]
+    assert snapshot_filters == [("pw_decision_snapshots", "project_id", ["p"])]
     assert decisions[0].subject_content == "# Spec"
+
+
+# --- batched reads (plan 0033 task 22) -------------------------------------
+
+
+def _rpc_error(code: str, message: str) -> APIError:
+    """The real postgrest error, so detection is pinned to its actual shape."""
+    return APIError({"code": code, "message": message, "hint": None, "details": None})
+
+
+class _TableClient(_Client):
+    """Rows per table, a record of which tables were read, and a scriptable rpc."""
+
+    def __init__(self, rows_by_table=None, rpc_rows=None, rpc_error=None):
+        super().__init__()
+        self.rows_by_table = rows_by_table or {}
+        self.reads: list[str] = []
+        self.rpc_rows = rpc_rows or []
+        self.rpc_error = rpc_error
+        self.rpc_calls: list[tuple[str, dict]] = []
+
+    def table(self, name: str):
+        client = self
+
+        class _Q(_Query):
+            def execute(self):
+                client.reads.append(name)
+                return _Result(client.rows_by_table.get(name, []))
+
+        return _Q(self, name)
+
+    def rpc(self, name: str, params: dict):
+        client = self
+        client.rpc_calls.append((name, params))
+
+        class _Call:
+            def execute(self):
+                if client.rpc_error is not None:
+                    raise client.rpc_error
+                return _Result(client.rpc_rows)
+
+        return _Call()
+
+
+def test_latest_receipt_at_is_one_rpc_and_no_table_read():
+    client = _TableClient(rpc_rows=[
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+        {"project_id": "b", "created_at": "2026-10-02T00:00:00+00:00"},
+    ])
+    got = _repo(client).latest_receipt_at(["a", "b", "c"])
+
+    assert client.rpc_calls == [("pw_latest_receipt_at", {"p_project_ids": ["a", "b", "c"]})]
+    assert client.reads == []
+    assert set(got) == {"a", "b"}
+    assert got["b"].day == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _rpc_error("42883", "function public.pw_latest_receipt_at(uuid[]) does not exist"),
+        _rpc_error(
+            "PGRST202",
+            "Could not find the function public.pw_latest_receipt_at(project_ids) "
+            "in the schema cache",
+        ),
+    ],
+)
+def test_latest_receipt_at_falls_back_to_the_paged_read(error):
+    rows = [  # newest first, as the query orders them
+        {"project_id": "a", "created_at": "2026-10-03T00:00:00+00:00"},
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+        {"project_id": "b", "created_at": "2026-10-02T00:00:00+00:00"},
+    ]
+    client = _TableClient(rows_by_table={"pw_receipts": rows}, rpc_error=error)
+
+    got = _repo(client).latest_receipt_at(["a", "b"])
+
+    assert len(client.rpc_calls) == 1
+    assert client.reads == ["pw_receipts"]
+    assert {k: v.day for k, v in got.items()} == {"a": 3, "b": 2}
+
+
+def test_latest_receipt_at_other_rpc_errors_still_raise():
+    client = _TableClient(rpc_error=_rpc_error("57014", "canceling statement due to timeout"))
+    with pytest.raises(APIError):
+        _repo(client).latest_receipt_at(["a"])
+    assert client.reads == []
+
+
+def test_list_decisions_for_is_one_decision_read_and_one_snapshot_read():
+    older = DECISION.model_copy(update={"id": "d1", "project_id": "a"})
+    newer = DECISION.model_copy(update={"id": "d2", "project_id": "a"})
+    other = DECISION.model_copy(update={"id": "d3", "project_id": "b"})
+    rows = [d.model_dump(mode="json") for d in (newer, older, other)]  # newest first
+    client = _TableClient(rows_by_table={
+        "pw_decisions": rows,
+        "pw_decision_snapshots": [{"decision_id": "d2", "content": "# Spec"}],
+    })
+
+    got = _repo(client).list_decisions_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_decisions", "pw_decision_snapshots"]
+    assert client.in_filters == [
+        ("pw_decisions", "project_id", ["a", "b", "c"]),
+        ("pw_decision_snapshots", "project_id", ["a", "b", "c"]),
+    ]
+    assert set(got) == {"a", "b", "c"}
+    assert [d.id for d in got["a"]] == ["d2", "d1"]
+    assert got["a"][0].subject_content == "# Spec"
+    assert [d.id for d in got["b"]] == ["d3"]
+    assert got["c"] == []
+
+
+def test_list_project_roles_for_is_one_read_grouped_by_project():
+    def role(pid, hat):
+        return ProjectRole(
+            project_id=pid, workspace_id="w", hat=hat, user_id="u", assigned_by="x"
+        ).model_dump(mode="json")
+
+    client = _TableClient(rows_by_table={
+        "pw_project_roles": [role("a", "business_owner"), role("a", "tech_steward"),
+                             role("b", "business_owner")],
+    })
+
+    got = _repo(client).list_project_roles_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_project_roles"]
+    assert client.in_filters == [("pw_project_roles", "project_id", ["a", "b", "c"])]
+    assert [r.hat for r in got["a"]] == ["business_owner", "tech_steward"]
+    assert len(got["b"]) == 1
+    assert got["c"] == []
+
+
+def test_get_repo_analyses_is_one_read_with_only_present_keys():
+    row = RepoAnalysis(
+        project_id="a", workspace_id="w", commit_sha="c" * 40,
+        snapshot=RepoSnapshot(commit_sha="c" * 40, default_branch="main", file_count=0),
+        created_by="u",
+    ).model_dump(mode="json")
+    client = _TableClient(rows_by_table={"pw_repo_analyses": [row]})
+
+    got = _repo(client).get_repo_analyses(["a", "b"])
+
+    assert client.reads == ["pw_repo_analyses"]
+    assert client.in_filters == [("pw_repo_analyses", "project_id", ["a", "b"])]
+    assert set(got) == {"a"}
+    assert _repo(_TableClient()).get_repo_analyses([]) == {}
+
+
+def test_list_receipts_for_is_one_receipt_read_with_in_filter():
+    def row(pid, seq):
+        return {
+            "id": f"{pid}{seq}", "project_id": pid, "workspace_id": "w", "event": "role.assigned",
+            "subject_type": "decision", "subject_id": "s", "actor": "a", "body": {},
+            "seq": seq, "prev_hash": "", "hash": "h", "created_at": "2026-10-01T00:00:00+00:00",
+        }
+
+    rows = [row("a", 1), row("a", 2), row("b", 1)]
+    client = _TableClient(rows_by_table={"pw_receipts": rows})
+
+    got = _repo(client).list_receipts_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_receipts"]
+    assert client.in_filters == [("pw_receipts", "project_id", ["a", "b", "c"])]
+    assert [r.seq for r in got["a"]] == [1, 2]
+    assert [r.seq for r in got["b"]] == [1]
+    assert got["c"] == []
+
+
+def test_list_receipts_for_missing_table_gives_empty_chains():
+    client = _Client(error={"code": "42P01", "message": "relation does not exist"})
+    assert _repo(client).list_receipts_for(["a"]) == {"a": []}
+
+
+def test_list_tasks_summary_agent_closed_at_is_the_latest_agent_artifact():
+    task = {"project_id": "p", "status": "todo", "assigned_user_id": None,
+            "updated_at": "2026-10-20T00:00:00+00:00"}
+    client = _TableClient(rows_by_table={
+        "pw_tasks": [{**task, "id": "A"}, {**task, "id": "B"}],
+        "pw_artifacts": [
+            {"id": "a1", "task_id": "A", "updated_at": "2026-10-01T00:00:00+00:00"},
+            {"id": "a2", "task_id": "A", "updated_at": "2026-10-05T12:00:00+00:00"},
+        ],
+    })
+
+    got = {r.task_id: r for r in _repo(client).list_tasks_summary(["p"])}
+
+    assert client.reads == ["pw_tasks", "pw_artifacts"]
+    assert got["A"].agent_closed is True
+    assert got["A"].agent_closed_at == datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+    assert got["A"].agent_closed_at.tzinfo is not None
+    assert got["B"].agent_closed is False
+    assert got["B"].agent_closed_at is None

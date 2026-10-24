@@ -16,6 +16,9 @@ export function UsagePanel({ usage }: { usage: GovernanceUsage[] }) {
   return (
     <section className="mt-5 border-t border-slate-100 pt-4">
       <h3 className="mb-2 text-sm font-medium text-slate-900">AI usage, last 30 days</h3>
+      {usage.length === 0 && (
+        <p className="text-sm text-slate-500">No AI runs in the last 30 days.</p>
+      )}
       {usage.map((u) => (
         <div key={`${u.source}-${u.provider ?? ""}`} className="mb-3">
           <p className="text-sm text-slate-800">{sourceLine(u)}</p>
@@ -23,10 +26,10 @@ export function UsagePanel({ usage }: { usage: GovernanceUsage[] }) {
             <table className="mt-1 w-full text-left text-xs text-slate-600">
               <thead>
                 <tr className="text-slate-500">
-                  <th className="py-1 pr-3 font-medium">Stage</th>
-                  <th className="py-1 pr-3 font-medium">Runs</th>
-                  <th className="py-1 pr-3 font-medium">Model</th>
-                  <th className="py-1 font-medium">Tokens</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Stage</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Runs</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Model</th>
+                  <th scope="col" className="py-1 font-medium">Tokens</th>
                 </tr>
               </thead>
               <tbody>

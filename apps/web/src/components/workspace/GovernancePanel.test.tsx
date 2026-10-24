@@ -4,15 +4,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernancePanel } from "./GovernancePanel";
 
 const refetch = vi.fn();
+const requestedPaths: string[] = [];
 const putGovernance = vi.fn();
 
-const GOV = {
+let GOV: Record<string, unknown> = {
   workspace_id: "w1",
   policy_scope: { selected: ["gdpr"], custom_text: "" },
   required_hats: ["business_owner", "tech_steward"],
   require_seeded_rules: true,
   updated_by: null,
   updated_at: "2026-10-24T00:00:00Z",
+  inheriting_unfrozen: 5,
+  own_scope: ["Zed", "Yan"],
 };
 const REPORT = {
   projects: [
@@ -36,9 +39,6 @@ const REPORT = {
 const card = (id: string, name: string, source: "workspace" | "project") => ({
   id, name, policy: { source, selected: [], require_seeded_rules: true },
 });
-const OVERVIEW = {
-  projects: [card("p1", "Alpha", "project"), card("p2", "Beta", "workspace"), card("p3", "Gamma", "workspace")],
-};
 const TEMPLATES = [
   { id: "gdpr", name: "GDPR", description: "EU rules.", body: "body" },
   { id: "thai-pdpa", name: "Thai PDPA", description: "Thai rules.", body: "body" },
@@ -46,10 +46,10 @@ const TEMPLATES = [
 
 vi.mock("@/lib/hooks", () => ({
   useCloudGet: (path: string) => {
+    requestedPaths.push(path);
     let data: unknown = null;
     if (path.endsWith("/governance/report")) data = REPORT;
     else if (path.endsWith("/governance")) data = GOV;
-    else if (path.endsWith("/overview")) data = OVERVIEW;
     else if (path === "/policy-templates") data = TEMPLATES;
     return { data, error: null, loading: false, refetch };
   },
@@ -64,12 +64,21 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+const GOV_DEFAULT = { ...GOV };
 afterEach(() => {
+  requestedPaths.length = 0;
+  GOV = { ...GOV_DEFAULT };
   cleanup();
   vi.resetAllMocks();
 });
 
 describe("GovernancePanel", () => {
+  it("never fetches the workspace overview", () => {
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(requestedPaths.length).toBeGreaterThan(0);
+    expect(requestedPaths.some((p) => p.endsWith("/overview"))).toBe(false);
+  });
+
   it("renders the scope editor, two switches on by default, and a project row per project with its check sentences", () => {
     render(<GovernancePanel workspaceId="w1" />);
     expect(screen.getByText("AI governance")).toBeInTheDocument();
@@ -93,10 +102,10 @@ describe("GovernancePanel", () => {
     expect(screen.getByText("Follows workspace rules (repository not checked here)")).toBeInTheDocument();
   });
 
-  it("Applies to N projects. M projects use their own scope. names the deviating projects", () => {
+  it("Applies to N projects. M projects use their own scope. comes from the governance fields", () => {
     render(<GovernancePanel workspaceId="w1" />);
     expect(
-      screen.getByText("Applies to 2 projects. 1 project uses its own scope: Alpha."),
+      screen.getByText("Applies to 5 projects. 2 projects use their own scope: Zed, Yan."),
     ).toBeInTheDocument();
   });
 
@@ -134,5 +143,20 @@ describe("GovernancePanel", () => {
     render(<GovernancePanel workspaceId="w1" />);
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/keep it under 20,000 characters/i)).toBeInTheDocument();
+  });
+});
+
+describe("GovernancePanel applies-to copy", () => {
+  it("singular project, one own-scope project", () => {
+    GOV = { ...GOV, inheriting_unfrozen: 1, own_scope: ["X"] };
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(screen.getByText("Applies to 1 project. 1 project uses its own scope: X.")).toBeInTheDocument();
+  });
+
+  it("omits the own-scope half when none", () => {
+    GOV = { ...GOV, inheriting_unfrozen: 3, own_scope: [] };
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(screen.getByText("Applies to 3 projects.")).toBeInTheDocument();
+    expect(screen.queryByText(/own scope/)).toBeNull();
   });
 });

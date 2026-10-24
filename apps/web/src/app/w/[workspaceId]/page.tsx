@@ -99,6 +99,11 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         <AskBox workspaceId={workspaceId} />
 
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>
+        {overview?.truncated && (
+          <p className="mb-3 text-xs text-slate-500">
+            Showing the 200 most recently updated projects.
+          </p>
+        )}
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {!loading && !error && (projects?.length ?? 0) === 0 ? (

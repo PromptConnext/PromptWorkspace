@@ -15,7 +15,7 @@ import { WorkspaceMap } from "@/components/workspace/WorkspaceMap";
 import { useOverview } from "@/components/workspace/useOverview";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
-import { displayName } from "@/lib/identity";
+import { memberFullName } from "@/components/project/MemberChip";
 import { useWorkspaceName } from "@/lib/workspace";
 import type { WorkspaceMember } from "@/lib/types";
 
@@ -167,17 +167,17 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
                   <button
                     type="button"
                     aria-pressed={selected === m.user_id}
-                    aria-label={`${selected === m.user_id ? "Hide" : "Show"} details for ${displayName(m)}`}
+                    aria-label={`${selected === m.user_id ? "Hide" : "Show"} details for ${memberFullName(m)}`}
                     onClick={() => setSelected(selected === m.user_id ? null : m.user_id)}
                     className="min-w-0 flex-1 truncate text-left font-medium text-slate-900 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-900"
                   >
-                    {displayName(m)}
+                    {memberFullName(m)}
                   </button>
                 )}
                 {isAdmin && editing !== m.user_id && (
                   <button
                     type="button"
-                    aria-label={`Edit name of ${displayName(m)}`}
+                    aria-label={`Edit name of ${memberFullName(m)}`}
                     onClick={() => setEditing(m.user_id)}
                     className="text-slate-400 hover:text-slate-900"
                   >

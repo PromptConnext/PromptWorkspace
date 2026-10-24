@@ -19,6 +19,10 @@ from app.secrets import SecretStore
 # use. Present only so ModelConnection's required field is satisfied.
 MANAGED_WORKSPACE_MARKER = "__managed__"
 
+# The provider name of the platform-operated chat model; the usage report
+# labels the managed source with it.
+MANAGED_PROVIDER = "typhoon"
+
 
 def build_managed_connection(
     settings: Settings, secret_store: SecretStore
@@ -27,7 +31,7 @@ def build_managed_connection(
         return None
     return ModelConnection(
         workspace_id=MANAGED_WORKSPACE_MARKER,
-        provider="typhoon",
+        provider=MANAGED_PROVIDER,
         base_url=settings.managed_model_base_url,
         model=settings.managed_model_name,
         embed_model="",

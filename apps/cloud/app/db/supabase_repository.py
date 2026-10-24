@@ -149,6 +149,9 @@ _MISSING_TABLE_CODES = frozenset({"PGRST205", "42P01"})
 # Postgres' undefined_column, what a write naming pw_decisions.subject_content
 # returns on a database migration 0006 hasn't reached yet.
 _MISSING_COLUMN_CODES = frozenset({"PGRST204", "42703"})
+# Postgres undefined_function and PostgREST's "function not in the schema
+# cache": what an RPC returns on a database a migration hasn't reached yet.
+_MISSING_FUNCTION_CODES = frozenset({"PGRST202", "42883"})
 # Postgres unique_violation: a receipt insert that lost a seq / decision-event race.
 _UNIQUE_VIOLATION = "23505"
 _REPO_ANALYSES = "pw_repo_analyses"
@@ -1637,13 +1640,17 @@ class SupabaseRepository(Repository):
         )
         art_rows = self._paged(
             lambda: self._table("pw_artifacts")
-            .select("id, task_id")
+            .select("id, task_id, updated_at")
             .in_("project_id", project_ids)
             .is_("deleted_at", "null")
             .not_.is_("agent", "null")
             .order("id")
         )
-        closed = {r["task_id"] for r in art_rows}
+        closed: dict[str, datetime] = {}
+        for r in art_rows:
+            at = _DT.validate_python(r["updated_at"])
+            if r["task_id"] not in closed or at > closed[r["task_id"]]:
+                closed[r["task_id"]] = at
         return [
             TaskSummary(
                 task_id=r["id"],
@@ -1651,6 +1658,7 @@ class SupabaseRepository(Repository):
                 status=TaskStatus(r["status"]),
                 assigned_user_id=r.get("assigned_user_id"),
                 agent_closed=r["id"] in closed,
+                agent_closed_at=closed.get(r["id"]),
                 updated_at=r["updated_at"],
             )
             for r in task_rows
@@ -1659,6 +1667,15 @@ class SupabaseRepository(Repository):
     def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
         if not project_ids:
             return {}
+        try:
+            res = self._client.rpc("pw_latest_receipt_at", {"p_project_ids": project_ids}).execute()
+            return {r["project_id"]: _DT.validate_python(r["created_at"]) for r in res.data or []}
+        except Exception as exc:
+            if self._missing_table(exc):
+                return {}
+            if not self._missing_function(exc):
+                raise
+        # Migration 0013 has not run: drain the receipts instead.
         try:
             rows = self._paged(
                 lambda: self._table(_RECEIPTS)
@@ -1829,6 +1846,13 @@ class SupabaseRepository(Repository):
     def _missing_table(exc: Exception) -> bool:
         return getattr(exc, "code", None) in _MISSING_TABLE_CODES
 
+    @staticmethod
+    def _missing_function(exc: Exception) -> bool:
+        return (
+            getattr(exc, "code", None) in _MISSING_FUNCTION_CODES
+            or "Could not find the function" in str(exc)
+        )
+
     def list_delivery_changes(
         self, project_id: str, *, include_deleted: bool = False
     ) -> list[DeliveryChange]:
@@ -1856,21 +1880,33 @@ class SupabaseRepository(Repository):
             raise
 
     def _snapshot_contents(
-        self, *, project_id: str | None = None, decision_id: str | None = None
+        self,
+        *,
+        project_id: str | None = None,
+        decision_id: str | None = None,
+        project_ids: list[str] | None = None,
     ) -> dict[str, str | None]:
         """decision_id -> stored text (None when erased), for a whole project
         (one filter, however long its history) or one decision. Ids with no row
         are absent, so the caller falls back to the pre-0008 column."""
         try:
-            query = self._table(_SNAPSHOTS).select("decision_id,content")
-            query = (query.eq("project_id", project_id) if project_id is not None
-                     else query.eq("decision_id", decision_id))
-            res = query.execute()
+            if project_ids is not None:
+                rows = self._paged(
+                    lambda: self._table(_SNAPSHOTS)
+                    .select("decision_id,content")
+                    .in_("project_id", project_ids)
+                    .order("decision_id")
+                )
+            else:
+                query = self._table(_SNAPSHOTS).select("decision_id,content")
+                query = (query.eq("project_id", project_id) if project_id is not None
+                         else query.eq("decision_id", decision_id))
+                rows = query.execute().data or []
         except Exception as exc:
             if self._missing_table(exc):
                 return {}
             raise
-        return {row["decision_id"]: row["content"] for row in res.data or []}
+        return {row["decision_id"]: row["content"] for row in rows}
 
     @staticmethod
     def _decision_of(row: dict, snapshots: dict[str, str | None]) -> Decision:
@@ -1879,21 +1915,29 @@ class SupabaseRepository(Repository):
         return Decision(**row)
 
     def list_decisions(self, project_id: str) -> list[Decision]:
+        return self.list_decisions_for([project_id])[project_id]
+
+    def list_decisions_for(self, project_ids: list[str]) -> dict[str, list[Decision]]:
+        ids = list(dict.fromkeys(project_ids))
+        out: dict[str, list[Decision]] = {pid: [] for pid in ids}
+        if not ids:
+            return out
         try:
-            res = (
-                self._table(_DECISIONS)
+            rows = self._paged(
+                lambda: self._table(_DECISIONS)
                 .select("*")
-                .eq("project_id", project_id)
+                .in_("project_id", ids)
                 .order("created_at", desc=True)
-                .execute()
+                .order("id", desc=True)
             )
         except Exception as exc:
             if self._missing_table(exc):
-                return []
+                return out
             raise
-        rows = res.data or []
-        snapshots = self._snapshot_contents(project_id=project_id) if rows else {}
-        return [self._decision_of(r, snapshots) for r in rows]
+        snapshots = self._snapshot_contents(project_ids=ids) if rows else {}
+        for r in rows:
+            out[r["project_id"]].append(self._decision_of(r, snapshots))
+        return out
 
     def update_open_decision(
         self, project_id: str, decision_id: str, changes: dict
@@ -2015,26 +2059,33 @@ class SupabaseRepository(Repository):
         return bool(res.data)
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
-        receipts: list[Receipt] = []
+        return self.list_receipts_for([project_id])[project_id]
+
+    def list_receipts_for(self, project_ids: list[str]) -> dict[str, list[Receipt]]:
+        out: dict[str, list[Receipt]] = {pid: [] for pid in project_ids}
+        if not project_ids:
+            return out
         start = 0
         while True:
             try:
                 res = (
                     self._table(_RECEIPTS)
                     .select("*")
-                    .eq("project_id", project_id)
+                    .in_("project_id", project_ids)
+                    .order("project_id")
                     .order("seq")
                     .range(start, start + _RECEIPT_PAGE - 1)
                     .execute()
                 )
             except Exception as exc:
                 if self._missing_table(exc):
-                    return []
+                    return {pid: [] for pid in project_ids}
                 raise
             rows = res.data or []
-            receipts.extend(Receipt(**row) for row in rows)
+            for row in rows:
+                out.setdefault(row["project_id"], []).append(Receipt(**row))
             if len(rows) < _RECEIPT_PAGE:
-                return receipts
+                return out
             start += _RECEIPT_PAGE
 
     def insert_receipt(self, receipt: Receipt) -> Receipt:
@@ -2059,19 +2110,28 @@ class SupabaseRepository(Repository):
         )
 
     def list_project_roles(self, project_id: str) -> list[ProjectRole]:
+        return self.list_project_roles_for([project_id])[project_id]
+
+    def list_project_roles_for(self, project_ids: list[str]) -> dict[str, list[ProjectRole]]:
+        ids = list(dict.fromkeys(project_ids))
+        out: dict[str, list[ProjectRole]] = {pid: [] for pid in ids}
+        if not ids:
+            return out
         try:
-            res = (
-                self._table(_PROJECT_ROLES)
+            rows = self._paged(
+                lambda: self._table(_PROJECT_ROLES)
                 .select("*")
-                .eq("project_id", project_id)
+                .in_("project_id", ids)
+                .order("project_id")
                 .order("hat")
-                .execute()
             )
         except Exception as exc:
             if self._missing_table(exc):
-                return []
+                return out
             raise
-        return [ProjectRole(**row) for row in res.data or []]
+        for row in rows:
+            out[row["project_id"]].append(ProjectRole(**row))
+        return out
 
     def set_project_role(
         self,
@@ -2114,6 +2174,18 @@ class SupabaseRepository(Repository):
         )
         rows = res.data or []
         return RepoAnalysis(**rows[0]) if rows else None
+
+    def get_repo_analyses(self, project_ids: list[str]) -> dict[str, RepoAnalysis]:
+        ids = list(dict.fromkeys(project_ids))
+        if not ids:
+            return {}
+        rows = self._paged(
+            lambda: self._table(_REPO_ANALYSES)
+            .select("*")
+            .in_("project_id", ids)
+            .order("project_id")
+        )
+        return {row["project_id"]: RepoAnalysis(**row) for row in rows}
 
     def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
