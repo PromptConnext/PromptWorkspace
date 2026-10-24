@@ -66,6 +66,8 @@ def test_list_tasks_summary_counts_and_agent_flag(repo: Repository) -> None:
     assert [tid for tid, r in rows.items() if r.agent_closed] == [t1.id]
     assert rows[t1.id].assigned_user_id == "u-1" and rows[t1.id].project_id == p1.id
     assert rows[t3.id].status == TaskStatus.verified
+    assert rows[t1.id].agent_closed_at is not None
+    assert rows[t2.id].agent_closed_at is None and rows[t3.id].agent_closed_at is None
     assert repo.list_tasks_summary([]) == []
 
 
@@ -222,3 +224,27 @@ def test_latest_receipt_at_matches_per_project_max(repo: Repository) -> None:
     latest = repo.latest_receipt_at([p1.id, p2.id])
 
     assert latest == {p1.id: max(a1.created_at, a2.created_at), p2.id: b1.created_at}
+
+
+def test_list_receipts_for_groups_oldest_first_and_keys_every_id(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    p1, p2, p3 = (h.project(repo, ws, admin) for _ in range(3))
+
+    def draft(pid: str) -> ReceiptDraft:
+        return ReceiptDraft(
+            project_id=pid, workspace_id=ws.id, event="decision.requested",
+            subject_type="decision", subject_id=new_id(), actor="alice", body={},
+        )
+
+    a1 = repo.insert_receipt(seal(draft(p1.id), None))
+    a2 = repo.insert_receipt(seal(draft(p1.id), a1))
+    b1 = repo.insert_receipt(seal(draft(p2.id), None))
+
+    got = repo.list_receipts_for([p1.id, p2.id, p3.id])
+
+    assert set(got) == {p1.id, p2.id, p3.id}
+    assert [r.id for r in got[p1.id]] == [a1.id, a2.id]
+    assert [r.id for r in got[p2.id]] == [b1.id]
+    assert got[p3.id] == []
+    assert [r.id for r in repo.list_receipts(p1.id)] == [a1.id, a2.id]
+    assert repo.list_receipts_for([]) == {}

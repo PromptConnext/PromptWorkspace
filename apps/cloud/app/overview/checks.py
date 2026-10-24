@@ -16,6 +16,7 @@ from app.models.schemas import (
 )
 
 _HAT_LABELS = {"business_owner": "business owner", "tech_steward": "tech steward"}
+_HAT_ORDER = ("business_owner", "tech_steward")
 EXPIRED_WINDOW = timedelta(days=30)
 
 
@@ -42,7 +43,9 @@ def run_checks(
 ) -> list[ProjectCheckOut]:
     out: list[ProjectCheckOut] = []
     held = {r.hat for r in roles}
-    for hat in governance.required_hats:
+    for hat in _HAT_ORDER:
+        if hat not in governance.required_hats:
+            continue
         label = _HAT_LABELS.get(hat, hat)
         ok = hat in held
         out.append(

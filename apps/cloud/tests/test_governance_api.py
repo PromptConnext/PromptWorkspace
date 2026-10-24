@@ -77,3 +77,29 @@ def test_put_governance_round_trips(client: TestClient, workspace: str) -> None:
     assert data["require_seeded_rules"] is False
     assert data["updated_by"] == "alice"
     assert client.get(url, headers=BOB).json() == data
+
+
+def _mk_project(client, workspace, name):
+    res = client.post("/projects", json={"name": name, "workspace_id": workspace}, headers=ALICE)
+    assert res.status_code in (200, 201), res.text
+    return res.json()["id"]
+
+
+def test_governance_reports_inheriting_and_own_scope_projects(
+    client: TestClient, workspace: str
+) -> None:
+    repo = client.app.state.repository
+    _mk_project(client, workspace, "Follows")
+    own = _mk_project(client, workspace, "Own")
+    frozen = _mk_project(client, workspace, "Frozen")
+    from app.models.schemas import PolicyScope
+
+    repo.update_project_policy_scope(own, PolicyScope(selected=["gdpr"]), source="project")
+    repo.update_project_policy_scope(frozen, PolicyScope(), source="workspace")
+    repo._projects[frozen].lifecycle_status = "repo_created"
+
+    url = f"/workspaces/{workspace}/governance"
+    got = client.get(url, headers=BOB).json()
+    assert got["inheriting_unfrozen"] == 1
+    assert got["own_scope"] == ["Own"]
+    assert client.put(url, json=_body(), headers=ALICE).json()["own_scope"] == ["Own"]

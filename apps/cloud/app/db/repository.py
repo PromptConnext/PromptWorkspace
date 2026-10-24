@@ -887,6 +887,12 @@ class Repository(abc.ABC):
         missing (migration 0007 not applied)."""
 
     @abc.abstractmethod
+    def list_receipts_for(self, project_ids: list[str]) -> dict[str, list[Receipt]]:
+        """Receipt chains of these projects, oldest first, one batched read.
+        Every requested id has a key (empty when it has no receipts or the
+        table is missing)."""
+
+    @abc.abstractmethod
     def insert_receipt(self, receipt: Receipt) -> Receipt:
         """Insert only. Raises ReceiptConflict when (project_id, seq) is taken
         or a decision receipt with the same (subject_id, event) exists;
@@ -1996,11 +2002,12 @@ class InMemoryRepository(Repository):
             store = self._graph.get(pid)
             if not store:
                 continue
-            closed = {
-                a.task_id
-                for a in store.get("artifacts", {}).values()
-                if a.deleted_at is None and a.agent is not None
-            }
+            closed: dict[str, datetime] = {}
+            for a in store.get("artifacts", {}).values():
+                if a.deleted_at is None and a.agent is not None:
+                    at = a.updated_at
+                    if a.task_id not in closed or at > closed[a.task_id]:
+                        closed[a.task_id] = at
             for t in store.get("tasks", {}).values():
                 if t.deleted_at is not None:
                     continue
@@ -2011,6 +2018,7 @@ class InMemoryRepository(Repository):
                         status=t.status,
                         assigned_user_id=t.assigned_user_id,
                         agent_closed=t.id in closed,
+                        agent_closed_at=closed.get(t.id),
                         updated_at=t.updated_at or utcnow(),
                     )
                 )
@@ -2180,7 +2188,12 @@ class InMemoryRepository(Repository):
         return True
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
-        return [copy.deepcopy(r) for r in self._receipts.get(project_id, [])]
+        return self.list_receipts_for([project_id])[project_id]
+
+    def list_receipts_for(self, project_ids: list[str]) -> dict[str, list[Receipt]]:
+        return {
+            pid: [copy.deepcopy(r) for r in self._receipts.get(pid, [])] for pid in project_ids
+        }
 
     def insert_receipt(self, receipt: Receipt) -> Receipt:
         chain = self._receipts.setdefault(receipt.project_id, [])

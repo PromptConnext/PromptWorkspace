@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from app.generation.managed import MANAGED_PROVIDER
 from app.main import create_app
 from app.models.schemas import Decision, GenerationRun, utcnow
 
@@ -127,6 +128,8 @@ def test_report_reads_each_family_once(client, workspace):
         _project(client, workspace, f"P{i}")
     repo = client.app.state.repository
     with (
+        patch.object(repo, "list_receipts_for", wraps=repo.list_receipts_for) as receipts_for,
+        patch.object(repo, "list_receipts", wraps=repo.list_receipts) as one_receipts,
         patch.object(repo, "list_project_roles_for", wraps=repo.list_project_roles_for) as roles,
         patch.object(repo, "list_decisions_for", wraps=repo.list_decisions_for) as decisions,
         patch.object(repo, "list_project_roles", wraps=repo.list_project_roles) as one_roles,
@@ -139,3 +142,36 @@ def test_report_reads_each_family_once(client, workspace):
     assert decisions.call_count == 1
     assert one_roles.call_count == 0
     assert one_decisions.call_count == 0
+    assert receipts_for.call_count == 1
+    assert one_receipts.call_count == 0
+
+
+def test_today_uses_the_utc_date_of_an_aware_timestamp(client, workspace):
+    from datetime import datetime, timezone
+
+    from app.overview.report import build_usage
+
+    tz = timezone(timedelta(hours=-7))
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    runs = [
+        # 10-23 23:00 at -07:00 is 10-24 06:00 UTC: today, though .date() says the 23rd
+        _run(workspace, None, "managed", "specify", 10, datetime(2026, 10, 23, 23, tzinfo=tz)),
+        # 10-23 18:00 UTC: yesterday
+        _run(
+            workspace, None, "managed", "plan", 10,
+            datetime(2026, 10, 23, 18, tzinfo=timezone.utc),
+        ),
+    ]
+    (m,) = build_usage(runs, now, managed_budget=None, byo_budget=None, byo_provider=None)
+    assert m.today_tokens == 20
+
+
+def test_stage_lists_every_distinct_model_it_used(client, workspace):
+    repo = client.app.state.repository
+    pid = _project(client, workspace)
+    now = utcnow()
+    for model in ("a", "b", "a"):
+        repo.create_generation_run(_run(workspace, pid, "managed", "specify", 1, now, model=model))
+    (m,) = _report(client, workspace).json()["usage"]
+    assert m["by_stage"][0]["model"] == "a, b"
+    assert m["provider"] == MANAGED_PROVIDER

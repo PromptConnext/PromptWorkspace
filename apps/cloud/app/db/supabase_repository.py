@@ -1640,13 +1640,17 @@ class SupabaseRepository(Repository):
         )
         art_rows = self._paged(
             lambda: self._table("pw_artifacts")
-            .select("id, task_id")
+            .select("id, task_id, updated_at")
             .in_("project_id", project_ids)
             .is_("deleted_at", "null")
             .not_.is_("agent", "null")
             .order("id")
         )
-        closed = {r["task_id"] for r in art_rows}
+        closed: dict[str, datetime] = {}
+        for r in art_rows:
+            at = _DT.validate_python(r["updated_at"])
+            if r["task_id"] not in closed or at > closed[r["task_id"]]:
+                closed[r["task_id"]] = at
         return [
             TaskSummary(
                 task_id=r["id"],
@@ -1654,6 +1658,7 @@ class SupabaseRepository(Repository):
                 status=TaskStatus(r["status"]),
                 assigned_user_id=r.get("assigned_user_id"),
                 agent_closed=r["id"] in closed,
+                agent_closed_at=closed.get(r["id"]),
                 updated_at=r["updated_at"],
             )
             for r in task_rows
@@ -2054,26 +2059,33 @@ class SupabaseRepository(Repository):
         return bool(res.data)
 
     def list_receipts(self, project_id: str) -> list[Receipt]:
-        receipts: list[Receipt] = []
+        return self.list_receipts_for([project_id])[project_id]
+
+    def list_receipts_for(self, project_ids: list[str]) -> dict[str, list[Receipt]]:
+        out: dict[str, list[Receipt]] = {pid: [] for pid in project_ids}
+        if not project_ids:
+            return out
         start = 0
         while True:
             try:
                 res = (
                     self._table(_RECEIPTS)
                     .select("*")
-                    .eq("project_id", project_id)
+                    .in_("project_id", project_ids)
+                    .order("project_id")
                     .order("seq")
                     .range(start, start + _RECEIPT_PAGE - 1)
                     .execute()
                 )
             except Exception as exc:
                 if self._missing_table(exc):
-                    return []
+                    return {pid: [] for pid in project_ids}
                 raise
             rows = res.data or []
-            receipts.extend(Receipt(**row) for row in rows)
+            for row in rows:
+                out.setdefault(row["project_id"], []).append(Receipt(**row))
             if len(rows) < _RECEIPT_PAGE:
-                return receipts
+                return out
             start += _RECEIPT_PAGE
 
     def insert_receipt(self, receipt: Receipt) -> Receipt:

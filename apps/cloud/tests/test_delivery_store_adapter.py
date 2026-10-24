@@ -429,3 +429,28 @@ def test_get_repo_analyses_is_one_read_with_only_present_keys():
     assert client.in_filters == [("pw_repo_analyses", "project_id", ["a", "b"])]
     assert set(got) == {"a"}
     assert _repo(_TableClient()).get_repo_analyses([]) == {}
+
+
+def test_list_receipts_for_is_one_receipt_read_with_in_filter():
+    def row(pid, seq):
+        return {
+            "id": f"{pid}{seq}", "project_id": pid, "workspace_id": "w", "event": "role.assigned",
+            "subject_type": "decision", "subject_id": "s", "actor": "a", "body": {},
+            "seq": seq, "prev_hash": "", "hash": "h", "created_at": "2026-10-01T00:00:00+00:00",
+        }
+
+    rows = [row("a", 1), row("a", 2), row("b", 1)]
+    client = _TableClient(rows_by_table={"pw_receipts": rows})
+
+    got = _repo(client).list_receipts_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_receipts"]
+    assert client.in_filters == [("pw_receipts", "project_id", ["a", "b", "c"])]
+    assert [r.seq for r in got["a"]] == [1, 2]
+    assert [r.seq for r in got["b"]] == [1]
+    assert got["c"] == []
+
+
+def test_list_receipts_for_missing_table_gives_empty_chains():
+    client = _Client(error={"code": "42P01", "message": "relation does not exist"})
+    assert _repo(client).list_receipts_for(["a"]) == {"a": []}
