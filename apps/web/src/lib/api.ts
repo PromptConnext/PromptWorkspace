@@ -15,6 +15,7 @@ import type {
   PolicyTemplateOut,
   PrefillOut,
   Project,
+  WorkspaceGovernance,
   ProjectHat,
   ProjectRoleOut,
   RepoAnalysisOut,
@@ -171,6 +172,18 @@ export function listMembers(workspaceId: string, authHeaders: Record<string, str
   return apiFetch<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`, authHeaders);
 }
 
+export function updateMemberDisplayName(
+  workspaceId: string,
+  userId: string,
+  displayName: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<WorkspaceMember>(`/workspaces/${workspaceId}/members/${userId}`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
 export function assignTask(
   projectId: string,
   taskId: string,
@@ -315,6 +328,26 @@ export function updatePolicyScope(
   return apiFetch<Project>(`/projects/${projectId}/policy-scope`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify(scope),
+  });
+}
+
+// Full replace: the body is the workspace's entire governance going forward.
+export function putGovernance(
+  workspaceId: string,
+  body: Pick<WorkspaceGovernance, "policy_scope" | "required_hats" | "require_seeded_rules">,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<WorkspaceGovernance>(`/workspaces/${workspaceId}/governance`, authHeaders, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+// Put a project back on the workspace policy scope; 409 project_frozen once
+// its repository exists.
+export function adoptWorkspaceScope(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<Project>(`/projects/${projectId}/policy-scope/use-workspace`, authHeaders, {
+    method: "POST",
   });
 }
 

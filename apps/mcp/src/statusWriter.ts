@@ -63,6 +63,8 @@ export class StatusWriter {
   private readonly client: CloudClient;
   private readonly queue: StatusQueue;
   private readonly log: LoggerLike;
+  /** The MCP client's `clientInfo.name`, known once `initialize` completes. */
+  private clientName: string | undefined;
 
   constructor(client: CloudClient, queue: StatusQueue, log: LoggerLike) {
     this.client = client;
@@ -70,11 +72,19 @@ export class StatusWriter {
     this.log = log;
   }
 
+  /** Record which MCP client is on the other end, so every artifact written
+   *  from here on names it. Called from `oninitialized`; an empty or missing
+   *  name leaves the bare `mcp`. */
+  setClient(name: string | undefined): void {
+    this.clientName = name;
+  }
+
   async setStatus(req: StatusWriteRequest): Promise<StatusWriteOutcome> {
+    const artifact = this.withAgent(req.artifact);
     try {
       await this.client.patchTaskStatus(req.projectId, req.taskId, {
         status: req.status,
-        artifact: req.artifact,
+        artifact,
       });
       return { kind: "written" };
     } catch (err) {
@@ -103,12 +113,20 @@ export class StatusWriter {
         projectId: req.projectId,
         taskId: req.taskId,
         status: req.status,
-        artifact: req.artifact,
+        artifact,
       });
       const reason = err instanceof Error ? err.message : String(err);
       this.log.info(`status write queued: ${req.taskId} -> ${req.status} (${reason})`);
       return { kind: "queued", reason };
     }
+  }
+
+  private withAgent(artifact: StatusArtifact | undefined): StatusArtifact | undefined {
+    if (!artifact) return artifact;
+    // The cloud rejects `agent.client` over 64 characters, and the name comes
+    // from an arbitrary third party; a 422 here would drop the whole close.
+    const client = (this.clientName ? `mcp:${this.clientName}` : "mcp").slice(0, 64);
+    return { ...artifact, agent: { client } };
   }
 
   /** Flush whatever the queue holds. Safe to call often — entries are due-gated

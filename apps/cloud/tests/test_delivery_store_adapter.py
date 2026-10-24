@@ -140,6 +140,12 @@ def test_delivery_tables_are_service_only():
     assert {"pw_delivery_changes", "pw_decisions", "pw_project_roles"} <= _SERVICE_ONLY_TABLES
 
 
+def test_workspace_governance_is_service_only():
+    # Migration 0011 enables RLS with no policy for `authenticated`; a per-user
+    # client would get 42501 on every read.
+    assert "pw_workspace_governance" in _SERVICE_ONLY_TABLES
+
+
 MISSING_SNAPSHOTS = {
     "code": "PGRST205",
     "message": "Could not find the table 'public.pw_decision_snapshots'",

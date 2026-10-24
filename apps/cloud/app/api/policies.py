@@ -17,15 +17,11 @@ from pydantic import BaseModel
 from app.api._guards import require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import PolicyScope, PolicyScopeUpdate, Project
-from app.policies.registry import BUILTIN_TEMPLATES, get_template, template_body
+from app.models.schemas import PolicyScopeUpdate, Project, WorkspaceGovernance
+from app.policies.registry import BUILTIN_TEMPLATES, template_body
+from app.policies.scope import validate_scope
 
 router = APIRouter(tags=["policies"])
-
-# Full custom_text cap (mirrors the plan's budget accounting: custom_text is
-# capped independently of the render-time budgets in app/policies/registry.py).
-_MAX_CUSTOM_TEXT_CHARS = 20_000
-
 
 class PolicyTemplateOut(BaseModel):
     id: str
@@ -61,17 +57,23 @@ def update_policy_scope(
     if project.lifecycle_status == "repo_created":
         raise HTTPException(status_code=409, detail="project_frozen")
 
-    resolved: list[str] = []
-    seen: set[str] = set()
-    for template_id in body.selected:
-        if get_template(template_id) is None:
-            raise HTTPException(status_code=422, detail="unknown_policy_template")
-        if template_id not in seen:
-            seen.add(template_id)
-            resolved.append(template_id)
+    scope = validate_scope(body.selected, body.custom_text)
+    return repo.update_project_policy_scope(project_id, scope, source="project")
 
-    if len(body.custom_text) > _MAX_CUSTOM_TEXT_CHARS:
-        raise HTTPException(status_code=422, detail="custom_text_too_long")
 
-    scope = PolicyScope(selected=resolved, custom_text=body.custom_text)
-    return repo.update_project_policy_scope(project_id, scope)
+@router.post("/projects/{project_id}/policy-scope/use-workspace", response_model=Project)
+def use_workspace_policy_scope(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Project:
+    """Drop the project's own scope and follow the workspace's again."""
+    project = require_project(repo, project_id, user)
+    if project.lifecycle_status == "repo_created":
+        raise HTTPException(status_code=409, detail="project_frozen")
+    governance = repo.get_workspace_governance(
+        project.workspace_id
+    ) or WorkspaceGovernance.default(project.workspace_id)
+    return repo.update_project_policy_scope(
+        project_id, governance.policy_scope.model_copy(deep=True), source="workspace"
+    )

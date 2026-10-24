@@ -24,6 +24,7 @@ export interface WorkspaceMember {
   workspace_id: string;
   user_id: string;
   email: string | null;
+  display_name: string | null;
   role: Role;
   invited_by: string | null;
   created_at: string;
@@ -52,6 +53,8 @@ export interface Project {
   // that predates the field.
   repo_origin?: "imported" | "created" | null;
   policy_scope?: PolicyScope | null;
+  // Plan 0033. "workspace" while the project follows the workspace scope.
+  policy_scope_source?: "workspace" | "project";
   // ADR 0021. `deployment_config` is the Tech Lead's frozen input;
   // `deployment_state` is the server's current view, written only by the
   // signed GitHub webhook. Two fields, not one, because they have different
@@ -145,6 +148,8 @@ export interface Artifact {
   kind: ArtifactKind;
   uri: string;
   commit_sha: string | null;
+  /** Which client closed the task; null/absent = closed on the web. */
+  agent?: { client: string; model: string | null } | null;
   updated_at: string | null;
   deleted_at: string | null;
   field_versions: Record<string, unknown>;
@@ -810,4 +815,96 @@ export interface InboxItem {
   workspace_name: string;
   /** Who sent a request back; set only on the caller's own sent-back items. */
   resolver_email?: string | null;
+}
+
+export interface ProjectCheck {
+  id: string;
+  ok: boolean;
+  text: string;
+}
+
+export interface PersonLink {
+  kind: "hat" | "work" | "approval";
+  from_user_id: string;
+  to_user_id: string | null;
+  project_id: string | null;
+  hat: string | null;
+  weight: number;
+}
+
+export interface ProjectCard {
+  id: string;
+  name: string;
+  lifecycle_status: string;
+  live_url: string | null;
+  updated_at: string;
+  hats: { business_owner: string | null; tech_steward: string | null };
+  /** User ids, most tasks first. */
+  contributors: string[];
+  task_counts: { todo: number; in_progress: number; implemented: number; verified: number };
+  decisions: { open: number; overdue: number; expired_30d: number };
+  stack: { runtime: string | null; languages: string[] } | null;
+  policy: { source: "workspace" | "project"; selected: string[]; require_seeded_rules: boolean };
+  /** Includes ok:true entries with positive text; the governance line uses the first with ok === false. */
+  checks: ProjectCheck[];
+  agent_closed_30d: number;
+  last_activity_at: string;
+}
+
+export interface WorkspaceOverview {
+  workspace_id: string;
+  generated_at: string;
+  truncated: boolean;
+  members: WorkspaceMember[];
+  projects: ProjectCard[];
+  people: PersonLink[];
+}
+
+export interface WorkspaceGovernance {
+  workspace_id: string;
+  policy_scope: PolicyScope;
+  required_hats: string[];
+  require_seeded_rules: boolean;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface GovernanceUsage {
+  source: "managed" | "byo";
+  provider: string | null;
+  runs: number;
+  tokens: number;
+  today_tokens: number;
+  daily_budget: number | null;
+  by_stage: { stage: string; runs: number; model: string; tokens: number }[];
+}
+
+export interface GovernanceDiscipline {
+  resolved: number;
+  open: number;
+  expired_30d: number;
+  median_hours_to_decide: number | null;
+  chains_verified: number;
+  chains_total: number;
+}
+
+export interface GovernanceReport {
+  usage: GovernanceUsage[];
+  discipline: GovernanceDiscipline;
+  projects: { project_id: string; name: string; checks: ProjectCheck[] }[];
+}
+
+// POST /workspaces/{id}/ask — the facts frame (apps/cloud/app/overview/facts.py).
+export interface WorkspaceFacts {
+  my_open_decisions: {
+    project_id: string;
+    project_name: string;
+    kind: string;
+    expires_at: string | null;
+  }[];
+  projects_missing_hats: { project_id: string; name: string; hats: string[] }[];
+  overdue: { project_id: string; name: string; count: number }[];
+  expired: { project_id: string; name: string; count: number }[];
+  by_runtime: Record<string, string[]>;
+  agent_closed_30d: number;
 }

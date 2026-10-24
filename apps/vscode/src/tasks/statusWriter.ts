@@ -31,6 +31,7 @@ export class StatusWriter {
   private readonly log: OutputLogger;
   private readonly onQueueChanged: () => void;
   private readonly owner: () => { scope: string; userId?: string };
+  private readonly appName: string;
 
   constructor(
     client: CloudClient,
@@ -41,6 +42,9 @@ export class StatusWriter {
     /** The environment and account a queued write belongs to, and the only
      *  ones `flush` sends: the queue file is shared by every window. */
     owner: () => { scope: string; userId?: string },
+    /** `vscode.env.appName` — "Cursor", "Visual Studio Code", … — recorded on
+     *  every artifact as the agent that closed the task. */
+    appName: string,
   ) {
     this.client = client;
     this.store = store;
@@ -48,14 +52,20 @@ export class StatusWriter {
     this.log = log;
     this.onQueueChanged = onQueueChanged;
     this.owner = owner;
+    this.appName = appName;
   }
 
   async setStatus(req: StatusWriteRequest): Promise<boolean> {
     const previous = this.store.applyLocalStatus(req.taskId, req.status);
+    const artifact = req.artifact && {
+      ...req.artifact,
+      // The cloud rejects `agent.client` over 64 characters.
+      agent: { client: `vscode:${this.appName}`.slice(0, 64) },
+    };
     try {
       await this.client.patchTaskStatus(req.projectId, req.taskId, {
         status: req.status,
-        artifact: req.artifact,
+        artifact,
       });
       await this.store.refresh();
       return true;
@@ -93,7 +103,7 @@ export class StatusWriter {
         projectId: req.projectId,
         taskId: req.taskId,
         status: req.status,
-        artifact: req.artifact,
+        artifact,
         scope,
         userId,
       });

@@ -12,6 +12,7 @@ const members: WorkspaceMember[] = [
     user_id: "u1",
     email: "dev-user@promptworkspace.local",
     role: "member",
+    display_name: null,
     invited_by: null,
     created_at: "2026-08-01T00:00:00Z",
   },
@@ -185,6 +186,31 @@ describe("TaskDrawer", () => {
       />,
     );
     expect(screen.getByText("No acceptance criteria")).toBeInTheDocument();
+  });
+
+  it("artifact with agent mcp:cursor reads Closed via Cursor (MCP)", () => {
+    const a = { ...graph.artifacts[0], agent: { client: "mcp:cursor", model: null } };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed via Cursor (MCP)")).toBeInTheDocument();
+  });
+
+  it("artifact with agent vscode:Cursor reads Closed via Cursor (editor)", () => {
+    const a = { ...graph.artifacts[0], agent: { client: "vscode:Cursor", model: null } };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed via Cursor (editor)")).toBeInTheDocument();
+  });
+
+  it("commit artifact without agent reads Closed by a push", () => {
+    const a = { ...graph.artifacts[0], agent: null, commit_sha: "abcdef1234567" };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed by a push")).toBeInTheDocument();
+    expect(screen.queryByText("Closed on the web")).toBeNull();
+  });
+
+  it("non-commit artifact without agent shows no label", () => {
+    const a = { ...graph.artifacts[0], agent: null, commit_sha: null };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.queryByText(/^Closed /)).toBeNull();
   });
 
   it("links commit artifacts by short sha in a new tab", () => {

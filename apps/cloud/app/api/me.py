@@ -60,6 +60,12 @@ def list_my_decisions(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[InboxItem]:
+    return collect_my_decisions(repo, user, workspace_id, include_mine)
+
+
+def collect_my_decisions(
+    repo: Repository, user: User, workspace_id: str | None = None, include_mine: bool = False
+) -> list[InboxItem]:
     """Open decisions routed to the caller (plan 0029 Decision Inbox). One pass
     over the caller's workspaces and projects: fine at today's scale; move to a
     single indexed query (idx_pw_decisions_open) when it isn't. With

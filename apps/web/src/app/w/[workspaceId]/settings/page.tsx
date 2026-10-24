@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { use } from "react";
 import { DeployConnectionsPanel } from "@/components/DeployConnectionsPanel";
+import { GovernancePanel } from "@/components/workspace/GovernancePanel";
 import { GithubConnectionForm } from "@/components/GithubConnectionForm";
 import { ModelConnectionForm } from "@/components/ModelConnectionForm";
 import { RequireAuth } from "@/components/RequireAuth";
@@ -45,6 +46,7 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
                 repository creation writes this credential into the repo the
                 GitHub token creates. */}
             <DeployConnectionsPanel workspaceId={workspaceId} />
+            <GovernancePanel workspaceId={workspaceId} />
             <ModelConnectionForm workspaceId={workspaceId} />
             <WorkspaceReindexPanel workspaceId={workspaceId} />
           </>

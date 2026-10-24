@@ -9,6 +9,9 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace: vi.fn() }
 vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({ authHeaders: () => ({}) }),
+}));
 vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
 vi.mock("@/components/NewProjectDialog", () => ({
   NewProjectDialog: ({
@@ -35,6 +38,7 @@ vi.mock("@/lib/workspace", () => ({
     setActiveWorkspace: vi.fn(),
   }),
   useWorkspaceName: () => "Acme",
+  useIsWorkspaceAdmin: () => false,
 }));
 
 // React's `use` reads status/value off a settled thenable synchronously, so
@@ -55,21 +59,39 @@ async function renderPage() {
   return view;
 }
 
-const state: Record<string, { data?: unknown; loading: boolean; error?: string | null }> = {};
+type Slot = { data?: unknown; loading: boolean; error?: string | null };
+const state: { overview: Slot; decisions: Slot } = {
+  overview: { loading: true },
+  decisions: { loading: true },
+};
 vi.mock("@/lib/hooks", () => ({
-  useCloudGet: (path: string) =>
-    state[path.includes("/me/decisions") ? "decisions" : path.endsWith("/members") ? "members" : "projects"],
+  useCloudGet: (path: string) => ({
+    refetch: vi.fn(),
+    ...(path.includes("/me/decisions") ? state.decisions : state.overview),
+  }),
 }));
 
+function overview(over: Record<string, unknown> = {}) {
+  return {
+    workspace_id: "w1",
+    generated_at: "2026-10-24T00:00:00Z",
+    truncated: false,
+    members: [],
+    projects: [],
+    people: [],
+    ...over,
+  };
+}
+
 beforeEach(() => {
-  state.members = { data: undefined, loading: true };
-  state.projects = { data: [], loading: false };
+  state.overview = { data: overview(), loading: false };
   state.decisions = { data: undefined, loading: true };
 });
 afterEach(cleanup);
 
 describe("workspace home", () => {
   it("shows a neutral label, not '0 members', while members load", async () => {
+    state.overview = { data: undefined, loading: true };
     await renderPage();
     expect(await screen.findByText("Members", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.queryByText(/0 members/)).toBeNull();
@@ -96,7 +118,7 @@ describe("workspace home", () => {
   });
 
   it("hides empty state when fetch error occurs", async () => {
-    state.projects = { data: undefined, loading: false, error: "Failed to load projects" };
+    state.overview = { data: undefined, loading: false, error: "Failed to load projects" };
     await renderPage();
     expect(await screen.findByText("Failed to load projects")).toBeInTheDocument();
     expect(screen.queryByText("No projects yet. Create your first project to start planning.")).toBeNull();

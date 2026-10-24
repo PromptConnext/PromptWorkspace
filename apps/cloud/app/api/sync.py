@@ -99,6 +99,7 @@ from app.models.schemas import (
     TaskAssignmentUpdate,
     TaskStatus,
     TaskStatusUpdate,
+    WorkspaceGovernance,
     new_id,
     utcnow,
 )
@@ -147,6 +148,17 @@ async def _has_commits(github_client, token: str, found: dict) -> bool:
     return True
 
 
+def _inherit_workspace_scope(repo: Repository, project: Project) -> Project:
+    """A new project starts on the workspace's policy scope, even when that
+    scope is empty, so later workspace edits propagate to it (plan 0033)."""
+    governance = repo.get_workspace_governance(
+        project.workspace_id
+    ) or WorkspaceGovernance.default(project.workspace_id)
+    return repo.update_project_policy_scope(
+        project.id, governance.policy_scope.model_copy(deep=True), source="workspace"
+    )
+
+
 @router.post("/projects", response_model=Project, status_code=201)
 async def create_project(
     body: ProjectCreate,
@@ -158,8 +170,11 @@ async def create_project(
     require_workspace(repo, body.workspace_id, user)
 
     if body.import_repo_full_name is None:
-        return repo.create_project(
-            workspace_id=body.workspace_id, created_by=user.id, name=body.name
+        return _inherit_workspace_scope(
+            repo,
+            repo.create_project(
+                workspace_id=body.workspace_id, created_by=user.id, name=body.name
+            ),
         )
 
     # Import path: the user picked a repo from GithubRepoListOut. Everything
@@ -208,14 +223,17 @@ async def create_project(
     if not await _has_commits(github_client, token, found):
         raise HTTPException(status_code=400, detail="repo_is_empty")
 
-    return repo.create_project(
-        workspace_id=body.workspace_id,
-        created_by=user.id,
-        name=body.name,
-        repo_url=found["html_url"],
-        repo_default_branch=found.get("default_branch") or "main",
-        repo_id=found["id"],
-        repo_origin="imported",
+    return _inherit_workspace_scope(
+        repo,
+        repo.create_project(
+            workspace_id=body.workspace_id,
+            created_by=user.id,
+            name=body.name,
+            repo_url=found["html_url"],
+            repo_default_branch=found.get("default_branch") or "main",
+            repo_id=found["id"],
+            repo_origin="imported",
+        ),
     )
 
 
@@ -1205,6 +1223,7 @@ def set_task_status(
             body.artifact.commit_sha,
             body.artifact.kind,
             now,
+            body.artifact.agent,
         )
     previous = task.status
     updated = repo.set_task_status(project_id, task_id, body.status, now)

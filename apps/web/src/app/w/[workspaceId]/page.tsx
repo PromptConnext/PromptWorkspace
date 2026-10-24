@@ -6,13 +6,13 @@ import { use, useEffect, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { InboxLink } from "@/components/InboxLink";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
-import { safeWebUrl } from "@/components/project/previewState";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
-import { useAuth } from "@/lib/auth";
-import { useCloudGet } from "@/lib/hooks";
-import { useWorkspace, useWorkspaceName } from "@/lib/workspace";
-import type { Project, WorkspaceMember } from "@/lib/types";
+import { AskBox } from "@/components/workspace/AskBox";
+import { ProjectCard } from "@/components/workspace/ProjectCard";
+import { useOverview } from "@/components/workspace/useOverview";
+import { useIsWorkspaceAdmin, useWorkspace, useWorkspaceName } from "@/lib/workspace";
+import type { WorkspaceMember } from "@/lib/types";
 
 const AVATAR_STACK_LIMIT = 4;
 
@@ -35,32 +35,14 @@ function MemberStack({ members }: { members: WorkspaceMember[] }) {
   );
 }
 
-function ProjectIcon() {
-  return (
-    <svg
-      aria-hidden
-      viewBox="0 0 24 24"
-      fill="none"
-      className="h-5 w-5 shrink-0 text-slate-400"
-    >
-      <path
-        d="M4 6.5A1.5 1.5 0 0 1 5.5 5h4l2 2h7A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-11Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const { memberships, loading: wsLoading, error: wsError, setActiveWorkspace } = useWorkspace();
   const workspaceName = useWorkspaceName(workspaceId);
-  const { data: members } = useCloudGet<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
-  const { data: projects, error, loading } = useCloudGet<Project[]>(
-    `/workspaces/${workspaceId}/projects`,
-  );
+  const { data: overview, error, loading, refetch } = useOverview(workspaceId);
+  const isAdmin = useIsWorkspaceAdmin(workspaceId);
+  const members = overview?.members;
+  const projects = overview?.projects;
 
   const [creating, setCreating] = useState(false);
 
@@ -80,7 +62,7 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
   return (
     <>
       <TopBar crumbs={[{ label: workspaceName }]} />
-      <main className="mx-auto max-w-3xl px-4 py-10">
+      <main className="mx-auto max-w-6xl px-4 py-10">
         <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-slate-900">
             {workspaceName}
@@ -114,6 +96,8 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
           </div>
         </div>
 
+        <AskBox workspaceId={workspaceId} />
+
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -131,52 +115,17 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
             </button>
           </div>
         ) : (
-          <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {projects?.map((p) => (
-              // safeWebUrl because this href comes from a webhook payload
-              // written by whoever can push to the project repo; React does
-              // not sanitise href, so a javascript: URL here would execute in
-              // this origin on click. The cloud refuses one on the storage
-              // path too — this is the second half of that.
-              //
-              // The live link is a sibling of the row link, not nested
-              // inside it: an anchor inside an anchor is invalid, and this is
-              // the one place a business user can reach the running
-              // application without first knowing which project it is (ADR
-              // 0021).
-              <li key={p.id} className="flex items-center hover:bg-slate-50">
-                <Link
-                  href={`/w/${workspaceId}/p/${p.id}`}
-                  className="flex flex-1 items-center gap-3 px-4 py-3"
-                >
-                  <ProjectIcon />
-                  <span className="flex-1 font-medium text-slate-900">{p.name}</span>
-                </Link>
-                {p.deployment_state?.state === "live" && safeWebUrl(p.deployment_state.url) && (
-                  <a
-                    href={safeWebUrl(p.deployment_state.url)!}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="Open the live application"
-                    className="mr-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900 hover:border-emerald-300"
-                  >
-                    <span
-                      aria-hidden
-                      className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
-                    />
-                    Live
-                  </a>
-                )}
-                <span className="pr-4 text-sm text-slate-500">
-                  {new Date(p.created_at).toLocaleDateString(undefined, {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
-              </li>
+              <ProjectCard
+                key={p.id}
+                card={p}
+                members={members ?? []}
+                workspaceId={workspaceId}
+                isAdmin={isAdmin}
+              />
             ))}
-          </ul>
+          </div>
         )}
       </main>
       <NewProjectDialog
@@ -186,7 +135,10 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
         // The dialog stays open, showing "Creating…", until the project page
         // replaces this one: closing it first showed the empty project list
         // for the seconds the navigation takes (trust test, finding #4).
-        onCreated={(project) => router.push(`/w/${workspaceId}/p/${project.id}`)}
+        onCreated={(project) => {
+          refetch();
+          router.push(`/w/${workspaceId}/p/${project.id}`);
+        }}
       />
     </>
   );
