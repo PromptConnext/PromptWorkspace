@@ -311,15 +311,42 @@ def test_refresh_rotates(client, active, clock):
     assert _refresh(client, cid, body["refresh_token"]).status_code == 200
 
 
-def test_rotated_token_within_grace_returns_access_only(client, active, clock):
+def test_rotated_token_within_grace_returns_a_fresh_successor(client, active, clock):
     cid = _register(client)
     first, fid = _tokens(client, cid)
-    assert _refresh(client, cid, first["refresh_token"]).status_code == 200
+    second = _refresh(client, cid, first["refresh_token"]).json()
     clock.advance(30)
     r = _refresh(client, cid, first["refresh_token"])
     assert r.status_code == 200, r.text
-    assert "refresh_token" not in r.json()
-    assert r.json()["access_token"]
+    grace = r.json()
+    assert grace["access_token"]
+    assert grace["refresh_token"] not in (first["refresh_token"], second["refresh_token"])
+    repo = client.app.state.repository
+    assert repo.get_oauth_family(fid).revoked_at is None
+    # The original still points at its first successor.
+    old = repo.get_refresh_token(hash_token(first["refresh_token"]))
+    assert old.rotated_to_hash == hash_token(second["refresh_token"])
+    row = repo.get_refresh_token(hash_token(grace["refresh_token"]))
+    assert row.family_id == fid and row.rotated_to_hash is None
+    assert row.issued_at == clock.now and row.expires_at == clock.now + timedelta(days=60)
+    # (a) the grace successor refreshes in turn.
+    clock.advance(1)
+    assert _refresh(client, cid, grace["refresh_token"]).status_code == 200
+
+
+def test_grace_successor_survives_past_the_window(client, active, clock):
+    # rotate -> grace replay -> the client keeps the grace token -> refresh
+    # 60 s later: an SDK client that stored the grace response must not be
+    # treated as a thief.
+    cid = _register(client)
+    first, fid = _tokens(client, cid)
+    assert _refresh(client, cid, first["refresh_token"]).status_code == 200
+    clock.advance(5)
+    kept = _refresh(client, cid, first["refresh_token"]).json()["refresh_token"]
+    clock.advance(60)
+    r = _refresh(client, cid, kept)
+    assert r.status_code == 200, r.text
+    assert r.json()["refresh_token"]
     assert client.app.state.repository.get_oauth_family(fid).revoked_at is None
 
 
@@ -559,8 +586,10 @@ def test_lost_rotation_race_gets_a_grace_response(client, active, monkeypatch):
     monkeypatch.setattr(repo, "claim_refresh_rotation", lose_once)
     r = _refresh(client, cid, first["refresh_token"])
     assert r.status_code == 200, r.text
-    assert r.json()["access_token"] and "refresh_token" not in r.json()
+    assert r.json()["access_token"] and r.json()["refresh_token"]
     assert repo.get_oauth_family(fid).revoked_at is None
+    successor = repo.get_refresh_token(hash_token(r.json()["refresh_token"]))
+    assert successor is not None and successor.family_id == fid
 
 
 def test_loopback_redirect_port_must_match_exactly(client, active):

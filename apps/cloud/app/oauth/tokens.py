@@ -153,7 +153,8 @@ def new_refresh_token() -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 
 # A rotated refresh token presented again within this window is a parallel
-# refresh by the same client, not theft: it gets an access token only.
+# refresh by the same client, not theft: it gets an access token and a fresh
+# successor refresh token in the same family.
 REFRESH_GRACE = timedelta(seconds=30)
 DCR_UNUSED = timedelta(days=90)
 # Bump the client's last_used_at (what keeps a DCR client from the 90-day
@@ -299,8 +300,13 @@ async def refresh_grant(
     lookup: Lookup,
 ) -> dict:
     """refresh_token grant with rotation on every use and a 30 s grace for a
-    just-rotated token (access token only; its successor's raw value is not
-    stored, so it cannot be re-sent)."""
+    just-rotated token. Within the grace a replay receives a fresh successor
+    in the same family (its first successor's raw value is not stored, so it
+    cannot be re-sent). The old row's `rotated_to_hash` keeps pointing at the
+    first successor, both successors are live, and the original replayed
+    after the window still revokes the family. Returning no refresh token
+    here would strand SDK clients: they keep the already-rotated token and
+    their next refresh, after the window, would revoke the family."""
     row = repo.get_refresh_token(hash_token(refresh_token))
     if row is None:
         raise GrantError("invalid_grant", "refresh token is invalid")
@@ -347,6 +353,12 @@ async def refresh_grant(
             settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
             family_id=row.family_id, scope=row.scope, now=now,
         )  # fmt: skip
+        new_raw, new_hash = new_refresh_token()
+        _put_refresh(
+            repo, settings, new_hash, family_id=row.family_id, client_id=row.client_id,
+            user_id=row.user_id, scope=row.scope, resource=row.resource, now=now,
+        )  # fmt: skip
+        body["refresh_token"] = new_raw
         _bookkeep(repo, client, row.family_id, now)
         return body
     # A rotated token replayed after the grace window: assume theft.
