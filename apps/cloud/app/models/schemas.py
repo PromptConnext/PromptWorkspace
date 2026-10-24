@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 
 def new_id() -> str:
@@ -165,12 +165,20 @@ class Task(GraphEntity):
     change_id: str | None = None
 
 
+class ArtifactAgent(BaseModel):
+    """The coding agent that produced a closing artifact (plan 0033)."""
+
+    client: str = Field(max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+
+
 class Artifact(GraphEntity):
     project_id: str
     task_id: str
     kind: ArtifactKind = ArtifactKind.code
     uri: str
     commit_sha: str | None = None
+    agent: ArtifactAgent | None = None
 
 
 class AgentRun(GraphEntity):
@@ -215,6 +223,7 @@ class TaskStatusArtifact(BaseModel):
     commit_sha: str
     uri: str
     kind: ArtifactKind = ArtifactKind.code
+    agent: ArtifactAgent | None = None
 
 
 class TaskStatusUpdate(BaseModel):
@@ -328,7 +337,31 @@ class WorkspaceMember(BaseModel):
     email: str | None = None
     role: Role = Role.member
     invited_by: str | None = None
+    # What the member chose to be called (plan 0033). Shown in preference to
+    # the email; stripped, capped at 80 characters, blank means unset.
+    display_name: str | None = Field(default=None, max_length=80)
     created_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _blank_display_name_is_none(cls, v: object) -> object:
+        return _clean_display_name(v)
+
+
+class MemberDisplayNameUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=80)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _blank_display_name_is_none(cls, v: object) -> object:
+        return _clean_display_name(v)
+
+
+def _clean_display_name(v: object) -> object:
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return v
 
 
 class InvitationCreate(BaseModel):
@@ -668,6 +701,9 @@ class Project(BaseModel):
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
+    # Whether policy_scope came from the workspace default or the project (plan 0033;
+    # migration 0011 column, default 'project').
+    policy_scope_source: Literal["workspace", "project"] = "project"
     # ADR 0021. Both nullable for the same backward-compatibility reason:
     # `None` config = no template ever chosen, `None` state = nothing ever
     # deployed. See the DeploymentConfig/DeploymentState note above for why
@@ -1393,6 +1429,7 @@ ReceiptEvent = Literal[
     "decision.snapshot_erased",
     "role.assigned",
     "role.cleared",
+    "policy_scope.updated",
 ]
 
 
@@ -1404,7 +1441,7 @@ class ReceiptDraft(BaseModel):
     project_id: str
     workspace_id: str
     event: ReceiptEvent
-    subject_type: Literal["decision", "project_role"]
+    subject_type: Literal["decision", "project_role", "project_policy"]
     subject_id: str
     actor: str
     body: dict[str, str | int | bool | None] = Field(default_factory=dict)
@@ -1432,10 +1469,21 @@ class GenerateRequest(BaseModel):
     options: dict = Field(default_factory=dict)
 
 
+class TaskSummary(BaseModel):
+    """A task reduced to what the workspace overview counts (plan 0033)."""
+
+    task_id: str
+    project_id: str
+    status: TaskStatus
+    assigned_user_id: str | None = None
+    agent_closed: bool = False
+    updated_at: datetime
+
+
 class GenerationRun(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str
-    project_id: str
+    project_id: str | None = None
     stage: str
     model_source: str = "byo"
     model: str
@@ -1688,3 +1736,139 @@ class SyncDocsOut(BaseModel):
     pr_url: str
     branch: str
     files: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# Workspace overview and governance (plan 0033)
+# --------------------------------------------------------------------------- #
+class ProjectCheckOut(BaseModel):
+    id: str
+    ok: bool
+    text: str
+
+
+class ProjectCardOut(BaseModel):
+    id: str
+    name: str
+    lifecycle_status: str
+    live_url: str | None = None
+    updated_at: datetime
+    hats: dict[str, str | None]
+    contributors: list[str]
+    task_counts: dict[str, int]
+    decisions: dict[str, int]
+    stack: dict | None = None
+    policy: dict
+    checks: list[ProjectCheckOut]
+    agent_closed_30d: int = 0
+    last_activity_at: datetime
+
+
+class WorkspaceGovernance(BaseModel):
+    workspace_id: str
+    policy_scope: PolicyScope = Field(default_factory=PolicyScope)
+    required_hats: list[str] = Field(
+        default_factory=lambda: ["business_owner", "tech_steward"]
+    )
+    require_seeded_rules: bool = True
+    updated_by: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @classmethod
+    def default(cls, workspace_id: str) -> WorkspaceGovernance:
+        return cls(workspace_id=workspace_id)
+
+
+class WorkspaceGovernanceUpdate(BaseModel):
+    """PUT /workspaces/{id}/governance body (full replace)."""
+
+    policy_scope: PolicyScopeUpdate = Field(default_factory=PolicyScopeUpdate)
+    required_hats: list[str] = Field(default_factory=list)
+    require_seeded_rules: bool = True
+
+
+class PersonLinkOut(BaseModel):
+    kind: Literal["hat", "work", "approval"]
+    from_user_id: str
+    to_user_id: str | None = None
+    project_id: str | None = None
+    hat: str | None = None
+    weight: int = 1
+
+
+class WorkspaceOverviewOut(BaseModel):
+    workspace_id: str
+    generated_at: datetime
+    members: list[WorkspaceMember]
+    projects: list[ProjectCardOut]
+    people: list[PersonLinkOut] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class UsageStageOut(BaseModel):
+    stage: str
+    runs: int
+    model: str
+    tokens: int
+
+
+class UsageSourceOut(BaseModel):
+    source: Literal["managed", "byo"]
+    provider: str | None = None
+    runs: int
+    tokens: int
+    today_tokens: int
+    daily_budget: int | None = None
+    by_stage: list[UsageStageOut] = Field(default_factory=list)
+
+
+class DisciplineOut(BaseModel):
+    resolved: int
+    open: int
+    expired_30d: int
+    median_hours_to_decide: float | None = None
+    chains_verified: int
+    chains_total: int
+
+
+class ProjectGovernanceOut(BaseModel):
+    project_id: str
+    name: str
+    checks: list[ProjectCheckOut]
+
+
+class GovernanceReportOut(BaseModel):
+    usage: list[UsageSourceOut]
+    discipline: DisciplineOut
+    projects: list[ProjectGovernanceOut]
+
+
+# --------------------------------------------------------------------------- #
+# Ask the workspace (plan 0033 task 20): the only context the model ever sees.
+# --------------------------------------------------------------------------- #
+class AskDecisionFact(BaseModel):
+    project_id: str
+    project_name: str
+    kind: str
+    expires_at: datetime | None = None
+
+
+class AskMissingHatsFact(BaseModel):
+    project_id: str
+    name: str
+    hats: list[str]
+
+
+class AskOverdueFact(BaseModel):
+    project_id: str
+    name: str
+    count: int
+
+
+class WorkspaceFacts(BaseModel):
+    my_open_decisions: list[AskDecisionFact] = Field(default_factory=list)
+    projects_missing_hats: list[AskMissingHatsFact] = Field(default_factory=list)
+    overdue: list[AskOverdueFact] = Field(default_factory=list)
+    expired: list[AskOverdueFact] = Field(default_factory=list)
+    by_runtime: dict[str, list[str]] = Field(default_factory=dict)
+    agent_closed_30d: int = 0

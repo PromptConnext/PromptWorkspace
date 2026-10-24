@@ -84,6 +84,10 @@ export interface StatusArtifact {
   commit_sha: string;
   uri: string;
   kind: ArtifactKind;
+  /** Which tool closed the task, e.g. `mcp:cursor` or `vscode:Cursor`. Absent
+   *  means a person on the web. The cloud caps `client` at 64 and `model` at
+   *  128 characters. */
+  agent?: { client: string; model?: string };
 }
 
 export interface TaskStatusUpdate {

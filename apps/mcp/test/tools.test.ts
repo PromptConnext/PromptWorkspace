@@ -640,7 +640,7 @@ test("close_task writes the status with the commit the caller names", async () =
       status: "implemented",
       // Same `git: <subject>` shape apps/vscode's watcher writes, so an
       // artifact from either surface renders identically in apps/web.
-      artifact: { commit_sha: "1a2b3c4d5e6f", uri: "git: T012: retry the upload", kind: "code" },
+      artifact: { commit_sha: "1a2b3c4d5e6f", uri: "git: T012: retry the upload", kind: "code", agent: { client: "mcp:test" } },
     });
     assert.deepEqual(queued(), []);
   });
@@ -659,7 +659,7 @@ test("close_task records HEAD when the caller names no commit", async () => {
     assert.match(bodyOf(result), new RegExp(`Commit recorded: ${sha} \\(HEAD of ${root}\\)`));
     assert.deepEqual(statusWrites(seen)[0].body, {
       status: "implemented",
-      artifact: { commit_sha: sha, uri: "git: T012: retry the upload", kind: "code" },
+      artifact: { commit_sha: sha, uri: "git: T012: retry the upload", kind: "code", agent: { client: "mcp:test" } },
     });
   });
 });

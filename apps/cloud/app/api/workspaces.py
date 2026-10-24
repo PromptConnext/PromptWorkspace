@@ -19,8 +19,10 @@ from app.models.schemas import (
     InvitationCreate,
     InvitationCreateResponse,
     InvitationStatus,
+    MemberDisplayNameUpdate,
     PendingInvitation,
     Project,
+    Role,
     Workspace,
     WorkspaceCreate,
     WorkspaceMember,
@@ -137,6 +139,26 @@ def list_members(
 ) -> list[WorkspaceMember]:
     require_workspace(repo, workspace_id, user)
     return repo.list_members(workspace_id)
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/members/{user_id}", response_model=WorkspaceMember
+)
+def set_member_display_name(
+    workspace_id: str,
+    user_id: str,
+    body: MemberDisplayNameUpdate,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> WorkspaceMember:
+    """A member names themselves; an admin may name anyone."""
+    require_workspace(repo, workspace_id, user)
+    if user.id != user_id and repo.get_membership(workspace_id, user.id) != Role.admin:
+        raise HTTPException(status_code=403, detail="display_name_forbidden")
+    member = repo.set_member_display_name(workspace_id, user_id, body.display_name)
+    if member is None:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    return member
 
 
 @router.get("/workspaces/{workspace_id}/projects", response_model=list[Project])

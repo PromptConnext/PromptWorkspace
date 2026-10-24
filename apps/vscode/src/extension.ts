@@ -120,7 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const writer = new StatusWriter(client, store, queue, log, refreshStatusBar, () => ({
     scope: scope(),
     userId: session.read()?.userId,
-  }));
+  }), vscode.env.appName);
 
   const docs = new RepoDocs(client, log);
   const git = await createGitBridge(log);

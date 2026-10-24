@@ -1,4 +1,5 @@
 import { Avatar } from "@/components/Avatar";
+import { displayName } from "@/lib/identity";
 import type { WorkspaceMember } from "@/lib/types";
 
 /**
@@ -13,12 +14,12 @@ import type { WorkspaceMember } from "@/lib/types";
  */
 export function memberFullName(member: WorkspaceMember | undefined): string {
   if (!member) return "Unknown member";
-  return member.email ?? "Unnamed member";
+  return (member.display_name || member.email) ? displayName(member) : "Unnamed member";
 }
 
 export function memberShortName(member: WorkspaceMember | undefined): string {
   const full = memberFullName(member);
-  if (!member?.email) return full;
+  if (!member || member.display_name || !member.email) return full;
   const at = full.indexOf("@");
   return at > 0 ? full.slice(0, at) : full;
 }

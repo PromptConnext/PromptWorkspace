@@ -41,6 +41,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 
 // Each PATCH call records its body so a test can assert what was actually sent.
 const posted: unknown[] = [];
+const usedWorkspace: string[] = [];
 
 function mockFetch(opts: { patchFailure?: { status: number; detail: string } } = {}) {
   global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
@@ -61,6 +62,14 @@ function mockFetch(opts: { patchFailure?: { status: number; detail: string } } =
         json: async () => ({ ...makeProject(), policy_scope: body }),
       });
     }
+    if (href.includes("/policy-scope/use-workspace") && init?.method === "POST") {
+      usedWorkspace.push(href);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ ...makeProject(), policy_scope_source: "workspace" }),
+      });
+    }
     if (href.includes("/policy-templates")) {
       return Promise.resolve({ ok: true, status: 200, json: async () => TEMPLATES });
     }
@@ -72,6 +81,7 @@ describe("PolicyScopePanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     posted.length = 0;
+    usedWorkspace.length = 0;
   });
 
   afterEach(() => {
@@ -189,5 +199,86 @@ describe("PolicyScopePanel", () => {
     expect(
       await screen.findByText(/select policy scope before generating the constitution/i),
     ).toBeInTheDocument();
+  });
+
+  it("shows Inherited from the workspace when policy_scope_source is workspace", async () => {
+    mockFetch();
+    render(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope_source: "workspace" })}
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Inherited from the workspace")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use workspace scope" })).not.toBeInTheDocument();
+  });
+
+  it("Use workspace scope calls the endpoint and is hidden when frozen", async () => {
+    mockFetch();
+    const onChange = vi.fn();
+    const { unmount } = render(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope_source: "project" })}
+        readOnly={false}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByText("This project uses its own scope")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use workspace scope" }));
+    await waitFor(() => expect(usedWorkspace).toHaveLength(1));
+    expect(usedWorkspace[0]).toContain("/projects/p1/policy-scope/use-workspace");
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    unmount();
+
+    render(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope_source: "project", lifecycle_status: "repo_created" })}
+        readOnly={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Use workspace scope" })).not.toBeInTheDocument();
+  });
+
+  it("hides Use workspace scope when readOnly", async () => {
+    mockFetch();
+    render(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope_source: "project" })}
+        readOnly
+        onChange={vi.fn()}
+      />,
+    );
+    await screen.findByRole("checkbox", { name: /gdpr/i });
+    expect(screen.queryByRole("button", { name: "Use workspace scope" })).not.toBeInTheDocument();
+  });
+
+  it("explains an unknown template rejection", async () => {
+    mockFetch({ patchFailure: { status: 422, detail: "unknown_policy_template" } });
+    render(<PolicyScopePanel project={makeProject()} readOnly={false} onChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: /gdpr/i }));
+    expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
+  });
+
+  it("keeps the typed text after a failed save when new props arrive", async () => {
+    mockFetch({ patchFailure: { status: 422, detail: "custom_text_too_long" } });
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <PolicyScopePanel project={makeProject()} readOnly={false} onChange={onChange} />,
+    );
+    const textarea = await screen.findByLabelText(/custom policy text/i);
+    fireEvent.change(textarea, { target: { value: "my unsaved text" } });
+    fireEvent.blur(textarea);
+    await screen.findByText(/keep it under 20,000 characters/i);
+
+    rerender(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope: { selected: [], custom_text: "server value" } })}
+        readOnly={false}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByLabelText(/custom policy text/i)).toHaveValue("my unsaved text");
   });
 });

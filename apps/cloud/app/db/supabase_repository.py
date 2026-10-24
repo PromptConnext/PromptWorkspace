@@ -26,6 +26,8 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
+from pydantic import TypeAdapter
+
 from app.db.merge import _as_dt, merge_entity
 from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import unwritten_fields as _unwritten_fields
@@ -43,6 +45,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     FIELD_DEFAULTS,
     Artifact,
+    ArtifactAgent,
     ArtifactKind,
     AssignedTask,
     CodeChunkHit,
@@ -79,7 +82,9 @@ from app.models.schemas import (
     Task,
     TaskLink,
     TaskStatus,
+    TaskSummary,
     Workspace,
+    WorkspaceGovernance,
     WorkspaceIntegration,
     WorkspaceMember,
     new_id,
@@ -130,8 +135,10 @@ _DECISIONS = "pw_decisions"
 _SNAPSHOTS = "pw_decision_snapshots"
 _PROJECT_ROLES = "pw_project_roles"
 _RECEIPTS = "pw_receipts"
+_WORKSPACE_GOVERNANCE = "pw_workspace_governance"
 # PostgREST caps a response at max_rows (1000); a chain is read page by page.
 _RECEIPT_PAGE = 1000
+_DT = TypeAdapter(datetime)  # tolerant of PostgREST's timestamptz spellings
 # PostgREST's "table not in the schema cache" and Postgres' undefined_table:
 # what a read of pw_stage_inputs returns on a database migration 0003 hasn't
 # reached yet. Matched on the error's `code` attribute rather than by
@@ -226,6 +233,10 @@ _SERVICE_ONLY_TABLES = frozenset(
         # project's. Every rule lives in the LINE routes.
         "pw_project_line_links",
         "pw_line_link_codes",
+        # Migration 0011 (plan 0033): born service-only. RLS is enabled with no
+        # policy for `authenticated`, so a per-user client would hit 42501 on
+        # every read; the admin-only write rule lives in app/api/overview.py.
+        "pw_workspace_governance",
     }
 )
 
@@ -469,6 +480,19 @@ class SupabaseRepository(Repository):
         res = self._table(_MEMBERS).select("*").eq("workspace_id", workspace_id).execute()
         return [WorkspaceMember(**row) for row in (res.data or [])]
 
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        res = (
+            self._table(_MEMBERS)
+            .update({"display_name": display_name})
+            .eq("workspace_id", workspace_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = res.data or []
+        return WorkspaceMember(**rows[0]) if rows else None
+
     def add_member(
         self,
         workspace_id: str,
@@ -488,8 +512,12 @@ class SupabaseRepository(Repository):
         # above — the SELECT policy (pw_members_read) can't see a just-added
         # member for RETURNING's benefit in every case (e.g. the bootstrap
         # add), and the caller already has `member` locally.
+        # display_name is the member's own; a re-add (e.g. a fresh invitation
+        # accepted by an existing member) must not overwrite it with null.
+        payload = _dump(member)
+        payload.pop("display_name", None)
         self._table(_MEMBERS).upsert(
-            _dump(member), on_conflict="workspace_id,user_id", returning="minimal"
+            payload, on_conflict="workspace_id,user_id", returning="minimal"
         ).execute()
         return member
 
@@ -594,11 +622,15 @@ class SupabaseRepository(Repository):
             raise KeyError("project_not_found")
         return project
 
-    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+    def update_project_policy_scope(
+        self, project_id: str, scope: PolicyScope | None, *, source: str | None = None
+    ) -> Project:
         patch = {
             "policy_scope": scope.model_dump(mode="json") if scope is not None else None,
             "updated_at": utcnow().isoformat(),
         }
+        if source is not None:
+            patch["policy_scope_source"] = source
         self._write_table(_PROJECTS).update(patch).eq("id", project_id).execute()
         project = self.get_project(project_id)
         if project is None:
@@ -1109,6 +1141,7 @@ class SupabaseRepository(Repository):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         # Select-then-insert reads racy, and is: the authoritative guard is the
         # partial unique index on (task_id, commit_sha) from migration 0025.
@@ -1127,13 +1160,22 @@ class SupabaseRepository(Repository):
             )
             rows = res.data or []
             if rows:
-                return Artifact(**rows[0])
+                existing = Artifact(**rows[0])
+                if existing.agent is None and agent is not None:
+                    # Guarded on `agent is null` so a concurrent writer's agent
+                    # is never overwritten.
+                    self._table(_TABLE["artifacts"]).update(
+                        {"agent": agent.model_dump(mode="json")}
+                    ).eq("id", existing.id).is_("agent", "null").execute()
+                    existing.agent = agent
+                return existing
         artifact = Artifact(
             project_id=project_id,
             task_id=task_id,
             kind=kind,
             uri=uri,
             commit_sha=commit_sha,
+            agent=agent,
             updated_at=now,
         )
         self._table(_TABLE["artifacts"]).insert(
@@ -1571,6 +1613,102 @@ class SupabaseRepository(Repository):
     def create_generation_run(self, run: GenerationRun) -> GenerationRun:
         self._table(_GENERATION_RUNS).insert(_dump(run), returning="minimal").execute()
         return run
+
+    def _paged(self, build) -> list[dict]:
+        """Drain a query past PostgREST's row cap; `build()` returns a fresh query."""
+        rows: list[dict] = []
+        start = 0
+        while True:
+            page = build().range(start, start + _RECEIPT_PAGE - 1).execute().data or []
+            rows.extend(page)
+            if len(page) < _RECEIPT_PAGE:
+                return rows
+            start += _RECEIPT_PAGE
+
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        if not project_ids:
+            return []
+        task_rows = self._paged(
+            lambda: self._table("pw_tasks")
+            .select("id, project_id, status, assigned_user_id, updated_at")
+            .in_("project_id", project_ids)
+            .is_("deleted_at", "null")
+            .order("id")
+        )
+        art_rows = self._paged(
+            lambda: self._table("pw_artifacts")
+            .select("id, task_id")
+            .in_("project_id", project_ids)
+            .is_("deleted_at", "null")
+            .not_.is_("agent", "null")
+            .order("id")
+        )
+        closed = {r["task_id"] for r in art_rows}
+        return [
+            TaskSummary(
+                task_id=r["id"],
+                project_id=r["project_id"],
+                status=TaskStatus(r["status"]),
+                assigned_user_id=r.get("assigned_user_id"),
+                agent_closed=r["id"] in closed,
+                updated_at=r["updated_at"],
+            )
+            for r in task_rows
+        ]
+
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        if not project_ids:
+            return {}
+        try:
+            rows = self._paged(
+                lambda: self._table(_RECEIPTS)
+                .select("project_id, created_at")
+                .in_("project_id", project_ids)
+                .order("created_at", desc=True)
+                .order("id")
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return {}
+            raise
+        latest: dict[str, datetime] = {}
+        for r in rows:
+            latest.setdefault(r["project_id"], _DT.validate_python(r["created_at"]))
+        return latest
+
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        try:
+            res = (
+                self._table(_WORKSPACE_GOVERNANCE)
+                .select("*")
+                .eq("workspace_id", workspace_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return None
+            raise
+        rows = res.data or []
+        return WorkspaceGovernance(**rows[0]) if rows else None
+
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        stored = g.model_copy(update={"updated_at": utcnow()})
+        self._table(_WORKSPACE_GOVERNANCE).upsert(
+            _dump(stored), on_conflict="workspace_id", returning="minimal"
+        ).execute()
+        return stored
+
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        rows = self._paged(
+            lambda: self._table(_GENERATION_RUNS)
+            .select("*")
+            .eq("workspace_id", workspace_id)
+            .gte("created_at", since.isoformat())
+            .order("created_at", desc=True)
+            .order("id")
+        )
+        return [GenerationRun(**r) for r in rows]
 
     def update_generation_run(
         self,

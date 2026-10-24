@@ -24,6 +24,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     FIELD_DEFAULTS,
     Artifact,
+    ArtifactAgent,
     ArtifactKind,
     AssignedTask,
     CodeChunk,
@@ -62,7 +63,9 @@ from app.models.schemas import (
     Task,
     TaskLink,
     TaskStatus,
+    TaskSummary,
     Workspace,
+    WorkspaceGovernance,
     WorkspaceIntegration,
     WorkspaceMember,
     new_id,
@@ -208,6 +211,12 @@ class Repository(abc.ABC):
     def list_members(self, workspace_id: str) -> list[WorkspaceMember]: ...
 
     @abc.abstractmethod
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        """Set (or clear, with None) a member's display name; None if not a member."""
+
+    @abc.abstractmethod
     def add_member(
         self,
         workspace_id: str,
@@ -286,9 +295,12 @@ class Repository(abc.ABC):
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project: ...
 
     @abc.abstractmethod
-    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+    def update_project_policy_scope(
+        self, project_id: str, scope: PolicyScope | None, *, source: str | None = None
+    ) -> Project:
         """Replace the whole policy scope atomically (last-write-wins);
-        `None` clears it. Bumps `updated_at`."""
+        `None` clears it. Bumps `updated_at`. `source`, when given, also
+        sets `policy_scope_source` ("workspace" or "project")."""
 
     @abc.abstractmethod
     def update_project_deployment_config(
@@ -526,13 +538,17 @@ class Repository(abc.ABC):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         """Append evidence for a status change (the commit that closed a task).
 
         Idempotent on (task_id, commit_sha) when commit_sha is not None. That
         is load-bearing rather than tidy: the git-driven caller replays commits
         whenever its local cache is dropped or a repo is re-cloned, so a
-        duplicate write is the expected case, not the exceptional one."""
+        duplicate write is the expected case, not the exceptional one.
+
+        `agent` merges once: an existing row without one gains the incoming
+        agent; a stored agent is never overwritten by a different one."""
 
     @abc.abstractmethod
     def get_node(
@@ -745,6 +761,27 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def create_generation_run(self, run: GenerationRun) -> GenerationRun: ...
+
+    @abc.abstractmethod
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        """Non-tombstoned tasks of these projects, one batched read. `agent_closed`
+        is true when any artifact of the task carries a non-null `agent`."""
+
+    @abc.abstractmethod
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        """Newest receipt `created_at` per project; projects with none are absent."""
+
+    @abc.abstractmethod
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        """The workspace's governance row, or None when it never set one."""
+
+    @abc.abstractmethod
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        """Insert or replace the workspace's governance row, stamping `updated_at`."""
+
+    @abc.abstractmethod
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        """The workspace's generation runs with `created_at >= since`, newest first."""
 
     @abc.abstractmethod
     def update_generation_run(
@@ -965,6 +1002,7 @@ class InMemoryRepository(Repository):
         self._project_roles: dict[tuple[str, str], ProjectRole] = {}
         # project_id -> receipt chain, oldest first (enterprise AI v2.1 D1)
         self._receipts: dict[str, list[Receipt]] = {}
+        self._workspace_governance: dict[str, WorkspaceGovernance] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
         self._stage_drafts: dict[tuple[str, str], StageDraft] = {}
@@ -1092,6 +1130,16 @@ class InMemoryRepository(Repository):
     def list_members(self, workspace_id: str) -> list[WorkspaceMember]:
         return list(self._members.get(workspace_id, {}).values())
 
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        member = self._members.get(workspace_id, {}).get(user_id)
+        if member is None:
+            return None
+        updated = member.model_copy(update={"display_name": display_name})
+        self._members[workspace_id][user_id] = updated
+        return updated
+
     def add_member(
         self,
         workspace_id: str,
@@ -1107,6 +1155,10 @@ class InMemoryRepository(Repository):
             invited_by=invited_by,
             email=email,
         )
+        # A re-add keeps the member's own display name (matches the Supabase adapter).
+        existing = self._members.get(workspace_id, {}).get(user_id)
+        if existing is not None:
+            member = member.model_copy(update={"display_name": existing.display_name})
         self._members.setdefault(workspace_id, {})[user_id] = member
         return member
 
@@ -1200,9 +1252,14 @@ class InMemoryRepository(Repository):
         self._projects[project_id] = updated
         return updated
 
-    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+    def update_project_policy_scope(
+        self, project_id: str, scope: PolicyScope | None, *, source: str | None = None
+    ) -> Project:
         project = self._projects[project_id]
-        updated = project.model_copy(update={"policy_scope": scope, "updated_at": utcnow()})
+        changes: dict = {"policy_scope": scope, "updated_at": utcnow()}
+        if source is not None:
+            changes["policy_scope_source"] = source
+        updated = project.model_copy(update=changes)
         self._projects[project_id] = updated
         return updated
 
@@ -1574,6 +1631,7 @@ class InMemoryRepository(Repository):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         store = self._graph.setdefault(project_id, {e: {} for e in ENTITY_TYPES})
         if commit_sha is not None:
@@ -1583,6 +1641,8 @@ class InMemoryRepository(Repository):
                     and existing.commit_sha == commit_sha
                     and existing.deleted_at is None
                 ):
+                    if existing.agent is None and agent is not None:
+                        existing.agent = agent.model_copy()
                     return copy.deepcopy(existing)
         artifact = Artifact(
             project_id=project_id,
@@ -1590,6 +1650,7 @@ class InMemoryRepository(Repository):
             kind=kind,
             uri=uri,
             commit_sha=commit_sha,
+            agent=agent,
             updated_at=now,
         )
         store["artifacts"][artifact.id] = artifact
@@ -1911,6 +1972,55 @@ class InMemoryRepository(Repository):
     def create_generation_run(self, run: GenerationRun) -> GenerationRun:
         self._generation_runs[run.id] = run
         return run
+
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        out: list[TaskSummary] = []
+        for pid in project_ids:
+            store = self._graph.get(pid)
+            if not store:
+                continue
+            closed = {
+                a.task_id
+                for a in store.get("artifacts", {}).values()
+                if a.deleted_at is None and a.agent is not None
+            }
+            for t in store.get("tasks", {}).values():
+                if t.deleted_at is not None:
+                    continue
+                out.append(
+                    TaskSummary(
+                        task_id=t.id,
+                        project_id=pid,
+                        status=t.status,
+                        assigned_user_id=t.assigned_user_id,
+                        agent_closed=t.id in closed,
+                        updated_at=t.updated_at or utcnow(),
+                    )
+                )
+        return out
+
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        return {
+            pid: max(r.created_at for r in self._receipts[pid])
+            for pid in project_ids
+            if self._receipts.get(pid)
+        }
+
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        return self._workspace_governance.get(workspace_id)
+
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        stored = g.model_copy(deep=True, update={"updated_at": utcnow()})
+        self._workspace_governance[g.workspace_id] = stored
+        return copy.deepcopy(stored)
+
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        runs = [
+            r
+            for r in self._generation_runs.values()
+            if r.workspace_id == workspace_id and r.created_at >= since
+        ]
+        return [copy.deepcopy(r) for r in sorted(runs, key=lambda r: r.created_at, reverse=True)]
 
     def update_generation_run(
         self,

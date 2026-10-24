@@ -16,6 +16,7 @@ import type {
 import { memberFullName } from "./MemberChip";
 import { STATUS_LABEL } from "./taskBoardA11y";
 import { InlineCodeText } from "./TaskCard";
+import { agentLabel } from "@/lib/agentLabel";
 import { artifactHref } from "./VerifyConfirmDialog";
 
 /**
@@ -119,6 +120,7 @@ function ArtifactRow({ artifact, repoUrl }: { artifact: Artifact; repoUrl: strin
   ) : (
     <span className="break-all">{artifact.uri}</span>
   );
+  const closedBy = agentLabel(artifact.agent, !!artifact.commit_sha);
   return (
     <li className="flex items-baseline gap-2 text-sm">
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
@@ -137,6 +139,7 @@ function ArtifactRow({ artifact, repoUrl }: { artifact: Artifact; repoUrl: strin
       ) : (
         <span className="min-w-0 text-slate-700">{label}</span>
       )}
+      {closedBy && <span className="shrink-0 text-xs text-slate-500">{closedBy}</span>}
     </li>
   );
 }
