@@ -4,6 +4,8 @@ any other failure still surfaces. Same posture as the stage-inputs store."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from postgrest.exceptions import APIError
 
@@ -36,6 +38,10 @@ class _Query:
         return self
 
     def is_(self, *_a, **_k):
+        return self
+
+    @property
+    def not_(self):
         return self
 
     def in_(self, column, values):
@@ -454,3 +460,24 @@ def test_list_receipts_for_is_one_receipt_read_with_in_filter():
 def test_list_receipts_for_missing_table_gives_empty_chains():
     client = _Client(error={"code": "42P01", "message": "relation does not exist"})
     assert _repo(client).list_receipts_for(["a"]) == {"a": []}
+
+
+def test_list_tasks_summary_agent_closed_at_is_the_latest_agent_artifact():
+    task = {"project_id": "p", "status": "todo", "assigned_user_id": None,
+            "updated_at": "2026-10-20T00:00:00+00:00"}
+    client = _TableClient(rows_by_table={
+        "pw_tasks": [{**task, "id": "A"}, {**task, "id": "B"}],
+        "pw_artifacts": [
+            {"id": "a1", "task_id": "A", "updated_at": "2026-10-01T00:00:00+00:00"},
+            {"id": "a2", "task_id": "A", "updated_at": "2026-10-05T12:00:00+00:00"},
+        ],
+    })
+
+    got = {r.task_id: r for r in _repo(client).list_tasks_summary(["p"])}
+
+    assert client.reads == ["pw_tasks", "pw_artifacts"]
+    assert got["A"].agent_closed is True
+    assert got["A"].agent_closed_at == datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+    assert got["A"].agent_closed_at.tzinfo is not None
+    assert got["B"].agent_closed is False
+    assert got["B"].agent_closed_at is None

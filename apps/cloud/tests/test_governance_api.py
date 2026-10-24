@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.models.schemas import PolicyScope
 
 ALICE = {"X-User-Id": "alice"}  # creator, admin
 BOB = {"X-User-Id": "bob"}  # member
@@ -92,8 +93,6 @@ def test_governance_reports_inheriting_and_own_scope_projects(
     _mk_project(client, workspace, "Follows")
     own = _mk_project(client, workspace, "Own")
     frozen = _mk_project(client, workspace, "Frozen")
-    from app.models.schemas import PolicyScope
-
     repo.update_project_policy_scope(own, PolicyScope(selected=["gdpr"]), source="project")
     repo.update_project_policy_scope(frozen, PolicyScope(), source="workspace")
     repo._projects[frozen].lifecycle_status = "repo_created"
