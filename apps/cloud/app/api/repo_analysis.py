@@ -426,11 +426,15 @@ def submit_agent_analysis(
         raise HTTPException(status_code=409, detail="repo_already_created")
 
     kept = filter_paths(body.paths)
+    # `file_count` counts the same files as `paths`; the ones filtered out
+    # here leave the count too, or the listing would never read as complete
+    # and the "path not marked (new)" warning could never fire.
+    file_count = max(0, body.file_count - (len(set(body.paths)) - len(set(kept))))
     stack = body.stack if body.stack.manifests or body.stack.runtime else detect_stack(kept)
     snapshot = RepoSnapshot(
         commit_sha=body.commit_sha,
         default_branch=body.default_branch,
-        file_count=body.file_count,
+        file_count=file_count,
         tree_truncated=body.tree_truncated,
         tree_summary=body.tree_summary or summarize_tree(kept),
         stack=stack,

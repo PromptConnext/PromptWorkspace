@@ -970,8 +970,22 @@ def test_agent_analysis_filters_secret_shaped_paths_server_side(client: TestClie
         paths=["README.md", ".env", "keys/deploy.pem", "node_modules/x.js"],
         file_count=4,
     )
-    paths = client.app.state.repository.get_repo_analysis(pid).snapshot.paths
-    assert paths == ["README.md"]
+    snapshot = client.app.state.repository.get_repo_analysis(pid).snapshot
+    assert snapshot.paths == ["README.md"]
+    # The filtered-out paths leave the count too, so the listing still reads
+    # as complete and a path that is neither listed nor marked (new) is caught.
+    assert snapshot.file_count == 1
+    res = client.post(
+        f"/projects/{pid}/stage-drafts",
+        json={
+            "stage": "tasks",
+            "markdown": "## Phase 1: Docs\n- [ ] T001 Change `src/other.js`\n",
+        },
+        headers=ALICE,
+    )
+    assert res.status_code == 201, res.text
+    warnings = {w["code"]: w["items"] for w in res.json()["warnings"]}
+    assert warnings["unmarked_new_paths"] == [{"ref": "T001", "path": "src/other.js"}]
 
 
 def test_agent_analysis_is_admin_only_and_refused_for_scratch(client: TestClient):

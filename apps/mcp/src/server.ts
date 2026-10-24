@@ -244,7 +244,13 @@ export const TOOLS: Tool[] = [
           items: { type: "string" },
           description: "Repository-relative file paths, as listed in the clone.",
         },
-        file_count: { type: "integer", minimum: 0, description: "Total number of files in the repository." },
+        file_count: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Number of tracked files, counting the same files `paths` lists (e.g. `git ls-files | wc -l`). " +
+            "Equal to the length of `paths` unless the list was capped.",
+        },
         tree_truncated: {
           type: "boolean",
           description: "True when `paths` lists fewer files than `file_count`.",
