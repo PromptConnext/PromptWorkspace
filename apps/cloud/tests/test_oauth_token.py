@@ -492,3 +492,94 @@ def test_user_is_active_does_not_cache_infrastructure_errors():
     _run(supabase_users.user_is_active(s, "u", http=http, cache=cache))
     _run(supabase_users.user_is_active(s, "u", http=http, cache=cache))
     assert len(seen) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Bookkeeping is best-effort; races; loopback ports
+# --------------------------------------------------------------------------- #
+
+
+def _age_client(repo, cid):
+    """Last used two hours ago: past the hourly client-touch threshold."""
+    c = repo.get_oauth_client(cid)
+    c.last_used_at = utcnow() - timedelta(hours=2)
+    repo.upsert_oauth_client(c)
+
+
+def _boom(*a, **kw):
+    raise RuntimeError("db blip")
+
+
+def test_family_touch_failure_does_not_strand_a_rotated_refresh(client, active, monkeypatch):
+    cid = _register(client)
+    first, fid = _tokens(client, cid)
+    repo = client.app.state.repository
+    monkeypatch.setattr(repo, "touch_oauth_family", _boom)
+    r = _refresh(client, cid, first["refresh_token"])
+    assert r.status_code == 200, r.text
+    new = r.json()["refresh_token"]
+    assert repo.get_refresh_token(hash_token(new)) is not None
+    assert "db blip" not in r.text
+
+
+def test_client_touch_failure_does_not_fail_the_code_grant(client, active, monkeypatch):
+    cid = _register(client)
+    code = _code(client, cid)
+    repo = client.app.state.repository
+    _age_client(repo, cid)
+    monkeypatch.setattr(repo, "touch_oauth_client", _boom)
+    r = _exchange(client, cid, code)
+    assert r.status_code == 200, r.text
+    assert r.json()["refresh_token"]
+
+
+def test_client_touch_is_field_scoped(client, active, clock):
+    cid = _register(client)
+    code = _code(client, cid)
+    _age_client(client.app.state.repository, cid)
+    assert _exchange(client, cid, code).status_code == 200
+    stored = client.app.state.repository.get_oauth_client(cid)
+    assert stored.last_used_at == clock.now and stored.client_name == "App"
+
+
+def test_lost_rotation_race_gets_a_grace_response(client, active, monkeypatch):
+    cid = _register(client)
+    first, fid = _tokens(client, cid)
+    repo = client.app.state.repository
+    real = repo.claim_refresh_rotation
+    calls = []
+
+    def lose_once(token_hash, to_hash, now):
+        if not calls:
+            calls.append(1)
+            real(token_hash, "parallel-winner", now)  # the other request won
+            return False
+        return real(token_hash, to_hash, now)
+
+    monkeypatch.setattr(repo, "claim_refresh_rotation", lose_once)
+    r = _refresh(client, cid, first["refresh_token"])
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"] and "refresh_token" not in r.json()
+    assert repo.get_oauth_family(fid).revoked_at is None
+
+
+def test_loopback_redirect_port_must_match_exactly(client, active):
+    r = client.post(
+        "/oauth/register",
+        json={"redirect_uris": ["http://127.0.0.1:5000/cb"], "client_name": "Local"},
+    )
+    assert r.status_code == 201, r.text
+    cid = r.json()["client_id"]
+    a = client.get(
+        "/oauth/authorize",
+        params={
+            "response_type": "code", "client_id": cid,
+            "redirect_uri": "http://127.0.0.1:5000/cb", "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256", "resource": RESOURCE, "scope": "mcp",
+        },
+    )  # fmt: skip
+    assert a.status_code == 302, a.text
+    rid = parse_qs(urlsplit(a.headers["location"]).query)["request"][0]
+    ok = client.post(f"/oauth/authorize/{rid}/approve", headers=ALICE)
+    code = parse_qs(urlsplit(ok.json()["redirect_to"]).query)["code"][0]
+    _err(_exchange(client, cid, code, redirect_uri="http://127.0.0.1:5001/cb"), "invalid_grant")

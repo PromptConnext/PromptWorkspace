@@ -967,6 +967,10 @@ class Repository(abc.ABC):
     def upsert_oauth_client(self, c: OAuthClient) -> OAuthClient: ...
 
     @abc.abstractmethod
+    def touch_oauth_client(self, client_id: str, now: datetime) -> None:
+        """Set last_used_at only; a no-op for an unknown client."""
+
+    @abc.abstractmethod
     def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
         """Delete clients of `kind` last used (created, if never used) before
         `cutoff`. Returns the count."""
@@ -2361,6 +2365,11 @@ class InMemoryRepository(Repository):
     def upsert_oauth_client(self, c: OAuthClient) -> OAuthClient:
         self._oauth_clients[c.client_id] = c.model_copy(deep=True)
         return c.model_copy(deep=True)
+
+    def touch_oauth_client(self, client_id: str, now: datetime) -> None:
+        c = self._oauth_clients.get(client_id)
+        if c is not None:
+            c.last_used_at = now
 
     def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
         gone = [

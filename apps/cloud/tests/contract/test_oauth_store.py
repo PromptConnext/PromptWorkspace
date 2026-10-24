@@ -183,3 +183,14 @@ def test_refresh_rotation_claim_is_single_winner(repo: Repository) -> None:
     assert got.rotated_to_hash == "succ-a"
     assert got.rotated_at is not None and got.last_used_at is not None
     assert repo.claim_refresh_rotation("missing-" + new_id(), "x", now) is False
+
+
+def test_client_touch_sets_only_last_used(repo: Repository) -> None:
+    c = _client(client_name="Name")
+    repo.upsert_oauth_client(c)
+    at = utcnow()
+    repo.touch_oauth_client(c.client_id, at)
+    got = repo.get_oauth_client(c.client_id)
+    assert got.client_name == "Name" and got.redirect_uris == c.redirect_uris
+    assert got.last_used_at is not None and abs((got.last_used_at - at).total_seconds()) < 1
+    repo.touch_oauth_client("nope-" + new_id(), at)  # unknown client: a no-op

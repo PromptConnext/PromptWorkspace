@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Iterable
@@ -23,6 +24,8 @@ from cryptography.hazmat.primitives import serialization
 
 from app.models.schemas import OAuthRefreshToken
 from app.oauth.keys import SigningKey
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -174,8 +177,22 @@ def pkce_matches(verifier: str, challenge: str) -> bool:
 
 def _touch_client(repo, client, now: datetime) -> None:
     if client.last_used_at is None or now - client.last_used_at >= _CLIENT_TOUCH:
-        client.last_used_at = now
-        repo.upsert_oauth_client(client)
+        repo.touch_oauth_client(client.client_id, now)
+
+
+def _bookkeep(repo, client, family_id: str, now: datetime) -> None:
+    """last_used_at on the family and the client. Best-effort: by now a code is
+    burned or a refresh token rotated, so failing the response here would
+    strand the client's new tokens (and a rotated token replayed after the
+    grace window revokes the family)."""
+    try:
+        repo.touch_oauth_family(family_id, now)
+    except Exception as err:  # noqa: BLE001 - bookkeeping must not fail the grant
+        logger.warning("OAuth family touch failed (%s)", type(err).__name__)
+    try:
+        _touch_client(repo, client, now)
+    except Exception as err:  # noqa: BLE001 - bookkeeping must not fail the grant
+        logger.warning("OAuth client touch failed (%s)", type(err).__name__)
 
 
 def _access(settings, key, *, sub, email, client_id, family_id, scope, now) -> dict:
@@ -257,8 +274,7 @@ async def exchange_code(
         user_id=row.user_id, scope=row.scope, resource=row.resource, now=now,
     )  # fmt: skip
     body["refresh_token"] = raw
-    repo.touch_oauth_family(row.family_id, now)
-    _touch_client(repo, client, now)
+    _bookkeep(repo, client, row.family_id, now)
     return body
 
 
@@ -293,19 +309,20 @@ async def refresh_grant(
         if not user.active:
             repo.revoke_oauth_family(row.family_id, "user_inactive", now)
             raise GrantError("invalid_grant", "the account is no longer active")
+        # Everything that can fail is built before the claim: once the old
+        # token is rotated, the new one must reach the client.
+        body = _access(
+            settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
+            family_id=row.family_id, scope=row.scope, now=now,
+        )  # fmt: skip
         new_raw, new_hash = new_refresh_token()
         if repo.claim_refresh_rotation(row.token_hash, new_hash, now):
             _put_refresh(
                 repo, settings, new_hash, family_id=row.family_id, client_id=row.client_id,
                 user_id=row.user_id, scope=row.scope, resource=row.resource, now=now,
             )  # fmt: skip
-            repo.touch_oauth_family(row.family_id, now)
-            _touch_client(repo, client, now)
-            body = _access(
-                settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
-                family_id=row.family_id, scope=row.scope, now=now,
-            )  # fmt: skip
             body["refresh_token"] = new_raw
+            _bookkeep(repo, client, row.family_id, now)
             return body
         # Lost a race with a parallel refresh: fall through to the grace rule.
         row = repo.get_refresh_token(row.token_hash)
@@ -317,11 +334,12 @@ async def refresh_grant(
         if not user.active:
             repo.revoke_oauth_family(row.family_id, "user_inactive", now)
             raise GrantError("invalid_grant", "the account is no longer active")
-        repo.touch_oauth_family(row.family_id, now)
-        return _access(
+        body = _access(
             settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
             family_id=row.family_id, scope=row.scope, now=now,
         )  # fmt: skip
+        _bookkeep(repo, client, row.family_id, now)
+        return body
     # A rotated token replayed after the grace window: assume theft.
     repo.revoke_oauth_family(row.family_id, "refresh_reuse", now)
     raise GrantError("invalid_grant", "refresh token has already been used")

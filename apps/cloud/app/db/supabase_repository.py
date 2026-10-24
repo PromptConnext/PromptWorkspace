@@ -2216,6 +2216,11 @@ class SupabaseRepository(Repository):
         self._table(_OAUTH_CLIENTS).upsert(_dump(c), on_conflict="client_id").execute()
         return c
 
+    def touch_oauth_client(self, client_id: str, now: datetime) -> None:
+        self._table(_OAUTH_CLIENTS).update({"last_used_at": now.isoformat()}).eq(
+            "client_id", client_id
+        ).execute()
+
     def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
         iso = cutoff.isoformat()
         used = (
