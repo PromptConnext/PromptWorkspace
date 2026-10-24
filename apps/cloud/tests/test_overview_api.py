@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.models.schemas import GraphUpsertRequest, Task, TaskStatus, new_id, utcnow
+from app.models.schemas import Decision, GraphUpsertRequest, Task, TaskStatus, new_id, utcnow
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
@@ -64,6 +64,13 @@ def test_overview_card_reflects_roles_tasks_decisions(client, workspace):
     pid = _new_project(client, workspace)
     repo = client.app.state.repository
     repo.set_project_role(pid, workspace, "business_owner", "bob", "alice")
+    repo.save_decision(
+        Decision(
+            project_id=pid, workspace_id=workspace, kind="plan_approval", title="Approve",
+            subject_stage="tasks", subject_hash="h", routed_hat="business_owner",
+            requested_by="alice",
+        )
+    )
     repo.upsert_graph(
         pid,
         GraphUpsertRequest(
@@ -80,7 +87,7 @@ def test_overview_card_reflects_roles_tasks_decisions(client, workspace):
     assert sum(card["task_counts"].values()) == 2
     assert card["task_counts"]["verified"] == 1
     assert card["contributors"] == ["bob"]
-    assert card["decisions"]["open"] == 0
+    assert card["decisions"]["open"] == 1
     ok = {c["id"]: c["ok"] for c in card["checks"]}
     assert ok["hat_business_owner"] is True
     assert ok["hat_tech_steward"] is False
@@ -91,6 +98,7 @@ def test_overview_truncates_after_200(client, workspace):
     base = utcnow()
     for i in range(201):
         p = repo.create_project(workspace, "alice", f"p{i}")
+        # relies on the memory adapter returning its stored instances
         p.updated_at = base + timedelta(seconds=i)
     body = _overview(client, workspace).json()
     assert len(body["projects"]) == 200
@@ -102,10 +110,21 @@ def test_overview_truncates_after_200(client, workspace):
     assert stamps == sorted(stamps, reverse=True)
 
 
+def test_overview_with_no_projects(client, workspace):
+    res = _overview(client, workspace)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["projects"] == []
+    assert body["truncated"] is False
+    assert {m["user_id"] for m in body["members"]} == {"alice", "bob"}
+
+
 def test_overview_uses_default_governance_without_row(client, workspace):
     _new_project(client, workspace)
     repo = client.app.state.repository
     assert repo.get_workspace_governance(workspace) is None
-    res = _overview(client, workspace)
-    assert res.status_code == 200
-    assert len(res.json()["projects"]) == 1
+    (card,) = _overview(client, workspace).json()["projects"]
+    ok = {c["id"]: c["ok"] for c in card["checks"]}
+    assert ok["hat_business_owner"] is False
+    assert ok["hat_tech_steward"] is False
+    assert repo.get_workspace_governance(workspace) is None
