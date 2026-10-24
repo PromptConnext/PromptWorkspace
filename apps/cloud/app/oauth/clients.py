@@ -11,11 +11,13 @@ and `http://localhost@evil.com` are not loopback.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 from urllib.parse import SplitResult, urlsplit
 
 from app.models.schemas import OAuthClient, utcnow
 
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
+CIMD_REFRESH = timedelta(seconds=3600)
 
 
 class RedirectError(ValueError):
@@ -87,6 +89,18 @@ def validate_redirect_uri(candidate: str, registered: list[str]) -> str:
     raise RedirectError("redirect_uri does not match a registered redirect URI")
 
 
+def _cimd_stale(client: OAuthClient, now: datetime) -> bool:
+    """A stored CIMD row older than an hour (or with no usable `fetched_at`)."""
+    raw = (client.metadata or {}).get("fetched_at")
+    try:
+        fetched = datetime.fromisoformat(raw) if isinstance(raw, str) else None
+    except ValueError:
+        fetched = None
+    if fetched is None or fetched.tzinfo is None:
+        return True
+    return now - fetched > CIMD_REFRESH
+
+
 async def resolve_client(
     repo,
     client_id: str,
@@ -94,14 +108,23 @@ async def resolve_client(
     cimd_fetch: Callable[[str], Awaitable[OAuthClient]],
 ) -> OAuthClient:
     """The stored client (its `last_used_at` bumped), else a CIMD fetched and
-    stored as `kind="cimd"`, else `UnknownClient`. `cimd_fetch` errors
-    (`CimdError`) propagate."""
+    stored as `kind="cimd"`, else `UnknownClient`. A stored CIMD row whose
+    `metadata["fetched_at"]` is over an hour old is refetched first, so a
+    client's edits to its document (e.g. a removed redirect URI) take effect.
+    `cimd_fetch` errors (`CimdError`) propagate."""
+    now = utcnow()
     stored = repo.get_oauth_client(client_id)
-    if stored is not None:
-        stored.last_used_at = utcnow()
+    if stored is not None and not (stored.kind == "cimd" and _cimd_stale(stored, now)):
+        stored.last_used_at = now
         return repo.upsert_oauth_client(stored)
     if client_id.lower().startswith("https://"):
         fetched = await cimd_fetch(client_id)
-        fetched = fetched.model_copy(update={"kind": "cimd", "last_used_at": utcnow()})
+        # `fetched_at` is ours: written after the document, so a document
+        # cannot declare itself fresh forever.
+        metadata = {**(fetched.metadata or {}), "fetched_at": now.isoformat()}
+        update = {"kind": "cimd", "last_used_at": now, "metadata": metadata}
+        if stored is not None:
+            update["created_at"] = stored.created_at
+        fetched = fetched.model_copy(update=update)
         return repo.upsert_oauth_client(fetched)
     raise UnknownClient(client_id)

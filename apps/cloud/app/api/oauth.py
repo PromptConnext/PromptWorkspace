@@ -1,24 +1,48 @@
-"""OAuth 2.1 authorization server: discovery metadata, JWKS and dynamic client
-registration (RFC 7591)."""
+"""OAuth 2.1 authorization server: discovery metadata, JWKS, dynamic client
+registration (RFC 7591), and the authorization endpoint with its consent read,
+approve and deny."""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import secrets
+from datetime import timedelta
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
 from app.config import get_settings
+from app.db.repository import Repository
+from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
+    ConsentDecisionOut,
+    ConsentView,
+    ConsentWorkspace,
     DcrRegistrationIn,
     DcrRegistrationOut,
     OAuthClient,
+    OAuthCode,
+    OAuthFamily,
+    OAuthRequest,
     new_id,
     utcnow,
 )
-from app.oauth.clients import redirect_uri_allowed
+from app.oauth import cimd
+from app.oauth.clients import (
+    RedirectError,
+    UnknownClient,
+    is_loopback,
+    redirect_uri_allowed,
+    resolve_client,
+    validate_redirect_uri,
+)
 from app.oauth.keys import jwks, load_signing_keys
+from app.oauth.known_clients import classify
+from app.oauth.pages import error_page
 
 router = APIRouter(tags=["oauth"])
 
@@ -178,3 +202,237 @@ async def register_client(request: Request):
         response_types=response_types,
     )
     return JSONResponse(out.model_dump(), status_code=201, headers=_NO_STORE)
+
+
+# --------------------------------------------------------------------------- #
+# Authorization endpoint, consent read, approve and deny
+# --------------------------------------------------------------------------- #
+
+REQUEST_TTL = timedelta(seconds=600)
+CODE_TTL = timedelta(seconds=300)
+_SCOPE = "mcp"
+# RFC 7636 §4.2: an S256 challenge is base64url, 43 to 128 characters.
+_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43,128}")
+
+
+def _with_query(redirect_uri: str, params: dict[str, str | None]) -> str:
+    """`redirect_uri` with `params` appended (None values omitted), keeping
+    any query the registered URI already carries."""
+    parts = urlsplit(redirect_uri)
+    extra = urlencode({k: v for k, v in params.items() if v is not None})
+    query = f"{parts.query}&{extra}" if parts.query else extra
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def _cimd_fetch(request: Request):
+    cache = getattr(request.app.state, "cimd_cache", None)
+    if cache is None:
+        cache = request.app.state.cimd_cache = {}
+
+    async def fetch(client_id: str) -> OAuthClient:
+        # Looked up on the module each call so tests can monkeypatch it.
+        return await cimd.fetch_client_metadata(client_id, cache=cache)
+
+    return fetch
+
+
+def _single(request: Request, name: str) -> str | None:
+    """The parameter's value, or None when absent or repeated."""
+    values = request.query_params.getlist(name)
+    return values[0] if len(values) == 1 else None
+
+
+@router.get("/oauth/authorize")
+async def authorize(request: Request):
+    settings = get_settings()
+    repo = request.app.state.repository  # pw_oauth_* are service-only
+    q = request.query_params
+
+    # 1. Client and redirect URI. Until both are valid there is nowhere safe
+    #    to redirect to: render an HTML error instead.
+    client_id = _single(request, "client_id")
+    if not client_id:
+        return error_page("invalid_client")
+    try:
+        client = await resolve_client(repo, client_id, cimd_fetch=_cimd_fetch(request))
+    except (UnknownClient, cimd.CimdError):
+        return error_page("invalid_client")
+    candidate = _single(request, "redirect_uri")
+    if not candidate:
+        return error_page("invalid_redirect_uri")
+    try:
+        validate_redirect_uri(candidate, client.redirect_uris)
+    except RedirectError:
+        return error_page("invalid_redirect_uri")
+    # Redirect to what the client sent (it matched a registered URI; loopback
+    # may differ only in port).
+    redirect_uri = candidate
+    state = q.get("state")
+    issuer = _issuer(request)
+
+    def fail(error: str, description: str) -> RedirectResponse:
+        return RedirectResponse(
+            _with_query(
+                redirect_uri,
+                {
+                    "error": error,
+                    "error_description": description,
+                    "state": state,
+                    "iss": issuer,
+                },
+            ),
+            status_code=302,
+        )
+
+    # 2. Everything else is reported to the client.
+    if _single(request, "response_type") != "code":
+        return fail("unsupported_response_type", "response_type must be code")
+    if _single(request, "code_challenge_method") != "S256":
+        return fail("invalid_request", "code_challenge_method must be S256")
+    challenge = _single(request, "code_challenge")
+    if not challenge or not _CHALLENGE.fullmatch(challenge):
+        return fail("invalid_request", "code_challenge must be 43-128 base64url characters")
+    if _single(request, "resource") != settings.canonical_mcp_url:
+        return fail("invalid_request", f"resource must be {settings.canonical_mcp_url}")
+    if len(q.getlist("state")) > 1:
+        return fail("invalid_request", "state must not repeat")
+    scopes = q.getlist("scope")
+    if len(scopes) > 1:
+        return fail("invalid_request", "scope must not repeat")
+    scope = (scopes[0] if scopes else "").strip()
+    if scope not in ("", _SCOPE):
+        return fail("invalid_scope", "the only supported scope is mcp")
+
+    now = utcnow()
+    stored = repo.put_oauth_request(
+        OAuthRequest(
+            client_id=client.client_id,
+            redirect_uri=redirect_uri,
+            code_challenge=challenge,
+            resource=settings.canonical_mcp_url,
+            scope=_SCOPE,
+            state=state,
+            created_at=now,
+            expires_at=now + REQUEST_TTL,
+        )
+    )
+    consent = f"{settings.web_app_url.rstrip('/')}/oauth/consent?" + urlencode(
+        {"request": stored.request_id}
+    )
+    return RedirectResponse(consent, status_code=302, headers=_NO_STORE)
+
+
+def _pending(repo, request_id: str) -> OAuthRequest:
+    """The request if it exists and has not expired; 404 otherwise. Whether it
+    is already decided is the caller's question."""
+    req = repo.get_oauth_request(request_id)
+    if req is None or req.expires_at <= utcnow():
+        raise HTTPException(status_code=404, detail="request_not_found")
+    return req
+
+
+def _decided(req: OAuthRequest) -> bool:
+    return req.approved_at is not None or req.denied_at is not None
+
+
+@router.get("/oauth/authorize/{request_id}", response_model=ConsentView)
+def consent_view(
+    request_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    user_repo: Repository = Depends(get_repository),
+) -> ConsentView:
+    repo = request.app.state.repository
+    req = _pending(repo, request_id)
+    if _decided(req):
+        raise HTTPException(status_code=404, detail="request_not_found")
+    client = repo.get_oauth_client(req.client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="request_not_found")
+    vendor, verified = classify(client.redirect_uris)
+    loopback = is_loopback(req.redirect_uri)
+    if vendor == "loopback":
+        vendor, verified, loopback = None, True, True
+    workspaces = user_repo.list_workspaces(user_id=user.id)
+    return ConsentView(
+        client_name=client.client_name,
+        client_uri=client.client_uri,
+        logo_uri=client.logo_uri,
+        vendor=vendor,
+        verified=verified,
+        redirect_host=urlsplit(req.redirect_uri).hostname or "",
+        loopback=loopback,
+        scopes=[_SCOPE],
+        account_email=user.email,
+        workspaces=[ConsentWorkspace(id=w.id, name=w.name) for w in workspaces],
+        expires_at=req.expires_at,
+    )
+
+
+def _undecided(repo, request_id: str) -> OAuthRequest:
+    req = _pending(repo, request_id)
+    if _decided(req):
+        raise HTTPException(status_code=409, detail="request_decided")
+    return req
+
+
+@router.post("/oauth/authorize/{request_id}/approve", response_model=ConsentDecisionOut)
+def approve(
+    request_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+) -> JSONResponse:
+    repo = request.app.state.repository
+    req = _undecided(repo, request_id)
+    now = utcnow()
+    family_id = new_id()
+    code = secrets.token_urlsafe(32)
+    repo.put_oauth_family(
+        OAuthFamily(family_id=family_id, client_id=req.client_id, user_id=user.id)
+    )
+    repo.put_oauth_code(
+        OAuthCode(
+            code_hash=hashlib.sha256(code.encode()).hexdigest(),
+            request_id=req.request_id,
+            family_id=family_id,
+            client_id=req.client_id,
+            user_id=user.id,
+            redirect_uri=req.redirect_uri,
+            code_challenge=req.code_challenge,
+            resource=req.resource,
+            scope=req.scope,
+            expires_at=now + CODE_TTL,
+        )
+    )
+    req.approved_user_id = user.id
+    req.approved_at = now
+    repo.update_oauth_request(req)
+    client = repo.get_oauth_client(req.client_id)
+    if client is not None:
+        client.last_used_at = now
+        repo.upsert_oauth_client(client)
+    out = ConsentDecisionOut(
+        redirect_to=_with_query(
+            req.redirect_uri, {"code": code, "state": req.state, "iss": _issuer(request)}
+        )
+    )
+    return JSONResponse(out.model_dump(), headers=_NO_STORE)
+
+
+@router.post("/oauth/authorize/{request_id}/deny", response_model=ConsentDecisionOut)
+def deny(
+    request_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+) -> JSONResponse:
+    repo = request.app.state.repository
+    req = _undecided(repo, request_id)
+    req.denied_at = utcnow()
+    repo.update_oauth_request(req)
+    out = ConsentDecisionOut(
+        redirect_to=_with_query(
+            req.redirect_uri,
+            {"error": "access_denied", "state": req.state, "iss": _issuer(request)},
+        )
+    )
+    return JSONResponse(out.model_dump(), headers=_NO_STORE)

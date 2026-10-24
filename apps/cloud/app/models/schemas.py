@@ -1743,6 +1743,33 @@ class OAuthFamily(BaseModel):
 
 
 
+class ConsentWorkspace(BaseModel):
+    id: str
+    name: str
+
+
+class ConsentView(BaseModel):
+    """What the web consent page shows for a pending `/oauth/authorize`.
+    `vendor`/`verified` come from the redirect URIs, never the self-declared
+    name; `loopback` means "an app on this computer"."""
+
+    client_name: str
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    vendor: str | None = None
+    verified: bool
+    redirect_host: str
+    loopback: bool
+    scopes: list[str]
+    account_email: str
+    workspaces: list[ConsentWorkspace]
+    expires_at: datetime
+
+
+class ConsentDecisionOut(BaseModel):
+    redirect_to: str
+
+
 DCR_MAX_BODY = 16_384
 DCR_MAX_URI = 2048
 DCR_MAX_SCOPE = 1000
