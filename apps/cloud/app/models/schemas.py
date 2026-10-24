@@ -1575,6 +1575,21 @@ class RepoAnalysisOut(BaseModel):
     stale: bool | None = None
 
 
+class AgentRepoAnalysisIn(BaseModel):
+    """A snapshot and baseline a local coding agent wrote from its own
+    checkout, posted instead of the cloud reading the repository itself."""
+
+    default_branch: str = Field(min_length=1, max_length=200)
+    commit_sha: str = Field(min_length=7, max_length=64)
+    paths: list[str] = Field(default_factory=list, max_length=50_000)
+    file_count: int = Field(ge=0)
+    tree_truncated: bool = False
+    stack: RepoStack = Field(default_factory=RepoStack)
+    tree_summary: str = Field(default="", max_length=20_000)
+    baseline: str = Field(min_length=1, max_length=100_000)
+    model: str | None = Field(default=None, max_length=200)
+
+
 class RepoAnalysisBaselineUpdate(BaseModel):
     baseline: str = Field(max_length=100_000)
 
