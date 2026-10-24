@@ -1,16 +1,27 @@
-"""Access-token issue/verify and refresh-token generation."""
+"""Access-token issue/verify, refresh-token generation, and the token
+endpoint's two grants (authorization_code with PKCE, rotating refresh_token)
+plus the periodic sweep of expired OAuth rows.
+
+Design: docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md,
+"/oauth/token" and "Tokens". Nothing here logs or returns a raw code or
+token; only their SHA-256 hashes are stored."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import re
 import secrets
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 
+from app.models.schemas import OAuthRefreshToken
 from app.oauth.keys import SigningKey
 
 
@@ -123,3 +134,216 @@ def hash_token(raw: str) -> str:
 def new_refresh_token() -> tuple[str, str]:
     raw = secrets.token_urlsafe(48)
     return raw, hash_token(raw)
+
+
+# --------------------------------------------------------------------------- #
+# Grants
+# --------------------------------------------------------------------------- #
+
+# A rotated refresh token presented again within this window is a parallel
+# refresh by the same client, not theft: it gets an access token only.
+REFRESH_GRACE = timedelta(seconds=30)
+DCR_UNUSED = timedelta(days=90)
+# Bump the client's last_used_at (what keeps a DCR client from the 90-day
+# purge) at most this often from the token endpoint.
+_CLIENT_TOUCH = timedelta(hours=1)
+# RFC 7636 §4.1: 43-128 characters from the unreserved set.
+_VERIFIER = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
+
+
+class GrantError(Exception):
+    """An RFC 6749 §5.2 error. `description` never carries a code or token."""
+
+    def __init__(self, error: str, description: str):
+        super().__init__(error)
+        self.error = error
+        self.description = description
+
+
+# user_id -> supabase_users.UserRecord
+Lookup = Callable[[str], Awaitable[Any]]
+
+
+def pkce_matches(verifier: str, challenge: str) -> bool:
+    if not _VERIFIER.fullmatch(verifier):
+        return False
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return hmac.compare_digest(computed.encode(), challenge.encode())
+
+
+def _touch_client(repo, client, now: datetime) -> None:
+    if client.last_used_at is None or now - client.last_used_at >= _CLIENT_TOUCH:
+        client.last_used_at = now
+        repo.upsert_oauth_client(client)
+
+
+def _access(settings, key, *, sub, email, client_id, family_id, scope, now) -> dict:
+    token, _ = issue_access_token(
+        settings, key, sub=sub, email=email, client_id=client_id,
+        family_id=family_id, scope=scope, now=now,
+    )  # fmt: skip
+    return {
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": settings.mcp_access_token_ttl_seconds,
+        "scope": scope,
+    }
+
+
+def _put_refresh(repo, settings, digest, *, family_id, client_id, user_id, scope, resource, now):
+    repo.put_refresh_token(
+        OAuthRefreshToken(
+            token_hash=digest, family_id=family_id, client_id=client_id, user_id=user_id,
+            scope=scope, resource=resource, issued_at=now,
+            expires_at=now + timedelta(days=settings.mcp_refresh_token_ttl_days),
+        )
+    )  # fmt: skip
+
+
+def _live_family(repo, family_id: str):
+    fam = repo.get_oauth_family(family_id)
+    if fam is None or fam.revoked_at is not None:
+        raise GrantError("invalid_grant", "the grant has been revoked")
+    return fam
+
+
+async def exchange_code(
+    repo,
+    settings,
+    key: SigningKey,
+    *,
+    client,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+    resource: str | None,
+    now: datetime,
+    lookup: Lookup,
+) -> dict:
+    """authorization_code grant. The code is burned before anything else is
+    checked, so a failed attempt cannot be retried with other parameters."""
+    code_hash = hash_token(code)
+    row = repo.take_oauth_code(code_hash, now)
+    if row is None:
+        seen = repo.get_oauth_code(code_hash)
+        if seen is not None and seen.used_at is not None:
+            # RFC 6749 §4.1.2: a reused code revokes what it issued.
+            repo.revoke_oauth_family(seen.family_id, "code_reuse", now)
+        raise GrantError("invalid_grant", "authorization code is invalid or already used")
+    if row.expires_at <= now:
+        raise GrantError("invalid_grant", "authorization code has expired")
+    if row.client_id != client.client_id:
+        raise GrantError("invalid_grant", "authorization code was issued to another client")
+    if redirect_uri != row.redirect_uri:
+        raise GrantError("invalid_grant", "redirect_uri does not match the authorization request")
+    if resource is not None and resource != row.resource:
+        raise GrantError("invalid_grant", "resource does not match the authorization request")
+    if not pkce_matches(code_verifier, row.code_challenge):
+        raise GrantError("invalid_grant", "code_verifier does not match the code_challenge")
+    _live_family(repo, row.family_id)
+    user = await lookup(row.user_id)
+    if not user.active:
+        repo.revoke_oauth_family(row.family_id, "user_inactive", now)
+        raise GrantError("invalid_grant", "the account is no longer active")
+
+    body = _access(
+        settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
+        family_id=row.family_id, scope=row.scope, now=now,
+    )  # fmt: skip
+    raw, digest = new_refresh_token()
+    _put_refresh(
+        repo, settings, digest, family_id=row.family_id, client_id=row.client_id,
+        user_id=row.user_id, scope=row.scope, resource=row.resource, now=now,
+    )  # fmt: skip
+    body["refresh_token"] = raw
+    repo.touch_oauth_family(row.family_id, now)
+    _touch_client(repo, client, now)
+    return body
+
+
+async def refresh_grant(
+    repo,
+    settings,
+    key: SigningKey,
+    *,
+    client,
+    refresh_token: str,
+    resource: str | None,
+    now: datetime,
+    lookup: Lookup,
+) -> dict:
+    """refresh_token grant with rotation on every use and a 30 s grace for a
+    just-rotated token (access token only; its successor's raw value is not
+    stored, so it cannot be re-sent)."""
+    row = repo.get_refresh_token(hash_token(refresh_token))
+    if row is None:
+        raise GrantError("invalid_grant", "refresh token is invalid")
+    if row.client_id != client.client_id:
+        raise GrantError("invalid_grant", "refresh token was issued to another client")
+    if resource is not None and resource != row.resource:
+        raise GrantError("invalid_grant", "resource does not match the grant")
+    _live_family(repo, row.family_id)
+    if row.revoked_at is not None or row.expires_at <= now:
+        raise GrantError("invalid_grant", "refresh token has expired or been revoked")
+
+    rotated = row.rotated_to_hash is not None
+    if not rotated:
+        user = await lookup(row.user_id)
+        if not user.active:
+            repo.revoke_oauth_family(row.family_id, "user_inactive", now)
+            raise GrantError("invalid_grant", "the account is no longer active")
+        new_raw, new_hash = new_refresh_token()
+        if repo.claim_refresh_rotation(row.token_hash, new_hash, now):
+            _put_refresh(
+                repo, settings, new_hash, family_id=row.family_id, client_id=row.client_id,
+                user_id=row.user_id, scope=row.scope, resource=row.resource, now=now,
+            )  # fmt: skip
+            repo.touch_oauth_family(row.family_id, now)
+            _touch_client(repo, client, now)
+            body = _access(
+                settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
+                family_id=row.family_id, scope=row.scope, now=now,
+            )  # fmt: skip
+            body["refresh_token"] = new_raw
+            return body
+        # Lost a race with a parallel refresh: fall through to the grace rule.
+        row = repo.get_refresh_token(row.token_hash)
+        if row is None or row.rotated_at is None:
+            raise GrantError("invalid_grant", "refresh token is invalid")
+
+    if row.rotated_at is not None and now - row.rotated_at <= REFRESH_GRACE:
+        user = await lookup(row.user_id)
+        if not user.active:
+            repo.revoke_oauth_family(row.family_id, "user_inactive", now)
+            raise GrantError("invalid_grant", "the account is no longer active")
+        repo.touch_oauth_family(row.family_id, now)
+        return _access(
+            settings, key, sub=row.user_id, email=user.email, client_id=row.client_id,
+            family_id=row.family_id, scope=row.scope, now=now,
+        )  # fmt: skip
+    # A rotated token replayed after the grace window: assume theft.
+    repo.revoke_oauth_family(row.family_id, "refresh_reuse", now)
+    raise GrantError("invalid_grant", "refresh token has already been used")
+
+
+def revoke_refresh(repo, token: str, client_id: str | None, now: datetime) -> None:
+    """RFC 7009: revoke the family of a refresh token, if it is one and (when
+    the caller names a client) was issued to that client. Silent otherwise."""
+    row = repo.get_refresh_token(hash_token(token))
+    if row is None:
+        return
+    if client_id is not None and client_id != row.client_id:
+        return
+    repo.revoke_oauth_family(row.family_id, "client_revoke", now)
+
+
+def sweep_oauth(repo, now: datetime) -> dict[str, int]:
+    """Delete expired requests, codes and refresh tokens, and DCR clients
+    unused for 90 days. Families are kept: they are the grant history."""
+    return {
+        "requests": repo.delete_oauth_requests_expired(now),
+        "codes": repo.delete_oauth_codes_expired(now),
+        "refresh_tokens": repo.delete_refresh_tokens_expired(now),
+        "clients": repo.delete_oauth_clients_unused_since(now - DCR_UNUSED, kind="dcr"),
+    }

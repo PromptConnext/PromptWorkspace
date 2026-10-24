@@ -1,6 +1,7 @@
 """OAuth 2.1 authorization server: discovery metadata, JWKS, dynamic client
-registration (RFC 7591), and the authorization endpoint with its consent read,
-approve and deny."""
+registration (RFC 7591), the authorization endpoint with its consent read,
+approve and deny, and the token (RFC 6749 §3.2) and revocation (RFC 7009)
+endpoints."""
 
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from app.models.schemas import (
     new_id,
     utcnow,
 )
-from app.oauth import cimd
+from app.oauth import cimd, supabase_users
 from app.oauth.clients import (
     RedirectError,
     UnknownClient,
@@ -43,6 +44,7 @@ from app.oauth.clients import (
 from app.oauth.keys import jwks, load_signing_keys
 from app.oauth.known_clients import classify
 from app.oauth.pages import error_page
+from app.oauth.tokens import GrantError, exchange_code, refresh_grant, revoke_refresh
 
 router = APIRouter(tags=["oauth"])
 
@@ -436,3 +438,121 @@ def deny(
         )
     )
     return JSONResponse(out.model_dump(), headers=_NO_STORE)
+
+
+# --------------------------------------------------------------------------- #
+# Token and revocation endpoints
+# --------------------------------------------------------------------------- #
+
+_TOKEN_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_FORM = "application/x-www-form-urlencoded"
+
+
+def _now(request: Request):
+    """The request's clock; tests inject `app.state.oauth_clock`."""
+    return getattr(request.app.state, "oauth_clock", utcnow)()
+
+
+def _token_error(error: str, description: str) -> JSONResponse:
+    return JSONResponse(
+        {"error": error, "error_description": description},
+        status_code=400,
+        headers=_TOKEN_HEADERS,
+    )
+
+
+async def _form(request: Request) -> dict[str, list[str]] | None:
+    """The urlencoded body as name -> values, or None when it is not one."""
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != _FORM:
+        return None
+    form = await request.form()
+    return {k: [v for v in form.getlist(k) if isinstance(v, str)] for k in form.keys()}
+
+
+class _Missing(Exception):
+    def __init__(self, description: str):
+        self.description = description
+
+
+def _field(form: dict[str, list[str]], name: str, *, required: bool) -> str | None:
+    values = form.get(name, [])
+    if len(values) > 1:
+        raise _Missing(f"{name} must not repeat")
+    value = values[0] if values else None
+    if required and not value:
+        raise _Missing(f"{name} is required")
+    return value or None
+
+
+def _lookup(request: Request, settings):
+    cache = getattr(request.app.state, "oauth_user_cache", None)
+    if cache is None:
+        cache = request.app.state.oauth_user_cache = {}
+    http = getattr(request.app.state, "oauth_http", None)
+
+    async def lookup(user_id: str):
+        # Looked up on the module each call so tests can monkeypatch it.
+        return await supabase_users.lookup_user(
+            settings, user_id, http=http, cache=cache, now=_now(request)
+        )
+
+    return lookup
+
+
+@router.post("/oauth/token")
+async def token(request: Request) -> JSONResponse:
+    settings = get_settings()
+    repo = request.app.state.repository  # pw_oauth_* are service-only
+    form = await _form(request)
+    if form is None:
+        return _token_error("invalid_request", f"the body must be {_FORM}")
+    try:
+        grant_type = _field(form, "grant_type", required=True)
+        if grant_type not in ("authorization_code", "refresh_token"):
+            return _token_error(
+                "unsupported_grant_type",
+                "grant_type must be authorization_code or refresh_token",
+            )
+        client_id = _field(form, "client_id", required=True)
+        resource = _field(form, "resource", required=False)
+        if grant_type == "authorization_code":
+            args = {
+                "code": _field(form, "code", required=True),
+                "redirect_uri": _field(form, "redirect_uri", required=True),
+                "code_verifier": _field(form, "code_verifier", required=True),
+            }
+        else:
+            args = {"refresh_token": _field(form, "refresh_token", required=True)}
+    except _Missing as err:
+        return _token_error("invalid_request", err.description)
+
+    client = repo.get_oauth_client(client_id)
+    if client is None:
+        return _token_error("invalid_client", "unknown client_id")
+    key, _ = load_signing_keys(settings)
+    grant = exchange_code if grant_type == "authorization_code" else refresh_grant
+    try:
+        body = await grant(
+            repo, settings, key, client=client, resource=resource,
+            now=_now(request), lookup=_lookup(request, settings), **args,
+        )  # fmt: skip
+    except GrantError as err:
+        return _token_error(err.error, err.description)
+    return JSONResponse(body, headers=_TOKEN_HEADERS)
+
+
+@router.post("/oauth/revoke")
+async def revoke(request: Request) -> JSONResponse:
+    """RFC 7009: always 200, whether or not the token was known."""
+    form = await _form(request) or {}
+    tokens = form.get("token", [])
+    client_ids = form.get("client_id", [])
+    if len(tokens) == 1 and tokens[0] and len(client_ids) <= 1:
+        revoke_refresh(
+            request.app.state.repository,
+            tokens[0],
+            client_ids[0] if client_ids else None,
+            _now(request),
+        )
+    return JSONResponse({}, headers=_TOKEN_HEADERS)

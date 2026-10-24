@@ -129,6 +129,24 @@ async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
             logger.exception("Decision sweep pass failed")
 
 
+async def _oauth_sweep_loop(app: FastAPI, settings: Settings) -> None:
+    """Delete expired OAuth requests, codes and refresh tokens, and DCR
+    clients unused for 90 days (hosted MCP). Off the event loop: the Supabase
+    adapter is synchronous."""
+    if settings.oauth_sweep_interval_seconds <= 0:
+        return
+    from app.oauth.tokens import sweep_oauth
+
+    while True:
+        await asyncio.sleep(settings.oauth_sweep_interval_seconds)
+        try:
+            counts = await asyncio.to_thread(sweep_oauth, app.state.repository, utcnow())
+            if any(counts.values()):
+                logger.info("OAuth sweep: %s", counts)
+        except Exception:  # noqa: BLE001 - the sweep must never crash the app
+            logger.exception("OAuth sweep pass failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -268,6 +286,15 @@ async def lifespan(app: FastAPI):
     sweep_task = asyncio.create_task(_decision_sweep_loop(app, settings))
     embed_task = asyncio.create_task(embed_worker_loop(app))
     reconcile_task = asyncio.create_task(reconcile_loop(app, settings))
+    # Hosted MCP authorization server: one shared client for the Supabase
+    # admin user check at /oauth/token, and the expired-row sweep.
+    oauth_task = None
+    app.state.oauth_http = None
+    if settings.mcp_enabled:
+        import httpx
+
+        app.state.oauth_http = httpx.AsyncClient()
+        oauth_task = asyncio.create_task(_oauth_sweep_loop(app, settings))
     try:
         yield
     finally:
@@ -283,6 +310,12 @@ async def lifespan(app: FastAPI):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):
             await reconcile_task
+        if oauth_task is not None:
+            oauth_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await oauth_task
+        if app.state.oauth_http is not None:
+            await app.state.oauth_http.aclose()
         app.state.line_notifier.shutdown()
 
 

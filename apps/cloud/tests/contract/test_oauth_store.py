@@ -148,3 +148,38 @@ def test_family_revoke_list_and_bulk_revoke(repo: Repository) -> None:
     assert repo.revoke_oauth_families_for_user(user, "user", utcnow()) == 2
     assert repo.revoke_oauth_families_for_user(user, "user", utcnow()) == 0
     assert repo.get_oauth_family(b.family_id).revoked_reason == "user"
+
+
+def test_expired_codes_purge(repo: Repository) -> None:
+    old, live = _code("code-" + new_id()), _code("code-" + new_id())
+    old.expires_at = utcnow() - timedelta(minutes=1)
+    repo.put_oauth_code(old)
+    repo.put_oauth_code(live)
+    assert repo.delete_oauth_codes_expired(utcnow()) >= 1
+    assert repo.get_oauth_code(old.code_hash) is None
+    assert repo.get_oauth_code(live.code_hash) is not None
+
+
+def test_family_touch_sets_last_used(repo: Repository) -> None:
+    fam = _family(new_id())
+    repo.put_oauth_family(fam)
+    assert repo.get_oauth_family(fam.family_id).last_used_at is None
+    at = utcnow()
+    repo.touch_oauth_family(fam.family_id, at)
+    got = repo.get_oauth_family(fam.family_id).last_used_at
+    assert got is not None and abs((got - at).total_seconds()) < 1
+    repo.touch_oauth_family(new_id(), at)  # unknown family: a no-op
+
+
+def test_refresh_rotation_claim_is_single_winner(repo: Repository) -> None:
+    fam = _family(new_id())
+    repo.put_oauth_family(fam)
+    t = _token("rt-" + new_id(), fam.family_id, fam.user_id)
+    repo.put_refresh_token(t)
+    now = utcnow()
+    assert repo.claim_refresh_rotation(t.token_hash, "succ-a", now) is True
+    assert repo.claim_refresh_rotation(t.token_hash, "succ-b", now) is False
+    got = repo.get_refresh_token(t.token_hash)
+    assert got.rotated_to_hash == "succ-a"
+    assert got.rotated_at is not None and got.last_used_at is not None
+    assert repo.claim_refresh_rotation("missing-" + new_id(), "x", now) is False

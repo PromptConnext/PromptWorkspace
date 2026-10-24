@@ -996,6 +996,9 @@ class Repository(abc.ABC):
         """Plain read, used to detect reuse after a take."""
 
     @abc.abstractmethod
+    def delete_oauth_codes_expired(self, now: datetime) -> int: ...
+
+    @abc.abstractmethod
     def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken: ...
 
     @abc.abstractmethod
@@ -1003,6 +1006,12 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken: ...
+
+    @abc.abstractmethod
+    def claim_refresh_rotation(self, token_hash: str, to_hash: str, now: datetime) -> bool:
+        """Atomically mark a live refresh token rotated to `to_hash` (setting
+        rotated_at and last_used_at to `now`). False when the row is missing or
+        already rotated: of two racing refreshes only one wins."""
 
     @abc.abstractmethod
     def delete_refresh_tokens_expired(self, now: datetime) -> int: ...
@@ -1019,6 +1028,10 @@ class Repository(abc.ABC):
     ) -> OAuthFamily | None:
         """Set revoked_at/revoked_reason unless already revoked. Returns the
         row, or None when the family does not exist."""
+
+    @abc.abstractmethod
+    def touch_oauth_family(self, family_id: str, now: datetime) -> None:
+        """Set last_used_at; a no-op for an unknown family."""
 
     @abc.abstractmethod
     def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
@@ -2392,6 +2405,12 @@ class InMemoryRepository(Repository):
         c = self._oauth_codes.get(code_hash)
         return c.model_copy() if c else None
 
+    def delete_oauth_codes_expired(self, now: datetime) -> int:
+        gone = [k for k, c in self._oauth_codes.items() if c.expires_at < now]
+        for k in gone:
+            del self._oauth_codes[k]
+        return len(gone)
+
     def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
         self._oauth_refresh[t.token_hash] = t.model_copy()
         return t.model_copy()
@@ -2403,6 +2422,13 @@ class InMemoryRepository(Repository):
     def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
         self._oauth_refresh[t.token_hash] = t.model_copy()
         return t.model_copy()
+
+    def claim_refresh_rotation(self, token_hash: str, to_hash: str, now: datetime) -> bool:
+        t = self._oauth_refresh.get(token_hash)
+        if t is None or t.rotated_to_hash is not None:
+            return False
+        t.rotated_to_hash, t.rotated_at, t.last_used_at = to_hash, now, now
+        return True
 
     def delete_refresh_tokens_expired(self, now: datetime) -> int:
         gone = [k for k, t in self._oauth_refresh.items() if t.expires_at < now]
@@ -2427,6 +2453,11 @@ class InMemoryRepository(Repository):
         if f.revoked_at is None:
             f.revoked_at, f.revoked_reason = now, reason
         return f.model_copy()
+
+    def touch_oauth_family(self, family_id: str, now: datetime) -> None:
+        f = self._oauth_families.get(family_id)
+        if f is not None:
+            f.last_used_at = now
 
     def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
         mine = [f for f in self._oauth_families.values() if f.user_id == user_id]

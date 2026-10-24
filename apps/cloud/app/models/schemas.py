@@ -1740,7 +1740,22 @@ class OAuthFamily(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
+    last_used_at: datetime | None = None
 
+
+class OAuthGrantOut(BaseModel):
+    """One row of Connected agents: a token family and who it was issued to.
+    `client_name`/`vendor`/`verified` come from the stored client (empty and
+    unverified when a DCR client has since been purged)."""
+
+    family_id: str
+    client_id: str
+    client_name: str
+    vendor: str | None = None
+    verified: bool
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
 class ConsentWorkspace(BaseModel):

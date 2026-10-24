@@ -2270,6 +2270,10 @@ class SupabaseRepository(Repository):
     def get_oauth_code(self, code_hash: str) -> OAuthCode | None:
         return self._oauth_one(_OAUTH_CODES, "code_hash", code_hash, OAuthCode)
 
+    def delete_oauth_codes_expired(self, now: datetime) -> int:
+        res = self._table(_OAUTH_CODES).delete().lt("expires_at", now.isoformat()).execute()
+        return len(res.data or [])
+
     def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
         self._table(_OAUTH_REFRESH).insert(_dump(t)).execute()
         return t
@@ -2280,6 +2284,19 @@ class SupabaseRepository(Repository):
     def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
         self._table(_OAUTH_REFRESH).upsert(_dump(t), on_conflict="token_hash").execute()
         return t
+
+    def claim_refresh_rotation(self, token_hash: str, to_hash: str, now: datetime) -> bool:
+        # The `rotated_to_hash is null` filter makes the update the claim: of
+        # two racing refreshes only one gets a row back.
+        iso = now.isoformat()
+        res = (
+            self._table(_OAUTH_REFRESH)
+            .update({"rotated_to_hash": to_hash, "rotated_at": iso, "last_used_at": iso})
+            .eq("token_hash", token_hash)
+            .is_("rotated_to_hash", "null")
+            .execute()
+        )
+        return bool(res.data)
 
     def delete_refresh_tokens_expired(self, now: datetime) -> int:
         res = self._table(_OAUTH_REFRESH).delete().lt("expires_at", now.isoformat()).execute()
@@ -2299,6 +2316,11 @@ class SupabaseRepository(Repository):
             {"revoked_at": now.isoformat(), "revoked_reason": reason}
         ).eq("family_id", family_id).is_("revoked_at", "null").execute()
         return self.get_oauth_family(family_id)
+
+    def touch_oauth_family(self, family_id: str, now: datetime) -> None:
+        self._table(_OAUTH_FAMILIES).update({"last_used_at": now.isoformat()}).eq(
+            "family_id", family_id
+        ).execute()
 
     def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
         res = (
