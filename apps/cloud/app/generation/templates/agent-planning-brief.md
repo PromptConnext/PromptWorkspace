@@ -4,7 +4,7 @@ You are planning changes to a repository that already exists and runs. PromptWor
 
 1. Fetch `origin/<default_branch>` and read the repository with your own tools before you write anything. Do not plan from the brief alone, and do not guess at files you have not opened.
 
-2. Write the codebase baseline as one Markdown document with these sections, in this order: purpose, stack, architecture and modules, conventions observed, test and CI setup, deployment signals, gaps and risks. Name real modules and paths. Then call `submit_repo_analysis` with the baseline.
+2. Write the codebase baseline as one Markdown document with these sections, in this order: purpose, stack, architecture and modules, conventions observed, test and CI setup, deployment signals, gaps and risks. Name real modules and paths. Then call `submit_repo_analysis` with the baseline. If `can_submit_analysis` is false, skip the baseline submission, tell the user a workspace admin must run this step, and continue with the stages you may submit once the baseline exists.
 
 3. Draft the planning documents in this order: constitution, specify, plan, tasks. Use the matching template from `templates` for each one. Review each draft yourself before you start the next, and fix what you find.
 

@@ -73,6 +73,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageDocumentSource,
     StageDraft,
     StageInputs,
     Task,
@@ -1618,7 +1619,14 @@ class SupabaseRepository(Repository):
         return {doc.stage: doc for doc in docs}
 
     def upsert_stage_document(
-        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        content: str,
+        user_id: str,
+        *,
+        source: StageDocumentSource | None = None,
     ) -> StageDocument:
         existing = self.get_stage_document(project_id, stage)
         doc = StageDocument(
@@ -1628,6 +1636,7 @@ class SupabaseRepository(Repository):
             stage=stage,
             content=content,
             created_by=existing.created_by if existing else user_id,
+            source=source,
         )
         self._table(_STAGE_DOCUMENTS).upsert(
             _dump(doc), on_conflict="project_id,stage"

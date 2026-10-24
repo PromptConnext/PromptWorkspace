@@ -65,11 +65,16 @@ def test_brief_carries_templates_policy_prds_and_submittable_stages(client: Test
     assert body["prd_texts"] == [{"title": "PRD one", "text": "y" * 40_000}]
     assert "submit_stage_draft" in body["instructions"]
     assert "- [ ] T001 [P]" in body["instructions"]
+    assert body["default_branch"] == "main"
+    assert body["repo_url"] == "https://github.com/acme/storyapp"
+    assert body["can_submit_analysis"] is True
 
 
 def test_brief_lists_only_member_stages_for_a_member(client: TestClient):
     _, pid = _imported_project(client)
-    assert _brief(client, pid, BOB).json()["submittable_stages"] == ["specify", "tasks"]
+    body = _brief(client, pid, BOB).json()
+    assert body["submittable_stages"] == ["specify", "tasks"]
+    assert body["can_submit_analysis"] is False
 
 
 def test_brief_refuses_scratch_and_created_projects(client: TestClient):

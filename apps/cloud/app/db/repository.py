@@ -56,6 +56,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageDocumentSource,
     StageDraft,
     StageInputs,
     Task,
@@ -768,7 +769,14 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def upsert_stage_document(
-        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        content: str,
+        user_id: str,
+        *,
+        source: StageDocumentSource | None = None,
     ) -> StageDocument: ...
 
     @abc.abstractmethod
@@ -1929,7 +1937,14 @@ class InMemoryRepository(Repository):
         return {stage: copy.deepcopy(store[stage]) for stage in stages if stage in store}
 
     def upsert_stage_document(
-        self, project_id: str, workspace_id: str, stage: str, content: str, user_id: str
+        self,
+        project_id: str,
+        workspace_id: str,
+        stage: str,
+        content: str,
+        user_id: str,
+        *,
+        source: StageDocumentSource | None = None,
     ) -> StageDocument:
         store = self._stage_documents.setdefault(project_id, {})
         existing = store.get(stage)
@@ -1940,6 +1955,7 @@ class InMemoryRepository(Repository):
             stage=stage,
             content=content,
             created_by=existing.created_by if existing else user_id,
+            source=source,
             updated_at=utcnow(),
         )
         store[stage] = doc
