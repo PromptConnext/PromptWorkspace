@@ -24,6 +24,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     FIELD_DEFAULTS,
     Artifact,
+    ArtifactAgent,
     ArtifactKind,
     AssignedTask,
     CodeChunk,
@@ -535,13 +536,17 @@ class Repository(abc.ABC):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         """Append evidence for a status change (the commit that closed a task).
 
         Idempotent on (task_id, commit_sha) when commit_sha is not None. That
         is load-bearing rather than tidy: the git-driven caller replays commits
         whenever its local cache is dropped or a repo is re-cloned, so a
-        duplicate write is the expected case, not the exceptional one."""
+        duplicate write is the expected case, not the exceptional one.
+
+        `agent` merges once: an existing row without one gains the incoming
+        agent; a stored agent is never overwritten by a different one."""
 
     @abc.abstractmethod
     def get_node(
@@ -1600,6 +1605,7 @@ class InMemoryRepository(Repository):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         store = self._graph.setdefault(project_id, {e: {} for e in ENTITY_TYPES})
         if commit_sha is not None:
@@ -1609,6 +1615,8 @@ class InMemoryRepository(Repository):
                     and existing.commit_sha == commit_sha
                     and existing.deleted_at is None
                 ):
+                    if existing.agent is None and agent is not None:
+                        existing.agent = agent.model_copy()
                     return copy.deepcopy(existing)
         artifact = Artifact(
             project_id=project_id,
@@ -1616,6 +1624,7 @@ class InMemoryRepository(Repository):
             kind=kind,
             uri=uri,
             commit_sha=commit_sha,
+            agent=agent,
             updated_at=now,
         )
         store["artifacts"][artifact.id] = artifact

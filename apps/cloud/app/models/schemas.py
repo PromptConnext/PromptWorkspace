@@ -168,8 +168,8 @@ class Task(GraphEntity):
 class ArtifactAgent(BaseModel):
     """The coding agent that produced a closing artifact (plan 0033)."""
 
-    client: str
-    model: str | None = None
+    client: str = Field(max_length=64)
+    model: str | None = Field(default=None, max_length=128)
 
 
 class Artifact(GraphEntity):
@@ -223,6 +223,7 @@ class TaskStatusArtifact(BaseModel):
     commit_sha: str
     uri: str
     kind: ArtifactKind = ArtifactKind.code
+    agent: ArtifactAgent | None = None
 
 
 class TaskStatusUpdate(BaseModel):

@@ -45,6 +45,7 @@ from app.models.schemas import (
     FIELD_AUTHORITY,
     FIELD_DEFAULTS,
     Artifact,
+    ArtifactAgent,
     ArtifactKind,
     AssignedTask,
     CodeChunkHit,
@@ -1130,6 +1131,7 @@ class SupabaseRepository(Repository):
         commit_sha: str | None,
         kind: ArtifactKind,
         now: datetime,
+        agent: ArtifactAgent | None = None,
     ) -> Artifact:
         # Select-then-insert reads racy, and is: the authoritative guard is the
         # partial unique index on (task_id, commit_sha) from migration 0025.
@@ -1148,13 +1150,22 @@ class SupabaseRepository(Repository):
             )
             rows = res.data or []
             if rows:
-                return Artifact(**rows[0])
+                existing = Artifact(**rows[0])
+                if existing.agent is None and agent is not None:
+                    # Guarded on `agent is null` so a concurrent writer's agent
+                    # is never overwritten.
+                    self._table(_TABLE["artifacts"]).update(
+                        {"agent": agent.model_dump(mode="json")}
+                    ).eq("id", existing.id).is_("agent", "null").execute()
+                    existing.agent = agent
+                return existing
         artifact = Artifact(
             project_id=project_id,
             task_id=task_id,
             kind=kind,
             uri=uri,
             commit_sha=commit_sha,
+            agent=agent,
             updated_at=now,
         )
         self._table(_TABLE["artifacts"]).insert(

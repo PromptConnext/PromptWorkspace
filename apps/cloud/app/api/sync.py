@@ -1223,6 +1223,7 @@ def set_task_status(
             body.artifact.commit_sha,
             body.artifact.kind,
             now,
+            body.artifact.agent,
         )
     previous = task.status
     updated = repo.set_task_status(project_id, task_id, body.status, now)
