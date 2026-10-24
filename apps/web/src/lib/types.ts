@@ -523,6 +523,32 @@ export interface RepoAnalysisOut {
   updated_at: string | null;
   // null is "couldn't check", not "fresh".
   stale: boolean | null;
+  // Who wrote the baseline: the cloud's managed model or the importer's agent.
+  source: "cloud" | "agent";
+  model: string | null;
+}
+
+export interface StageDraftWarning {
+  code: string;
+  items: string[];
+}
+
+/** GET /projects/{id}/stage-drafts: a stage document drafted by the
+ *  importer's coding agent, awaiting review. */
+export interface StageDraftOut {
+  id: string;
+  project_id: string;
+  stage: StageKind;
+  markdown: string;
+  source: string;
+  model: string | null;
+  status: "pending" | "rejected";
+  stale: boolean;
+  rejection_note: string | null;
+  last_error: string | null;
+  created_by: string;
+  created_at: string;
+  warnings: StageDraftWarning[];
 }
 
 export interface RepoAnalysisDoneEvent extends RepoAnalysisOut {

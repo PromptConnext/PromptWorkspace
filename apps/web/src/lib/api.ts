@@ -20,6 +20,7 @@ import type {
   RepoAnalysisOut,
   SeedPreview,
   StageDocumentOut,
+  StageDraftOut,
   StageDocumentSaved,
   StageInputsOut,
   StageKind,
@@ -435,6 +436,32 @@ export function patchRepoAnalysis(
   return apiFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis`, authHeaders, {
     method: "PATCH",
     body: JSON.stringify({ baseline }),
+  });
+}
+
+export function listStageDrafts(projectId: string, authHeaders: Record<string, string>) {
+  return apiFetch<StageDraftOut[]>(`/projects/${projectId}/stage-drafts`, authHeaders);
+}
+
+export function acceptStageDraft(
+  projectId: string,
+  stage: StageKind,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDocumentSaved>(`/projects/${projectId}/stage-drafts/${stage}/accept`, authHeaders, {
+    method: "POST",
+  });
+}
+
+export function rejectStageDraft(
+  projectId: string,
+  stage: StageKind,
+  note: string,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<StageDraftOut>(`/projects/${projectId}/stage-drafts/${stage}/reject`, authHeaders, {
+    method: "POST",
+    body: JSON.stringify({ note }),
   });
 }
 

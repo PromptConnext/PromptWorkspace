@@ -33,6 +33,8 @@ function analysis(overrides: Partial<RepoAnalysisOut> = {}): RepoAnalysisOut {
     baseline: "",
     updated_at: null,
     stale: null,
+    source: "cloud",
+    model: null,
     ...overrides,
   };
 }
