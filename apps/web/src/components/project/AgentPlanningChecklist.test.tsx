@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentPlanningChecklist } from "./AgentPlanningChecklist";
+import { CLOUD_API_URL } from "@/lib/config";
 import type { RepoAnalysisOut, StageDraftOut, StageKind } from "@/lib/types";
 
 const base: RepoAnalysisOut = {
@@ -43,9 +44,13 @@ describe("AgentPlanningChecklist", () => {
   afterEach(cleanup);
 
   it("shows the three steps with the exact commands", () => {
-    render(<AgentPlanningChecklist analysis={base} drafts={[]} />);
-    expect(screen.getByText("Install the PromptWorkspace MCP server and sign in")).toBeInTheDocument();
-    expect(screen.getByText("promptworkspace-mcp login")).toBeInTheDocument();
+    render(<AgentPlanningChecklist workspaceId="w1" analysis={base} drafts={[]} />);
+    expect(screen.getByText("Connect your coding agent to PromptWorkspace")).toBeInTheDocument();
+    expect(
+      screen.getByText(`claude mcp add --transport http promptworkspace ${CLOUD_API_URL}/mcp`),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Other agents" })).toHaveAttribute("href", "/w/w1/settings");
+    expect(screen.queryByText(/promptworkspace-mcp login/)).not.toBeInTheDocument();
     expect(screen.getByText("Open this repository in your coding agent and paste:")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -61,6 +66,7 @@ describe("AgentPlanningChecklist", () => {
   it("applies the status rule per row", () => {
     render(
       <AgentPlanningChecklist
+        workspaceId="w1"
         analysis={{ ...base, status: "baseline_ready" }}
         drafts={[draft("constitution", "pending"), draft("specify", "rejected"), draft("plan", "rejected")]}
         stageDocsPresent={{ constitution: true, plan: true, tasks: true }}

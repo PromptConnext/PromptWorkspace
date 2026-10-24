@@ -1,5 +1,8 @@
 "use client";
 
+import Link from "next/link";
+import { claudeCodeCommand } from "@/components/ConnectSnippets";
+import { CLOUD_API_URL } from "@/lib/config";
 import type { RepoAnalysisOut, StageDraftOut, StageKind } from "@/lib/types";
 
 export type ChecklistStatus = "Waiting" | "Pending review" | "Rejected" | "Accepted";
@@ -34,10 +37,13 @@ const STATUS_CLASS: Record<ChecklistStatus, string> = {
 // Plan 0027 follow-up: an imported project is planned by the importer's own
 // coding agent through MCP tools; this lists what the agent still owes.
 export function AgentPlanningChecklist({
+  workspaceId,
   analysis,
   drafts,
   stageDocsPresent = {},
 }: {
+  /** The settings page holds the snippets for agents other than Claude Code. */
+  workspaceId: string;
   analysis: RepoAnalysisOut;
   drafts: StageDraftOut[];
   stageDocsPresent?: Partial<Record<StageKind, boolean>>;
@@ -58,10 +64,16 @@ export function AgentPlanningChecklist({
   return (
     <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm text-slate-700">
       <li>
-        <p>Install the PromptWorkspace MCP server and sign in</p>
-        <code className="mt-1 block rounded bg-slate-50 px-2 py-1 text-xs">
-          promptworkspace-mcp login
+        <p>Connect your coding agent to PromptWorkspace</p>
+        <code className="mt-1 block break-all rounded bg-slate-50 px-2 py-1 text-xs">
+          {claudeCodeCommand(CLOUD_API_URL)}
         </code>
+        <Link
+          href={`/w/${workspaceId}/settings`}
+          className="mt-1 inline-block text-xs text-indigo-600 hover:underline"
+        >
+          Other agents
+        </Link>
       </li>
       <li>
         <p>Open this repository in your coding agent and paste:</p>

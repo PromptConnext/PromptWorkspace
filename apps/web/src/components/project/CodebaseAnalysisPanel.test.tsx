@@ -62,7 +62,7 @@ describe("CodebaseAnalysisPanel", () => {
 
   it("shows the snapshot's stack, size and directory summary", () => {
     render(
-      <CodebaseAnalysisPanel projectId="p1" analysis={analysis()} canEdit onChange={vi.fn()} />,
+      <CodebaseAnalysisPanel workspaceId="w1" projectId="p1" analysis={analysis()} canEdit onChange={vi.fn()} />,
     );
     expect(screen.getByText(/42 files read/)).toBeInTheDocument();
     expect(screen.getByText("abcdef1")).toBeInTheDocument();
@@ -77,6 +77,7 @@ describe("CodebaseAnalysisPanel", () => {
     const base = analysis();
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({
           snapshot: {
@@ -101,6 +102,7 @@ describe("CodebaseAnalysisPanel", () => {
     const base = analysis();
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({
           snapshot: {
@@ -128,6 +130,7 @@ describe("CodebaseAnalysisPanel", () => {
     const base = analysis();
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({
           snapshot: { ...base.snapshot!, file_count: 52, skipped: [], skipped_count: 1 },
@@ -146,6 +149,7 @@ describe("CodebaseAnalysisPanel", () => {
     const base = analysis();
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({
           stale: true,
@@ -162,9 +166,9 @@ describe("CodebaseAnalysisPanel", () => {
   it("shows the checklist instead of the Analyze button for a required analysis", () => {
     const none = analysis({ status: "none", snapshot: null, baseline: "", commit_sha: null });
     const { unmount } = render(
-      <CodebaseAnalysisPanel projectId="p1" analysis={none} canEdit onChange={vi.fn()} />,
+      <CodebaseAnalysisPanel workspaceId="w1" projectId="p1" analysis={none} canEdit onChange={vi.fn()} />,
     );
-    expect(screen.getByText("promptworkspace-mcp login")).toBeInTheDocument();
+    expect(screen.getByText("Connect your coding agent to PromptWorkspace")).toBeInTheDocument();
     expect(screen.getByText("Wait for drafts")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /analyze/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
@@ -172,7 +176,7 @@ describe("CodebaseAnalysisPanel", () => {
     unmount();
 
     render(
-      <CodebaseAnalysisPanel projectId="p1" analysis={none} canEdit={false} onChange={vi.fn()} />,
+      <CodebaseAnalysisPanel workspaceId="w1" projectId="p1" analysis={none} canEdit={false} onChange={vi.fn()} />,
     );
     expect(screen.getByText("Wait for drafts")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /analyze/i })).not.toBeInTheDocument();
@@ -181,19 +185,21 @@ describe("CodebaseAnalysisPanel", () => {
   it("hides the checklist when the analysis is no longer required but keeps the baseline editor", () => {
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({ required: false })}
         canEdit
         onChange={vi.fn()}
       />,
     );
-    expect(screen.queryByText("promptworkspace-mcp login")).not.toBeInTheDocument();
+    expect(screen.queryByText("Connect your coding agent to PromptWorkspace")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Raw" })).toBeInTheDocument();
   });
 
   it("marks the baseline row accepted for a pre-existing cloud baseline and keeps stage rows waiting", () => {
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({ source: "cloud", model: "typhoon" })}
         canEdit
@@ -211,6 +217,7 @@ describe("CodebaseAnalysisPanel", () => {
   it("marks a stage row pending review when a draft exists", () => {
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis()}
         canEdit
@@ -226,6 +233,7 @@ describe("CodebaseAnalysisPanel", () => {
     const base = analysis();
     render(
       <CodebaseAnalysisPanel
+        workspaceId="w1"
         projectId="p1"
         analysis={analysis({ snapshot: { ...base.snapshot!, excerpts: [] } })}
         canEdit={false}
@@ -250,7 +258,7 @@ describe("CodebaseAnalysisPanel", () => {
     }) as unknown as typeof fetch;
     const onChange = vi.fn();
     render(
-      <CodebaseAnalysisPanel projectId="p1" analysis={analysis()} canEdit onChange={onChange} />,
+      <CodebaseAnalysisPanel workspaceId="w1" projectId="p1" analysis={analysis()} canEdit onChange={onChange} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Raw" }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Edited" } });
@@ -266,7 +274,7 @@ describe("CodebaseAnalysisPanel", () => {
     }) as unknown as typeof fetch;
     const onChange = vi.fn();
     render(
-      <CodebaseAnalysisPanel projectId="p1" analysis={analysis()} canEdit onChange={onChange} />,
+      <CodebaseAnalysisPanel workspaceId="w1" projectId="p1" analysis={analysis()} canEdit onChange={onChange} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Raw" }));

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { revokeAllOauthGrants } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
   AuthCard,
@@ -15,7 +16,7 @@ import {
 
 export default function ResetPasswordPage() {
   const stubRedirecting = useStubRedirect();
-  const { user, loading, updatePassword } = useAuth();
+  const { user, loading, updatePassword, authHeaders } = useAuth();
   const router = useRouter();
 
   const [password, setPassword] = useState("");
@@ -62,6 +63,11 @@ export default function ResetPasswordPage() {
     setPending(true);
     try {
       await updatePassword(password);
+      // A reset is the "my account may be compromised" path, so it also cuts
+      // off every connected agent. Fire and forget: the new password is set
+      // either way, and the user can revoke from /account/agents if this
+      // call is lost. Ordinary sign-out deliberately does not do this.
+      revokeAllOauthGrants(authHeaders()).catch(() => {});
       router.replace("/login");
     } catch (err) {
       setError((err as Error).message);

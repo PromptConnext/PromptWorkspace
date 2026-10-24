@@ -933,3 +933,36 @@ export interface WorkspaceFacts {
   by_runtime: Record<string, string[]>;
   agent_closed_30d: number;
 }
+
+// GET /oauth/authorize/{request_id} (apps/cloud): what the consent page shows.
+// `client_name`, `client_uri` and `logo_uri` are self-declared by the client;
+// only `vendor` is backed by `verified`.
+export interface ConsentView {
+  client_name: string;
+  client_uri: string | null;
+  logo_uri: string | null;
+  vendor: string | null;
+  verified: boolean;
+  redirect_host: string;
+  loopback: boolean;
+  scopes: string[];
+  account_email: string;
+  workspaces: { id: string; name: string }[];
+  expires_at: string;
+}
+
+export interface ConsentDecisionOut {
+  redirect_to: string;
+}
+
+// GET /me/oauth-grants: one row per refresh-token family a user approved.
+export interface OAuthGrantOut {
+  family_id: string;
+  client_id: string;
+  client_name: string;
+  vendor: string | null;
+  verified: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
