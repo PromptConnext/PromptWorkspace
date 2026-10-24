@@ -14,6 +14,7 @@ The pre-rename tree is tag `pre-promptworkspace-rename`.
 - **The Tauri identifier.** `com.promptconnext.promptworkspace` (reverse-DNS of the company domain).
 - **Company domains.** `promptconnext.com` (and its subdomains, e.g. `workspace-api.promptconnext.com`), `promptconnext.truthledgers.com`, `no-reply@promptconnext.com`. Each has a right boundary, so `promptconnext.commitScanLimit` is *not* mistaken for the domain.
 - **Company and copyright spans.** `© <year> PromptConnext`, `Copyright (c) <year> PromptConnext`, `PromptConnext Co.`, `<verb> by PromptConnext` for the company verbs only (`hosted`, `managed`, `minted`, `supplied`, `built`, `made`, `operated`, and never when followed by `Cloud`, `Workspace`, `Desktop`, `MCP` or `extension`, so "seeded by PromptConnext Cloud" is renamed), `PromptConnext company`, `PromptConnext is the company`, and the LICENSE's `permission from PromptConnext`.
+- **The npm package.** `@promptconnext/promptworkspace-mcp` (with a right boundary) and the phrase `@promptconnext scope`: the stdio MCP package is published under the company's npm org scope, which is fixed outside this repo.
 - **The pre-baseline table prefix.** `PRE_BASELINE_TABLE_PREFIX = "pz_"` in `apps/cloud/scripts/migrate.py`, the one constant the runner uses to recognise (and refuse) a database still on the old table names.
 - **Links to dated historical docs.** `promptzone-{design-system-plan,diagrams,platform-architecture,product-roadmap}.md` and `promptzone-graph.png` keep their file names, so references to them do too.
 

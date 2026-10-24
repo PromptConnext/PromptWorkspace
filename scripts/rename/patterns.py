@@ -36,6 +36,9 @@ PROTECTED: list[str] = [
     r"no-reply@promptconnext\.com" + _RB,
     r"promptconnext\.truthledgers\.com" + _RB,
     r"promptconnext\.com" + _RB,
+    # The npm package is published under the company's npm org scope.
+    r"@promptconnext/promptworkspace-mcp" + _RB,
+    r"@promptconnext(?=`?\s+scope\b)",
     # Company / copyright spans.
     r"©\s*\d{4}(?:[–-]\d{4})?\s+PromptConnext",
     r"Copyright \(c\) \d{4}(?:[–-]\d{4})? PromptConnext",
