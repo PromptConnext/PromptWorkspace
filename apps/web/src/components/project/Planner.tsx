@@ -223,13 +223,19 @@ const DRAFT_FORBIDDEN_TEXT = "Only your Tech Lead can accept this draft.";
 // project does not offer.
 const DRAFT_ERROR_TEXT: Record<string, string> = {
   draft_changed: "This draft changed since you opened it — reloading.",
+  requirement_required: "Accept the specification draft first — the plan is written against it.",
+  spec_document_required: "Accept the plan draft first — tasks are broken down from it.",
+  intent_not_approved: INTENT_WAITING_TEXT,
 };
 
 // A refused accept or reject, in words. The 409s are the same ordering codes
-// generation answers, so they read as the section's own blockedBy text does.
-function draftErrorText(err: unknown): string {
+// generation answers, reworded for a draft to accept rather than a document
+// to generate. `analysisText` is the baseline-gate sentence for this viewer
+// (an admin's agent submits the baseline; a member waits for one).
+function draftErrorText(err: unknown, analysisText: string): string {
   if (err instanceof ApiError && err.status === 403) return DRAFT_FORBIDDEN_TEXT;
   const code = (err as Error).message;
+  if (code === "repo_analysis_required") return analysisText;
   return DRAFT_ERROR_TEXT[code] ?? STAGE_ERROR_TEXT[code] ?? code;
 }
 
@@ -260,6 +266,7 @@ function StageSection({
   draft,
   draftCanAct = false,
   draftBlockedBy,
+  draftAnalysisText = ANALYSIS_GATE_TEXT,
   onDraftsChange,
 }: {
   projectId: string;
@@ -308,8 +315,11 @@ function StageSection({
   draft?: StageDraftOut;
   /** Whether the viewer may accept or reject `draft`. */
   draftCanAct?: boolean;
-  /** Why `draft` cannot be accepted yet (a missing predecessor). */
+  /** Why `draft` cannot be accepted yet (a missing predecessor, or the
+   *  codebase baseline gate). */
   draftBlockedBy?: string;
+  /** The baseline-gate sentence for this viewer, for a refused accept. */
+  draftAnalysisText?: string;
   /** Called after an accept or reject, so the Planner rereads the drafts. */
   onDraftsChange?: () => void;
 }) {
@@ -461,7 +471,7 @@ function StageSection({
       onDocPresence?.(stage, doc.content.trim().length > 0);
       if (doc.projection === "current") onGraphChange?.();
     } catch (err) {
-      setDraftError(draftErrorText(err));
+      setDraftError(draftErrorText(err, draftAnalysisText));
     } finally {
       onDraftsChange?.();
     }
@@ -473,7 +483,7 @@ function StageSection({
     try {
       await rejectStageDraft(projectId, stage, draft.id, note, authHeaders());
     } catch (err) {
-      setDraftError(draftErrorText(err));
+      setDraftError(draftErrorText(err, draftAnalysisText));
       // The banner keeps the typed note when the reject did not land.
       throw err;
     } finally {
@@ -492,6 +502,13 @@ function StageSection({
   // Until the stage has a document, generating it is the thing to do here;
   // after that the tab's "Continue to …" takes over as the primary action.
   const hasDoc = docContent.trim().length > 0;
+  // The banner beside a disabled Accept already says the baseline gate is
+  // closed; the section does not say it a second time.
+  const gateInBanner =
+    Boolean(analysisGate) &&
+    pendingDraft !== undefined &&
+    draftCanAct &&
+    draftBlockedBy === analysisGate;
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -522,7 +539,7 @@ function StageSection({
           {recommendation && !blockedBy && (
             <p className="mb-3 rounded bg-sky-50 p-3 text-xs text-sky-900">{recommendation}</p>
           )}
-          {analysisGate && (
+          {analysisGate && !gateInBanner && (
             <div className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">
               <p>{analysisGate}</p>
               {onOpenAnalysis && (
@@ -1451,7 +1468,11 @@ export function Planner({
                 agentPlanned={agentPlanned}
                 draft={drafts.find((d) => d.stage === stage)}
                 draftCanAct={isTechLead || !ADMIN_ONLY_STAGES.includes(stage)}
-                draftBlockedBy={blockedBy(meta)}
+                draftBlockedBy={
+                  blockedBy(meta) ??
+                  (stage === "plan" || stage === "tasks" ? analysisGate : undefined)
+                }
+                draftAnalysisText={isTechLead ? ANALYSIS_GATE_TEXT : ANALYSIS_GATE_MEMBER_TEXT}
                 onDraftsChange={refetchDrafts}
               />
             );

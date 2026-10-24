@@ -1462,8 +1462,50 @@ describe("Planner", () => {
     const panel = within(screen.getByRole("tabpanel", { name: /plan/i }));
     fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
     expect(
-      await panel.findByText("Generate the specification first — the plan is written against it."),
+      await panel.findByText("Accept the specification draft first — the plan is written against it."),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["spec_document_required", "tasks", "Accept the plan draft first — tasks are broken down from it."],
+    [
+      "intent_not_approved",
+      "plan",
+      "Waiting for the intent to be approved. The plan is written once the business owner approves it.",
+    ],
+    [
+      "repo_analysis_required",
+      "tasks",
+      "Waiting for the codebase baseline — this project was imported, so the plan and tasks are " +
+        "written against its code. Your coding agent submits it through the start_planning flow.",
+    ],
+  ])("words a %s refusal of an accept in draft terms", async (detail, stage, text) => {
+    mockImported("baseline_ready");
+    withDrafts(
+      () => [stageDraft({ stage })],
+      () => ({ ok: false, status: 409, json: async () => ({ detail }) }),
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    const tab = stage === "plan" ? /plan/i : /tasks/i;
+    await screen.findByRole("tab", { name: tab });
+    openTab(tab);
+    const panel = within(screen.getByRole("tabpanel", { name: tab }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+    expect(await panel.findByText(text)).toBeInTheDocument();
+  });
+
+  it("keeps Accept disabled while the codebase baseline gate is closed, saying so once", async () => {
+    mockImported("none");
+    withDrafts(() => [stageDraft({ stage: "plan" })]);
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /plan/i }));
+    const accept = await panel.findByRole("button", { name: "Accept" });
+    await waitFor(() => expect(accept).toBeDisabled());
+    expect(panel.getAllByText(/^Waiting for the codebase baseline/)).toHaveLength(1);
   });
 
   it("accepts the draft it shows, by id", async () => {
