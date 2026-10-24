@@ -1235,9 +1235,13 @@ describe("Planner", () => {
     expect(await screen.findByText("Codebase analysis")).toBeInTheDocument();
     await screen.findByRole("tab", { name: /plan/i });
     openTab(/plan/i);
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /generate plan/i })).toBeDisabled();
-    });
+    expect(
+      (
+        await screen.findAllByText(
+          "Waiting for the codebase baseline — this project was imported, so the plan and tasks are written against its code. Your coding agent submits it through the start_planning flow.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
     const gates = screen.getAllByRole("button", { name: /go to codebase analysis/i });
     expect(gates.length).toBeGreaterThan(0);
 
@@ -1255,9 +1259,23 @@ describe("Planner", () => {
     await screen.findByText(/analyzed — the plan and tasks are written against/i);
     openTab(/tasks/i);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /generate tasks/i })).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "Tasks document" })).toBeEnabled();
     });
-    expect(screen.queryByText(/analyze the repository first/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the codebase baseline/i)).not.toBeInTheDocument();
+  });
+
+  it("tells a member whose agent submits the baseline", async () => {
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    mockImported("none");
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /tasks/i });
+    openTab(/tasks/i);
+    expect(
+      await screen.findByText(
+        "Waiting for the codebase baseline — this project was imported, so the plan and tasks are written against its code. A workspace admin's coding agent submits it.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("does not mark Foundation done while a required analysis has no baseline", async () => {
@@ -1296,9 +1314,193 @@ describe("Planner", () => {
     fireEvent.click(button);
 
     expect(
-      await screen.findByText(/analyze the repository first — this project was imported/i),
+      await screen.findByText(/waiting for the codebase baseline — this project was imported/i),
     ).toBeInTheDocument();
     expect(screen.queryByText("repo_analysis_required")).not.toBeInTheDocument();
+  });
+
+  // An imported project is planned by the importer's local coding agent: its
+  // drafts arrive through MCP and are reviewed here, so the managed-model
+  // buttons are gone and the draft banner takes their place.
+  function stageDraft(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "sd1",
+      project_id: "p1",
+      stage: "specify",
+      markdown: "# Agent spec\n\nBilling for teams.",
+      source: "claude-code",
+      model: "claude-opus",
+      status: "pending",
+      stale: false,
+      rejection_note: null,
+      last_error: null,
+      created_by: "u1",
+      created_at: "2026-10-24T00:00:00Z",
+      warnings: [],
+      ...overrides,
+    };
+  }
+
+  function withDrafts(
+    drafts: () => unknown[],
+    accept?: (init?: RequestInit) => { ok: boolean; status?: number; json: () => Promise<unknown> },
+  ) {
+    const base = global.fetch;
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url.toString();
+      if (href.includes("/stage-drafts/") && href.endsWith("/accept") && accept) {
+        return Promise.resolve(accept(init));
+      }
+      if (href.endsWith("/projects/p1/stage-drafts")) {
+        return Promise.resolve({ ok: true, json: async () => drafts() });
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+  }
+
+  it("hides Generate and the draft button on an imported project and shows the draft banner", async () => {
+    mockImported("baseline_ready");
+    withDrafts(() => [stageDraft()]);
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    expect(await panel.findByText("Draft from your coding agent")).toBeInTheDocument();
+    expect(panel.getByText("claude-code · claude-opus")).toBeInTheDocument();
+    expect(panel.getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(panel.queryByRole("button", { name: /generate specification/i })).not.toBeInTheDocument();
+    expect(panel.queryByRole("button", { name: /draft the specify fields/i })).not.toBeInTheDocument();
+    // The editor stays (opened on Preview, since the document has text).
+    expect(
+      await panel.findByRole("region", { name: "Specification document" }),
+    ).toBeInTheDocument();
+
+    openTab(/tasks/i);
+    expect(screen.queryByRole("button", { name: /generate tasks/i })).not.toBeInTheDocument();
+  });
+
+  it("refetches drafts and the document after a draft is accepted", async () => {
+    const onChange = vi.fn();
+    mockImported("baseline_ready");
+    let pending = true;
+    withDrafts(
+      () => (pending ? [stageDraft()] : []),
+      () => {
+        pending = false;
+        return {
+          ok: true,
+          json: async () => ({
+            stage: "specify",
+            content: "# Agent spec\n\nBilling for teams.",
+            updated_at: "2026-10-24T01:00:00Z",
+            projection: "current",
+          }),
+        };
+      },
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={onChange} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+
+    await waitFor(() =>
+      expect(panel.queryByText("Draft from your coding agent")).not.toBeInTheDocument(),
+    );
+    const editor = panel.getByRole("region", { name: "Specification document" });
+    expect(within(editor).getByRole("heading", { name: "Agent spec" })).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalled();
+    const listCalls = fetchedHrefs().filter((h) => h.endsWith("/projects/p1/stage-drafts"));
+    expect(listCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the banner and says why when an accepted draft could not be applied", async () => {
+    mockImported("baseline_ready");
+    let lastError: string | null = null;
+    withDrafts(
+      () => [stageDraft({ last_error: lastError })],
+      () => {
+        lastError = "graph_write_failed";
+        return {
+          ok: true,
+          json: async () => ({
+            stage: "specify",
+            content: "# Agent spec",
+            updated_at: "2026-10-24T01:00:00Z",
+            projection: "failed",
+            error: "graph_write_failed",
+          }),
+        };
+      },
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+
+    expect(await panel.findByText("Could not apply: graph_write_failed")).toBeInTheDocument();
+    expect(panel.getByText("Draft from your coding agent")).toBeInTheDocument();
+    expect(
+      panel.getByText("Something went wrong applying this to the project — try saving again."),
+    ).toBeInTheDocument();
+  });
+
+  it("words the cloud's refusal of an accept", async () => {
+    mockImported("baseline_ready");
+    withDrafts(
+      () => [stageDraft({ stage: "plan" })],
+      () => ({ ok: false, status: 409, json: async () => ({ detail: "requirement_required" }) }),
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /plan/i }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+    expect(
+      await panel.findByText("Generate the specification first — the plan is written against it."),
+    ).toBeInTheDocument();
+  });
+
+  it("says only the Tech Lead may accept when the cloud answers 403", async () => {
+    mockImported("baseline_ready");
+    withDrafts(
+      () => [stageDraft()],
+      () => ({ ok: false, status: 403, json: async () => ({ detail: "admin_required" }) }),
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+    expect(await panel.findByText("Only your Tech Lead can accept this draft.")).toBeInTheDocument();
+  });
+
+  it("shows a member the plan draft without buttons", async () => {
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    mockImported("baseline_ready");
+    withDrafts(() => [stageDraft({ stage: "plan" })]);
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /plan/i }));
+    expect(await panel.findByText("Your Tech Lead reviews this draft.")).toBeInTheDocument();
+    expect(panel.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Generate for a project started from scratch", async () => {
+    render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    expect(screen.getByRole("button", { name: /generate specification/i })).toBeInTheDocument();
+    expect(screen.queryByText("Draft from your coding agent")).not.toBeInTheDocument();
+    expect(fetchedHrefs().some((h) => h.includes("/stage-drafts"))).toBe(false);
   });
 
   it("generates tasks with no user input once the spec and plan exist", async () => {
