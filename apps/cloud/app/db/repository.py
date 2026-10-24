@@ -60,6 +60,7 @@ from app.models.schemas import (
     Task,
     TaskLink,
     TaskStatus,
+    TaskSummary,
     Workspace,
     WorkspaceIntegration,
     WorkspaceMember,
@@ -749,6 +750,19 @@ class Repository(abc.ABC):
 
     @abc.abstractmethod
     def create_generation_run(self, run: GenerationRun) -> GenerationRun: ...
+
+    @abc.abstractmethod
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        """Non-tombstoned tasks of these projects, one batched read. `agent_closed`
+        is true when any artifact of the task carries a non-null `agent`."""
+
+    @abc.abstractmethod
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        """Newest receipt `created_at` per project; projects with none are absent."""
+
+    @abc.abstractmethod
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        """The workspace's generation runs with `created_at >= since`, newest first."""
 
     @abc.abstractmethod
     def update_generation_run(
@@ -1905,6 +1919,47 @@ class InMemoryRepository(Repository):
     def create_generation_run(self, run: GenerationRun) -> GenerationRun:
         self._generation_runs[run.id] = run
         return run
+
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        out: list[TaskSummary] = []
+        for pid in project_ids:
+            store = self._graph.get(pid)
+            if not store:
+                continue
+            closed = {
+                a.task_id
+                for a in store.get("artifacts", {}).values()
+                if a.deleted_at is None and a.agent is not None
+            }
+            for t in store.get("tasks", {}).values():
+                if t.deleted_at is not None:
+                    continue
+                out.append(
+                    TaskSummary(
+                        task_id=t.id,
+                        project_id=pid,
+                        status=t.status,
+                        assigned_user_id=t.assigned_user_id,
+                        agent_closed=t.id in closed,
+                        updated_at=t.updated_at or utcnow(),
+                    )
+                )
+        return out
+
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        return {
+            pid: max(r.created_at for r in self._receipts[pid])
+            for pid in project_ids
+            if self._receipts.get(pid)
+        }
+
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        runs = [
+            r
+            for r in self._generation_runs.values()
+            if r.workspace_id == workspace_id and r.created_at >= since
+        ]
+        return [copy.deepcopy(r) for r in sorted(runs, key=lambda r: r.created_at, reverse=True)]
 
     def update_generation_run(
         self,

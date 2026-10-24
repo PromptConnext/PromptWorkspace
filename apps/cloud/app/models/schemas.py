@@ -165,12 +165,20 @@ class Task(GraphEntity):
     change_id: str | None = None
 
 
+class ArtifactAgent(BaseModel):
+    """The coding agent that produced a closing artifact (plan 0033)."""
+
+    client: str
+    model: str | None = None
+
+
 class Artifact(GraphEntity):
     project_id: str
     task_id: str
     kind: ArtifactKind = ArtifactKind.code
     uri: str
     commit_sha: str | None = None
+    agent: ArtifactAgent | None = None
 
 
 class AgentRun(GraphEntity):
@@ -1447,6 +1455,17 @@ class Receipt(ReceiptDraft):
 class GenerateRequest(BaseModel):
     user_input: str
     options: dict = Field(default_factory=dict)
+
+
+class TaskSummary(BaseModel):
+    """A task reduced to what the workspace overview counts (plan 0033)."""
+
+    task_id: str
+    project_id: str
+    status: TaskStatus
+    assigned_user_id: str | None = None
+    agent_closed: bool = False
+    updated_at: datetime
 
 
 class GenerationRun(BaseModel):

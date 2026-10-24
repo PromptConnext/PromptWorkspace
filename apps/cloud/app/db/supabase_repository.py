@@ -26,6 +26,8 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
+from pydantic import TypeAdapter
+
 from app.db.merge import _as_dt, merge_entity
 from app.db.merge import incoming_dump as _incoming_dump
 from app.db.merge import unwritten_fields as _unwritten_fields
@@ -77,6 +79,7 @@ from app.models.schemas import (
     Task,
     TaskLink,
     TaskStatus,
+    TaskSummary,
     Workspace,
     WorkspaceIntegration,
     WorkspaceMember,
@@ -130,6 +133,7 @@ _PROJECT_ROLES = "pw_project_roles"
 _RECEIPTS = "pw_receipts"
 # PostgREST caps a response at max_rows (1000); a chain is read page by page.
 _RECEIPT_PAGE = 1000
+_DT = TypeAdapter(datetime)  # tolerant of PostgREST's timestamptz spellings
 # PostgREST's "table not in the schema cache" and Postgres' undefined_table:
 # what a read of pw_stage_inputs returns on a database migration 0003 hasn't
 # reached yet. Matched on the error's `code` attribute rather than by
@@ -1582,6 +1586,79 @@ class SupabaseRepository(Repository):
     def create_generation_run(self, run: GenerationRun) -> GenerationRun:
         self._table(_GENERATION_RUNS).insert(_dump(run), returning="minimal").execute()
         return run
+
+    def _paged(self, build) -> list[dict]:
+        """Drain a query past PostgREST's row cap; `build()` returns a fresh query."""
+        rows: list[dict] = []
+        start = 0
+        while True:
+            page = build().range(start, start + _RECEIPT_PAGE - 1).execute().data or []
+            rows.extend(page)
+            if len(page) < _RECEIPT_PAGE:
+                return rows
+            start += _RECEIPT_PAGE
+
+    def list_tasks_summary(self, project_ids: list[str]) -> list[TaskSummary]:
+        if not project_ids:
+            return []
+        task_rows = self._paged(
+            lambda: self._table("pw_tasks")
+            .select("id, project_id, status, assigned_user_id, updated_at")
+            .in_("project_id", project_ids)
+            .is_("deleted_at", "null")
+            .order("id")
+        )
+        art_rows = self._paged(
+            lambda: self._table("pw_artifacts")
+            .select("id, task_id")
+            .in_("project_id", project_ids)
+            .is_("deleted_at", "null")
+            .not_.is_("agent", "null")
+            .order("id")
+        )
+        closed = {r["task_id"] for r in art_rows}
+        return [
+            TaskSummary(
+                task_id=r["id"],
+                project_id=r["project_id"],
+                status=TaskStatus(r["status"]),
+                assigned_user_id=r.get("assigned_user_id"),
+                agent_closed=r["id"] in closed,
+                updated_at=r["updated_at"],
+            )
+            for r in task_rows
+        ]
+
+    def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
+        if not project_ids:
+            return {}
+        try:
+            rows = self._paged(
+                lambda: self._table(_RECEIPTS)
+                .select("project_id, created_at")
+                .in_("project_id", project_ids)
+                .order("created_at", desc=True)
+                .order("id")
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return {}
+            raise
+        latest: dict[str, datetime] = {}
+        for r in rows:
+            latest.setdefault(r["project_id"], _DT.validate_python(r["created_at"]))
+        return latest
+
+    def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
+        rows = self._paged(
+            lambda: self._table(_GENERATION_RUNS)
+            .select("*")
+            .eq("workspace_id", workspace_id)
+            .gte("created_at", since.isoformat())
+            .order("created_at", desc=True)
+            .order("id")
+        )
+        return [GenerationRun(**r) for r in rows]
 
     def update_generation_run(
         self,
