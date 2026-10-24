@@ -240,4 +240,45 @@ describe("PolicyScopePanel", () => {
     );
     expect(screen.queryByRole("button", { name: "Use workspace scope" })).not.toBeInTheDocument();
   });
+
+  it("hides Use workspace scope when readOnly", async () => {
+    mockFetch();
+    render(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope_source: "project" })}
+        readOnly
+        onChange={vi.fn()}
+      />,
+    );
+    await screen.findByRole("checkbox", { name: /gdpr/i });
+    expect(screen.queryByRole("button", { name: "Use workspace scope" })).not.toBeInTheDocument();
+  });
+
+  it("explains an unknown template rejection", async () => {
+    mockFetch({ patchFailure: { status: 422, detail: "unknown_policy_template" } });
+    render(<PolicyScopePanel project={makeProject()} readOnly={false} onChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: /gdpr/i }));
+    expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
+  });
+
+  it("keeps the typed text after a failed save when new props arrive", async () => {
+    mockFetch({ patchFailure: { status: 422, detail: "custom_text_too_long" } });
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <PolicyScopePanel project={makeProject()} readOnly={false} onChange={onChange} />,
+    );
+    const textarea = await screen.findByLabelText(/custom policy text/i);
+    fireEvent.change(textarea, { target: { value: "my unsaved text" } });
+    fireEvent.blur(textarea);
+    await screen.findByText(/keep it under 20,000 characters/i);
+
+    rerender(
+      <PolicyScopePanel
+        project={makeProject({ policy_scope: { selected: [], custom_text: "server value" } })}
+        readOnly={false}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByLabelText(/custom policy text/i)).toHaveValue("my unsaved text");
+  });
 });

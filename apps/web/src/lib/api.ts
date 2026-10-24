@@ -331,10 +331,6 @@ export function updatePolicyScope(
   });
 }
 
-export function getGovernance(workspaceId: string, authHeaders: Record<string, string>) {
-  return apiFetch<WorkspaceGovernance>(`/workspaces/${workspaceId}/governance`, authHeaders);
-}
-
 // Full replace: the body is the workspace's entire governance going forward.
 export function putGovernance(
   workspaceId: string,
@@ -349,7 +345,7 @@ export function putGovernance(
 
 // Put a project back on the workspace policy scope; 409 project_frozen once
 // its repository exists.
-export function useWorkspaceScope(projectId: string, authHeaders: Record<string, string>) {
+export function adoptWorkspaceScope(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<Project>(`/projects/${projectId}/policy-scope/use-workspace`, authHeaders, {
     method: "POST",
   });

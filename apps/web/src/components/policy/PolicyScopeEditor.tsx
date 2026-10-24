@@ -23,7 +23,8 @@ export function PolicyScopeEditor({
   scope: PolicyScope | null | undefined;
   templates: PolicyTemplateOut[] | null;
   readOnly: boolean;
-  onSave: (scope: PolicyScope) => void;
+  // Resolve false when the save failed, so unsaved text survives a prop refetch.
+  onSave: (scope: PolicyScope) => void | Promise<boolean>;
   onEdit?: (scope: PolicyScope) => void;
   emptyHint?: string;
 }) {
@@ -53,7 +54,12 @@ export function PolicyScopeEditor({
 
   function commit(next: PolicyScope) {
     dirtyRef.current = false;
-    onSave(next);
+    const result = onSave(next);
+    if (result instanceof Promise) {
+      void result.then((ok) => {
+        if (!ok) dirtyRef.current = true;
+      });
+    }
   }
 
   function toggle(id: string) {

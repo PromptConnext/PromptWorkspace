@@ -29,11 +29,17 @@ function plural(n: number, one: string, many: string) {
 }
 
 // Where a failing check is fixed, keyed off the check id the server emits.
-function fixHref(workspaceId: string, projectId: string, check: ProjectCheck): string {
+function fixLink(
+  workspaceId: string,
+  projectId: string,
+  check: ProjectCheck,
+): { href: string; label: string } {
   const base = `/w/${workspaceId}/p/${projectId}`;
-  if (check.id.startsWith("hat_")) return `${base}/settings`;
-  if (check.id.startsWith("policy_")) return `${base}?tab=planner`;
-  return `${base}?tab=decisions`;
+  if (check.id.startsWith("hat_")) return { href: `${base}/settings`, label: "Assign roles" };
+  if (check.id.startsWith("policy_")) {
+    return { href: `${base}?tab=planner`, label: "Review policy scope" };
+  }
+  return { href: `${base}?tab=decisions`, label: "Open decisions" };
 }
 
 function Switch({
@@ -196,17 +202,17 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
                   <span className="ml-2 text-xs text-green-700">Follows workspace rules</span>
                 ) : (
                   <ul className="mt-1 space-y-0.5">
-                    {failing.map((c) => (
-                      <li key={c.id} className="text-xs text-amber-700">
-                        {c.text}{" "}
-                        <Link
-                          href={fixHref(workspaceId, p.project_id, c)}
-                          className="underline hover:text-amber-900"
-                        >
-                          Fix
-                        </Link>
-                      </li>
-                    ))}
+                    {failing.map((c) => {
+                      const fix = fixLink(workspaceId, p.project_id, c);
+                      return (
+                        <li key={c.id} className="text-xs text-amber-700">
+                          {c.text}{" "}
+                          <Link href={fix.href} className="underline hover:text-amber-900">
+                            {fix.label}
+                          </Link>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </li>

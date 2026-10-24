@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PolicyScopeEditor } from "@/components/policy/PolicyScopeEditor";
-import { updatePolicyScope, useWorkspaceScope as applyWorkspaceScope } from "@/lib/api";
+import { updatePolicyScope, adoptWorkspaceScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useCloudGet } from "@/lib/hooks";
 import type { PolicyScope, PolicyTemplateOut, Project } from "@/lib/types";
@@ -55,8 +55,8 @@ export function PolicyScopePanel({
     lastSavedRef.current = project.policy_scope ?? EMPTY_SCOPE;
   }, [project.policy_scope]);
 
-  async function save(nextScope: PolicyScope) {
-    if (scopesEqual(nextScope, lastSavedRef.current)) return;
+  async function save(nextScope: PolicyScope): Promise<boolean> {
+    if (scopesEqual(nextScope, lastSavedRef.current)) return true;
     setStatus("saving");
     setErrorDetail(null);
     try {
@@ -64,9 +64,11 @@ export function PolicyScopePanel({
       lastSavedRef.current = updated.policy_scope ?? nextScope;
       setStatus("saved");
       onChange();
+      return true;
     } catch (err) {
       setStatus("error");
       setErrorDetail((err as Error).message);
+      return false;
     }
   }
 
@@ -74,7 +76,7 @@ export function PolicyScopePanel({
     setStatus("saving");
     setErrorDetail(null);
     try {
-      const updated = await applyWorkspaceScope(project.id, authHeaders());
+      const updated = await adoptWorkspaceScope(project.id, authHeaders());
       lastSavedRef.current = updated.policy_scope ?? EMPTY_SCOPE;
       setStatus("saved");
       onChange();
@@ -118,7 +120,7 @@ export function PolicyScopePanel({
         scope={project.policy_scope}
         templates={templates}
         readOnly={readOnly}
-        onSave={(scope) => void save(scope)}
+        onSave={save}
         emptyHint="Select policy scope before generating the constitution so compliance principles are included."
       />
 

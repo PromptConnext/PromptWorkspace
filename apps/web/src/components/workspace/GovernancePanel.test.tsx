@@ -83,11 +83,11 @@ describe("GovernancePanel", () => {
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText(/No tech steward assigned/)).toBeInTheDocument();
     expect(screen.queryByText(/Has a business owner assigned/)).not.toBeInTheDocument();
-    const links = screen.getAllByRole("link").map((l) => l.getAttribute("href"));
+    const links = screen.getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")]);
     expect(links).toEqual([
-      "/w/w1/p/p1/settings",
-      "/w/w1/p/p1?tab=planner",
-      "/w/w1/p/p1?tab=decisions",
+      ["Assign roles", "/w/w1/p/p1/settings"],
+      ["Review policy scope", "/w/w1/p/p1?tab=planner"],
+      ["Open decisions", "/w/w1/p/p1?tab=decisions"],
     ]);
     expect(screen.getByText("Beta")).toBeInTheDocument();
     expect(screen.getByText("Follows workspace rules")).toBeInTheDocument();
@@ -116,5 +116,23 @@ describe("GovernancePanel", () => {
       require_seeded_rules: false,
     });
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  it("turning the owner switch off saves no required hats", async () => {
+    putGovernance.mockResolvedValue(GOV);
+    render(<GovernancePanel workspaceId="w1" />);
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Every project needs a business owner and a tech steward" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putGovernance).toHaveBeenCalledTimes(1));
+    expect(putGovernance.mock.calls[0][1].required_hats).toEqual([]);
+  });
+
+  it("shows the mapped sentence when the save is rejected", async () => {
+    putGovernance.mockRejectedValue(new Error("custom_text_too_long"));
+    render(<GovernancePanel workspaceId="w1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/keep it under 20,000 characters/i)).toBeInTheDocument();
   });
 });
