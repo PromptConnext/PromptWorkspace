@@ -9,7 +9,14 @@ from postgrest.exceptions import APIError
 
 from app.db.repository import DeliveryStoreUnavailable
 from app.db.supabase_repository import _SERVICE_ONLY_TABLES, SupabaseRepository
-from app.models.schemas import Decision, DeliveryChange, StageDocument
+from app.models.schemas import (
+    Decision,
+    DeliveryChange,
+    ProjectRole,
+    RepoAnalysis,
+    RepoSnapshot,
+    StageDocument,
+)
 
 
 class _Result:
@@ -277,5 +284,148 @@ def test_listing_decisions_reads_snapshots_by_project_not_by_every_id():
     decisions = _repo(client).list_decisions("p")
 
     # Filtered by project only: no URL that grows with the history.
-    assert {col for _t, col, _v in client.in_filters} == {"project_id"}
+    snapshot_filters = [f for f in client.in_filters if f[0] == "pw_decision_snapshots"]
+    assert snapshot_filters == [("pw_decision_snapshots", "project_id", ["p"])]
     assert decisions[0].subject_content == "# Spec"
+
+
+# --- batched reads (plan 0033 task 22) -------------------------------------
+
+
+class _RpcError(Exception):
+    def __init__(self, code: str, message: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class _TableClient(_Client):
+    """Rows per table, a record of which tables were read, and a scriptable rpc."""
+
+    def __init__(self, rows_by_table=None, rpc_rows=None, rpc_error=None):
+        super().__init__()
+        self.rows_by_table = rows_by_table or {}
+        self.reads: list[str] = []
+        self.rpc_rows = rpc_rows or []
+        self.rpc_error = rpc_error
+        self.rpc_calls: list[tuple[str, dict]] = []
+
+    def table(self, name: str):
+        client = self
+
+        class _Q(_Query):
+            def execute(self):
+                client.reads.append(name)
+                return _Result(client.rows_by_table.get(name, []))
+
+        return _Q(self, name)
+
+    def rpc(self, name: str, params: dict):
+        client = self
+        client.rpc_calls.append((name, params))
+
+        class _Call:
+            def execute(self):
+                if client.rpc_error is not None:
+                    raise client.rpc_error
+                return _Result(client.rpc_rows)
+
+        return _Call()
+
+
+def test_latest_receipt_at_is_one_rpc_and_no_table_read():
+    client = _TableClient(rpc_rows=[
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+        {"project_id": "b", "created_at": "2026-10-02T00:00:00+00:00"},
+    ])
+    got = _repo(client).latest_receipt_at(["a", "b", "c"])
+
+    assert client.rpc_calls == [("pw_latest_receipt_at", {"p_project_ids": ["a", "b", "c"]})]
+    assert client.reads == []
+    assert set(got) == {"a", "b"}
+    assert got["b"].day == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [_RpcError("42883", "function does not exist"), _RpcError("PGRST202", "Could not find")],
+)
+def test_latest_receipt_at_falls_back_to_the_paged_read(error):
+    rows = [  # newest first, as the query orders them
+        {"project_id": "a", "created_at": "2026-10-03T00:00:00+00:00"},
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+        {"project_id": "b", "created_at": "2026-10-02T00:00:00+00:00"},
+    ]
+    client = _TableClient(rows_by_table={"pw_receipts": rows}, rpc_error=error)
+
+    got = _repo(client).latest_receipt_at(["a", "b"])
+
+    assert len(client.rpc_calls) == 1
+    assert client.reads == ["pw_receipts"]
+    assert {k: v.day for k, v in got.items()} == {"a": 3, "b": 2}
+
+
+def test_latest_receipt_at_other_rpc_errors_still_raise():
+    client = _TableClient(rpc_error=_RpcError("57014", "statement timeout"))
+    with pytest.raises(_RpcError):
+        _repo(client).latest_receipt_at(["a"])
+    assert client.reads == []
+
+
+def test_list_decisions_for_is_one_decision_read_and_one_snapshot_read():
+    older = DECISION.model_copy(update={"id": "d1", "project_id": "a"})
+    newer = DECISION.model_copy(update={"id": "d2", "project_id": "a"})
+    other = DECISION.model_copy(update={"id": "d3", "project_id": "b"})
+    rows = [d.model_dump(mode="json") for d in (newer, older, other)]  # newest first
+    client = _TableClient(rows_by_table={
+        "pw_decisions": rows,
+        "pw_decision_snapshots": [{"decision_id": "d2", "content": "# Spec"}],
+    })
+
+    got = _repo(client).list_decisions_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_decisions", "pw_decision_snapshots"]
+    assert client.in_filters == [
+        ("pw_decisions", "project_id", ["a", "b", "c"]),
+        ("pw_decision_snapshots", "project_id", ["a", "b", "c"]),
+    ]
+    assert set(got) == {"a", "b", "c"}
+    assert [d.id for d in got["a"]] == ["d2", "d1"]
+    assert got["a"][0].subject_content == "# Spec"
+    assert [d.id for d in got["b"]] == ["d3"]
+    assert got["c"] == []
+
+
+def test_list_project_roles_for_is_one_read_grouped_by_project():
+    def role(pid, hat):
+        return ProjectRole(
+            project_id=pid, workspace_id="w", hat=hat, user_id="u", assigned_by="x"
+        ).model_dump(mode="json")
+
+    client = _TableClient(rows_by_table={
+        "pw_project_roles": [role("a", "business_owner"), role("a", "tech_steward"),
+                             role("b", "business_owner")],
+    })
+
+    got = _repo(client).list_project_roles_for(["a", "b", "c"])
+
+    assert client.reads == ["pw_project_roles"]
+    assert client.in_filters == [("pw_project_roles", "project_id", ["a", "b", "c"])]
+    assert [r.hat for r in got["a"]] == ["business_owner", "tech_steward"]
+    assert len(got["b"]) == 1
+    assert got["c"] == []
+
+
+def test_get_repo_analyses_is_one_read_with_only_present_keys():
+    row = RepoAnalysis(
+        project_id="a", workspace_id="w", commit_sha="c" * 40,
+        snapshot=RepoSnapshot(commit_sha="c" * 40, default_branch="main", file_count=0),
+        created_by="u",
+    ).model_dump(mode="json")
+    client = _TableClient(rows_by_table={"pw_repo_analyses": [row]})
+
+    got = _repo(client).get_repo_analyses(["a", "b"])
+
+    assert client.reads == ["pw_repo_analyses"]
+    assert client.in_filters == [("pw_repo_analyses", "project_id", ["a", "b"])]
+    assert set(got) == {"a"}
+    assert _repo(_TableClient()).get_repo_analyses([]) == {}
