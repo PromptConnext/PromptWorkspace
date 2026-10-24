@@ -1591,8 +1591,8 @@ StageDraftStatus = Literal["pending", "rejected"]
 
 class StageDraft(BaseModel):
     """A planning document a local coding agent submitted, awaiting a
-    decision from someone who may author that stage. One row per (project, stage); a new submission replaces
-    the old one."""
+    decision from someone who may author that stage. One row per (project,
+    stage); a new submission replaces the old one."""
 
     id: str = Field(default_factory=new_id)
     project_id: str
