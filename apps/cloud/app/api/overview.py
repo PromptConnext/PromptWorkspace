@@ -21,6 +21,7 @@ from app.models.schemas import (
 )
 from app.overview.cards import build_card
 from app.overview.checks import run_checks
+from app.overview.people import build_links
 from app.overview.report import build_discipline, build_usage
 from app.policies.scope import validate_scope
 
@@ -52,12 +53,15 @@ def get_overview(
         tasks_by_project.setdefault(t.project_id, []).append(t)
     receipts = repo.latest_receipt_at(ids)
 
+    roles_by_project = {p.id: repo.list_project_roles(p.id) for p in projects}
+    decisions_by_project = {p.id: repo.list_decisions(p.id) for p in projects}
+
     cards = [
         build_card(
             p,
-            repo.list_project_roles(p.id),
+            roles_by_project[p.id],
             tasks_by_project[p.id],
-            repo.list_decisions(p.id),
+            decisions_by_project[p.id],
             repo.get_repo_analysis(p.id),
             governance,
             receipts.get(p.id),
@@ -70,7 +74,11 @@ def get_overview(
         generated_at=now,
         members=repo.list_members(workspace_id),
         projects=cards,
-        people=[],
+        people=build_links(
+            roles_by_project,
+            [t for ts in tasks_by_project.values() for t in ts],
+            decisions_by_project,
+        ),
         truncated=truncated,
     )
 
