@@ -1,5 +1,5 @@
 """Repository CRUD for pw_stage_drafts and the provenance defaults added by
-migration 0011 (design 2026-10-24-local-agent-brownfield-planning)."""
+migration 0012 (design 2026-10-24-local-agent-brownfield-planning)."""
 
 from __future__ import annotations
 

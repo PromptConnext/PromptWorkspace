@@ -243,7 +243,7 @@ def test_member_cannot_write_a_repo_analysis_directly(
 def test_member_cannot_touch_stage_drafts_directly(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
-    """Migration 0011: `pw_stage_drafts` is born service-only (RLS on, no
+    """Migration 0012: `pw_stage_drafts` is born service-only (RLS on, no
     policy, grants revoked from `authenticated` and `anon`). A draft is an
     agent's proposed stage markdown awaiting admin approval, so a member
     inserting, rewriting or deleting one straight through PostgREST would

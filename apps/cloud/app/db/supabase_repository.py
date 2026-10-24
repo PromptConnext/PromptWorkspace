@@ -216,7 +216,7 @@ _SERVICE_ONLY_TABLES = frozenset(
         # customer's source and the admin-only baseline — the rule that only
         # an admin analyses or edits lives in app/api/repo_analysis.py alone.
         "pw_repo_analyses",
-        # Migration 0011: born service-only. Agent-submitted drafts; every
+        # Migration 0012: born service-only. Agent-submitted drafts; every
         # rule lives in app/api/stage_drafts.py.
         "pw_stage_drafts",
         # Migration 0003: born service-only like pw_stage_documents ended up.

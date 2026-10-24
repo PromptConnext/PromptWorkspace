@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Tables are `pw_*`. Next migration file is `apps/cloud/migrations/0011_pw_stage_drafts.sql`; check the directory before claiming the number.
+- Tables are `pw_*`. Next migration file is `apps/cloud/migrations/0012_pw_stage_drafts.sql` (0011 went to plan 0033's workspace governance); check the directory before claiming the number.
 - New table is born service-only: RLS enabled with no policy, `revoke all ... from authenticated` and `from anon`, `grant select, insert, update, delete ... to service_role`, name added to `_SERVICE_ONLY_TABLES` in `apps/cloud/app/db/supabase_repository.py`.
 - Stage kinds stay `constitution | specify | plan | tasks`. No renames.
 - Per-stage access is `require_stage_access(repo, project, stage, user)` from `app/api/_guards.py`; baseline writes are `require_admin`.

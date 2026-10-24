@@ -1325,7 +1325,7 @@ class StageDocument(BaseModel):
     # worker's duck-typed tombstone check (`node.deleted_at`), shared with
     # every other node_type, works unmodified for this one too.
     deleted_at: datetime | None = None
-    # Provenance: None for rows written before migration 0011.
+    # Provenance: None for rows written before migration 0012.
     source: StageDocumentSource | None = None
 
 

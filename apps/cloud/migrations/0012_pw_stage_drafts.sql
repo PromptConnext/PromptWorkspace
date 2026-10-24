@@ -1,4 +1,4 @@
--- 0011_pw_stage_drafts — agent-written planning drafts and provenance
+-- 0012_pw_stage_drafts — agent-written planning drafts and provenance
 -- (design 2026-10-24-local-agent-brownfield-planning). Idempotent.
 -- Service-only like pw_repo_analyses: every rule lives in app/api/stage_drafts.py.
 -- DEPLOY ORDER: apply BEFORE deploying this code (the adapter inserts `source`).
