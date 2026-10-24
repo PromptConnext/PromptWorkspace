@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Planner } from "./Planner";
 import type { Project } from "@/lib/types";
@@ -1593,6 +1593,61 @@ describe("Planner", () => {
     const text = "Waiting on Implementation plan — your Tech Lead accepts it.";
     await waitFor(() => expect(panel.getAllByText(text)).toHaveLength(1));
     expect(panel.getByRole("button", { name: "Accept" })).toBeDisabled();
+  });
+
+  // The checklist waits on the importer's terminal sitting, so the Planner
+  // rereads the analysis and drafts while the page is visible.
+  function draftListCalls(): number {
+    return fetchedHrefs().filter((h) => h.endsWith("/projects/p1/stage-drafts")).length;
+  }
+
+  it("polls the drafts every 15 s while an imported project waits for tasks", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockImported("baseline_ready");
+      withDrafts(() => []);
+      render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+      await screen.findByRole("tab", { name: /tasks/i });
+      await waitFor(() => expect(draftListCalls()).toBe(1));
+
+      await act(async () => {
+        vi.advanceTimersByTime(15_000);
+      });
+      await waitFor(() => expect(draftListCalls()).toBe(2));
+      const analysisCalls = fetchedHrefs().filter((h) => h.endsWith("/repo-analysis")).length;
+      expect(analysisCalls).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling once the tasks document is present", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockImported("baseline_ready");
+      const base = global.fetch;
+      global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const href = url.toString();
+        if (href.includes("/stage-documents/tasks")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ stage: "tasks", content: "# Tasks", updated_at: null }),
+          });
+        }
+        return base(url, init);
+      }) as unknown as typeof fetch;
+      withDrafts(() => []);
+      render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+      await screen.findByRole("tab", { name: /tasks/i });
+      await waitFor(() => expect(draftListCalls()).toBe(1));
+
+      await act(async () => {
+        vi.advanceTimersByTime(45_000);
+      });
+      expect(draftListCalls()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps Generate for a project started from scratch", async () => {

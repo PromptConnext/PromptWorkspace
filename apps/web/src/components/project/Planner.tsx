@@ -211,6 +211,9 @@ const ANALYSIS_GATE_MEMBER_TEXT =
   "Waiting for the codebase baseline — this project was imported, so the plan and tasks are " +
   "written against its code. A workspace admin's coding agent submits it.";
 
+// How often an agent-planned project rereads its baseline and drafts.
+const PLANNING_POLL_MS = 15_000;
+
 // The cloud refuses a draft accept with 403 when the caller may not author
 // the stage (app/api/_guards.py::require_stage_access).
 const DRAFT_FORBIDDEN_TEXT = "Only your Tech Lead can accept this draft.";
@@ -971,21 +974,27 @@ export function Planner({
       })
       .catch(() => undefined);
   }, [projectId, authHeaders]);
+  // Same sequence rule as the drafts: only the latest read lands, so a slow
+  // poll cannot overwrite a newer answer.
+  const analysisRead = useRef(0);
+  const refetchAnalysis = useCallback(() => {
+    const read = ++analysisRead.current;
+    getRepoAnalysis(projectId, authHeaders())
+      .then((result) => {
+        if (read === analysisRead.current) setAnalysis(result);
+      })
+      .catch(() => undefined);
+  }, [projectId, authHeaders]);
   useEffect(() => {
     if (!analysisApplies) {
       setAnalysis(null);
       setDrafts([]);
       return;
     }
-    let cancelled = false;
-    getRepoAnalysis(projectId, authHeaders())
-      .then((result) => {
-        if (!cancelled) setAnalysis(result);
-      })
-      .catch(() => undefined);
+    refetchAnalysis();
     refetchDrafts();
     return () => {
-      cancelled = true;
+      analysisRead.current++;
       draftsRead.current++;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1001,6 +1010,44 @@ export function Planner({
   // An imported project before repo_created is planned by the importer's local
   // coding agent; the managed-model buttons are not offered on it.
   const agentPlanned = analysisRequired;
+
+  // The baseline and drafts arrive from the importer's terminal sitting while
+  // this page is open, so reread both every 15 s until the tasks document
+  // exists — only while the page is visible, and once more on returning to it.
+  const pollPlanning = analysisRequired && docPresent.tasks !== true;
+  useEffect(() => {
+    if (!pollPlanning) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
+      refetchAnalysis();
+      refetchDrafts();
+    };
+    const start = () => {
+      if (timer === null && document.visibilityState === "visible") {
+        timer = setInterval(tick, PLANNING_POLL_MS);
+      }
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        tick();
+        start();
+      } else {
+        stop();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [pollPlanning, refetchAnalysis, refetchDrafts]);
   const analysisGate =
     analysisRequired && analysis?.status !== "baseline_ready"
       ? isTechLead
