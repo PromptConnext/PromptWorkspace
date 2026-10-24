@@ -812,3 +812,46 @@ export interface InboxItem {
   /** Who sent a request back; set only on the caller's own sent-back items. */
   resolver_email?: string | null;
 }
+
+export interface ProjectCheck {
+  id: string;
+  ok: boolean;
+  text: string;
+}
+
+export interface PersonLink {
+  kind: "hat" | "work" | "approval";
+  from_user_id: string;
+  to_user_id: string | null;
+  project_id: string | null;
+  hat: string | null;
+  weight: number;
+}
+
+export interface ProjectCard {
+  id: string;
+  name: string;
+  lifecycle_status: string;
+  live_url: string | null;
+  updated_at: string;
+  hats: { business_owner: string | null; tech_steward: string | null };
+  /** User ids, most tasks first. */
+  contributors: string[];
+  task_counts: { todo: number; in_progress: number; implemented: number; verified: number };
+  decisions: { open: number; overdue: number; expired_30d: number };
+  stack: { runtime: string | null; languages: string[] } | null;
+  policy: { source: "workspace" | "project"; selected: string[] };
+  /** Includes ok:true entries with positive text; the governance line uses the first with ok === false. */
+  checks: ProjectCheck[];
+  agent_closed_30d: number;
+  last_activity_at: string;
+}
+
+export interface WorkspaceOverview {
+  workspace_id: string;
+  generated_at: string;
+  truncated: boolean;
+  members: WorkspaceMember[];
+  projects: ProjectCard[];
+  people: PersonLink[];
+}
