@@ -124,6 +124,10 @@ The instruction text in the brief tells the agent, in order: fetch and read the 
 - Rejection carries a note the agent sees next time.
 - Size cap 100k characters, matching the existing baseline cap.
 - Plan 0025 and `CLAUDE.md` get a dated amendment lifting the four-tool ceiling for planning reads and draft writes, keeping the graph-write and claim-tool prohibitions.
+- A too-long body is Pydantic's 422, mapped to words in the MCP tool, not a 413.
+- The MCP tools validate the cloud's field bounds locally before sending.
+- The brief carries `default_branch`, `repo_url` and `can_submit_analysis`.
+- `project_description` is always empty, because `Project` has no description field.
 
 ## Left to the builder
 
