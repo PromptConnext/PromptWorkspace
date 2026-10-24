@@ -150,7 +150,7 @@ export function MemberPanel({
           <ProjectDecisionsProbe
             key={pid}
             projectId={pid}
-            projectName={names.get(pid) ?? pid}
+            projectName={names.get(pid) ?? "Unknown project"}
             hats={hats}
             onItems={onItems}
           />
@@ -164,7 +164,7 @@ export function MemberPanel({
           <ul className="mt-1 space-y-1 text-sm text-slate-900">
             {hatEdges.map((l) => (
               <li key={`${l.project_id}:${l.hat}`}>
-                {HAT_LABEL[l.hat as string] ?? l.hat} · {names.get(l.project_id as string) ?? l.project_id}
+                {HAT_LABEL[l.hat as string] ?? l.hat} · {names.get(l.project_id as string) ?? "Unknown project"}
               </li>
             ))}
           </ul>

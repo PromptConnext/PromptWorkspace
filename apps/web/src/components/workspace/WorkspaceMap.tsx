@@ -129,7 +129,7 @@ export function WorkspaceMap({
           const isMember = n.type === "member";
           const m = isMember ? memberById.get(n.refId) : undefined;
           const p = isMember ? undefined : projectById.get(n.refId);
-          const label = isMember ? memberFullName(m) : (p?.name ?? n.refId);
+          const label = isMember ? memberFullName(m) : (p?.name ?? "Unknown project");
           const dim = hover !== null && hover !== n.id && !edges.some(
             (e) => (e.from === hover && e.to === n.id) || (e.to === hover && e.from === n.id),
           );

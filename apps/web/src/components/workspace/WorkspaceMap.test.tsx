@@ -94,3 +94,11 @@ describe("WorkspaceMap names", () => {
     expect(screen.queryByLabelText(/u-raw-id/)).toBeNull();
   });
 });
+
+describe("WorkspaceMap unknown project", () => {
+  it("a link to a project missing from the overview is not labelled with its id", () => {
+    const ov = overview([link({ kind: "hat", project_id: "p-gone-uuid", hat: "business_owner" })]);
+    render(<WorkspaceMap overview={ov} workspaceId="w1" onSelectMember={() => {}} />);
+    expect(screen.queryByLabelText(/p-gone-uuid/)).toBeNull();
+  });
+});

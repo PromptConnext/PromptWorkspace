@@ -136,3 +136,15 @@ describe("MemberPanel names and headings", () => {
     expect(screen.queryByText("In progress")).toBeNull();
   });
 });
+
+describe("MemberPanel unknown project", () => {
+  beforeEach(() => mockApi({}));
+  afterEach(cleanup);
+
+  it("a hat on a project outside the overview reads Unknown project, never the id", () => {
+    const people = [link({ kind: "hat", project_id: "p-gone-uuid", hat: "tech_steward" })];
+    panel({ overview: overview(people) });
+    expect(screen.getByText("Tech steward · Unknown project")).toBeInTheDocument();
+    expect(screen.queryByText(/p-gone-uuid/)).toBeNull();
+  });
+});

@@ -6,7 +6,7 @@ import { GovernancePanel } from "./GovernancePanel";
 const refetch = vi.fn();
 const putGovernance = vi.fn();
 
-const GOV = {
+let GOV: Record<string, unknown> = {
   workspace_id: "w1",
   policy_scope: { selected: ["gdpr"], custom_text: "" },
   required_hats: ["business_owner", "tech_steward"],
@@ -66,7 +66,9 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+const GOV_DEFAULT = { ...GOV };
 afterEach(() => {
+  GOV = { ...GOV_DEFAULT };
   cleanup();
   vi.resetAllMocks();
 });
@@ -136,5 +138,20 @@ describe("GovernancePanel", () => {
     render(<GovernancePanel workspaceId="w1" />);
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/keep it under 20,000 characters/i)).toBeInTheDocument();
+  });
+});
+
+describe("GovernancePanel applies-to copy", () => {
+  it("singular project, one own-scope project", () => {
+    GOV = { ...GOV, inheriting_unfrozen: 1, own_scope: ["X"] };
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(screen.getByText("Applies to 1 project. 1 project uses its own scope: X.")).toBeInTheDocument();
+  });
+
+  it("omits the own-scope half when none", () => {
+    GOV = { ...GOV, inheriting_unfrozen: 3, own_scope: [] };
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(screen.getByText("Applies to 3 projects.")).toBeInTheDocument();
+    expect(screen.queryByText(/own scope/)).toBeNull();
   });
 });
