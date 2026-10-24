@@ -4,14 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectCard as Card, WorkspaceMember } from "@/lib/types";
 import { ProjectCard } from "./ProjectCard";
 
-vi.mock("@/lib/hooks", () => ({
-  useCloudGet: () => ({ data: null, error: null, loading: false }),
-}));
+const useCloudGet = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/hooks", () => ({ useCloudGet }));
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({}) }),
 }));
 const NOW = new Date("2026-10-24T12:00:00Z");
 beforeEach(() => {
+  useCloudGet.mockReset();
+  useCloudGet.mockReturnValue({ data: null, error: null, loading: false });
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });
@@ -53,7 +54,7 @@ function card(over: Partial<Card> = {}): Card {
     task_counts: { todo: 4, in_progress: 3, implemented: 10, verified: 2 },
     decisions: { open: 2, overdue: 0, expired_30d: 0 },
     stack: { runtime: "Node", languages: ["TypeScript", "Python", "Go", "Rust"] },
-    policy: { source: "workspace", selected: [] },
+    policy: { source: "workspace", selected: [], require_seeded_rules: true },
     checks: [{ id: "c1", ok: true, text: "All good" }],
     agent_closed_30d: 0,
     last_activity_at: "2026-10-24T10:00:00Z",
@@ -163,5 +164,50 @@ describe("ProjectCard", () => {
     const pill = screen.getByRole("link", { name: /Live/ });
     expect(pill).toHaveAttribute("href", "https://app.example.com");
     expect(within(document.body).getByText(/Updated 2 hours ago/)).toBeInTheDocument();
+  });
+
+  const DRIFT = "Rules in the repository differ from the plan";
+  const docsPath = "/projects/p1/repository/docs-status";
+  function mockDocs(files: { path: string; state: string }[]) {
+    useCloudGet.mockImplementation((path: string | null, enabled = true) =>
+      path === docsPath && enabled
+        ? { data: { files, open_sync_pr: null }, error: null, loading: false }
+        : { data: null, error: null, loading: false },
+    );
+  }
+
+  it("repo_created project fetches docs-status and shows Rules in the repository differ from the plan when any file is not current", () => {
+    mockDocs([
+      { path: "AGENTS.md", state: "current" },
+      { path: "CLAUDE.md", state: "out_of_date" },
+    ]);
+    renderCard(card());
+    expect(useCloudGet).toHaveBeenCalledWith(docsPath, true);
+    expect(screen.getByText(DRIFT).className).toContain("amber");
+    expect(screen.queryByText("Follows workspace rules")).toBeNull();
+  });
+
+  it("all files current keeps Follows workspace rules; a server failing check outranks drift", () => {
+    mockDocs([{ path: "AGENTS.md", state: "current" }]);
+    const { unmount } = renderCard(card());
+    expect(screen.getByText("Follows workspace rules")).toBeInTheDocument();
+    unmount();
+    mockDocs([{ path: "AGENTS.md", state: "out_of_date" }]);
+    renderCard(card({ checks: [{ id: "b", ok: false, text: "No tests run on pull requests." }] }));
+    expect(screen.getByText("No tests run on pull requests.")).toBeInTheDocument();
+    expect(screen.queryByText(DRIFT)).toBeNull();
+  });
+
+  it("planning project does not fetch docs-status", () => {
+    renderCard(card({ lifecycle_status: "planning" }));
+    expect(useCloudGet).toHaveBeenCalledWith(docsPath, false);
+    expect(useCloudGet).not.toHaveBeenCalledWith(docsPath, true);
+  });
+
+  it("drift check is skipped when governance.require_seeded_rules is false", () => {
+    mockDocs([{ path: "AGENTS.md", state: "out_of_date" }]);
+    renderCard(card({ policy: { source: "workspace", selected: [], require_seeded_rules: false } }));
+    expect(useCloudGet).toHaveBeenCalledWith(docsPath, false);
+    expect(screen.queryByText(DRIFT)).toBeNull();
   });
 });

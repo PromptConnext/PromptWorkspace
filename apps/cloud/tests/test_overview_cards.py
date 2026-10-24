@@ -126,7 +126,9 @@ def test_live_url_and_policy_source():
     )
     card = _card(p)
     assert card.live_url == "https://x"
-    assert card.policy == {"source": "project", "selected": ["a"]}
+    assert card.policy == {"source": "project", "selected": ["a"], "require_seeded_rules": True}
+    off = _card(p, gov=_gov(require_seeded_rules=False))
+    assert off.policy["require_seeded_rules"] is False
     p2 = _project(deployment_state=DeploymentState(state="failed", url="https://x"))
     assert _card(p2).live_url is None
 

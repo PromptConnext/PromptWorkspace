@@ -840,7 +840,7 @@ export interface ProjectCard {
   task_counts: { todo: number; in_progress: number; implemented: number; verified: number };
   decisions: { open: number; overdue: number; expired_30d: number };
   stack: { runtime: string | null; languages: string[] } | null;
-  policy: { source: "workspace" | "project"; selected: string[] };
+  policy: { source: "workspace" | "project"; selected: string[]; require_seeded_rules: boolean };
   /** Includes ok:true entries with positive text; the governance line uses the first with ok === false. */
   checks: ProjectCheck[];
   agent_closed_30d: number;

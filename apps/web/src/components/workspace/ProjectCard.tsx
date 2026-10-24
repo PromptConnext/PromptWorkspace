@@ -3,7 +3,8 @@ import { Avatar } from "@/components/Avatar";
 import { MemberChip, memberFullName } from "@/components/project/MemberChip";
 import { safeWebUrl } from "@/components/project/previewState";
 import { relativeTime } from "@/lib/relativeTime";
-import type { ProjectCard as Card, WorkspaceMember } from "@/lib/types";
+import { useCloudGet } from "@/lib/hooks";
+import type { ProjectCard as Card, RepositoryDocsStatus, WorkspaceMember } from "@/lib/types";
 
 const CONTRIBUTOR_LIMIT = 5;
 const LANGUAGE_LIMIT = 3;
@@ -66,7 +67,16 @@ export function ProjectCard({
   const done = implemented + verified;
   const { open, overdue, expired_30d } = card.decisions;
   const liveUrl = safeWebUrl(card.live_url);
-  const failing = card.checks.find((c) => !c.ok);
+  // Lazy: only a repository-backed project that requires seeded rules can drift.
+  const docs = useCloudGet<RepositoryDocsStatus>(
+    `/projects/${card.id}/repository/docs-status`,
+    card.lifecycle_status === "repo_created" && card.policy.require_seeded_rules,
+  );
+  const drifted = !!docs.data?.files.some((f) => f.state !== "current");
+  // Server checks rank first; drift only speaks when none of them fail.
+  const failingText =
+    card.checks.find((c) => !c.ok)?.text ??
+    (drifted ? "Rules in the repository differ from the plan" : null);
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-300">
@@ -175,9 +185,9 @@ export function ProjectCard({
         </p>
       )}
 
-      <p className={`flex items-start gap-1.5 text-xs ${failing ? "text-amber-700" : "text-emerald-700"}`}>
-        {failing ? (
-          <span className="text-amber-700">{failing.text}</span>
+      <p className={`flex items-start gap-1.5 text-xs ${failingText ? "text-amber-700" : "text-emerald-700"}`}>
+        {failingText ? (
+          <span className="text-amber-700">{failingText}</span>
         ) : (
           <>
             <span aria-hidden>✓</span>

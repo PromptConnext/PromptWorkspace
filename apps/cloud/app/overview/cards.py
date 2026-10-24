@@ -67,6 +67,7 @@ def build_card(
         policy={
             "source": project.policy_scope_source,
             "selected": list(project.policy_scope.selected) if project.policy_scope else [],
+            "require_seeded_rules": governance.require_seeded_rules,
         },
         checks=run_checks(project, roles, decisions, governance, now),
         agent_closed_30d=sum(
