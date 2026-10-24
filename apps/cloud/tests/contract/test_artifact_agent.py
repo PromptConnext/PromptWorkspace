@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.repository import Repository
-from app.models.schemas import ArtifactAgent, ArtifactKind, new_id, utcnow
+from app.models.schemas import ArtifactAgent, ArtifactKind, Task, new_id, utcnow
 
 from . import _helpers as h
 
@@ -15,7 +15,11 @@ pytestmark = pytest.mark.contract
 def test_upsert_artifact_merges_agent_once(repo: Repository) -> None:
     ws, admin = h.workspace(repo)
     project = h.project(repo, ws, admin)
-    task_id, sha = new_id(), "a" * 40
+    # Postgres enforces pw_artifacts.task_id / project_id foreign keys, so the
+    # task must be a real row.
+    task = Task(id=new_id(), project_id=project.id, title="closed by an agent")
+    h.push_tasks(repo, project.id, [task])
+    task_id, sha = task.id, "a" * 40
 
     def upsert(agent: ArtifactAgent | None):
         return repo.upsert_task_artifact(
