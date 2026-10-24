@@ -15,12 +15,13 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     AnyHttpUrl,
     AnyUrl,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -1742,20 +1743,41 @@ class OAuthFamily(BaseModel):
 
 
 
+DCR_MAX_BODY = 16_384
+DCR_MAX_URI = 2048
+DCR_MAX_SCOPE = 1000
+
+
+def _cap_dcr_uri(v: Any) -> Any:
+    # Checked on the raw string: pydantic's URL types have no length cap.
+    if isinstance(v, str) and len(v) > DCR_MAX_URI:
+        raise ValueError(f"URI longer than {DCR_MAX_URI} characters")
+    return v
+
+
 class DcrRegistrationIn(BaseModel):
     """RFC 7591 client metadata accepted by `POST /oauth/register`. Public
     clients only: no secret is ever issued or stored. The route reports
     validation failures as RFC 7591 §3.2.2 errors, never as 422."""
 
-    redirect_uris: list[AnyUrl] = Field(min_length=1, max_length=10)
+    MAX_BODY: ClassVar[int] = DCR_MAX_BODY
+
+    redirect_uris: list[Annotated[AnyUrl, BeforeValidator(_cap_dcr_uri)]] = Field(
+        min_length=1, max_length=10
+    )
     client_name: str = Field("", max_length=120)
     client_uri: AnyHttpUrl | None = None
     logo_uri: AnyHttpUrl | None = None
     application_type: Literal["web", "native"] | None = None
     token_endpoint_auth_method: Literal["none"] = "none"
-    grant_types: list[str] | None = None
-    response_types: list[str] | None = None
-    scope: str | None = None
+    grant_types: list[str] | None = Field(None, max_length=10)
+    response_types: list[str] | None = Field(None, max_length=10)
+    scope: str | None = Field(None, max_length=DCR_MAX_SCOPE)
+
+    @field_validator("client_uri", "logo_uri", mode="before")
+    @classmethod
+    def _cap_uri(cls, v: Any) -> Any:
+        return _cap_dcr_uri(v)
 
 
 class DcrRegistrationOut(BaseModel):

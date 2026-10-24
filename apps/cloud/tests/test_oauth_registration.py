@@ -320,11 +320,28 @@ def _doc(**over):
     return d
 
 
+class _RawStream(httpx.AsyncByteStream):
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def __aiter__(self):
+        for i in range(0, len(self._data), 4096):
+            yield self._data[i : i + 4096]
+
+
 def _transport(handler, seen=None):
+    """A real transport hands back an unread stream; `httpx.Response(content=...)`
+    reads itself on construction, so re-wrap its raw (still encoded) bytes."""
+
     def wrapped(request: httpx.Request):
         if seen is not None:
             seen.append(request)
-        return handler(request)
+        r = handler(request)
+        if isinstance(r.stream, httpx.ByteStream):
+            return httpx.Response(
+                r.status_code, headers=r.headers, stream=_RawStream(b"".join(r.stream))
+            )
+        return r
 
     return lambda: httpx.MockTransport(wrapped)
 
@@ -347,7 +364,8 @@ async def test_fetch_happy_path_pins_ip_and_keeps_hostname():
     assert got.client_name == "Claude Code"
     assert got.client_uri == "https://claude.ai"
     assert got.redirect_uris == ["http://localhost/callback", "http://127.0.0.1/callback"]
-    assert got.metadata["client_id"] == CID
+    assert "client_id" not in got.metadata
+    assert "fetched_at" in got.metadata
     (req,) = seen
     assert req.url.host == PUBLIC
     assert req.url.scheme == "https"
@@ -539,3 +557,187 @@ async def test_fetch_cached_for_an_hour():
     assert len(calls) == 1 and len(seen) == 1
     await fetch_client_metadata(CID, now=t0 + timedelta(seconds=3601), **kw)
     assert len(calls) == 2 and len(seen) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: raw-byte cap, validated fields only, DCR size caps
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("ip", ["fec0::1", "192.88.99.1"])
+def test_check_address_refuses_non_global(ip):
+    with pytest.raises(CimdError) as e:
+        check_address(ip)
+    assert e.value.code == "private_address"
+
+
+@pytest.mark.anyio
+async def test_fetch_sends_identity_and_refuses_compressed():
+    import gzip
+
+    seen: list[httpx.Request] = []
+    body = gzip.compress(json.dumps(_doc()).encode())
+    handler = lambda req: httpx.Response(  # noqa: E731
+        200,
+        content=body,
+        headers={"content-type": "application/json", "content-encoding": "gzip"},
+    )
+    with pytest.raises(CimdError) as e:
+        await fetch_client_metadata(
+            CID, cache={}, resolver=_resolver(PUBLIC), transport_factory=_transport(handler, seen)
+        )
+    assert e.value.code == "invalid_document"
+    assert seen[0].headers["accept-encoding"] == "identity"
+
+
+@pytest.mark.anyio
+async def test_fetch_identity_encoding_allowed():
+    handler = lambda req: httpx.Response(  # noqa: E731
+        200,
+        content=json.dumps(_doc()).encode(),
+        headers={"content-type": "application/json", "content-encoding": "identity"},
+    )
+    got = await fetch_client_metadata(
+        CID, cache={}, resolver=_resolver(PUBLIC), transport_factory=_transport(handler)
+    )
+    assert got.client_id == CID
+
+
+@pytest.mark.anyio
+async def test_fetch_raw_cap_stops_reading():
+    chunk = b"x" * 4096
+    pulled = []
+
+    class Endless(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                pulled.append(len(chunk))
+                yield chunk
+
+    handler = lambda req: httpx.Response(  # noqa: E731
+        200, headers={"content-type": "application/json"}, stream=Endless()
+    )
+    with pytest.raises(CimdError) as e:
+        await fetch_client_metadata(
+            CID, cache={}, resolver=_resolver(PUBLIC), transport_factory=_transport(handler)
+        )
+    assert e.value.code == "too_large"
+    assert sum(pulled) <= 65_536 + len(chunk)
+
+
+@pytest.mark.anyio
+async def test_fetch_deeply_nested_body_is_invalid():
+    # Stay under the 64 KB cap: depth matters, not size.
+    nested = b"[" * 30_000 + b"]" * 30_000
+    handler = lambda req: httpx.Response(  # noqa: E731
+        200, content=nested, headers={"content-type": "application/json"}
+    )
+    with pytest.raises(CimdError) as e:
+        await fetch_client_metadata(
+            CID, cache={}, resolver=_resolver(PUBLIC), transport_factory=_transport(handler)
+        )
+    assert e.value.code == "invalid_document"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "http://client.example/logo.png",
+        "https://user@client.example/logo.png",
+        "https://client.example/" + "p" * 2048,
+        42,
+    ],
+    ids=["javascript", "data", "http", "userinfo", "too_long", "not_a_string"],
+)
+async def test_fetch_drops_unsafe_uris(uri):
+    got = await fetch_client_metadata(
+        CID,
+        cache={},
+        resolver=_resolver(PUBLIC),
+        transport_factory=_transport(_json_handler(_doc(client_uri=uri, logo_uri=uri))),
+    )
+    assert got.client_uri is None
+    assert got.logo_uri is None
+
+
+@pytest.mark.anyio
+async def test_fetch_keeps_https_logo():
+    got = await fetch_client_metadata(
+        CID,
+        cache={},
+        resolver=_resolver(PUBLIC),
+        transport_factory=_transport(
+            _json_handler(_doc(logo_uri="https://client.example/logo.png"))
+        ),
+    )
+    assert got.logo_uri == "https://client.example/logo.png"
+
+
+@pytest.mark.anyio
+async def test_fetch_metadata_is_allow_listed():
+    t0 = utcnow()
+    got = await fetch_client_metadata(
+        CID,
+        now=t0,
+        cache={},
+        resolver=_resolver(PUBLIC),
+        transport_factory=_transport(
+            _json_handler(
+                _doc(
+                    application_type="native",
+                    grant_types=["authorization_code"],
+                    response_types=["code"],
+                    scope="mcp " + "x" * 2000,
+                    evil={"nested": "x" * 1000},
+                    jwks={"keys": []},
+                )
+            )
+        ),
+    )
+    assert set(got.metadata) <= {
+        "application_type",
+        "grant_types",
+        "response_types",
+        "scope",
+        "fetched_at",
+    }
+    assert got.metadata["fetched_at"] == t0.isoformat()
+    assert got.metadata["application_type"] == "native"
+    assert got.metadata["grant_types"] == ["authorization_code"]
+    assert len(got.metadata["scope"]) <= 1000
+    assert "client_id" not in got.metadata
+
+
+def test_dcr_refuses_oversized_body(client):
+    body = {"redirect_uris": ["https://a.example/cb"], "client_name": "x", "pad": "y" * 17_000}
+    r = client.post("/oauth/register", json=body)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_client_metadata"
+
+
+@pytest.mark.parametrize(
+    ("patch", "error"),
+    [
+        ({"scope": "s" * 1001}, "invalid_client_metadata"),
+        ({"client_uri": "https://a.example/" + "p" * 2040}, "invalid_client_metadata"),
+        ({"logo_uri": "https://a.example/" + "p" * 2040}, "invalid_client_metadata"),
+        ({"redirect_uris": ["https://a.example/" + "p" * 2040]}, "invalid_redirect_uri"),
+    ],
+)
+def test_dcr_length_caps(client, patch, error):
+    body = {"redirect_uris": ["https://a.example/cb"], **patch}
+    r = client.post("/oauth/register", json=body)
+    assert r.status_code == 400, r.text
+    assert r.json()["error"] == error
+
+
+def test_dcr_accepts_at_caps(client):
+    body = {
+        "redirect_uris": ["https://a.example/" + "p" * (2048 - len("https://a.example/"))],
+        "scope": "s" * 1000,
+    }
+    r = client.post("/oauth/register", json=body)
+    assert r.status_code == 201, r.text

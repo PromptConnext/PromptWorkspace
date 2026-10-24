@@ -28,11 +28,18 @@ from app.models.schemas import OAuthClient, utcnow
 from app.oauth.clients import redirect_uri_allowed
 
 MAX_BYTES = 65_536
+MAX_URI = 2048
+MAX_SCOPE = 1000
 TIMEOUT_SECONDS = 10.0
 CACHE_TTL = timedelta(seconds=3600)
 
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
-_CARRIER_NAT = ipaddress.ip_network("100.64.0.0/10")
+# Refused explicitly: the stdlib's is_global does not cover these on every
+# Python version (carrier-grade NAT; deprecated 6to4 relay anycast).
+_REFUSED_V4 = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("192.88.99.0/24"),
+)
 
 Resolver = Callable[[str, int], Awaitable[list]]
 
@@ -58,13 +65,15 @@ def check_address(ip: str) -> None:
         elif addr in _NAT64:
             addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
     if (
-        addr.is_private
+        not addr.is_global
+        or addr.is_private
         or addr.is_loopback
         or addr.is_link_local
         or addr.is_multicast
         or addr.is_unspecified
         or addr.is_reserved
-        or (addr.version == 4 and addr in _CARRIER_NAT)
+        or (addr.version == 4 and any(addr in n for n in _REFUSED_V4))
+        or (addr.version == 6 and addr.is_site_local)
     ):
         raise CimdError("private_address", f"{ip} is not a public address")
 
@@ -101,20 +110,57 @@ def _to_client(client_id: str, doc: object, now: datetime) -> OAuthClient:
     if doc.get("token_endpoint_auth_method", "none") != "none":
         raise CimdError("invalid_document", "only public clients are supported")
 
-    def _str(key: str) -> str | None:
-        v = doc.get(key)
-        return v if isinstance(v, str) else None
-
+    now_iso = now.isoformat()
     return OAuthClient(
         client_id=client_id,
         kind="cimd",
-        client_name=(_str("client_name") or "")[:120],
+        client_name=_text(doc.get("client_name"), 120) or "",
         redirect_uris=list(uris),
-        client_uri=_str("client_uri"),
-        logo_uri=_str("logo_uri"),
-        metadata=doc,
+        client_uri=_https_uri(doc.get("client_uri")),
+        logo_uri=_https_uri(doc.get("logo_uri")),
+        metadata=_allow_listed(doc, now_iso),
         created_at=now,
     )
+
+
+def _text(v: object, cap: int) -> str | None:
+    return v[:cap] if isinstance(v, str) else None
+
+
+def _https_uri(v: object) -> str | None:
+    """`v` if it is an https URL with a host, no userinfo and at most
+    `MAX_URI` characters; otherwise None. Shown on the consent page, so
+    `javascript:`/`data:` and the like must never get through."""
+    if not isinstance(v, str) or len(v) > MAX_URI:
+        return None
+    try:
+        p = urlsplit(v)
+        p.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError:
+        return None
+    if p.scheme.lower() != "https" or not p.hostname:
+        return None
+    if p.username is not None or p.password is not None:
+        return None
+    return v
+
+
+def _str_list(v: object, max_items: int, cap: int) -> list[str] | None:
+    if not isinstance(v, list):
+        return None
+    return [s[:cap] for s in v[:max_items] if isinstance(s, str)]
+
+
+def _allow_listed(doc: dict, fetched_at: str) -> dict:
+    """The same keys DCR stores, length-capped, plus `fetched_at`. The full
+    document is never persisted."""
+    return {
+        "application_type": _text(doc.get("application_type"), 20),
+        "grant_types": _str_list(doc.get("grant_types"), 10, 64),
+        "response_types": _str_list(doc.get("response_types"), 10, 64),
+        "scope": _text(doc.get("scope"), MAX_SCOPE),
+        "fetched_at": fetched_at,
+    }
 
 
 async def _get(url: str, host: str, transport: httpx.AsyncBaseTransport) -> bytes:
@@ -124,7 +170,11 @@ async def _get(url: str, host: str, transport: httpx.AsyncBaseTransport) -> byte
         async with client.stream(
             "GET",
             url,
-            headers={"Host": host, "Accept": "application/json"},
+            headers={
+                "Host": host,
+                "Accept": "application/json",
+                "Accept-Encoding": "identity",
+            },
             extensions={"sni_hostname": host},
         ) as resp:
             if resp.is_redirect or 300 <= resp.status_code < 400:
@@ -133,11 +183,16 @@ async def _get(url: str, host: str, transport: httpx.AsyncBaseTransport) -> byte
                 raise CimdError("invalid_document", f"status {resp.status_code}")
             if not _is_json(resp.headers.get("content-type", "")):
                 raise CimdError("invalid_document", "not application/json")
+            encoding = resp.headers.get("content-encoding", "").strip().lower()
+            if encoding not in ("", "identity"):
+                # The cap counts bytes on the wire; a compressed body could
+                # expand far past it, so only identity is accepted.
+                raise CimdError("invalid_document", f"content-encoding {encoding!r}")
             declared = resp.headers.get("content-length")
             if declared and declared.isdigit() and int(declared) > MAX_BYTES:
                 raise CimdError("too_large", "document over 64 KB")
             body = bytearray()
-            async for chunk in resp.aiter_bytes():
+            async for chunk in resp.aiter_raw():
                 body += chunk
                 if len(body) > MAX_BYTES:
                     raise CimdError("too_large", "document over 64 KB")
@@ -201,7 +256,7 @@ async def fetch_client_metadata(
 
     try:
         doc = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise CimdError("invalid_document", "body is not JSON") from None
     client = _to_client(client_id, doc, now)
     cache[client_id] = (now, client.model_copy(deep=True))

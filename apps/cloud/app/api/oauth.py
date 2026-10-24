@@ -104,9 +104,21 @@ def _validation_error(exc: ValidationError) -> JSONResponse:
 
 @router.post("/oauth/register", status_code=201, response_model=DcrRegistrationOut)
 async def register_client(request: Request):
+    # Size cap before parsing: the body is buffered and json.loads is
+    # unbounded otherwise. The declared length is checked, then the stream is
+    # counted as it arrives, since Content-Length may be absent or wrong.
+    too_big = f"body larger than {DcrRegistrationIn.MAX_BODY} bytes"
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > DcrRegistrationIn.MAX_BODY:
+        return _dcr_error("invalid_client_metadata", too_big)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > DcrRegistrationIn.MAX_BODY:
+            return _dcr_error("invalid_client_metadata", too_big)
     try:
-        body = json.loads(await request.body())
-    except ValueError:
+        body = json.loads(raw)
+    except (ValueError, RecursionError):
         return _dcr_error("invalid_client_metadata", "body must be a JSON object")
     if not isinstance(body, dict):
         return _dcr_error("invalid_client_metadata", "body must be a JSON object")
