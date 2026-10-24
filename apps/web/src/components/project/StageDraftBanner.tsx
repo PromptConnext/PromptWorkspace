@@ -42,9 +42,14 @@ export function StageDraftBanner({
     }
   };
 
+  // A failed reject keeps the note; the caller says what went wrong.
   const confirmReject = () =>
     run(async () => {
-      await onReject(note.trim());
+      try {
+        await onReject(note.trim());
+      } catch {
+        return;
+      }
       setRejecting(false);
       setNote("");
     });
@@ -76,7 +81,7 @@ export function StageDraftBanner({
       <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-700">
         {draft.markdown}
       </pre>
-      {!canAct && <p className="mt-2 text-xs text-slate-600">Your Tech Lead reviews this draft.</p>}
+      {!canAct && draft.status === "pending" && <p className="mt-2 text-xs text-slate-600">Your Tech Lead reviews this draft.</p>}
       {showButtons && (
         <>
           {blockedBy && <p className="mt-2 text-xs text-slate-600">{blockedBy}</p>}
@@ -108,7 +113,12 @@ export function StageDraftBanner({
                 onChange={(e) => setNote(e.target.value)}
                 className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
               />
-              <button type="button" className={BUTTON} disabled={busy} onClick={confirmReject}>
+              <button
+                type="button"
+                className={BUTTON}
+                disabled={busy || note.trim().length === 0}
+                onClick={confirmReject}
+              >
                 Confirm
               </button>
             </div>

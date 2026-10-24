@@ -446,6 +446,8 @@ function StageSection({
       await rejectStageDraft(projectId, stage, note, authHeaders());
     } catch (err) {
       setDraftError(draftErrorText(err));
+      // The banner keeps the typed note when the reject did not land.
+      throw err;
     } finally {
       onDraftsChange?.();
     }
@@ -485,7 +487,8 @@ function StageSection({
       )}
       {!readOnly && (
         <>
-          {blockedBy && (
+          {/* With a draft present the banner says it, beside the Accept it disables. */}
+          {blockedBy && !draft && (
             <p className="mb-3 rounded bg-slate-50 p-3 text-xs text-slate-600">{blockedBy}</p>
           )}
           {recommendation && !blockedBy && (
@@ -1023,6 +1026,13 @@ export function Planner({
     if (!meta.requires || docPresent[meta.requires] !== false) return undefined;
     const previous = STAGE_ORDER.find((s) => s.stage === meta.requires);
     const label = previous?.label ?? meta.requires;
+    // On an agent-planned project the predecessor arrives as a draft to
+    // accept, not a document to generate.
+    if (agentPlanned) {
+      return isTechLead || !ADMIN_ONLY_STAGES.includes(meta.requires)
+        ? `Waiting on ${label} — accept its draft first.`
+        : `Waiting on ${label} — your Tech Lead accepts it.`;
+    }
     // Telling a business user to "generate that document first" points them at
     // a stage only a Tech Lead may author, so name who does it instead.
     if (ADMIN_ONLY_STAGES.includes(meta.requires) && !isTechLead) {

@@ -1494,6 +1494,56 @@ describe("Planner", () => {
     expect(panel.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
   });
 
+  it("says once, accept-shaped, what a plan draft waits on", async () => {
+    mockImported("baseline_ready");
+    const base = global.fetch;
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/specify")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "specify", content: "", updated_at: null }),
+        });
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+    withDrafts(() => [stageDraft({ stage: "plan" })]);
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /plan/i });
+    openTab(/plan/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /plan/i }));
+    const text = "Waiting on 1 · Specify — accept its draft first.";
+    await waitFor(() => expect(panel.getAllByText(text)).toHaveLength(1));
+    expect(panel.getByRole("button", { name: "Accept" })).toBeDisabled();
+    expect(panel.queryByText(/generate it first/i)).not.toBeInTheDocument();
+  });
+
+  it("tells a member the Tech Lead accepts the plan the tasks wait on", async () => {
+    members = [{ ...ADMIN_MEMBER, role: "member" }];
+    mockImported("baseline_ready");
+    const base = global.fetch;
+    global.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = url.toString();
+      if (href.includes("/stage-documents/plan")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ stage: "plan", content: "", updated_at: null }),
+        });
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+    withDrafts(() => [stageDraft({ stage: "tasks" })]);
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /tasks/i });
+    openTab(/tasks/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /tasks/i }));
+    const text = "Waiting on Implementation plan — your Tech Lead accepts it.";
+    await waitFor(() => expect(panel.getAllByText(text)).toHaveLength(1));
+    expect(panel.getByRole("button", { name: "Accept" })).toBeDisabled();
+  });
+
   it("keeps Generate for a project started from scratch", async () => {
     render(<Planner project={makeProject()} projectId="p1" onChange={vi.fn()} />);
     await screen.findByRole("tab", { name: /specify/i });

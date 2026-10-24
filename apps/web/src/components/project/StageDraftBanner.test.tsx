@@ -80,7 +80,11 @@ describe("StageDraftBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reject" }));
     expect(onReject).not.toHaveBeenCalled();
     const note = screen.getByPlaceholderText("Why this draft is rejected");
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeDisabled();
+    fireEvent.change(note, { target: { value: "   " } });
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeDisabled();
     fireEvent.change(note, { target: { value: "Wrong framework" } });
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() => expect(onReject).toHaveBeenCalledWith("Wrong framework"));
@@ -89,10 +93,34 @@ describe("StageDraftBanner", () => {
     );
   });
 
+  it("keeps the note when the reject fails", async () => {
+    const onReject = vi.fn(async (_note: string) => {
+      throw new Error("draft_not_found");
+    });
+    renderBanner({ onReject });
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    fireEvent.change(screen.getByPlaceholderText("Why this draft is rejected"), {
+      target: { value: "Wrong framework" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(onReject).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled());
+    expect(screen.getByPlaceholderText("Why this draft is rejected")).toHaveValue(
+      "Wrong framework",
+    );
+  });
+
   it("shows the rejection note, and no buttons, on a rejected draft", () => {
     renderBanner({ draft: draft({ status: "rejected", rejection_note: "Wrong framework" }) });
     expect(screen.getByText("Rejected: Wrong framework")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+  });
+
+  it("does not promise a Tech Lead review of a draft already rejected", () => {
+    renderBanner({ canAct: false, draft: draft({ status: "rejected", rejection_note: "No" }) });
+    expect(screen.getByText("Rejected: No")).toBeInTheDocument();
+    expect(screen.queryByText("Your Tech Lead reviews this draft.")).not.toBeInTheDocument();
   });
 
   it("shows a member no buttons on an admin-only stage", () => {
