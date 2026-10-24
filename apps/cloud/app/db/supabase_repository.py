@@ -1667,6 +1667,13 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return WorkspaceGovernance(**rows[0]) if rows else None
 
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        stored = g.model_copy(update={"updated_at": utcnow()})
+        self._table(_WORKSPACE_GOVERNANCE).upsert(
+            _dump(stored), on_conflict="workspace_id", returning="minimal"
+        ).execute()
+        return stored
+
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         rows = self._paged(
             lambda: self._table(_GENERATION_RUNS)

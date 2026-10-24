@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.api._guards import require_workspace
+from app.api._guards import require_admin, require_workspace
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import WorkspaceGovernance, WorkspaceOverviewOut, utcnow
+from app.models.schemas import (
+    WorkspaceGovernance,
+    WorkspaceGovernanceUpdate,
+    WorkspaceOverviewOut,
+    utcnow,
+)
 from app.overview.cards import build_card
+from app.policies.scope import validate_scope
 
 router = APIRouter(tags=["overview"])
 
@@ -58,4 +64,43 @@ def get_overview(
         projects=cards,
         people=[],
         truncated=truncated,
+    )
+
+
+_HATS = {"business_owner", "tech_steward"}
+
+
+@router.get("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernance)
+def get_governance(
+    workspace_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> WorkspaceGovernance:
+    """The stored row, or the defaults when none was set. Never writes."""
+    require_workspace(repo, workspace_id, user)
+    return repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
+        workspace_id
+    )
+
+
+@router.put("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernance)
+def put_governance(
+    workspace_id: str,
+    body: WorkspaceGovernanceUpdate,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> WorkspaceGovernance:
+    """Admin-only full replace."""
+    require_admin(repo, workspace_id, user)
+    scope = validate_scope(body.policy_scope.selected, body.policy_scope.custom_text)
+    if any(h not in _HATS for h in body.required_hats):
+        raise HTTPException(status_code=422, detail="unknown_hat")
+    return repo.put_workspace_governance(
+        WorkspaceGovernance(
+            workspace_id=workspace_id,
+            policy_scope=scope,
+            required_hats=list(dict.fromkeys(body.required_hats)),
+            require_seeded_rules=body.require_seeded_rules,
+            updated_by=user.id,
+        )
     )

@@ -13,9 +13,11 @@ from app.models.schemas import (
     ArtifactAgent,
     GenerationRun,
     GraphUpsertRequest,
+    PolicyScope,
     ReceiptDraft,
     Task,
     TaskStatus,
+    WorkspaceGovernance,
     new_id,
     utcnow,
 )
@@ -121,3 +123,19 @@ def test_list_generation_runs_since_newest_first(repo: Repository) -> None:
 def test_get_workspace_governance_none_when_absent(repo: Repository) -> None:
     ws, _admin = h.workspace(repo)
     assert repo.get_workspace_governance(ws.id) is None
+
+
+def test_put_workspace_governance_round_trips(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    g = WorkspaceGovernance(
+        workspace_id=ws.id,
+        policy_scope=PolicyScope(selected=["gdpr"], custom_text="x"),
+        required_hats=["tech_steward"],
+        require_seeded_rules=False,
+        updated_by=admin,
+    )
+    put = repo.put_workspace_governance(g)
+    assert repo.get_workspace_governance(ws.id) == put
+    replaced = repo.put_workspace_governance(g.model_copy(update={"require_seeded_rules": True}))
+    assert repo.get_workspace_governance(ws.id) == replaced
+    assert replaced.require_seeded_rules is True

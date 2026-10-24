@@ -1692,6 +1692,14 @@ class WorkspaceGovernance(BaseModel):
         return cls(workspace_id=workspace_id)
 
 
+class WorkspaceGovernanceUpdate(BaseModel):
+    """PUT /workspaces/{id}/governance body (full replace)."""
+
+    policy_scope: PolicyScopeUpdate = Field(default_factory=PolicyScopeUpdate)
+    required_hats: list[str] = Field(default_factory=list)
+    require_seeded_rules: bool = True
+
+
 class PersonLinkOut(BaseModel):
     kind: Literal["hat", "work", "approval"]
     from_user_id: str

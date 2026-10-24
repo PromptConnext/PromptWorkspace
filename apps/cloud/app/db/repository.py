@@ -766,6 +766,10 @@ class Repository(abc.ABC):
         """The workspace's governance row, or None when it never set one."""
 
     @abc.abstractmethod
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        """Insert or replace the workspace's governance row, stamping `updated_at`."""
+
+    @abc.abstractmethod
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         """The workspace's generation runs with `created_at >= since`, newest first."""
 
@@ -1961,6 +1965,11 @@ class InMemoryRepository(Repository):
 
     def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
         return self._workspace_governance.get(workspace_id)
+
+    def put_workspace_governance(self, g: WorkspaceGovernance) -> WorkspaceGovernance:
+        stored = g.model_copy(deep=True, update={"updated_at": utcnow()})
+        self._workspace_governance[g.workspace_id] = stored
+        return copy.deepcopy(stored)
 
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         runs = [
