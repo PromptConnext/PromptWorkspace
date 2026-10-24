@@ -13,6 +13,36 @@ Zed has no other surface, and once the desktop shells are deleted
 thing left for them to install. The build is sequenced in
 [plan 0025](../../docs/plans/0025-mcp-server.md).
 
+## Use the hosted server
+
+For people, the supported path is the hosted server on the PromptWorkspace API:
+nothing to install, no config file, no pasted code. Your agent opens a browser,
+you sign in to PromptWorkspace and approve once, and it is connected. It has six
+tools (`list_my_tasks`, `get_task`, `close_task`, `start_planning`,
+`submit_repo_analysis`, `submit_stage_draft`); `get_project_rules` is not hosted,
+because your agent can read the rules files from its own clone. The design is in
+[docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md](../../docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md)
+and the decision in
+[ADR 0029](../../docs/decisions/0029-cloud-is-its-own-oauth-authorization-server.md).
+
+- **Claude Code:**
+  `claude mcp add --transport http promptworkspace https://workspace-api.promptconnext.com/mcp`,
+  then run `/mcp` and pick PromptWorkspace to sign in.
+- **Cursor:** use the one-click link or the JSON snippet shown in the web app
+  (workspace settings, or the Planner checklist for an imported project), which
+  points at the same URL.
+- **Claude.ai and ChatGPT:** add a custom connector and give it the URL
+  `https://workspace-api.promptconnext.com/mcp`.
+
+Connected agents are listed under Account, Connected agents in the web app,
+where each can be revoked.
+
+## The stdio server: CI and offline fallback
+
+Everything below describes the stdio package, which is for CI runners and
+machines that cannot reach the hosted server. It is not the path for people, it
+has its own pasted-code login, and it does not use the OAuth flow above.
+
 ## What it is, and what it is not
 
 Seven tools: the four task tools of M1 to M3, and three planning tools for an
@@ -76,7 +106,7 @@ Neither write is queued: a refusal or an unreachable cloud is a tool error, and
 the agent submits again. They store a pending draft and the analysis row and
 nothing else.
 
-Streamable HTTP is M4.
+Streamable HTTP is not part of this package; it is the hosted server above.
 
 Beyond those drafts this is **not a planning client**. It does not create
 projects, run stages, edit stage documents, requirements or specs, upload a PRD,
@@ -88,8 +118,12 @@ returns only tasks already assigned to you, so a claim tool would have no caller
 
 ## Install and sign in
 
-The package is not on the npm registry. Each release is a tarball attached to a
-GitHub Release (tag `mcp-v<version>`) at
+The package is `@promptconnext/promptworkspace-mcp`. Pushing a tag named
+`mcp-v<version>` runs `.github/workflows/mcp-publish.yml`, which builds, tests
+and publishes it to npm with provenance; that needs an `NPM_TOKEN` repository
+secret, which **a maintainer must create** before the first publish. Until the
+package is on the registry, each release is a tarball attached to a GitHub
+Release (tag `mcp-v<version>`) at
 <https://github.com/PromptConnext/PromptWorkspace/releases>. Download
 `promptworkspace-mcp-<version>.tgz` and install it globally:
 

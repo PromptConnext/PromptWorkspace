@@ -1,0 +1,36 @@
+name: mcp-publish
+
+# Publishes the stdio MCP package to npm when a maintainer pushes a tag named
+# mcp-v<version>. Needs the NPM_TOKEN repository secret (an npm automation
+# token with publish rights to the @promptconnext scope), which a maintainer
+# must create; until it exists the run fails at the publish step.
+on:
+  push:
+    tags:
+      - "mcp-v*"
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # The suite is `node --test` over .ts files, which needs the unflagged
+          # type stripping Node 22.18+ provides (same as the ci.yml mcp job).
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile --filter @promptconnext/promptworkspace-mcp...
+      - run: pnpm --dir apps/mcp build
+      - run: pnpm --dir apps/mcp test
+      - name: Publish
+        working-directory: apps/mcp
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

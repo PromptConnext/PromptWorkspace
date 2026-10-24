@@ -184,7 +184,7 @@ jobs:
           # unflagged type stripping Node 22.18+ provides.
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @promptworkspace/mcp...
+      - run: pnpm install --frozen-lockfile --filter @promptconnext/promptworkspace-mcp...
       - run: pnpm --dir apps/mcp typecheck
       - run: pnpm --dir apps/mcp test
       - run: pnpm --dir apps/mcp build

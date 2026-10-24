@@ -70,7 +70,8 @@ create table if not exists pw_oauth_families (
     user_id text not null,
     created_at timestamptz not null default now(),
     revoked_at timestamptz,
-    revoked_reason text
+    revoked_reason text,
+    last_used_at timestamptz
 );
 create index if not exists pw_oauth_families_user_idx on pw_oauth_families (user_id, created_at desc);
 

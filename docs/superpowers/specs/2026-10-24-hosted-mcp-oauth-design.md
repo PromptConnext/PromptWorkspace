@@ -158,6 +158,10 @@ Endpoints:
 - Legacy MCP sessions in memory on one instance; a client that lands on the 30 s deploy overlap re-initializes.
 - Device-code flow for stdio dropped.
 - Added after the builder check (2026-10-25): a grant spans all current and future workspaces, membership checked per call; `close_task` keeps the stdio schema (`task_id`, `status`, `commit_sha` required for `implemented`); consent shown every time; access tokens 15 min with a per-call family-revocation check cached 30 s; refresh re-checks the Supabase account; 30 s refresh-rotation grace; known-client table with Verified/Unverified display; named limiter instances and `X-User-Id` honoured only in stub mode; `safeNext` tightened; consent page framing denied; CIMD fetch pinned to the checked address.
+- 2026-10-25: `fastapi` bumped to `>=0.117,<0.200` because `mcp` 2.3 needs Starlette 1.x; the Dockerfile CMD gained `--proxy-headers --forwarded-allow-ips`.
+- 2026-10-25: migration `0014_pw_oauth_family_last_used` folded into `0013_pw_oauth` (`pw_oauth_families.last_used_at`), since nothing from this branch is deployed; the design's table list above predates it.
+- 2026-10-25: `resource` is optional at the token endpoint (clients that sent it at `/oauth/authorize` are bound by the stored request, and a mismatch is still refused); it is required at authorize.
+- 2026-10-25: `verify_access_token(public_keys=...)` takes the published key set so `/mcp` verification caches the JWKS in process instead of rebuilding it per call.
 
 ## Left to the builder
 

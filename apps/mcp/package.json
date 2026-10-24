@@ -1,7 +1,6 @@
 {
-  "name": "@promptworkspace/mcp",
+  "name": "@promptconnext/promptworkspace-mcp",
   "version": "0.2.0",
-  "private": true,
   "description": "PromptWorkspace MCP server — assigned tasks and their context, for the editors the VS Code extension cannot reach (ADR 0019 decision 3).",
   "license": "UNLICENSED",
   "repository": {
@@ -13,6 +12,9 @@
     "promptworkspace-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist"
   ],
