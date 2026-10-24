@@ -11,10 +11,13 @@ from app.delivery.receipts import seal
 from app.models.schemas import (
     Artifact,
     ArtifactAgent,
+    Decision,
     GenerationRun,
     GraphUpsertRequest,
     PolicyScope,
     ReceiptDraft,
+    RepoAnalysis,
+    RepoSnapshot,
     Task,
     TaskStatus,
     WorkspaceGovernance,
@@ -139,3 +142,83 @@ def test_put_workspace_governance_round_trips(repo: Repository) -> None:
     replaced = repo.put_workspace_governance(g.model_copy(update={"require_seeded_rules": True}))
     assert repo.get_workspace_governance(ws.id) == replaced
     assert replaced.require_seeded_rules is True
+
+
+def _decision(project_id: str, workspace_id: str, age_h: int) -> Decision:
+    return Decision(
+        project_id=project_id, workspace_id=workspace_id, kind="plan_approval", title="t",
+        subject_stage="tasks", subject_hash="h", routed_hat="business_owner",
+        requested_by="alice", created_at=utcnow() - timedelta(hours=age_h),
+    )
+
+
+def test_list_project_roles_for_groups_by_project(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    p1, p2, p3 = (h.project(repo, ws, admin) for _ in range(3))
+    repo.set_project_role(p1.id, ws.id, "tech_steward", "u-1", admin)
+    repo.set_project_role(p1.id, ws.id, "business_owner", "u-2", admin)
+    repo.set_project_role(p2.id, ws.id, "business_owner", "u-3", admin)
+
+    got = repo.list_project_roles_for([p1.id, p2.id, p3.id])
+
+    assert set(got) == {p1.id, p2.id, p3.id}
+    assert [r.hat for r in got[p1.id]] == ["business_owner", "tech_steward"]
+    assert [r.user_id for r in got[p2.id]] == ["u-3"]
+    assert got[p3.id] == []
+    assert got[p1.id] == repo.list_project_roles(p1.id)
+    assert repo.list_project_roles_for([]) == {}
+
+
+def test_list_decisions_for_newest_first_per_project(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    p1, p2, p3 = (h.project(repo, ws, admin) for _ in range(3))
+    old, new = _decision(p1.id, ws.id, 5), _decision(p1.id, ws.id, 1)
+    other = _decision(p2.id, ws.id, 2)
+    for d in (old, new, other):
+        repo.save_decision(d)
+
+    got = repo.list_decisions_for([p1.id, p2.id, p3.id])
+
+    assert set(got) == {p1.id, p2.id, p3.id}
+    assert [d.id for d in got[p1.id]] == [new.id, old.id]
+    assert [d.id for d in got[p2.id]] == [other.id]
+    assert got[p3.id] == []
+    assert [d.id for d in repo.list_decisions(p1.id)] == [new.id, old.id]
+    assert repo.list_decisions_for([]) == {}
+
+
+def test_get_repo_analyses_only_present(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    p1, p2 = h.project(repo, ws, admin), h.project(repo, ws, admin)
+    repo.upsert_repo_analysis(
+        RepoAnalysis(
+            project_id=p1.id, workspace_id=ws.id, commit_sha="a" * 40,
+            snapshot=RepoSnapshot(commit_sha="a" * 40, default_branch="main", file_count=0),
+            created_by=admin,
+        )
+    )
+
+    got = repo.get_repo_analyses([p1.id, p2.id])
+
+    assert set(got) == {p1.id}
+    assert got[p1.id].commit_sha == "a" * 40
+    assert repo.get_repo_analyses([]) == {}
+
+
+def test_latest_receipt_at_matches_per_project_max(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    p1, p2 = h.project(repo, ws, admin), h.project(repo, ws, admin)
+
+    def draft(pid: str) -> ReceiptDraft:
+        return ReceiptDraft(
+            project_id=pid, workspace_id=ws.id, event="decision.requested",
+            subject_type="decision", subject_id=new_id(), actor="alice", body={},
+        )
+
+    a1 = repo.insert_receipt(seal(draft(p1.id), None))
+    a2 = repo.insert_receipt(seal(draft(p1.id), a1))
+    b1 = repo.insert_receipt(seal(draft(p2.id), None))
+
+    latest = repo.latest_receipt_at([p1.id, p2.id])
+
+    assert latest == {p1.id: max(a1.created_at, a2.created_at), p2.id: b1.created_at}

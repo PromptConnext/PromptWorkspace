@@ -59,8 +59,9 @@ def build_overview(repo: Repository, workspace_id: str, user: User) -> Workspace
         tasks_by_project.setdefault(t.project_id, []).append(t)
     receipts = repo.latest_receipt_at(ids)
 
-    roles_by_project = {p.id: repo.list_project_roles(p.id) for p in projects}
-    decisions_by_project = {p.id: repo.list_decisions(p.id) for p in projects}
+    roles_by_project = repo.list_project_roles_for(ids)
+    decisions_by_project = repo.list_decisions_for(ids)
+    analyses = repo.get_repo_analyses(ids)
 
     cards = [
         build_card(
@@ -68,7 +69,7 @@ def build_overview(repo: Repository, workspace_id: str, user: User) -> Workspace
             roles_by_project[p.id],
             tasks_by_project[p.id],
             decisions_by_project[p.id],
-            repo.get_repo_analysis(p.id),
+            analyses.get(p.id),
             governance,
             receipts.get(p.id),
             now,
@@ -188,18 +189,22 @@ def get_governance_report(
     governance = repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
         workspace_id
     )
+    projects = repo.list_projects_by_workspace(workspace_id)
+    ids = [p.id for p in projects]
+    roles_by_project = repo.list_project_roles_for(ids)
+    decisions_by_project = repo.list_decisions_for(ids)
     decisions = []
     chains = []
     per_project = []
-    for p in repo.list_projects_by_workspace(workspace_id):
-        ds = repo.list_decisions(p.id)
+    for p in projects:
+        ds = decisions_by_project[p.id]
         decisions.extend(ds)
         chains.append(repo.list_receipts(p.id))
         per_project.append(
             ProjectGovernanceOut(
                 project_id=p.id,
                 name=p.name,
-                checks=run_checks(p, repo.list_project_roles(p.id), ds, governance, now),
+                checks=run_checks(p, roles_by_project[p.id], ds, governance, now),
             )
         )
     return GovernanceReportOut(

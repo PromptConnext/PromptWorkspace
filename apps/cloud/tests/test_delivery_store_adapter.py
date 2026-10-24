@@ -38,6 +38,9 @@ class _Query:
     def order(self, *_a, **_k):
         return self
 
+    def range(self, *_a, **_k):
+        return self
+
     def limit(self, *_a, **_k):
         return self
 
@@ -273,5 +276,6 @@ def test_listing_decisions_reads_snapshots_by_project_not_by_every_id():
     client = _Client(rows=[row])
     decisions = _repo(client).list_decisions("p")
 
-    assert client.in_filters == []  # no URL that grows with the history
+    # Filtered by project only: no URL that grows with the history.
+    assert {col for _t, col, _v in client.in_filters} == {"project_id"}
     assert decisions[0].subject_content == "# Spec"

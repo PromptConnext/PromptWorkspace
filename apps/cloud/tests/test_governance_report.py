@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,3 +120,22 @@ def test_chains_verified_per_project(client, workspace):
     assert (body["discipline"]["chains_total"], body["discipline"]["chains_verified"]) == (2, 1)
     assert {p["name"] for p in body["projects"]} == {"good", "bad", "none"}
     assert all(p["checks"] for p in body["projects"])
+
+
+def test_report_reads_each_family_once(client, workspace):
+    for i in range(3):
+        _project(client, workspace, f"P{i}")
+    repo = client.app.state.repository
+    with (
+        patch.object(repo, "list_project_roles_for", wraps=repo.list_project_roles_for) as roles,
+        patch.object(repo, "list_decisions_for", wraps=repo.list_decisions_for) as decisions,
+        patch.object(repo, "list_project_roles", wraps=repo.list_project_roles) as one_roles,
+        patch.object(repo, "list_decisions", wraps=repo.list_decisions) as one_decisions,
+    ):
+        res = _report(client, workspace)
+    assert res.status_code == 200
+    assert len(res.json()["projects"]) == 3
+    assert roles.call_count == 1
+    assert decisions.call_count == 1
+    assert one_roles.call_count == 0
+    assert one_decisions.call_count == 0

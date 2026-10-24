@@ -848,6 +848,11 @@ class Repository(abc.ABC):
         """Newest first."""
 
     @abc.abstractmethod
+    def list_decisions_for(self, project_ids: list[str]) -> dict[str, list[Decision]]:
+        """One read for many projects, newest first per project, with the same
+        tolerance as `list_decisions`. Every input id is a key."""
+
+    @abc.abstractmethod
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None: ...
 
     @abc.abstractmethod
@@ -891,6 +896,11 @@ class Repository(abc.ABC):
     def list_project_roles(self, project_id: str) -> list[ProjectRole]: ...
 
     @abc.abstractmethod
+    def list_project_roles_for(self, project_ids: list[str]) -> dict[str, list[ProjectRole]]:
+        """One read for many projects. Every input id is a key (empty list when
+        the project has no roles); each list is ordered by hat."""
+
+    @abc.abstractmethod
     def set_project_role(
         self,
         project_id: str,
@@ -904,6 +914,10 @@ class Repository(abc.ABC):
     # -- repository analysis (plan 0027) ---------------------------------- #
     @abc.abstractmethod
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None: ...
+
+    @abc.abstractmethod
+    def get_repo_analyses(self, project_ids: list[str]) -> dict[str, RepoAnalysis]:
+        """One read for many projects. Only projects with an analysis are keys."""
 
     @abc.abstractmethod
     def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
@@ -2133,9 +2147,15 @@ class InMemoryRepository(Repository):
         return [self._with_snapshot(d) for d in rows[:limit]]
 
     def list_decisions(self, project_id: str) -> list[Decision]:
+        return self._decisions_of(project_id)
+
+    def _decisions_of(self, project_id: str) -> list[Decision]:
         rows = [d for d in self._decisions.values() if d.project_id == project_id]
         rows.sort(key=lambda d: (d.created_at, d.id), reverse=True)
         return [self._with_snapshot(d) for d in rows]
+
+    def list_decisions_for(self, project_ids: list[str]) -> dict[str, list[Decision]]:
+        return {pid: self._decisions_of(pid) for pid in dict.fromkeys(project_ids)}
 
     def get_decision(self, project_id: str, decision_id: str) -> Decision | None:
         row = self._decisions.get(decision_id)
@@ -2178,8 +2198,14 @@ class InMemoryRepository(Repository):
         return copy.deepcopy(receipt)
 
     def list_project_roles(self, project_id: str) -> list[ProjectRole]:
+        return self._roles_of(project_id)
+
+    def _roles_of(self, project_id: str) -> list[ProjectRole]:
         rows = [r for (pid, _), r in self._project_roles.items() if pid == project_id]
         return [copy.deepcopy(r) for r in sorted(rows, key=lambda r: r.hat)]
+
+    def list_project_roles_for(self, project_ids: list[str]) -> dict[str, list[ProjectRole]]:
+        return {pid: self._roles_of(pid) for pid in dict.fromkeys(project_ids)}
 
     def set_project_role(
         self,
@@ -2203,6 +2229,13 @@ class InMemoryRepository(Repository):
     def get_repo_analysis(self, project_id: str) -> RepoAnalysis | None:
         analysis = self._repo_analyses.get(project_id)
         return copy.deepcopy(analysis) if analysis else None
+
+    def get_repo_analyses(self, project_ids: list[str]) -> dict[str, RepoAnalysis]:
+        return {
+            pid: copy.deepcopy(self._repo_analyses[pid])
+            for pid in dict.fromkeys(project_ids)
+            if pid in self._repo_analyses
+        }
 
     def upsert_repo_analysis(self, analysis: RepoAnalysis) -> RepoAnalysis:
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
