@@ -475,6 +475,10 @@ export function createServer(
     },
   );
 
+  // The client names itself in `initialize`; the SDK only has it once the
+  // handshake completes, hence the callback rather than a read at construction.
+  server.oninitialized = () => writer.setClient(server.getClientVersion()?.name);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
