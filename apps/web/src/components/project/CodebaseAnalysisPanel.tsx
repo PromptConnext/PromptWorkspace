@@ -39,7 +39,7 @@ export const ANALYSIS_ERROR_TEXT: Record<string, string> = {
   daily_token_budget_exceeded:
     "This workspace hit its daily generation budget. Try again tomorrow, or write the baseline " +
     "below by hand — a saved baseline unlocks planning just the same.",
-  repo_analysis_not_found: "Analyze the repository first — there is no baseline to save yet.",
+  repo_analysis_not_found: "There is no baseline to save yet — your coding agent submits it with the start_planning flow.",
 };
 
 const STATUS_TEXT: Record<RepoAnalysisOut["status"], string> = {
@@ -202,12 +202,13 @@ export function CodebaseAnalysisPanel({
         </div>
       )}
 
-      <AgentPlanningChecklist
-        projectId={projectId}
-        analysis={analysis}
-        drafts={drafts}
-        stageDocsPresent={stageDocsPresent}
-      />
+      {analysis.required === true && (
+        <AgentPlanningChecklist
+          analysis={analysis}
+          drafts={drafts}
+          stageDocsPresent={stageDocsPresent}
+        />
+      )}
 
       {/* The baseline is an input to planning, so it reads like the stage
           documents it feeds — same editor — and an admin can correct it by

@@ -38,7 +38,6 @@ export function AgentPlanningChecklist({
   drafts,
   stageDocsPresent = {},
 }: {
-  projectId: string;
   analysis: RepoAnalysisOut;
   drafts: StageDraftOut[];
   stageDocsPresent?: Partial<Record<StageKind, boolean>>;

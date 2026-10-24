@@ -43,7 +43,7 @@ describe("AgentPlanningChecklist", () => {
   afterEach(cleanup);
 
   it("shows the three steps with the exact commands", () => {
-    render(<AgentPlanningChecklist projectId="p1" analysis={base} drafts={[]} />);
+    render(<AgentPlanningChecklist analysis={base} drafts={[]} />);
     expect(screen.getByText("Install the PromptWorkspace MCP server and sign in")).toBeInTheDocument();
     expect(screen.getByText("promptworkspace-mcp login")).toBeInTheDocument();
     expect(screen.getByText("Open this repository in your coding agent and paste:")).toBeInTheDocument();
@@ -61,7 +61,6 @@ describe("AgentPlanningChecklist", () => {
   it("applies the status rule per row", () => {
     render(
       <AgentPlanningChecklist
-        projectId="p1"
         analysis={{ ...base, status: "baseline_ready" }}
         drafts={[draft("constitution", "pending"), draft("specify", "rejected"), draft("plan", "rejected")]}
         stageDocsPresent={{ constitution: true, plan: true, tasks: true }}

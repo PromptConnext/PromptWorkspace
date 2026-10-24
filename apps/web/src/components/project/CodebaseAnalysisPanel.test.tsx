@@ -178,6 +178,19 @@ describe("CodebaseAnalysisPanel", () => {
     expect(screen.queryByRole("button", { name: /analyze/i })).not.toBeInTheDocument();
   });
 
+  it("hides the checklist when the analysis is no longer required but keeps the baseline editor", () => {
+    render(
+      <CodebaseAnalysisPanel
+        projectId="p1"
+        analysis={analysis({ required: false })}
+        canEdit
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("promptworkspace-mcp login")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Raw" })).toBeInTheDocument();
+  });
+
   it("marks the baseline row accepted for a pre-existing cloud baseline and keeps stage rows waiting", () => {
     render(
       <CodebaseAnalysisPanel
