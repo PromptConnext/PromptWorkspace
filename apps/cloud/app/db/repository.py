@@ -206,6 +206,12 @@ class Repository(abc.ABC):
     def list_members(self, workspace_id: str) -> list[WorkspaceMember]: ...
 
     @abc.abstractmethod
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        """Set (or clear, with None) a member's display name; None if not a member."""
+
+    @abc.abstractmethod
     def add_member(
         self,
         workspace_id: str,
@@ -1065,6 +1071,16 @@ class InMemoryRepository(Repository):
 
     def list_members(self, workspace_id: str) -> list[WorkspaceMember]:
         return list(self._members.get(workspace_id, {}).values())
+
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        member = self._members.get(workspace_id, {}).get(user_id)
+        if member is None:
+            return None
+        updated = member.model_copy(update={"display_name": display_name})
+        self._members[workspace_id][user_id] = updated
+        return updated
 
     def add_member(
         self,

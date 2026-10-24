@@ -14,6 +14,7 @@ const member = (user_id: string, email: string | null): WorkspaceMember => ({
   user_id,
   email,
   role: "member",
+  display_name: null,
   invited_by: null,
   created_at: "2026-10-01T00:00:00Z",
 });

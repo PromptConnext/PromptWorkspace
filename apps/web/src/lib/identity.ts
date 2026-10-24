@@ -20,16 +20,16 @@ function hash(input: string): number {
   return Math.abs(h);
 }
 
-export function displayName(identity: { email: string | null; user_id: string }): string {
-  return identity.email ?? identity.user_id;
+type Identity = { display_name?: string | null; email: string | null; user_id: string };
+
+export function displayName(identity: Identity): string {
+  return identity.display_name || identity.email || identity.user_id;
 }
 
-export function initial(identity: { email: string | null; user_id: string }): string {
-  const source = identity.email ?? identity.user_id;
-  return source.charAt(0).toUpperCase();
+export function initial(identity: Identity): string {
+  return displayName(identity).charAt(0).toUpperCase();
 }
 
-export function avatarColor(identity: { email: string | null; user_id: string }): string {
-  const source = identity.email ?? identity.user_id;
-  return AVATAR_COLORS[hash(source) % AVATAR_COLORS.length];
+export function avatarColor(identity: Identity): string {
+  return AVATAR_COLORS[hash(displayName(identity)) % AVATAR_COLORS.length];
 }

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 
 def new_id() -> str:
@@ -328,7 +328,31 @@ class WorkspaceMember(BaseModel):
     email: str | None = None
     role: Role = Role.member
     invited_by: str | None = None
+    # What the member chose to be called (plan 0033). Shown in preference to
+    # the email; stripped, capped at 80 characters, blank means unset.
+    display_name: str | None = Field(default=None, max_length=80)
     created_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _blank_display_name_is_none(cls, v: object) -> object:
+        return _clean_display_name(v)
+
+
+class MemberDisplayNameUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=80)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _blank_display_name_is_none(cls, v: object) -> object:
+        return _clean_display_name(v)
+
+
+def _clean_display_name(v: object) -> object:
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return v
 
 
 class InvitationCreate(BaseModel):

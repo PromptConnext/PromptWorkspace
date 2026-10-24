@@ -12,6 +12,7 @@ const members: WorkspaceMember[] = [
     user_id: "u1",
     email: "dev-user@promptworkspace.local",
     role: "member",
+    display_name: null,
     invited_by: null,
     created_at: "2026-08-01T00:00:00Z",
   },

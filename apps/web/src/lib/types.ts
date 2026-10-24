@@ -24,6 +24,7 @@ export interface WorkspaceMember {
   workspace_id: string;
   user_id: string;
   email: string | null;
+  display_name: string | null;
   role: Role;
   invited_by: string | null;
   created_at: string;

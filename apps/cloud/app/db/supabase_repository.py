@@ -463,6 +463,19 @@ class SupabaseRepository(Repository):
         res = self._table(_MEMBERS).select("*").eq("workspace_id", workspace_id).execute()
         return [WorkspaceMember(**row) for row in (res.data or [])]
 
+    def set_member_display_name(
+        self, workspace_id: str, user_id: str, display_name: str | None
+    ) -> WorkspaceMember | None:
+        res = (
+            self._table(_MEMBERS)
+            .update({"display_name": display_name})
+            .eq("workspace_id", workspace_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = res.data or []
+        return WorkspaceMember(**rows[0]) if rows else None
+
     def add_member(
         self,
         workspace_id: str,

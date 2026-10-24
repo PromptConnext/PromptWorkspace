@@ -171,6 +171,18 @@ export function listMembers(workspaceId: string, authHeaders: Record<string, str
   return apiFetch<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`, authHeaders);
 }
 
+export function updateMemberDisplayName(
+  workspaceId: string,
+  userId: string,
+  displayName: string | null,
+  authHeaders: Record<string, string>,
+) {
+  return apiFetch<WorkspaceMember>(`/workspaces/${workspaceId}/members/${userId}`, authHeaders, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
 export function assignTask(
   projectId: string,
   taskId: string,
