@@ -700,6 +700,9 @@ class Project(BaseModel):
     # Nullable: `None` = never selected (backward compatible with every
     # project created before this feature). See PolicyScope above.
     policy_scope: PolicyScope | None = None
+    # Whether policy_scope came from the workspace default or the project (plan 0033;
+    # migration 0011 column, default 'project').
+    policy_scope_source: Literal["workspace", "project"] = "project"
     # ADR 0021. Both nullable for the same backward-compatibility reason:
     # `None` config = no template ever chosen, `None` state = nothing ever
     # deployed. See the DeploymentConfig/DeploymentState note above for why

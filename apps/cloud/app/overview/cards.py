@@ -64,9 +64,8 @@ def build_card(
         task_counts=task_counts,
         decisions=decision_counts(decisions, now),
         stack=stack,
-        # policy_scope_source is added to Project by Task 9; "project" until then.
         policy={
-            "source": getattr(project, "policy_scope_source", "project"),
+            "source": project.policy_scope_source,
             "selected": list(project.policy_scope.selected) if project.policy_scope else [],
         },
         checks=run_checks(project, roles, decisions, governance, now),
