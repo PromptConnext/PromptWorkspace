@@ -71,7 +71,7 @@ psql "$POOLER_URL" -c "select has_table_privilege('service_role','public.pw_work
 
 If the privilege check prints `f`, migration 0005 has not been applied. (It checks `pw_workspace_members` on purpose: the baseline grants `service_role` on the graph tables such as `pw_tasks` explicitly, so a check on those passes on a database that is missing the rest.)
 
-**Confirm what the database has applied from its ledger, not from `/health`.** `/health.schema_version` is the stem of the newest migration file in the deployed image — the version the *code* expects — and never reads the database, so it now answers `"0011_pw_workspace_governance"` whether or not 0004 through 0006 were applied (it answered `"0003_pw_stage_inputs"` before plan 0029; and because the API tolerates a missing `pw_stage_inputs`, a missing 0003 looks fine too, while a missing 0004 fails every task write (`pw_tasks.change_id`: the Planner's tasks generation and save, and the sync push) as well as the delivery-plan and decision routes, so unlike 0003 it is not silent: apply it before deploying this code). The proof is `python scripts/migrate.py --db-url "$POOLER_URL" status`, which must list every file on disk under `Applied` and print `Pending (0)`, or the ledger itself:
+**Confirm what the database has applied from its ledger, not from `/health`.** `/health.schema_version` is the stem of the newest migration file in the deployed image — the version the *code* expects — and never reads the database, so it now answers `"0012_pw_stage_drafts"` whether or not 0004 through 0006 were applied (it answered `"0003_pw_stage_inputs"` before plan 0029; and because the API tolerates a missing `pw_stage_inputs`, a missing 0003 looks fine too, while a missing 0004 fails every task write (`pw_tasks.change_id`: the Planner's tasks generation and save, and the sync push) as well as the delivery-plan and decision routes, so unlike 0003 it is not silent: apply it before deploying this code). The proof is `python scripts/migrate.py --db-url "$POOLER_URL" status`, which must list every file on disk under `Applied` and print `Pending (0)`, or the ledger itself:
 
 ```bash
 psql "$POOLER_URL" -c "select filename, applied_at from pw_schema_migrations order by filename"   # last row: 0012_pw_stage_drafts.sql
@@ -504,7 +504,7 @@ Neither workflow deploys: Vercel's git integration and Northflank's per-service 
 
 ## 7. Production checklist
 
-- [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `scripts/migrate.py status` against the same URI prints `Pending (0)` with `0003_pw_stage_inputs.sql` through `0011_pw_workspace_governance.sql` under `Applied` (`/health.schema_version` only names the version the code expects, not what the DB has); the service_role privilege check prints `t` (§2.2)
+- [ ] `scripts/migrate.py apply --var embed_dim=<N>` run against the prod pooler URI; `<N>` equals `MANAGED_EMBED_DIM`; `scripts/migrate.py status` against the same URI prints `Pending (0)` with `0003_pw_stage_inputs.sql` through `0012_pw_stage_drafts.sql` under `Applied` (`/health.schema_version` only names the version the code expects, not what the DB has); the service_role privilege check prints `t` (§2.2)
 - [ ] `AUTH_MODE=supabase`, `DATA_BACKEND=supabase`, `APP_ENV=production`, `RAG_KEY_ENCRYPTION_KEY` set (the service refuses to boot without it) and backed up offline
 - [ ] Secret key set only in the Northflank runtime variables — never in the repo or a client; clients get only the publishable key
 - [ ] Instances = 1 (in-process presence/rate-limit state)
@@ -533,7 +533,7 @@ A third, short-lived stack for the agent-native delivery work in [plan 0029](pla
    - Auth → URL Configuration: Site URL `https://promptworkspace-trust.truthledgers.com`; Redirect URLs `https://promptworkspace-trust.truthledgers.com/**` and `http://localhost:3000/**`.
    - Auth → SMTP: the same Brevo settings as develop, sender name `PromptWorkspace (trust)`.
 2. **Schema, before any deploy.** From `apps/cloud`:
-   `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" apply --var embed_dim=1536`, then `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" status` must list `0011_pw_workspace_governance` as applied, and the §2.2 privilege check must print `t`.
+   `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" apply --var embed_dim=1536`, then `python scripts/migrate.py --db-url "$TRUST_POOLER_URL" status` must list `0012_pw_stage_drafts` as applied, and the §2.2 privilege check must print `t`.
 3. **Northflank.** In project `promptworkspace`, duplicate service `promptworkspace` as `promptworkspace-trust`: branch `feature/trust-outcome`, same Dockerfile/context/port/health checks, instances 1, autoscaling off. Runtime variables: copy from `promptworkspace`, then change `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`, `CORS_ORIGINS=https://promptworkspace-trust.truthledgers.com`, `WEB_APP_URL=https://promptworkspace-trust.truthledgers.com`, `PUBLIC_API_URL=https://promptworkspace-trust-api.truthledgers.com`, a **new** `RAG_KEY_ENCRYPTION_KEY`, `APP_ENV=trust`, and add `REQUIRE_PLAN_APPROVAL=true`. Custom domain `promptworkspace-trust-api.truthledgers.com`. Enable CI auto-deploy only after step 2.
 
    `APP_ENV` has to be changed because the copy inherits develop's `staging`, and `/health` would then report `"env": "staging"` for the trust stack. Only the exact value `production` (compared case- and whitespace-insensitively) changes the cloud's behaviour, through its startup guards, so any other label is safe. Beyond that guard `APP_ENV` only labels the stack: the `env` field of `/health` and the `environment` tag on Sentry events, which is what keeps trust errors apart from develop's.
@@ -544,7 +544,7 @@ A third, short-lived stack for the agent-native delivery work in [plan 0029](pla
    - Settings → Environment Variables, scope **Preview**, branch `feature/trust-outcome`: `NEXT_PUBLIC_CLOUD_API_URL=https://promptworkspace-trust-api.truthledgers.com`, `NEXT_PUBLIC_CLOUD_WS_URL=wss://promptworkspace-trust-api.truthledgers.com`, `NEXT_PUBLIC_AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the trust project's publishable key).
    - Settings → Domains: add `promptworkspace-trust.truthledgers.com` and connect it to Git branch `feature/trust-outcome`.
 5. **DNS** (truthledgers.com, proxy off): `promptworkspace-trust` CNAME → the Vercel target; `promptworkspace-trust-api` CNAME → the Northflank target.
-6. **Smoke check:** `curl -s https://promptworkspace-trust-api.truthledgers.com/health` reports `schema_version` `0011_pw_workspace_governance` and `"env": "trust"`, and the web origin returns 200.
+6. **Smoke check:** `curl -s https://promptworkspace-trust-api.truthledgers.com/health` reports `schema_version` `0012_pw_stage_drafts` and `"env": "trust"`, and the web origin returns 200.
 
 ### 8.2 Teardown
 
