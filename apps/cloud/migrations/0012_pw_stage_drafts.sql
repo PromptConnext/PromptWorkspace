@@ -17,6 +17,7 @@ create table if not exists pw_stage_drafts (
     status text not null default 'pending' check (status in ('pending','rejected')),
     rejection_note text,
     last_error text,
+    predecessor_fingerprint text,
     created_by uuid not null,
     created_at timestamptz not null default now(),
     unique (project_id, stage)

@@ -3,8 +3,6 @@ accept/reject that decides whether they become the project's stage documents."""
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -334,7 +332,6 @@ def test_list_is_member_readable_and_computes_stale(client: TestClient):
     assert by_stage["specify"]["stale"] is False
     assert by_stage["specify"]["warnings"] == []
 
-    time.sleep(0.01)
     client.patch(
         f"/projects/{pid}/stage-documents/constitution",
         json={"content": "# Rules moved"},
@@ -349,3 +346,62 @@ def test_list_is_member_readable_and_computes_stale(client: TestClient):
     assert client.get(
         f"/projects/{pid}/stage-drafts", headers={"X-User-Id": "mallory"}
     ).status_code == 403
+
+
+def test_one_sitting_drafts_are_not_stale_after_their_predecessors_are_accepted(
+    client: TestClient,
+):
+    """The agent submits all four drafts in one sitting, each against the
+    previous *draft*; accepting the drafts in order must not mark the later
+    ones stale. Only a change to the predecessor's content does."""
+    _, pid = _ready_project(client)
+    rules = "# Rules\n\nBe kind.\n"
+    for stage, markdown in (
+        ("constitution", rules),
+        ("specify", SPEC),
+        ("plan", PLAN),
+        ("tasks", TASKS),
+    ):
+        assert _submit(client, pid, stage, markdown).status_code == 201
+
+    def stale() -> dict[str, bool]:
+        listed = client.get(f"/projects/{pid}/stage-drafts", headers=ALICE).json()
+        return {d["stage"]: d["stale"] for d in listed}
+
+    assert _accept(client, pid, "constitution").status_code == 200
+    assert stale()["specify"] is False
+    assert _accept(client, pid, "specify").status_code == 200
+    assert stale()["plan"] is False
+    assert _accept(client, pid, "plan").status_code == 200
+    assert stale()["tasks"] is False
+
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/plan",
+        json={"content": PLAN + "\nAlso cache the first page.\n"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    assert stale()["tasks"] is True
+
+    assert _submit(client, pid, "tasks", TASKS).status_code == 201
+    assert stale()["tasks"] is False
+
+
+def test_accepting_the_predecessor_after_editing_its_draft_marks_the_successor_stale(
+    client: TestClient,
+):
+    _, pid = _ready_project(client)
+    _accepted(client, pid, "constitution", "# Rules\n")
+    assert _submit(client, pid, "specify", SPEC).status_code == 201
+    assert _submit(client, pid, "plan", PLAN).status_code == 201
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/specify",
+        json={"content": SPEC + "\nReaders may also filter.\n"},
+        headers=ALICE,
+    )
+    assert res.status_code == 200, res.text
+    listed = {
+        d["stage"]: d["stale"]
+        for d in client.get(f"/projects/{pid}/stage-drafts", headers=ALICE).json()
+    }
+    assert listed["plan"] is True

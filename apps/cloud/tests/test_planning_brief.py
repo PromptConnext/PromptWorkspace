@@ -3,8 +3,6 @@ project's planning documents."""
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -94,18 +92,34 @@ def test_brief_refuses_a_non_member(client: TestClient):
 
 
 def test_brief_marks_a_draft_stale_when_its_predecessor_moved(client: TestClient):
+    """Stale is a fingerprint, not a timestamp: a draft written against the
+    constitution "# d" stays fresh when that exact text is saved as the
+    document, and turns stale once the document says something else."""
+    from app.api.stage_drafts import predecessor_fingerprint
+
     ws_id, pid = _imported_project(client)
     repo = client.app.state.repository
     for stage in ("constitution", "specify"):
         repo.upsert_stage_draft(
             StageDraft(
-                project_id=pid, workspace_id=ws_id, stage=stage, markdown="# d", created_by="alice"
+                project_id=pid,
+                workspace_id=ws_id,
+                stage=stage,
+                markdown="# d",
+                predecessor_fingerprint=predecessor_fingerprint(repo, pid, stage),
+                created_by="alice",
             )
         )
     before = {d["stage"]: d["stale"] for d in _brief(client, pid).json()["drafts"]}
     assert before == {"constitution": False, "specify": False}
 
-    time.sleep(0.01)
+    res = client.patch(
+        f"/projects/{pid}/stage-documents/constitution", json={"content": "# d"}, headers=ALICE
+    )
+    assert res.status_code == 200, res.text
+    same = {d["stage"]: d["stale"] for d in _brief(client, pid).json()["drafts"]}
+    assert same == {"constitution": False, "specify": False}
+
     res = client.patch(
         f"/projects/{pid}/stage-documents/constitution",
         json={"content": "# Constitution moved"},

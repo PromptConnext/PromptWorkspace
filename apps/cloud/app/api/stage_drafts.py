@@ -19,6 +19,7 @@ The brief is member-readable like the stored analysis; what a caller may
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Literal
 
@@ -87,15 +88,38 @@ class PlanningBriefOut(BaseModel):
     instructions: str
 
 
+def _fingerprint(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def predecessor_fingerprint(repo: Repository, project_id: str, stage: str) -> str | None:
+    """What a draft for `stage` is being written against, fingerprinted at
+    submit time: the predecessor's pending draft if there is one (the agent
+    drafts all four stages in one sitting, each from the previous draft),
+    else its stored document, else nothing. Constitution has no predecessor."""
+    predecessor = PREDECESSOR.get(stage)
+    if predecessor is None:
+        return None
+    pending = repo.get_stage_draft(project_id, predecessor)
+    if pending is not None and pending.status == "pending":
+        return _fingerprint(pending.markdown)
+    document = repo.get_stage_document(project_id, predecessor)
+    return _fingerprint(document.content if document is not None else "")
+
+
 def compute_stale(draft: StageDraft, repo: Repository) -> bool:
-    """A draft is stale when the stage document it was written against has
-    been saved since the draft was submitted. No predecessor document, or no
-    predecessor at all (constitution), is not stale."""
+    """A draft is stale when its predecessor's stored document no longer has
+    the content the draft was written against. Accepting the predecessor's
+    draft unchanged keeps it fresh; editing it before or after acceptance
+    does not. No predecessor document yet, or no predecessor at all
+    (constitution), is not stale."""
     predecessor = PREDECESSOR.get(draft.stage)
     if predecessor is None:
         return False
     document = repo.get_stage_document(draft.project_id, predecessor)
-    return document is not None and document.updated_at > draft.created_at
+    if document is None:
+        return False
+    return _fingerprint(document.content) != draft.predecessor_fingerprint
 
 
 def _require_open_import(project: Project) -> None:
@@ -255,8 +279,9 @@ def submit_stage_draft(
     _require_open_import(project)
 
     # A fresh draft every time: a resubmission clears the rejection and the
-    # last apply error, and its staleness is measured from now. The markdown
-    # is stored exactly as received; the parsers only produce warnings.
+    # last apply error, and its staleness is measured against the
+    # predecessor as it is now. The markdown is stored exactly as received;
+    # the parsers only produce warnings.
     draft = repo.upsert_stage_draft(
         StageDraft(
             project_id=project.id,
@@ -264,6 +289,7 @@ def submit_stage_draft(
             stage=body.stage,
             markdown=body.markdown,
             model=body.model,
+            predecessor_fingerprint=predecessor_fingerprint(repo, project.id, body.stage),
             created_by=user.id,
         )
     )

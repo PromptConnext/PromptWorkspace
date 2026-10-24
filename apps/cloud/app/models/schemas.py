@@ -1604,6 +1604,10 @@ class StageDraft(BaseModel):
     status: StageDraftStatus = "pending"
     rejection_note: str | None = None
     last_error: str | None = None
+    # sha256 of the predecessor stage's content this draft was written
+    # against: its pending draft at submit time if there was one, else its
+    # stored document, else "". None for constitution (no predecessor).
+    predecessor_fingerprint: str | None = None
     created_by: str
     created_at: datetime = Field(default_factory=utcnow)
 
