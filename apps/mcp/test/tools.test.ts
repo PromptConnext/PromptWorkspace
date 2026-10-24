@@ -16,7 +16,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -96,6 +96,45 @@ const PROJECT = {
   lifecycle_status: "repo_created",
 };
 
+const PLANNING_BRIEF = {
+  project_id: "proj-1",
+  project_name: "Uploader",
+  project_description: "Uploads files.",
+  repo_url: REPO_URL,
+  default_branch: "main",
+  can_submit_analysis: true,
+  policy_context: "Keep customer data in-region.",
+  templates: {
+    constitution: "# Constitution template",
+    specify: "# Specify template",
+    plan: "# Plan template",
+    tasks: "# Tasks template",
+  },
+  prd_texts: [{ title: "Uploader PRD", text: "Users upload large files." }],
+  analysis_status: "baseline_ready",
+  baseline: "The service is a FastAPI app.",
+  drafts: [
+    {
+      stage: "plan",
+      status: "rejected",
+      stale: true,
+      rejection_note: "Name the queue.",
+      last_error: null,
+      created_at: "2026-10-24T00:00:00Z",
+    },
+  ],
+  submittable_stages: ["constitution", "specify", "plan", "tasks"],
+  instructions: "Read the repository, then submit the baseline.",
+};
+
+const STAGE_DRAFT = {
+  id: "draft-1",
+  stage: "tasks",
+  status: "pending",
+  stale: false,
+  warnings: [] as unknown[],
+};
+
 interface Recorded {
   path: string;
   method: string;
@@ -122,6 +161,9 @@ interface HarnessOptions {
   /** Share one queue file between two harnesses, standing in for two runs of
    *  the server against the same config directory. */
   queueDir?: string;
+  /** How the fake cloud answers the two planning POSTs (`repo-analysis/agent`
+   *  and `stage-drafts`). Default: the canned success bodies below. */
+  planningReply?: (path: string) => { code: number; body: unknown } | undefined;
 }
 
 function readQueueFile(dir: string): QueueEntry[] {
@@ -180,8 +222,22 @@ async function withTools(
       });
       return;
     }
+    if (method === "POST" && /^\/projects\/proj-1\/(repo-analysis\/agent|stage-drafts)$/.test(path)) {
+      void readBody(req).then((body) => {
+        seen.push({ path, method, body });
+        const fallback = path.endsWith("/stage-drafts")
+          ? { code: 201, body: { ...STAGE_DRAFT, stage: body?.stage } }
+          : { code: 200, body: { status: "baseline_ready", commit_sha: body?.commit_sha } };
+        const reply = options.planningReply?.(path) ?? fallback;
+        res.statusCode = reply.code;
+        res.end(JSON.stringify(reply.body));
+      });
+      return;
+    }
     seen.push({ path, method });
-    if (path.startsWith("/me/tasks")) {
+    if (path === "/projects/proj-1/planning-brief") {
+      res.end(JSON.stringify(PLANNING_BRIEF));
+    } else if (path.startsWith("/me/tasks")) {
       res.end(JSON.stringify([TASK]));
     } else if (path.startsWith("/workspaces/ws-1/projects")) {
       res.end(JSON.stringify([PROJECT, ...(options.extraProjects ?? [])]));
@@ -285,16 +341,20 @@ after(() => {
   for (const root of clones) rmSync(root, { recursive: true, force: true });
 });
 
-test("the server advertises exactly the four tools of plan 0025", async () => {
+test("the server advertises the four plan 0025 tools and the three planning tools", async () => {
   await withTools(async ({ listToolNames }) => {
-    // A fifth name appearing here means a tool was invented outside plan 0025
-    // §1 — most likely a claim or assignment tool, for which /me/tasks gives no
-    // caller, or something that writes the graph.
+    // An eighth name appearing here means a tool was invented outside plan 0025
+    // §1 and the local-agent planning flow — most likely a claim or assignment
+    // tool, for which /me/tasks gives no caller, or something that writes the
+    // graph.
     assert.deepEqual(await listToolNames(), [
       "list_my_tasks",
       "get_task",
       "get_project_rules",
       "close_task",
+      "start_planning",
+      "submit_repo_analysis",
+      "submit_stage_draft",
     ]);
   });
 });
@@ -761,6 +821,261 @@ test("close_task refuses a status outside the one vocabulary", async () => {
     assert.match(bodyOf(result), /must be one of: todo, in_progress, implemented, verified/);
     assert.equal(statusWrites(seen).length, 0);
   });
+});
+
+// ------------------------------------------------------------ planning tools
+
+const SNAPSHOT = {
+  default_branch: "main",
+  commit_sha: "abc123",
+  paths: ["src/app.py", "pyproject.toml"],
+  file_count: 2,
+  stack: { runtime: "python", manifests: ["pyproject.toml"], languages: ["Python"] },
+  baseline: "# Baseline\n\nA FastAPI app.",
+};
+
+test("start_planning resolves the project from the clone and renders the brief", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("start_planning", { workspace_root: root });
+    assert.equal(result.isError, undefined);
+    const body = bodyOf(result);
+    assert.ok(seen.some((s) => s.method === "GET" && s.path === "/projects/proj-1/planning-brief"));
+
+    const headings = body.split("\n").filter((l) => l.startsWith("## "));
+    assert.deepEqual(headings, [
+      "## Instructions",
+      "## Project",
+      "## Drafts",
+      "## Baseline",
+      "## Policy context",
+      "## PRDs",
+      "## Templates",
+    ]);
+    assert.ok(body.startsWith("## Instructions\n\nRead the repository, then submit the baseline."));
+    assert.match(body, /Uploader/);
+    assert.match(body, /https:\/\/github\.com\/acme\/uploader/);
+    assert.match(body, /can_submit_analysis: true/);
+    assert.match(body, /analysis_status: baseline_ready/);
+    assert.match(body, /submittable_stages: constitution, specify, plan, tasks/);
+    assert.match(body, /- plan: rejected, stale: true, rejection_note: Name the queue\., last_error: none/);
+    assert.match(body, /## Baseline\n\nThe service is a FastAPI app\./);
+    assert.match(body, /## Policy context\n\nKeep customer data in-region\./);
+    assert.match(body, /Uploader PRD[\s\S]*Users upload large files\./);
+    for (const stage of ["constitution", "specify", "plan", "tasks"]) {
+      const cap = stage[0].toUpperCase() + stage.slice(1);
+      assert.match(body, new RegExp(`### ${stage}\\n\\n\`\`\`+markdown\\n# ${cap} template\\n\`\`\`+`));
+    }
+  });
+});
+
+test("start_planning takes project_id instead of a remote", async () => {
+  const root = makeClone({}, null);
+  await withTools(async ({ call }) => {
+    const result = await call("start_planning", { workspace_root: root, project_id: "proj-1" });
+    assert.equal(result.isError, undefined);
+    assert.match(bodyOf(result), /## Instructions/);
+  });
+});
+
+test("submit_repo_analysis posts the snapshot and reports the gate open", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
+    assert.equal(result.isError, undefined);
+    assert.equal(
+      bodyOf(result),
+      "Baseline accepted for Uploader at abc123; the plan and tasks stages are now open for drafts.",
+    );
+    const post = seen.find((s) => s.path === "/projects/proj-1/repo-analysis/agent");
+    assert.ok(post);
+    assert.equal(post.method, "POST");
+    assert.deepEqual(post.body, SNAPSHOT);
+  });
+});
+
+test("submit_repo_analysis without admin rights is a tool error asking for an admin", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
+      assert.equal(result.isError, true);
+      assert.equal(
+        bodyOf(result),
+        "Only a workspace admin can submit the repository analysis; ask one to run this step.",
+      );
+    },
+    { planningReply: () => ({ code: 403, body: { detail: "admin_required" } }) },
+  );
+});
+
+test("submit_repo_analysis on a from-scratch project names the 409 and explains it", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
+      assert.equal(result.isError, true);
+      assert.equal(
+        bodyOf(result),
+        "repo_not_imported: this project was started from scratch, so there is nothing to analyze",
+      );
+    },
+    { planningReply: () => ({ code: 409, body: { detail: "repo_not_imported" } }) },
+  );
+});
+
+test("submit_repo_analysis with an over-long baseline is told to shorten it", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
+      assert.equal(result.isError, true);
+      assert.equal(bodyOf(result), "The baseline is longer than 100,000 characters; shorten it.");
+    },
+    { planningReply: () => ({ code: 422, body: { detail: "too long" } }) },
+  );
+});
+
+test("submit_stage_draft relays the cloud's warnings as bullets", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call, seen }) => {
+      const result = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "tasks",
+        markdown: "- T001 Add the queue",
+        model: "claude-opus-5-5",
+      });
+      assert.equal(result.isError, undefined);
+      assert.equal(
+        bodyOf(result),
+        [
+          "Draft for tasks is pending review in PromptWorkspace.",
+          "",
+          "Warnings to fix and resubmit:",
+          "- Task numbers missing: T003, T004",
+          "- T002 names a path not in the repository: src/new.py — mark it (new) or use an existing path",
+        ].join("\n"),
+      );
+      const post = seen.find((s) => s.path === "/projects/proj-1/stage-drafts");
+      assert.deepEqual(post?.body, {
+        stage: "tasks",
+        markdown: "- T001 Add the queue",
+        model: "claude-opus-5-5",
+      });
+    },
+    {
+      planningReply: () => ({
+        code: 201,
+        body: {
+          ...STAGE_DRAFT,
+          warnings: [
+            { code: "missing_task_numbers", items: ["T003", "T004"] },
+            { code: "unmarked_new_paths", items: [{ ref: "T002", path: "src/new.py" }] },
+          ],
+        },
+      }),
+    },
+  );
+});
+
+test("submit_stage_draft with no warnings is one line", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call }) => {
+    const result = await call("submit_stage_draft", {
+      workspace_root: root,
+      stage: "specify",
+      markdown: "# Spec",
+    });
+    assert.equal(result.isError, undefined);
+    assert.equal(bodyOf(result), "Draft for specify is pending review in PromptWorkspace.");
+  });
+});
+
+test("submit_stage_draft on a stage the caller may not author is a tool error naming the stage", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "constitution",
+        markdown: "# Rules",
+      });
+      assert.equal(result.isError, true);
+      assert.equal(
+        bodyOf(result),
+        "You may not author constitution in this project; ask a workspace admin.",
+      );
+    },
+    { planningReply: () => ({ code: 403, body: { detail: "admin_required" } }) },
+  );
+});
+
+test("submit_stage_draft after the repository exists names the 409 and explains it", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "plan",
+        markdown: "# Plan",
+      });
+      assert.equal(result.isError, true);
+      assert.equal(
+        bodyOf(result),
+        "repo_already_created: the repository is already created, so planning drafts are no longer accepted",
+      );
+    },
+    { planningReply: () => ({ code: 409, body: { detail: "repo_already_created" } }) },
+  );
+});
+
+test("submit_stage_draft with over-long markdown is told to shorten it", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "plan",
+        markdown: "# Plan",
+      });
+      assert.equal(result.isError, true);
+      assert.equal(bodyOf(result), "The markdown is longer than 100,000 characters; shorten it.");
+    },
+    { planningReply: () => ({ code: 422, body: { detail: "too long" } }) },
+  );
+});
+
+test("submit_stage_draft refuses a stage outside the four", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_stage_draft", {
+      workspace_root: root,
+      stage: "design",
+      markdown: "# x",
+    });
+    assert.equal(result.isError, true);
+    assert.match(bodyOf(result), /must be one of: constitution, specify, plan, tasks/);
+    assert.ok(!seen.some((s) => s.path.endsWith("/stage-drafts")));
+  });
+});
+
+test("planning tools never enqueue: a 5xx is a tool error, not a queued write", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call, queueDir }) => {
+      const draft = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "plan",
+        markdown: "# Plan",
+      });
+      assert.equal(draft.isError, true);
+      const analysis = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
+      assert.equal(analysis.isError, true);
+      assert.equal(existsSync(join(queueDir, "queue.json")), false);
+    },
+    { planningReply: () => ({ code: 503, body: { detail: "unavailable" } }) },
+  );
 });
 
 test("config precedence is default, then file, then environment", () => {

@@ -15,7 +15,8 @@ thing left for them to install. The build is sequenced in
 
 ## What it is, and what it is not
 
-Four tools, through M3. Three read:
+Seven tools: the four task tools of M1 to M3, and three planning tools for an
+imported project. Three task tools read:
 
 - **`list_my_tasks`** — the tasks assigned to you, across every workspace and
   project. Optional `workspace_id` and `status` filters; without `status` the
@@ -57,11 +58,29 @@ And one writes:
   may kill this process at any moment, so the work happens when the process is
   known to be alive.
 
+Three more exist for one situation: a project imported from an existing
+repository that has not reached repo creation yet, where your own agent reads
+the clone and drafts the plan.
+
+- **`start_planning`** — the planning brief: instructions, the four stage
+  templates, policy context, PRDs, the codebase baseline and the drafts already
+  submitted. Resolves the project like `get_project_rules`.
+- **`submit_repo_analysis`** — the repository snapshot and the baseline your
+  agent wrote. Workspace admins only; it opens the plan and tasks stages.
+- **`submit_stage_draft`** — one stage's Markdown, stored as a **pending
+  draft** a person accepts or rejects in PromptWorkspace. Warnings (gaps in task
+  numbering, paths not in the repository) come back as bullets to fix and
+  resubmit.
+
+Neither write is queued: a refusal or an unreachable cloud is a tool error, and
+the agent submits again. They store a pending draft and the analysis row and
+nothing else.
+
 Streamable HTTP is M4.
 
-This is **not a planning client**. It does not create projects, run stages,
-author or edit requirements and specs, upload a PRD, post discussions, or clone a
-repository. It never calls `PUT /sync/projects/{id}/graph` — a task client with a
+Beyond those drafts this is **not a planning client**. It does not create
+projects, run stages, edit stage documents, requirements or specs, upload a PRD,
+post discussions, or clone a repository. It never calls `PUT /sync/projects/{id}/graph` — a task client with a
 full-graph push can overwrite the requirements and specs the cloud authored, and
 `packages/cloud-client/src/client.ts` writes down the same prohibition for the same
 reason. There is no task-claim or task-assignment tool either: `/me/tasks`
