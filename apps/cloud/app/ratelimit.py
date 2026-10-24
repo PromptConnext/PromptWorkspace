@@ -135,10 +135,12 @@ async def _token_client_key(request: Request) -> str:
     if not cid and request.headers.get("content-type", "").startswith(
         "application/x-www-form-urlencoded"
     ):
+        # Unknown (absent / non-numeric) length means unbounded: never buffer it.
         try:
-            too_big = int(request.headers.get("content-length", "0")) > _MAX_FORM_BYTES
+            length = int(request.headers.get("content-length", ""))
         except ValueError:
-            too_big = True
+            length = None
+        too_big = length is None or length > _MAX_FORM_BYTES
         if not too_big:
             # BaseHTTPMiddleware replays a body read here to the route.
             form = parse_qs((await request.body()).decode("utf-8", "replace"))
@@ -177,7 +179,7 @@ def default_rules(settings) -> list[LimitRule]:
             lambda r: (
                 r.method == "GET"
                 and r.url.path == "/oauth/authorize"
-                and r.query_params.get("client_id", "").startswith("https://")
+                and r.query_params.get("client_id", "").lower().startswith("https://")
             ),
             _ip,
             _hourly(20, 5),
@@ -190,7 +192,7 @@ def default_rules(settings) -> list[LimitRule]:
         ),
         LimitRule(
             "mcp",
-            lambda r: r.url.path.startswith("/mcp"),
+            lambda r: r.url.path == "/mcp" or r.url.path.startswith("/mcp/"),
             ident,
             TokenBucketLimiter(per_minute=300, burst=60),
         ),

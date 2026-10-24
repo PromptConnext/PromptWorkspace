@@ -81,7 +81,7 @@ def test_identity_token_suffix_then_ip():
     assert identity(_req({}, host=None), stub_mode=False) == "ip:unknown"
 
 
-def test_register_per_ip_hourly_limit():
+def test_register_6th_rapid_call_from_one_ip_is_429_other_ip_passes():
     c1, c2 = _client(_build(), "1.1.1.1"), None
     codes = [c1.post("/oauth/register").status_code for _ in range(6)]
     assert codes == [200] * 5 + [429]
@@ -90,18 +90,14 @@ def test_register_per_ip_hourly_limit():
     assert c2.post("/oauth/register").status_code == 200
 
 
-def test_register_31st_call_in_an_hour_is_429(monkeypatch):
+def test_register_bucket_refills_at_30_per_hour(monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(ratelimit.time, "monotonic", lambda: now[0])
     c = _client(_build(), "1.1.1.1")
-    codes = []
-    for _ in range(35):
-        codes.append(c.post("/oauth/register").status_code)
-        now[0] += 60  # 30/hour sustained = one token per 120s, so we outrun refill
-    # 5 burst + 1 refill per 2 calls: bucket drains and starts rejecting
-    assert 429 in codes
-    now[0] += 3600
+    assert [c.post("/oauth/register").status_code for _ in range(6)] == [200] * 5 + [429]
+    now[0] += 120  # one token per 120s at 30/hour
     assert c.post("/oauth/register").status_code == 200
+    assert c.post("/oauth/register").status_code == 429
 
 
 def test_register_global_bucket_caps_across_ips():
@@ -165,3 +161,54 @@ def test_sync_bucket_keyed_by_user_only_in_stub_mode(stub):
     assert c.get("/sync/x", headers={"x-user-id": "a"}).status_code == 200
     second = c.get("/sync/x", headers={"x-user-id": "b"}).status_code
     assert second == (200 if stub else 429)
+
+
+def test_chunked_token_body_is_not_buffered_and_keyed_by_ip():
+    app = _build()
+    def gen():
+        yield b"client_id=A&code="
+        yield b"x" * 100
+
+    c = _client(app)
+    hdr = {"content-type": "application/x-www-form-urlencoded"}
+    # generator body -> Transfer-Encoding: chunked, no Content-Length
+    r = c.post("/oauth/token", content=gen(), headers=hdr)
+    assert r.status_code == 200
+    assert r.json()["body"].startswith("client_id=A")  # route still gets it
+    # Keyed by ip: the 20-token ip bucket drains, client:A's own bucket is untouched.
+    for _ in range(19):
+        c.post("/oauth/token", content=gen(), headers=hdr)
+    assert c.post("/oauth/token", data={"client_id": "A"}).status_code == 200
+    assert (
+        c.post("/oauth/token", content=gen(), headers=hdr).status_code == 429
+    )
+
+
+def test_token_key_does_not_read_body_without_content_length(monkeypatch):
+    called = []
+    orig = Request.body
+
+    async def spy(self):
+        called.append(1)
+        return await orig(self)
+
+    monkeypatch.setattr(Request, "body", spy)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/oauth/token",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        "client": ("7.7.7.7", 1),
+    }
+    import asyncio
+
+    key = asyncio.run(ratelimit._token_client_key(Request(scope)))
+    assert key == "ip:7.7.7.7" and not called
+
+
+def test_mcp_prefix_is_exact_and_cimd_scheme_case_insensitive():
+    c = _client(_build())
+    assert all(c.get("/mcpfoo").status_code == 404 for _ in range(70))  # never limited
+    codes = [c.get("/oauth/authorize?client_id=HTTPS://a/b").status_code for _ in range(6)]
+    assert codes[-1] == 429
