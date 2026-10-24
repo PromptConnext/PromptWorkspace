@@ -63,4 +63,21 @@ describe("DisplayNameField", () => {
     await waitFor(() => expect(updateMemberDisplayName).toHaveBeenCalled());
     expect(updateMemberDisplayName.mock.calls[0][2]).toBeNull();
   });
+
+  it("keeps showing Saved when the member prop changes after a save", async () => {
+    updateMemberDisplayName.mockResolvedValue({ ...member, display_name: "Somchai" });
+    const { rerender } = render(
+      <DisplayNameField workspaceId="w1" member={member} label="Your name" />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    rerender(
+      <DisplayNameField
+        workspaceId="w1"
+        member={{ ...member, display_name: "Somchai" }}
+        label="Your name"
+      />,
+    );
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+  });
 });

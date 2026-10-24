@@ -1097,6 +1097,10 @@ class InMemoryRepository(Repository):
             invited_by=invited_by,
             email=email,
         )
+        # A re-add keeps the member's own display name (matches the Supabase adapter).
+        existing = self._members.get(workspace_id, {}).get(user_id)
+        if existing is not None:
+            member = member.model_copy(update={"display_name": existing.display_name})
         self._members.setdefault(workspace_id, {})[user_id] = member
         return member
 

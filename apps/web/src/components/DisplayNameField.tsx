@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { updateMemberDisplayName } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { WorkspaceMember } from "@/lib/types";
@@ -18,6 +18,7 @@ export function DisplayNameField({
   onSaved?: (member: WorkspaceMember) => void;
 }) {
   const { authHeaders } = useAuth();
+  const id = useId();
   const [value, setValue] = useState(member.display_name ?? "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
@@ -38,7 +39,6 @@ export function DisplayNameField({
     }
   }
 
-  const id = `display-name-${member.user_id}`;
   return (
     <form onSubmit={submit} className="flex items-center gap-2">
       <label htmlFor={id} className="text-sm font-medium text-slate-700">

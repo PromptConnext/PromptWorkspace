@@ -14,7 +14,7 @@ import type { WorkspaceMember } from "@/lib/types";
  */
 export function memberFullName(member: WorkspaceMember | undefined): string {
   if (!member) return "Unknown member";
-  return member.display_name || member.email ? displayName(member) : "Unnamed member";
+  return (member.display_name || member.email) ? displayName(member) : "Unnamed member";
 }
 
 export function memberShortName(member: WorkspaceMember | undefined): string {

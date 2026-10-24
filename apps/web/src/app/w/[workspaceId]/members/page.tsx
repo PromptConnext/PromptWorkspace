@@ -48,7 +48,6 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
         {me && (
           <div className="mb-6">
             <DisplayNameField
-              key={me.display_name ?? ""}
               workspaceId={workspaceId}
               member={me}
               label="Your name"
@@ -68,11 +67,15 @@ function MembersView({ workspaceId }: { workspaceId: string }) {
                       workspaceId={workspaceId}
                       member={m}
                       label="Name"
-                      onSaved={() => {
-                        setEditing(null);
-                        refetch();
-                      }}
+                      onSaved={() => refetch()}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setEditing(null)}
+                      className="mt-1 text-xs text-slate-500 hover:text-slate-900"
+                    >
+                      Done
+                    </button>
                   </div>
                 ) : (
                   <span className="min-w-0 flex-1 truncate font-medium text-slate-900">

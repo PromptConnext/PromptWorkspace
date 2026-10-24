@@ -495,8 +495,12 @@ class SupabaseRepository(Repository):
         # above — the SELECT policy (pw_members_read) can't see a just-added
         # member for RETURNING's benefit in every case (e.g. the bootstrap
         # add), and the caller already has `member` locally.
+        # display_name is the member's own; a re-add (e.g. a fresh invitation
+        # accepted by an existing member) must not overwrite it with null.
+        payload = _dump(member)
+        payload.pop("display_name", None)
         self._table(_MEMBERS).upsert(
-            _dump(member), on_conflict="workspace_id,user_id", returning="minimal"
+            payload, on_conflict="workspace_id,user_id", returning="minimal"
         ).execute()
         return member
 
