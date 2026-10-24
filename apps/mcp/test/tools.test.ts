@@ -827,7 +827,7 @@ test("close_task refuses a status outside the one vocabulary", async () => {
 
 const SNAPSHOT = {
   default_branch: "main",
-  commit_sha: "abc1234def5678",
+  commit_sha: "abc1234def5678abc1234def5678abc1234def56",
   paths: ["src/app.py", "pyproject.toml"],
   file_count: 2,
   stack: { runtime: "python", manifests: ["pyproject.toml"], languages: ["Python"] },
@@ -885,7 +885,7 @@ test("submit_repo_analysis posts the snapshot and reports the gate open", async 
     assert.equal(result.isError, undefined);
     assert.equal(
       bodyOf(result),
-      "Baseline accepted for Uploader at abc1234def5678; the plan and tasks stages are now open for drafts.",
+      "Baseline accepted for Uploader at abc1234def5678abc1234def5678abc1234def56; the plan and tasks stages are now open for drafts.",
     );
     const post = seen.find((s) => s.path === "/projects/proj-1/repo-analysis/agent");
     assert.ok(post);
@@ -938,16 +938,48 @@ test("submit_repo_analysis with an over-long baseline is refused before any requ
   });
 });
 
-test("submit_repo_analysis refuses a commit_sha shorter than 7 characters before any request", async () => {
+test("submit_repo_analysis refuses anything but a full lowercase hex commit_sha before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    for (const bad of ["abc123", "abc1234def5678", "A".repeat(40), "g".repeat(40), "a".repeat(41)]) {
+      const result = await call("submit_repo_analysis", {
+        workspace_root: root,
+        ...SNAPSHOT,
+        commit_sha: bad,
+      });
+      assert.equal(result.isError, true, bad);
+      assert.match(
+        bodyOf(result),
+        /`commit_sha` must be the full commit hash: 40 \(or 64\) lowercase hex characters/,
+      );
+    }
+    assert.ok(!seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("submit_repo_analysis accepts a 64-character SHA-256 commit id", async () => {
   const root = makeClone({});
   await withTools(async ({ call, seen }) => {
     const result = await call("submit_repo_analysis", {
       workspace_root: root,
       ...SNAPSHOT,
-      commit_sha: "abc123",
+      commit_sha: "b".repeat(64),
+    });
+    assert.equal(result.isError, undefined);
+    assert.ok(seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("submit_repo_analysis refuses an over-long path before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_repo_analysis", {
+      workspace_root: root,
+      ...SNAPSHOT,
+      paths: ["src/" + "a".repeat(1021)],
     });
     assert.equal(result.isError, true);
-    assert.match(bodyOf(result), /`commit_sha` must be 7 to 64 characters/);
+    assert.match(bodyOf(result), /each path must be at most 1,024 characters/);
     assert.ok(!seen.some((s) => s.method === "POST"));
   });
 });

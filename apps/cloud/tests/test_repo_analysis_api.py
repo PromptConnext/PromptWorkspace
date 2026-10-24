@@ -32,7 +32,7 @@ ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}
 TOKEN = "github_pat_11ABCDEF_secretvalue"
 REPO = "acme/storyapp"
-HEAD = "c0ffee1"
+HEAD = "c0ffee1" + "0" * 33  # a full 40-hex sha, as git and GitHub report it
 
 README = "# Story App\n\nA storytelling app built on Express with a Postgres store."
 INJECTION = (
@@ -1021,3 +1021,16 @@ def test_agent_analysis_replaces_a_cloud_analysis_and_keeps_stale_working(
     now[0] += repo_analysis_api._STALE_TTL_SECONDS + 1
     got = client.get(f"/projects/{pid}/repo-analysis", headers=ALICE).json()
     assert isinstance(got["stale"], bool)
+
+
+def test_agent_analysis_commit_sha_is_a_full_lowercase_hex_sha(client: TestClient):
+    _, pid = _imported_project(client)
+    for bad in ("c0ffee1", "C" * 40, "g" * 40, "a" * 41, "a" * 63):
+        assert _agent_analysis(client, pid, commit_sha=bad).status_code == 422, bad
+    assert _agent_analysis(client, pid, commit_sha="b" * 64).status_code == 200
+
+
+def test_agent_analysis_caps_each_path(client: TestClient):
+    _, pid = _imported_project(client)
+    long_path = "src/" + "a" * 1021
+    assert _agent_analysis(client, pid, paths=[long_path], file_count=1).status_code == 422

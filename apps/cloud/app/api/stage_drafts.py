@@ -304,6 +304,7 @@ def accept_stage_draft(
 ) -> StageDocumentSaved:
     project = require_project(repo, project_id, user)
     require_stage_access(repo, project, stage, user)
+    _require_open_import(project)
     draft = _require_pending_draft(repo, project_id, stage, body.draft_id)
     _require_chain(repo, project, stage)
 
@@ -352,6 +353,7 @@ def reject_stage_draft(
 ) -> StageDraftOut:
     project = require_project(repo, project_id, user)
     require_stage_access(repo, project, stage, user)
+    _require_open_import(project)
     draft = _require_pending_draft(repo, project_id, stage, body.draft_id)
     rejected = repo.upsert_stage_draft(
         draft.model_copy(update={"status": "rejected", "rejection_note": body.note or None})

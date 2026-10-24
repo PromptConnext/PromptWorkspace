@@ -238,7 +238,12 @@ export const TOOLS: Tool[] = [
           description: "Use this project instead of resolving one from the folder's git remote.",
         },
         default_branch: { type: "string", description: "The branch the snapshot was read from." },
-        commit_sha: { type: "string", description: "The commit the snapshot was read at." },
+        commit_sha: {
+          type: "string",
+          description:
+            "The full commit hash the snapshot was read at (40 lowercase hex characters, or 64 " +
+            "for a SHA-256 repository), e.g. `git rev-parse origin/<default_branch>` after a fetch.",
+        },
         paths: {
           type: "array",
           items: { type: "string" },

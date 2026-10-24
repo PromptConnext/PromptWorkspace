@@ -531,3 +531,33 @@ def test_a_well_formed_specification_has_no_warnings(client: TestClient):
     _, pid = _ready_project(client)
     res = _submit(client, pid, "specify", SPEC)
     assert res.json()["warnings"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Frozen projects and per-stage access on accept
+# --------------------------------------------------------------------------- #
+
+
+def test_accept_and_reject_refused_after_repo_created(client: TestClient):
+    _, pid = _ready_project(client)
+    _submit(client, pid, "specify", SPEC)
+    repo = client.app.state.repository
+    repo.update_project_lifecycle_status(pid, "repo_created")
+
+    res = _accept(client, pid, "specify")
+    assert res.status_code == 409 and res.json()["detail"] == "repo_already_created"
+    res = _reject(client, pid, "specify", "late")
+    assert res.status_code == 409 and res.json()["detail"] == "repo_already_created"
+    assert repo.get_stage_document(pid, "specify") is None
+    assert repo.get_stage_draft(pid, "specify").status == "pending"
+
+
+def test_a_member_may_not_accept_a_plan_draft(client: TestClient):
+    _, pid = _ready_project(client)
+    _accepted(client, pid, "specify", SPEC)
+    _submit(client, pid, "plan", PLAN)
+    res = _accept(client, pid, "plan", headers=BOB)
+    assert res.status_code == 403
+    repo = client.app.state.repository
+    assert repo.get_stage_document(pid, "plan") is None
+    assert repo.get_stage_draft(pid, "plan").status == "pending"

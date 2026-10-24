@@ -41,8 +41,11 @@ const MAX_DOCUMENT_CHARS = 100_000;
 const MAX_NAME_CHARS = 200;
 const MAX_TREE_SUMMARY_CHARS = 20_000;
 const MAX_PATHS = 50_000;
-const MIN_SHA_CHARS = 7;
-const MAX_SHA_CHARS = 64;
+// The cloud's AgentRepoAnalysisIn bounds: a full commit id (40 hex for
+// SHA-1, 64 for SHA-256), lowercase as git prints it, and paths of at most
+// 1,024 characters each.
+const COMMIT_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const MAX_PATH_CHARS = 1_024;
 
 /** Length in code points, which is what pydantic's `max_length` counts. */
 function charCount(value: string): number {
@@ -194,12 +197,14 @@ function analysisBody(args: Record<string, unknown>): AgentRepoAnalysisIn {
       "`paths` must list at most 50,000 entries; list the first 50,000 and set tree_truncated.",
     );
   }
+  if (paths.some((path) => charCount(path) > MAX_PATH_CHARS)) {
+    throw new Error("`paths`: each path must be at most 1,024 characters.");
+  }
   const commitSha = requiredText(args, "commit_sha").trim();
-  const shaChars = charCount(commitSha);
-  if (shaChars < MIN_SHA_CHARS || shaChars > MAX_SHA_CHARS) {
+  if (!COMMIT_SHA_RE.test(commitSha)) {
     throw new Error(
-      `\`commit_sha\` must be ${MIN_SHA_CHARS} to ${MAX_SHA_CHARS} characters; pass the ` +
-        "full commit hash from `git rev-parse HEAD`.",
+      "`commit_sha` must be the full commit hash: 40 (or 64) lowercase hex characters, as " +
+        "`git rev-parse origin/<default_branch>` prints it.",
     );
   }
   const defaultBranch = requiredText(args, "default_branch").trim();

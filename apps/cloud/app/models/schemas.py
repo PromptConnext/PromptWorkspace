@@ -1685,8 +1685,13 @@ class AgentRepoAnalysisIn(BaseModel):
     checkout, posted instead of the cloud reading the repository itself."""
 
     default_branch: str = Field(min_length=1, max_length=200)
-    commit_sha: str = Field(min_length=7, max_length=64)
-    paths: list[str] = Field(default_factory=list, max_length=50_000)
+    # A full commit id as `git rev-parse` prints it: 40 lowercase hex (SHA-1)
+    # or 64 (SHA-256). An abbreviation could never match the branch head the
+    # staleness check compares it with.
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+    paths: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=50_000
+    )
     file_count: int = Field(ge=0)
     tree_truncated: bool = False
     stack: RepoStack = Field(default_factory=RepoStack)
