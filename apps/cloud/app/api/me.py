@@ -212,6 +212,16 @@ def list_my_oauth_grants(
     return out
 
 
+def _evict_families(request: Request, family_ids) -> None:
+    """Drop revoked families from the hosted MCP verifier's liveness cache, so
+    revocation is immediate in this process (absent when MCP is off)."""
+    verifier = getattr(request.app.state, "mcp_token_verifier", None)
+    if verifier is None:
+        return
+    for fid in family_ids:
+        verifier.evict(fid)
+
+
 @router.delete("/oauth-grants/{family_id}", status_code=204)
 def revoke_my_oauth_grant(
     family_id: str, request: Request, user: User = Depends(get_current_user)
@@ -222,6 +232,7 @@ def revoke_my_oauth_grant(
     if fam is None or fam.user_id != user.id:
         raise HTTPException(status_code=404, detail="grant_not_found")
     repo.revoke_oauth_family(fid, "user_revoke", utcnow())
+    _evict_families(request, [fid])
     return Response(status_code=204)
 
 
@@ -229,7 +240,7 @@ def revoke_my_oauth_grant(
 def revoke_all_my_oauth_grants(
     request: Request, user: User = Depends(get_current_user)
 ) -> Response:
-    request.app.state.repository.revoke_oauth_families_for_user(
-        user.id, "user_revoke_all", utcnow()
-    )
+    repo = request.app.state.repository
+    repo.revoke_oauth_families_for_user(user.id, "user_revoke_all", utcnow())
+    _evict_families(request, [f.family_id for f in repo.list_oauth_families_for_user(user.id)])
     return Response(status_code=204)

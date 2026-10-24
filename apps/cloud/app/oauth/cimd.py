@@ -4,10 +4,12 @@ Design: docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md,
 "Security". The `client_id` URL must be `https` on port 443 with no userinfo.
 Its hostname is resolved once; every resolved address (IPv4-mapped and NAT64
 forms unwrapped to the embedded IPv4) must be public, and the request is sent
-to the first address as an IP-literal URL with the original hostname in the
+to a checked address as an IP-literal URL with the original hostname in the
 `Host` header and as the TLS SNI name (`sni_hostname` request extension, which
 httpcore also uses for certificate hostname verification). A second DNS answer
-therefore cannot swap the address after the check (DNS rebinding). Redirects
+therefore cannot swap the address after the check (DNS rebinding). If an
+address refuses the connection, the next checked one is tried (IPv4 first),
+never an address that was not checked. Redirects
 are refused, the whole fetch is capped at 10 s, the body at 64 KB, and results
 are cached per `client_id` for an hour.
 """
@@ -238,17 +240,30 @@ async def fetch_client_metadata(
     for ip in addresses:
         check_address(ip)
 
-    ip = addresses[0]
-    literal = f"[{ip}]" if ":" in ip else ip
     path = parts.path or "/"
     if parts.query:
         path = f"{path}?{parts.query}"
-    url = f"https://{literal}{path}"
-    transport = (
-        transport_factory() if transport_factory else httpx.AsyncHTTPTransport(retries=0)
-    )
+    # IPv4 first (many hosts publish AAAA records this server cannot reach),
+    # otherwise in resolver order; dict.fromkeys drops duplicates.
+    ordered = sorted(dict.fromkeys(addresses), key=lambda ip: ":" in ip)
+
+    async def attempt() -> bytes:
+        for i, ip in enumerate(ordered):
+            literal = f"[{ip}]" if ":" in ip else ip
+            transport = (
+                transport_factory() if transport_factory else httpx.AsyncHTTPTransport(retries=0)
+            )
+            try:
+                return await _get(f"https://{literal}{path}", host, transport)
+            except httpx.ConnectError:
+                # Only a failure to connect moves on: once an address answers,
+                # its answer is final.
+                if i == len(ordered) - 1:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
     try:
-        raw = await asyncio.wait_for(_get(url, host, transport), TIMEOUT_SECONDS)
+        raw = await asyncio.wait_for(attempt(), TIMEOUT_SECONDS)
     except (TimeoutError, httpx.TimeoutException):
         raise CimdError("timeout", "metadata fetch timed out") from None
     except httpx.HTTPError as exc:

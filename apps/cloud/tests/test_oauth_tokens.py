@@ -80,13 +80,33 @@ def test_wrong_audience_is_refused(settings_with_key):
     assert exc.value.code == "wrong_audience"
 
 
+def test_iss_is_the_metadata_issuer_without_a_trailing_slash(settings_with_key):
+    slash = settings_with_key.model_copy(update={"public_api_url": "https://api.test/"})
+    key, _ = load_signing_keys(slash)
+    token, _ = _issue(slash, key)
+    assert jwt.decode(token, options={"verify_signature": False})["iss"] == "https://api.test"
+    assert slash.oauth_issuer == "https://api.test"
+    # Either spelling of PUBLIC_API_URL verifies the other's tokens.
+    assert verify_access_token(settings_with_key, [key], token).sub == "u1"
+    token2, _ = _issue(settings_with_key, key)
+    assert verify_access_token(slash, [key], token2).sub == "u1"
+
+
 def test_wrong_issuer_and_expired(settings_with_key):
     key, _ = load_signing_keys(settings_with_key)
-    token, _ = _issue(settings_with_key, key)
-    bad = settings_with_key.model_copy(update={"public_api_url": "https://api.test/"})
-    # trailing slash changes issuer but canonical url is rstripped, so aud still matches
+    token = jwt.encode(
+        {
+            "iss": "https://evil.test",
+            "aud": "https://api.test/mcp",
+            "sub": "u1",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        key.private_pem,
+        algorithm="ES256",
+        headers={"kid": key.kid},
+    )
     with pytest.raises(TokenError) as exc:
-        verify_access_token(bad, [key], token)
+        verify_access_token(settings_with_key, [key], token)
     assert exc.value.code == "wrong_issuer"
     old = datetime.now(timezone.utc) - timedelta(hours=2)
     token, _ = issue_access_token(

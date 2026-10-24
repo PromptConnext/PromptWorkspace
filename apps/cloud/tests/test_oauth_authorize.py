@@ -236,6 +236,17 @@ def test_consent_view_lists_user_workspaces(client):
     assert {"id": ws.json()["id"], "name": "Alpha"} in v["workspaces"]
 
 
+@pytest.mark.parametrize("method,suffix", [("get", ""), ("post", "/approve"), ("post", "/deny")])
+def test_non_uuid_request_id_is_404_without_a_read(client, monkeypatch, method, suffix):
+    # The column is uuid: a malformed id must be a 404, not a database error.
+    repo = client.app.state.repository
+    monkeypatch.setattr(
+        repo, "get_oauth_request", lambda _id: (_ for _ in ()).throw(AssertionError("read"))
+    )
+    r = getattr(client, method)(f"/oauth/authorize/abc{suffix}", headers=ALICE)
+    assert r.status_code == 404 and r.json()["detail"] == "request_not_found"
+
+
 def test_consent_view_unknown_404(client):
     r = client.get("/oauth/authorize/nope", headers=ALICE)
     assert r.status_code == 404 and r.json()["detail"] == "request_not_found"
@@ -323,6 +334,7 @@ def test_param_errors_redirect(client, over, error):
     cid = _register(client)
     r = _authorize(client, cid, **over)
     _assert_error_redirect(r, error)
+    assert r.headers["cache-control"] == "no-store"
     assert client.app.state.repository._oauth_requests == {}
 
 

@@ -458,6 +458,64 @@ async def test_fetch_accepts_cursor_native_redirect():
 
 
 @pytest.mark.anyio
+async def test_fetch_tries_the_next_checked_address_on_connect_error():
+    seen: list[str] = []
+    second = "93.184.216.35"
+
+    def handler(req):
+        seen.append(req.url.host)
+        if req.url.host == PUBLIC:
+            raise httpx.ConnectError("refused", request=req)
+        return httpx.Response(200, json=_doc())
+
+    got = await fetch_client_metadata(
+        CID,
+        cache={},
+        resolver=_resolver(PUBLIC, second),
+        transport_factory=_transport(handler),
+    )
+    assert got.client_id == CID
+    assert seen == [PUBLIC, second]
+
+
+@pytest.mark.anyio
+async def test_fetch_tries_ipv4_before_ipv6():
+    seen: list[str] = []
+
+    def handler(req):
+        seen.append(req.url.host)
+        raise httpx.ConnectError("refused", request=req)
+
+    with pytest.raises(CimdError) as e:
+        await fetch_client_metadata(
+            CID,
+            cache={},
+            resolver=_resolver("2606:4700:4700::1111", PUBLIC),
+            transport_factory=_transport(handler),
+        )
+    assert e.value.code == "invalid_document"
+    assert seen == [PUBLIC, "2606:4700:4700::1111"]
+
+
+@pytest.mark.anyio
+async def test_fetch_does_not_retry_after_a_response():
+    seen: list[str] = []
+
+    def handler(req):
+        seen.append(req.url.host)
+        return httpx.Response(404)
+
+    with pytest.raises(CimdError):
+        await fetch_client_metadata(
+            CID,
+            cache={},
+            resolver=_resolver(PUBLIC, "93.184.216.35"),
+            transport_factory=_transport(handler),
+        )
+    assert seen == [PUBLIC]
+
+
+@pytest.mark.anyio
 async def test_fetch_ipv6_literal_url():
     seen: list[httpx.Request] = []
     await fetch_client_metadata(

@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import secrets
+import uuid
 from datetime import timedelta
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -56,7 +57,7 @@ def _json(body: dict) -> JSONResponse:
 
 
 def _issuer(request: Request) -> str:
-    return get_settings().public_api_url.rstrip("/")
+    return get_settings().oauth_issuer
 
 
 def _as_metadata(issuer: str) -> dict:
@@ -284,6 +285,7 @@ async def authorize(request: Request):
                 },
             ),
             status_code=302,
+            headers=_NO_STORE,
         )
 
     # 2. Everything else is reported to the client.
@@ -326,7 +328,12 @@ async def authorize(request: Request):
 
 def _pending(repo, request_id: str) -> OAuthRequest:
     """The request if it exists and has not expired; 404 otherwise. Whether it
-    is already decided is the caller's question."""
+    is already decided is the caller's question. A non-UUID id is a 404
+    without a read (the column is uuid; it would be a database error)."""
+    try:
+        request_id = str(uuid.UUID(request_id))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="request_not_found") from None
     req = repo.get_oauth_request(request_id)
     if req is None or req.expires_at <= utcnow():
         raise HTTPException(status_code=404, detail="request_not_found")

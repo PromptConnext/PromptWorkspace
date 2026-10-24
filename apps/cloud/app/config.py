@@ -303,8 +303,15 @@ class Settings(BaseSettings):
             )
 
     @property
+    def oauth_issuer(self) -> str:
+        """The OAuth issuer: `PUBLIC_API_URL` without a trailing slash. The
+        metadata `issuer`, the JWT `iss` and its verification all use this,
+        so the two can never differ by a slash."""
+        return self.public_api_url.rstrip("/")
+
+    @property
     def canonical_mcp_url(self) -> str:
-        return f"{self.public_api_url.rstrip('/')}/mcp"
+        return f"{self.oauth_issuer}/mcp"
 
     def require_mcp(self) -> None:
         if not self.mcp_enabled:

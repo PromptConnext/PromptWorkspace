@@ -62,7 +62,7 @@ def issue_access_token(
     jti = secrets.token_urlsafe(16)
     aud = settings.canonical_mcp_url
     payload = {
-        "iss": settings.public_api_url,
+        "iss": settings.oauth_issuer,
         "sub": sub,
         "aud": aud,
         "client_id": client_id,
@@ -111,7 +111,7 @@ def verify_access_token(
             public,
             algorithms=["ES256"],
             audience=settings.canonical_mcp_url,
-            issuer=settings.public_api_url,
+            issuer=settings.oauth_issuer,
             options=options,
         )
     except jwt.InvalidAudienceError as err:

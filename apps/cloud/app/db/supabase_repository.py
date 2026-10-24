@@ -1116,6 +1116,11 @@ class SupabaseRepository(Repository):
         rows = res.data or []
         return Task(**rows[0]) if rows else None
 
+    def find_task(self, task_id: str) -> Task | None:
+        res = self._table(_TABLE["tasks"]).select("*").eq("id", task_id).limit(1).execute()
+        rows = res.data or []
+        return Task(**rows[0]) if rows else None
+
     def assign_task(
         self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime
     ) -> Task:

@@ -313,6 +313,64 @@ async def test_task_of_someone_else_is_not_found(mcp_app):
 
 
 @pytest.mark.anyio
+async def test_get_task_finds_a_task_past_a_thousand_assigned(mcp_app, monkeypatch):
+    async with _running(mcp_app) as repo:
+        _ws, project = _seed(repo)
+        payload = GraphUpsertRequest()
+        payload.tasks.extend(
+            Task(id=f"t-x{i:04d}", project_id=project.id, title=f"Bulk {i}",
+                 assigned_user_id="bob")
+            for i in range(1001)
+        )  # fmt: skip
+        repo.upsert_graph(project.id, payload, source="pz", seed_fields=PLANNER_SEED_FIELDS)
+        # Sorted by (project, feature_tag, id), this one is past any 1000-row cut.
+        last = "t-x1000"
+
+        def no_scan(*a, **k):  # pragma: no cover - must not be called
+            raise AssertionError("get_task/close_task must not scan assigned tasks")
+
+        monkeypatch.setattr(repo, "list_assigned_tasks", no_scan)
+        token, _ = _token(repo=repo)
+        async with _session(mcp_app, token) as session:
+            got = await session.call_tool("get_task", {"task_id": last})
+            closed = await session.call_tool(
+                "close_task", {"task_id": last, "status": "in_progress"})
+    assert not got.is_error, _text(got)
+    data = got.structured_content
+    assert data.get("result", data)["task_id"] == last
+    assert data.get("result", data)["workspace"] == "Acme"
+    assert not closed.is_error, _text(closed)
+
+
+@pytest.mark.anyio
+async def test_task_of_a_left_workspace_is_not_found(mcp_app):
+    async with _running(mcp_app) as repo:
+        ws, _project = _seed(repo)
+        repo.remove_member(ws.id, "bob")
+        token, _ = _token(repo=repo)
+        async with _session(mcp_app, token) as session:
+            got = await session.call_tool("get_task", {"task_id": "t-1"})
+    assert got.is_error and "task_not_found: " in _text(got)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("revoke_all", [False, True])
+async def test_revoke_from_connected_agents_is_immediate(mcp_app, revoke_all):
+    # Default family cache TTL: revocation through /me evicts the family.
+    assert mcp_app.state.mcp_token_verifier.family_cache_ttl == 30.0
+    async with _running(mcp_app) as repo:
+        token, fid = _token(repo=repo)
+        async with _session(mcp_app, token) as session:
+            await session.list_tools()
+        path = "/me/oauth-grants" if revoke_all else f"/me/oauth-grants/{fid}"
+        async with _http(mcp_app, **{"X-User-Id": "bob"}) as http:
+            assert (await http.delete(path)).status_code == 204
+        async with _http(mcp_app, token) as http:
+            r = await http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert r.status_code == 401
+
+
+@pytest.mark.anyio
 async def test_get_task_truncates_the_spec_excerpt(mcp_app):
     async with _running(mcp_app) as repo:
         _seed(repo, spec_content="x" * 5000)

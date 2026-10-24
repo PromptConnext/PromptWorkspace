@@ -516,6 +516,12 @@ class Repository(abc.ABC):
     def get_task(self, project_id: str, task_id: str) -> Task | None: ...
 
     @abc.abstractmethod
+    def find_task(self, task_id: str) -> Task | None:
+        """The task with this id in any project (task ids are unique across
+        projects), tombstoned or not; no membership check. Callers check
+        assignment and project membership themselves."""
+
+    @abc.abstractmethod
     def assign_task(
         self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime
     ) -> Task:
@@ -1693,6 +1699,13 @@ class InMemoryRepository(Repository):
             return None
         task = store["tasks"].get(task_id)
         return copy.deepcopy(task) if task else None
+
+    def find_task(self, task_id: str) -> Task | None:
+        for store in self._graph.values():
+            task = store["tasks"].get(task_id)
+            if task is not None:
+                return copy.deepcopy(task)
+        return None
 
     def assign_task(
         self, project_id: str, task_id: str, assigned_user_id: str | None, now: datetime

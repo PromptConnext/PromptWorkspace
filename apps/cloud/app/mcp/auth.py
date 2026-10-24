@@ -4,7 +4,8 @@ The token is our own ES256 access token (app/oauth/tokens.py). On top of the
 signature, issuer, audience and expiry checks, a token is refused once its
 family is revoked: the family read is cached per family for
 `family_cache_ttl` seconds, so "revoke" takes effect within that window
-rather than within the access-token lifetime. Tokens are never logged; the
+rather than within the access-token lifetime; a revocation through
+`/me/oauth-grants` evicts the family at once (`evict`). Tokens are never logged; the
 family id is what log lines name."""
 
 from __future__ import annotations
@@ -75,6 +76,12 @@ class PromptWorkspaceTokenVerifier(TokenVerifier):
             subject=claims.sub,
             claims={"email": claims.email, "fid": claims.family_id},
         )
+
+    def evict(self, family_id: str) -> None:
+        """Forget a family's cached liveness, so a revocation made in this
+        process takes effect on the very next call instead of within
+        `family_cache_ttl`."""
+        self._family_ok.pop(family_id, None)
 
     async def _family_live(self, fid: str) -> bool:
         now = time.monotonic()

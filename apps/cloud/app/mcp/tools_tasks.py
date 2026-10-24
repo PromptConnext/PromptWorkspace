@@ -5,8 +5,9 @@ close_task. Same names and meaning as the stdio server (apps/mcp), minus
 Every tool takes its user from the verified bearer (`current_user()`), never
 from an argument, and reads through the service-role repository only behind
 the same checks the HTTP routes run: the membership-filtered
-`assigned_tasks_for` (GET /me/tasks) and `require_project` plus
-`apply_task_status` (PATCH .../status)."""
+`assigned_tasks_for` (GET /me/tasks), and for one task a by-id read checked
+for assignment then `require_project`, plus `apply_task_status`
+(PATCH .../status)."""
 
 from __future__ import annotations
 
@@ -38,10 +39,6 @@ SPEC_EXCERPT_CHARS = 4000
 _TRUNCATED = "\n\n…(truncated)"
 _SLUG_MAX = 40  # packages/cloud-client/src/taskRefs.ts SLUG_MAX
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-# The ceiling GET /me/tasks allows; a task looked up by id is searched in all
-# of the caller's assigned tasks, in every status.
-_LOOKUP_LIMIT = 1000
-_ALL_STATUSES = list(TaskStatus)
 
 # HTTPException detail -> the sentence an agent reads after it.
 _SENTENCES = {
@@ -69,12 +66,27 @@ def branch_name_for_task(ref: str, title: str) -> str:
 
 
 def _find_assigned(repo: Repository, user: User, task_id: str) -> AssignedTask:
-    for entry in assigned_tasks_for(
-        repo, user, statuses=_ALL_STATUSES, limit=_LOOKUP_LIMIT
-    ):
-        if entry.task.id == task_id:
-            return entry
-    raise _tool_error("task_not_found")
+    """One of the caller's tasks, read by id: assigned to the caller, live, and
+    in a project of a workspace they still belong to. Anything else is
+    `task_not_found`, so a task outside the caller's reach is not confirmed to
+    exist. A by-id read, not a scan of the assigned list, so no row cap can
+    hide a task."""
+    task = repo.find_task(task_id)
+    if task is None or task.deleted_at is not None or task.assigned_user_id != user.id:
+        raise _tool_error("task_not_found")
+    try:
+        project = require_project(repo, task.project_id, user)
+    except HTTPException as err:
+        raise _tool_error("task_not_found") from err
+    workspace = repo.get_workspace(project.workspace_id)
+    return AssignedTask(
+        task=task,
+        project_id=project.id,
+        project_name=project.name,
+        workspace_id=project.workspace_id,
+        workspace_name=workspace.name if workspace else "",
+        repo_url=project.repo_url,
+    )
 
 
 def _summary(entry: AssignedTask) -> dict[str, Any]:

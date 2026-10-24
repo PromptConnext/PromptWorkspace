@@ -883,7 +883,7 @@ An audit of every earlier plan against `develop` on 2026-10-04 updated their Sta
 | 5 | `upsert_graph` merges without a transaction (finding 17, concurrency half) | Plan 0020 | **Phase 0**, or moot if item 2 retires the route |
 | 6 | Create-path retry adopts a repo on description match alone (N5). Code-index chunks are embedded without secret redaction (N6) | Plan 0027 | **Phase 0.** Both are security items; N6 matters more once agents read the index |
 | 7 | Presence WebSocket sends its JWT as `?token=` (issue #1) | Plan 0005 | **Phase 0** |
-| 8 | MCP M4: Streamable HTTP transport, register the server from the VS Code extension, device-code login, npm publish | Plan 0025 | **Phase 2.** The runner (M3 here) needs the same server to be installable in CI |
+| 8 | MCP M4: Streamable HTTP transport, register the server from the VS Code extension, device-code login, npm publish | Plan 0025 | **Delivered 2026-10-25** as the hosted Streamable HTTP server at `{PUBLIC_API_URL}/mcp` with OAuth 2.1 ([ADR 0029](../decisions/0029-cloud-is-its-own-oauth-authorization-server.md)). Device-code login was dropped. An npm publish workflow (`.github/workflows/mcp-publish.yml`, on `mcp-v*` tags) was added for the stdio package, which CI installs |
 | 9 | FastAPI + Uvicorn python runtime for the docker-compose template | Plan 0026 | **Phase 4**, when `verify.yml` templates are written per stack |
 | 10 | Compliance ADR: obligations, coverage, audit export | Plan 0023 | **Phase 5** |
 | 11 | Business-user desktop follow-up plan | ADR 0028 | Open question 4 in §12 |

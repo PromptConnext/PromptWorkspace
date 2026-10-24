@@ -52,7 +52,7 @@ def build_mcp_server(
         instructions=INSTRUCTIONS,
         token_verifier=verifier,
         auth=AuthSettings(
-            issuer_url=settings.public_api_url.rstrip("/"),
+            issuer_url=settings.oauth_issuer,
             resource_server_url=settings.canonical_mcp_url,
             required_scopes=["mcp"],
             validate_token_resource=True,
