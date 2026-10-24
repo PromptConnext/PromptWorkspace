@@ -1,8 +1,8 @@
 # 0033: Workspace overview and AI governance, Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Status:** Draft, 2026-10-24. Branch `feature/workspace-overview`, cut from `feature/trust-outcome` at `2065f76`; merges back into `feature/trust-outcome`, which the trust environment deploys.
+**Status:** Implemented 2026-10-24 on `feature/workspace-overview` (M1 to M4, Tasks 1 to 21). Closing checklist pending the trust walkthrough.
 
 **Goal:** A Tech Lead opens the workspace and sees, in one screen, who works on which project with what stack, which projects break the workspace's rules, how AI is being used, and can ask the workspace a question in plain words.
 
@@ -45,7 +45,7 @@
 **Interfaces:**
 - Produces: tables and columns every later task reads: `pw_workspace_governance`, `pw_projects.policy_scope_source`, `pw_artifacts.agent`, `pw_workspace_members.display_name`, `pw_generation_runs.project_id` nullable, `pw_receipts.subject_type` check widened.
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 Header in the style of `0010` (THE PROBLEM / SHAPE / GRANTS / DEPLOY ORDER). Body, every statement idempotent:
 
@@ -79,12 +79,12 @@ alter table pw_receipts add constraint pw_receipts_subject_type_check
 
 Check the actual constraint name of the `subject_type` check in `0007_pw_receipts.sql` before writing the drop; use that name.
 
-- [ ] **Step 2: Verify the file parses and is idempotent**
+- [x] **Step 2: Verify the file parses and is idempotent**
 
 Run: `cd apps/cloud && python scripts/migrate.py --help` to confirm the tool; if a local Supabase is running, `python scripts/migrate.py --db-url "$POOLER_URL" apply --dry-run --var embed_dim=1024` twice. Otherwise rely on the CI baseline gate (`.github/workflows`, "additive migrations").
 Expected: no error; second dry-run reports nothing new.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add apps/cloud/migrations/0011_pw_workspace_governance.sql
@@ -101,7 +101,7 @@ git commit -m "feat(cloud): migration 0011 workspace governance, display names, 
 **Interfaces:**
 - Produces: `WorkspaceMember.display_name: str | None`; `Repository.set_member_display_name(workspace_id: str, user_id: str, display_name: str | None) -> WorkspaceMember`; `PATCH /workspaces/{id}/members/{user_id}` body `{"display_name": str | null}`; web `displayName(identity)` prefers `display_name`; `updateMemberDisplayName(workspaceId, userId, displayName, authHeaders)` in `api.ts`.
 
-- [ ] **Step 1: Write the failing cloud tests**
+- [x] **Step 1: Write the failing cloud tests**
 
 ```python
 def test_member_sets_own_display_name(client, workspace):
@@ -122,25 +122,25 @@ def test_display_name_length_capped(client, workspace):
 
 Fixture `workspace` as in `tests/test_delivery_api.py` (alice creates, bob accepts an invitation).
 
-- [ ] **Step 2: Run, expect 404/405**
+- [x] **Step 2: Run, expect 404/405**
 
 Run: `cd apps/cloud && pytest tests/test_members_display_name.py -v`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `WorkspaceMember.display_name: str | None = None` (cap 80 characters, stripped; empty string becomes `None`). `MemberDisplayNameUpdate(BaseModel)` with `display_name: str | None`. Repository method on both adapters (Supabase: update `pw_workspace_members` where `workspace_id` and `user_id`). Route in `workspaces.py`: `require_workspace`; allow when `user.id == user_id` or caller is admin, else 403 `display_name_forbidden`; 404 `member_not_found`.
 
-- [ ] **Step 4: Run cloud tests, expect PASS; `ruff check .`**
+- [x] **Step 4: Run cloud tests, expect PASS; `ruff check .`**
 
-- [ ] **Step 5: Write the failing web tests**
+- [x] **Step 5: Write the failing web tests**
 
 `identity.test.ts`: `displayName({display_name: "Somchai", email: "s@x.com", user_id: "u"})` is `"Somchai"`; with `display_name: null` it is the email; `initial` uses the first character of the same source. `DisplayNameField.test.tsx`: renders an input prefilled with the current member's `display_name`, submit calls `updateMemberDisplayName` once with the trimmed value, shows "Saved".
 
-- [ ] **Step 6: Implement web**
+- [x] **Step 6: Implement web**
 
 Add `display_name: string | null` to `WorkspaceMember`; `identity.ts` functions take `{display_name?: string | null; email: string | null; user_id: string}`; `memberFullName` in `MemberChip.tsx` delegates to `displayName`. `DisplayNameField` component (`apps/web/src/components/DisplayNameField.tsx`) rendered on the members page above the list for the signed-in member, labelled "Your name". Admin: a pencil next to each row opening the same field for that member.
 
-- [ ] **Step 7: Run `pnpm --dir apps/web vitest run` and `tsc --noEmit`, expect PASS. Commit**
+- [x] **Step 7: Run `pnpm --dir apps/web vitest run` and `tsc --noEmit`, expect PASS. Commit**
 
 ```bash
 git commit -am "feat: members can set a display name"
@@ -160,7 +160,7 @@ git commit -am "feat: members can set a display name"
   - `Repository.latest_receipt_at(project_ids: list[str]) -> dict[str, datetime]` (projects with no receipts absent)
   - `Repository.list_generation_runs(workspace_id: str, since: datetime) -> list[GenerationRun]` (created_at ≥ since, newest first)
 
-- [ ] **Step 1: Write the failing contract tests** (parametrised `repo` fixture from `tests/contract/conftest.py`)
+- [x] **Step 1: Write the failing contract tests** (parametrised `repo` fixture from `tests/contract/conftest.py`)
 
 ```python
 def test_list_tasks_summary_counts_and_agent_flag(repo): ...   # two projects, three tasks, one artifact with agent → agent_closed True on exactly that task
@@ -169,15 +169,15 @@ def test_latest_receipt_at_only_for_projects_with_receipts(repo): ...
 def test_list_generation_runs_since_newest_first(repo): ...
 ```
 
-- [ ] **Step 2: Run, expect `AttributeError`**
+- [x] **Step 2: Run, expect `AttributeError`**
 
 Run: `pytest tests/contract/test_overview_reads.py -v`
 
-- [ ] **Step 3: Implement on both adapters**
+- [x] **Step 3: Implement on both adapters**
 
 Supabase: `pw_tasks` select `id, project_id, status, assigned_user_id, updated_at` with `in_("project_id", ids)` and `deleted_at is null`; `pw_artifacts` select `task_id` where `agent is not null` for those tasks; `pw_receipts` select `project_id, created_at` ordered desc, first per project; `pw_generation_runs` filtered by `workspace_id` and `created_at >= since`. The test seeds the artifact's `agent` through `upsert_graph`, which already accepts whole `Artifact` rows.
 
-- [ ] **Step 4: Run, expect PASS (memory; Supabase parameter skips without env). `ruff check .`. Commit**
+- [x] **Step 4: Run, expect PASS (memory; Supabase parameter skips without env). `ruff check .`. Commit**
 
 ```bash
 git commit -am "feat(cloud): repository reads for the workspace overview"
@@ -199,7 +199,7 @@ git commit -am "feat(cloud): repository reads for the workspace overview"
   - `checks.run_checks(project: Project, roles: list[ProjectRole], decisions: list[Decision], governance: WorkspaceGovernance, now: datetime) -> list[ProjectCheckOut]` in spec §4.3 order, excluding `rules_in_repo`
   - `cards.build_card(project, roles, tasks: list[TaskSummary], decisions, analysis: RepoAnalysis | None, governance, latest_receipt_at: datetime | None, now) -> ProjectCardOut`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_card_counts_tasks_by_status(): ...
@@ -216,7 +216,7 @@ def test_required_hats_respected(): ...                  # governance.required_h
 
 Sentences exactly: "No business owner assigned", "No tech steward assigned", "Policy scope differs from the workspace", "No policy scope set", "N decisions past their due date" (singular "1 decision past its due date").
 
-- [ ] **Step 2: Run, expect ImportError. Step 3: Implement. Step 4: Run, PASS. `ruff check .`. Commit**
+- [x] **Step 2: Run, expect ImportError. Step 3: Implement. Step 4: Run, PASS. `ruff check .`. Commit**
 
 ```bash
 git commit -am "feat(cloud): overview card builder and governance checks"
@@ -233,7 +233,7 @@ git commit -am "feat(cloud): overview card builder and governance checks"
 - Produces: `WorkspaceOverviewOut(workspace_id, generated_at, members: list[WorkspaceMember], projects: list[ProjectCardOut], people: list[PersonLinkOut], truncated: bool)`; `PersonLinkOut(kind: Literal["hat","work","approval"], from_user_id: str, to_user_id: str | None, project_id: str | None, hat: str | None, weight: int)` (filled in Task 13; empty list here).
 - Consumes: Task 3 reads, Task 4 builder, `require_workspace`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_overview_requires_membership(client, workspace): ...                     # MALLORY → 403
@@ -243,11 +243,11 @@ def test_overview_truncates_after_200(client, workspace): ...                   
 def test_overview_uses_default_governance_without_row(client, workspace): ...
 ```
 
-- [ ] **Step 2: Run, expect 404. Step 3: Implement**
+- [x] **Step 2: Run, expect 404. Step 3: Implement**
 
 Route calls `list_projects_by_workspace`, sorts by `updated_at` desc, slices 200, then `list_tasks_summary`, `latest_receipt_at`, and per project `list_project_roles`, `list_decisions`, `get_repo_analysis`. Governance from `get_workspace_governance` or `WorkspaceGovernance.default`.
 
-- [ ] **Step 4: Run, PASS. `ruff check .`. Commit**
+- [x] **Step 4: Run, PASS. `ruff check .`. Commit**
 
 ```bash
 git commit -am "feat(cloud): GET /workspaces/{id}/overview"
@@ -262,7 +262,7 @@ git commit -am "feat(cloud): GET /workspaces/{id}/overview"
 **Interfaces:**
 - Produces: `<ProjectCard card={ProjectCard} members={WorkspaceMember[]} workspaceId={string} isAdmin={boolean} />`; `useOverview(workspaceId)` wrapping `useCloudGet<WorkspaceOverview>(`/workspaces/${id}/overview`)`.
 
-- [ ] **Step 1: Write the failing tests** (mock `@/lib/hooks` as in `DecisionsPanel.test.tsx`)
+- [x] **Step 1: Write the failing tests** (mock `@/lib/hooks` as in `DecisionsPanel.test.tsx`)
 
 ```ts
 it("leads with people: hat holders then contributors", ...)      // Somchai (Tech steward), "+2" after five avatars
@@ -275,11 +275,11 @@ it("governance line: Follows workspace rules when all checks pass, else first fa
 it("Live pill links to live_url", ...)
 ```
 
-- [ ] **Step 2: Run `vitest run ProjectCard`, expect fail. Step 3: Implement**
+- [x] **Step 2: Run `vitest run ProjectCard`, expect fail. Step 3: Implement**
 
 Card layout per spec §1. Use `MemberChip`, `Avatar`, existing slate/emerald/amber classes. Home page: `max-w-6xl`, grid `sm:grid-cols-2 xl:grid-cols-3`, data from `useOverview`; keep header, empty state and `NewProjectDialog`; drop the `/projects` and `/members` fetches (overview carries members).
 
-- [ ] **Step 4: `vitest run`, `tsc --noEmit`, PASS. Commit**
+- [x] **Step 4: `vitest run`, `tsc --noEmit`, PASS. Commit**
 
 ```bash
 git commit -am "feat(web): workspace home shows project cards"
@@ -290,7 +290,7 @@ git commit -am "feat(web): workspace home shows project cards"
 **Files:**
 - Modify: `apps/web/src/components/workspace/ProjectCard.tsx`, `ProjectCard.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it("repo_created project fetches docs-status and shows Rules in the repository differ from the plan when any file is not in_sync", ...)
@@ -298,11 +298,11 @@ it("planning project does not fetch docs-status", ...)
 it("drift check is skipped when governance.require_seeded_rules is false", ...)   // card.policy carries require_seeded_rules from the overview
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement**
+- [x] **Step 2: Fail. Step 3: Implement**
 
 `useCloudGet<RepositoryDocsStatus>(`/projects/${id}/repository/docs-status`, card.lifecycle_status === "repo_created" && requireSeededRules)`. Add `require_seeded_rules: boolean` to `ProjectCardOut.policy` (cloud, one line in Task 4's builder plus its test). The drift sentence ranks after the server checks.
 
-- [ ] **Step 4: PASS both suites. Commit**
+- [x] **Step 4: PASS both suites. Commit**
 
 ```bash
 git commit -am "feat(web): project card shows repository rules drift"
@@ -321,7 +321,7 @@ git commit -am "feat(web): project card shows repository rules drift"
 **Interfaces:**
 - Produces: `GET /workspaces/{id}/governance` (member; default when no row, never writes); `PUT /workspaces/{id}/governance` (admin) body `{policy_scope: {selected, custom_text}, required_hats: [...], require_seeded_rules: bool}` → `WorkspaceGovernance`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_get_governance_default_without_row(client, workspace): ...        # selected [], required_hats both, require_seeded_rules True; repo has no row afterwards
@@ -330,7 +330,7 @@ def test_put_governance_validates_template_ids_and_text_cap(client, workspace): 
 def test_put_governance_round_trips(client, workspace): ...
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement** (reuse `get_template` and `_MAX_CUSTOM_TEXT_CHARS` from `app/api/policies.py`; move the validation into a shared `validate_scope(body) -> PolicyScope` in `app/policies/scope.py` and call it from both routes). **Step 4: PASS, ruff. Commit**
+- [x] **Step 2: Fail. Step 3: Implement** (reuse `get_template` and `_MAX_CUSTOM_TEXT_CHARS` from `app/api/policies.py`; move the validation into a shared `validate_scope(body) -> PolicyScope` in `app/policies/scope.py` and call it from both routes). **Step 4: PASS, ruff. Commit**
 
 ```bash
 git commit -am "feat(cloud): workspace governance row and routes"
@@ -345,7 +345,7 @@ git commit -am "feat(cloud): workspace governance row and routes"
 **Interfaces:**
 - Produces: `POST /projects/{id}/policy-scope/use-workspace` (member; 409 `project_frozen` when `repo_created`) → `Project`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_new_project_copies_workspace_scope_with_source_workspace(client, workspace): ...
@@ -359,7 +359,7 @@ def test_receipt_chain_still_verifies_after_policy_receipt(client, workspace): .
 
 Receipt body holds template ids joined by `,` as strings (`before`, `after`), never custom text.
 
-- [ ] **Step 2: Fail. Step 3: Implement.** Fan-out writes receipts through the same seal path `delivery.py` uses for decisions. **Step 4: PASS, ruff. Commit**
+- [x] **Step 2: Fail. Step 3: Implement.** Fan-out writes receipts through the same seal path `delivery.py` uses for decisions. **Step 4: PASS, ruff. Commit**
 
 ```bash
 git commit -am "feat(cloud): projects inherit the workspace policy scope"
@@ -378,7 +378,7 @@ git commit -am "feat(cloud): projects inherit the workspace policy scope"
   - `DisciplineOut(resolved: int, open: int, expired_30d: int, median_hours_to_decide: float | None, chains_verified: int, chains_total: int)`
 - Consumes: `list_generation_runs(workspace_id, now - 30 days)`, `settings.managed_daily_token_budget`, workspace model connection `daily_token_budget`, `list_receipts` + `verify_chain`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_report_admin_only(client, workspace): ...
@@ -387,7 +387,7 @@ def test_discipline_counts_and_median(client, workspace): ...
 def test_chains_verified_per_project(client, workspace): ...
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
 
 ```bash
 git commit -am "feat(cloud): governance report"
@@ -399,7 +399,7 @@ git commit -am "feat(cloud): governance report"
 - Create: `apps/web/src/components/policy/PolicyScopeEditor.tsx` (lifted from `PolicyScopePanel.tsx:41-223`: templates list, checkboxes, textarea; props `scope`, `templates`, `readOnly`, `onSave(scope)`), `apps/web/src/components/workspace/GovernancePanel.tsx`, `GovernancePanel.test.tsx`
 - Modify: `apps/web/src/components/project/PolicyScopePanel.tsx` (uses the editor; adds "Inherited from the workspace" / "This project uses its own scope" line and a **Use workspace scope** button), `PolicyScopePanel.test.tsx`, `apps/web/src/lib/api.ts` (`getGovernance`, `putGovernance`, `useWorkspaceScope(projectId)`), `apps/web/src/lib/types.ts`, `apps/web/src/app/w/[workspaceId]/settings/page.tsx:40-50`
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 // GovernancePanel
@@ -411,7 +411,7 @@ it("shows Inherited from the workspace when policy_scope_source is workspace", .
 it("Use workspace scope calls the endpoint and is hidden when frozen", ...)
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement.** Section title "AI governance", placed above `ModelConnectionForm`. **Step 4: PASS, tsc. Commit**
+- [x] **Step 2: Fail. Step 3: Implement.** Section title "AI governance", placed above `ModelConnectionForm`. **Step 4: PASS, tsc. Commit**
 
 ```bash
 git commit -am "feat(web): workspace AI governance page; projects inherit scope"
@@ -423,7 +423,7 @@ git commit -am "feat(web): workspace AI governance page; projects inherit scope"
 - Create: `apps/web/src/components/workspace/UsagePanel.tsx`, `DisciplinePanel.tsx`, tests
 - Modify: `GovernancePanel.tsx`, `api.ts` (`getGovernanceReport`)
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 it("one line per used source naming its own budget; none when no budget", ...)   // "Managed model: 14 runs, 120,000 tokens; today 8,000 of the daily budget 200,000"
@@ -432,7 +432,7 @@ it("discipline sentences: 12 decisions resolved, 2 open, 1 expired without an an
 it("median absent reads Median time to decide: not yet known", ...)
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS. Commit**
 
 ```bash
 git commit -am "feat(web): AI usage and decision discipline"
@@ -452,7 +452,7 @@ git commit -am "feat(web): AI usage and decision discipline"
 **Interfaces:**
 - Produces: `people.build_links(roles_by_project: dict[str, list[ProjectRole]], tasks: list[TaskSummary], decisions_by_project: dict[str, list[Decision]]) -> list[PersonLinkOut]`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_hat_edge_per_role(): ...                                   # kind hat, weight 1, hat name
@@ -461,7 +461,7 @@ def test_approval_edge_requester_to_resolver_weighted(): ...         # only reso
 def test_overview_endpoint_carries_people(client, workspace): ...
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
 
 ```bash
 git commit -am "feat(cloud): people links in the workspace overview"
@@ -476,7 +476,7 @@ git commit -am "feat(cloud): people links in the workspace overview"
 **Interfaces:**
 - Produces: `<MemberPanel member overview viewerIsAdmin viewerId />`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 it("lists hats per project and projects contributed to", ...)
@@ -484,7 +484,7 @@ it("shows decisions waiting on the member only to admins or the member themself"
 it("tasks in progress count from work edges and card task_counts", ...)
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement** (`useOverview` from Task 6; the decisions-waiting list derives from `overview.projects[].decisions` plus `/me/decisions` when the viewer is that member, and from `GET /projects/{id}/decisions` filtered by `routed_hat` for admins). **Step 4: PASS. Commit**
+- [x] **Step 2: Fail. Step 3: Implement** (`useOverview` from Task 6; the decisions-waiting list derives from `overview.projects[].decisions` plus `/me/decisions` when the viewer is that member, and from `GET /projects/{id}/decisions` filtered by `routed_hat` for admins). **Step 4: PASS. Commit**
 
 ```bash
 git commit -am "feat(web): member side panel"
@@ -496,7 +496,7 @@ git commit -am "feat(web): member side panel"
 - Create: `apps/web/src/components/workspace/WorkspaceMap.tsx`, `layout.ts` (pure: `layoutGraph(members, cards, links, width, height) -> {nodes: Positioned[], edges: Positioned[]}` running `d3-force` to completion with a fixed seed order), `WorkspaceMap.test.tsx`, `layout.test.ts`
 - Modify: `apps/web/package.json` (`d3-force`, `@types/d3-force` dev), members page (tab "Map")
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 // layout.test.ts
@@ -507,7 +507,7 @@ it("renders one node per member and project and one path per link, hat solid, wo
 it("hover highlights the node's edges; Enter on a focused project node navigates", ...)
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement** (`forceSimulation(...).stop(); for (let i = 0; i < 300; i++) sim.tick();`; nodes `tabIndex=0` in reading order). **Step 4: PASS, tsc. Commit**
+- [x] **Step 2: Fail. Step 3: Implement** (`forceSimulation(...).stop(); for (let i = 0; i < 300; i++) sim.tick();`; nodes `tabIndex=0` in reading order). **Step 4: PASS, tsc. Commit**
 
 ```bash
 git commit -am "feat(web): workspace people map"
@@ -523,7 +523,7 @@ git commit -am "feat(web): workspace people map"
 - Modify: `app/models/schemas.py:206` (`TaskStatusArtifact.agent: ArtifactAgent | None`; `ArtifactAgent` and `Artifact.agent` exist since Task 3), `app/api/sync.py:1160`, `app/db/repository.py:519,1543`, `supabase_repository.py` (`upsert_task_artifact(..., agent: ArtifactAgent | None)`), `app/overview/cards.py` (`agent_closed_30d`)
 - Test: `apps/cloud/tests/contract/test_artifact_agent.py`, `tests/test_task_status_agent.py`
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_upsert_artifact_merges_agent_once(repo): ...   # first upsert no agent, second with agent → row has agent; third with different client → unchanged
@@ -532,7 +532,7 @@ def test_status_patch_records_agent(client, project): ...
 def test_card_counts_agent_closed_30d(): ...
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS, ruff. Commit**
 
 ```bash
 git commit -am "feat(cloud): record the agent client that closed a task"
@@ -544,8 +544,8 @@ git commit -am "feat(cloud): record the agent client that closed a task"
 - Modify: `packages/cloud-client/src/types.ts:83` (`StatusArtifact.agent?: {client: string; model?: string}`), `apps/mcp/src/server.ts:460` (after construction, `server.oninitialized = () => writer.setClient(server.getClientVersion()?.name)`), `apps/mcp/src/statusWriter.ts` (`setClient(name: string | undefined)`; every artifact gains `agent: {client: name ? `mcp:${name}` : "mcp"}`)
 - Test: `apps/mcp/test/close-task-agent.test.ts`
 
-- [ ] **Step 1: Failing test** (InMemoryTransport, client initialised as `{name: "cursor", version: "1"}`): `close_task` PATCH body has `artifact.agent.client === "mcp:cursor"`; without clientInfo name, `"mcp"`.
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: `pnpm --dir apps/mcp test` and `typecheck` PASS. Commit**
+- [x] **Step 1: Failing test** (InMemoryTransport, client initialised as `{name: "cursor", version: "1"}`): `close_task` PATCH body has `artifact.agent.client === "mcp:cursor"`; without clientInfo name, `"mcp"`.
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: `pnpm --dir apps/mcp test` and `typecheck` PASS. Commit**
 
 ```bash
 git commit -am "feat(mcp): close_task names the MCP client"
@@ -557,8 +557,8 @@ git commit -am "feat(mcp): close_task names the MCP client"
 - Modify: `apps/vscode/src/tasks/statusWriter.ts:17-58` (constructor takes `appName: string`; artifact gains `agent: {client: `vscode:${appName}`}`), its constructor call in `apps/vscode/src/extension.ts` (`vscode.env.appName`)
 - Test: `apps/vscode/test/unit/statusWriter.test.ts`
 
-- [ ] **Step 1: Failing test:** a write with `appName: "Cursor"` sends `artifact.agent.client === "vscode:Cursor"`.
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: `pnpm --dir apps/vscode test` and `typecheck` PASS. Commit**
+- [x] **Step 1: Failing test:** a write with `appName: "Cursor"` sends `artifact.agent.client === "vscode:Cursor"`.
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: `pnpm --dir apps/vscode test` and `typecheck` PASS. Commit**
 
 ```bash
 git commit -am "feat(vscode): task close names the editor"
@@ -569,7 +569,7 @@ git commit -am "feat(vscode): task close names the editor"
 **Files:**
 - Modify: `apps/web/src/lib/types.ts` (`Artifact.agent`), `apps/web/src/components/project/TaskDrawer.tsx` (artifact line), `apps/web/src/components/workspace/ProjectCard.tsx` (state line "· 7 closed by agents"), tests
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```ts
 it("artifact with agent mcp:cursor reads Closed via Cursor (MCP)", ...)
@@ -580,7 +580,7 @@ it("card state line appends · N closed by agents when agent_closed_30d > 0", ..
 
 Label mapping: `mcp:<name>` → "<Name> (MCP)", `vscode:<name>` → "<name> (editor)", bare `mcp` → "an MCP client".
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS. Commit**
 
 ```bash
 git commit -am "feat(web): show which client closed a task"
@@ -596,7 +596,7 @@ git commit -am "feat(web): show which client closed a task"
 - Produces: `POST /workspaces/{id}/ask` body `{question: str}` (member; question ≤ 500 chars) → SSE: `event: facts` (JSON `WorkspaceFacts`), then `data: {"delta": ...}` tokens, then `event: done`. `WorkspaceFacts(my_open_decisions: list[{project_id, project_name, kind, expires_at}], projects_missing_hats: list[{project_id, name, hats: list[str]}], overdue: list[{project_id, name, count}], by_runtime: dict[str, list[str]], agent_closed_30d: int)`.
 - Consumes: `resolve_assistant_models` (`app/rag/models.py`) for the chat connection; `DailyTokenBudget` from `app/rag/budget.py`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 def test_facts_my_open_decisions_only_routed_to_me(...): ...
@@ -617,7 +617,7 @@ it("renders facts as sentences when no delta arrives", ...)   // "You have 2 dec
 it("streams deltas into the answer", ...)
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement. Step 4: PASS both suites, ruff, tsc. Commit**
+- [x] **Step 2: Fail. Step 3: Implement. Step 4: PASS both suites, ruff, tsc. Commit**
 
 ```bash
 git commit -am "feat: ask the workspace"
@@ -628,7 +628,7 @@ git commit -am "feat: ask the workspace"
 **Files:**
 - Modify: `docs/plans/0029-agent-native-delivery.md` §13 (row 24: "Plan 0033 (2026-10-24 workspace overview and AI governance): cards, people map, workspace policy scope with inheritance, usage and discipline, agent identity on task close, ask box. Its Deferred table holds organisation-custom templates (plan 0023) and guardrail levels (D3)"), this plan's Status line, `CLAUDE.md` Web routes line (members page gains Map; home shows cards), `docs/DEPLOYMENT.md` migration checklist ("0004 through 0011").
 
-- [ ] **Step 1: Edit. Step 2: `git diff --stat` shows only docs. Commit**
+- [x] **Step 1: Edit. Step 2: `git diff --stat` shows only docs. Commit**
 
 ```bash
 git commit -am "docs: plan 0033 shipped; backlog row 24; deployment checklist 0011"
