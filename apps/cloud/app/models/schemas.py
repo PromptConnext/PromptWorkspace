@@ -1476,7 +1476,7 @@ class TaskSummary(BaseModel):
 class GenerationRun(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str
-    project_id: str
+    project_id: str | None = None
     stage: str
     model_source: str = "byo"
     model: str
@@ -1756,3 +1756,33 @@ class GovernanceReportOut(BaseModel):
     usage: list[UsageSourceOut]
     discipline: DisciplineOut
     projects: list[ProjectGovernanceOut]
+
+
+# --------------------------------------------------------------------------- #
+# Ask the workspace (plan 0033 task 20): the only context the model ever sees.
+# --------------------------------------------------------------------------- #
+class AskDecisionFact(BaseModel):
+    project_id: str
+    project_name: str
+    kind: str
+    expires_at: datetime | None = None
+
+
+class AskMissingHatsFact(BaseModel):
+    project_id: str
+    name: str
+    hats: list[str]
+
+
+class AskOverdueFact(BaseModel):
+    project_id: str
+    name: str
+    count: int
+
+
+class WorkspaceFacts(BaseModel):
+    my_open_decisions: list[AskDecisionFact] = Field(default_factory=list)
+    projects_missing_hats: list[AskMissingHatsFact] = Field(default_factory=list)
+    overdue: list[AskOverdueFact] = Field(default_factory=list)
+    by_runtime: dict[str, list[str]] = Field(default_factory=dict)
+    agent_closed_30d: int = 0

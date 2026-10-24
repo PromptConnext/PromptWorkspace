@@ -57,7 +57,13 @@ SYSTEM_PROMPT = (
 
 class ChatProvider(Protocol):
     def stream_chat(
-        self, context: str, question: str, model: str, api_key: str, base_url: str
+        self,
+        context: str,
+        question: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[str]: ...
 
 
@@ -115,10 +121,16 @@ async def stream_openai_chat(
 
 class HttpChatProvider:
     async def stream_chat(
-        self, context: str, question: str, model: str, api_key: str, base_url: str
+        self,
+        context: str,
+        question: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
             {"role": "user", "content": f"CONTEXT:\n{context}\n\nQUESTION: {question}"},
         ]
         async for delta in stream_openai_chat(messages, model, api_key, base_url):
@@ -130,7 +142,13 @@ class FakeChatProvider:
     answer that references the context so tests can assert grounding."""
 
     async def stream_chat(
-        self, context: str, question: str, model: str, api_key: str, base_url: str
+        self,
+        context: str,
+        question: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[str]:
         answer = f"Based on the context: {context[:200]}"
         for word in answer.split(" "):

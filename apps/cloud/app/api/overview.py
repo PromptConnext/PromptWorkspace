@@ -37,6 +37,12 @@ def get_overview(
     repo: Repository = Depends(get_repository),
 ) -> WorkspaceOverviewOut:
     require_workspace(repo, workspace_id, user)
+    return build_overview(repo, workspace_id, user)
+
+
+def build_overview(repo: Repository, workspace_id: str, user: User) -> WorkspaceOverviewOut:
+    """The overview without HTTP, so the ask route can reuse it. The caller has
+    already checked membership."""
     now = utcnow()
     projects = sorted(
         repo.list_projects_by_workspace(workspace_id), key=lambda p: p.updated_at, reverse=True
