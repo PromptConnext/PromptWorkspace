@@ -827,7 +827,7 @@ test("close_task refuses a status outside the one vocabulary", async () => {
 
 const SNAPSHOT = {
   default_branch: "main",
-  commit_sha: "abc123",
+  commit_sha: "abc1234def5678",
   paths: ["src/app.py", "pyproject.toml"],
   file_count: 2,
   stack: { runtime: "python", manifests: ["pyproject.toml"], languages: ["Python"] },
@@ -885,7 +885,7 @@ test("submit_repo_analysis posts the snapshot and reports the gate open", async 
     assert.equal(result.isError, undefined);
     assert.equal(
       bodyOf(result),
-      "Baseline accepted for Uploader at abc123; the plan and tasks stages are now open for drafts.",
+      "Baseline accepted for Uploader at abc1234def5678; the plan and tasks stages are now open for drafts.",
     );
     const post = seen.find((s) => s.path === "/projects/proj-1/repo-analysis/agent");
     assert.ok(post);
@@ -924,15 +924,64 @@ test("submit_repo_analysis on a from-scratch project names the 409 and explains 
   );
 });
 
-test("submit_repo_analysis with an over-long baseline is told to shorten it", async () => {
+test("submit_repo_analysis with an over-long baseline is refused before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_repo_analysis", {
+      workspace_root: root,
+      ...SNAPSHOT,
+      baseline: "x".repeat(100_001),
+    });
+    assert.equal(result.isError, true);
+    assert.equal(bodyOf(result), "The baseline is longer than 100,000 characters; shorten it.");
+    assert.ok(!seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("submit_repo_analysis refuses a commit_sha shorter than 7 characters before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_repo_analysis", {
+      workspace_root: root,
+      ...SNAPSHOT,
+      commit_sha: "abc123",
+    });
+    assert.equal(result.isError, true);
+    assert.match(bodyOf(result), /`commit_sha` must be 7 to 64 characters/);
+    assert.ok(!seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("submit_repo_analysis refuses over-long names and summaries before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ default_branch: "b".repeat(201) }, /`default_branch` must be at most 200 characters/],
+      [{ model: "m".repeat(201) }, /`model` must be at most 200 characters/],
+      [{ tree_summary: "t".repeat(20_001) }, /`tree_summary` must be at most 20,000 characters/],
+      [{ paths: Array.from({ length: 50_001 }, (_, i) => `f${i}`) }, /`paths` must list at most 50,000 entries/],
+    ];
+    for (const [override, expected] of cases) {
+      const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT, ...override });
+      assert.equal(result.isError, true);
+      assert.match(bodyOf(result), expected);
+    }
+    assert.ok(!seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("a cloud 422 on a valid-looking analysis is reported generically, not as a length error", async () => {
   const root = makeClone({});
   await withTools(
     async ({ call }) => {
       const result = await call("submit_repo_analysis", { workspace_root: root, ...SNAPSHOT });
       assert.equal(result.isError, true);
-      assert.equal(bodyOf(result), "The baseline is longer than 100,000 characters; shorten it.");
+      assert.equal(
+        bodyOf(result),
+        "PromptWorkspace rejected the request (422). Check the field values and try again.",
+      );
     },
-    { planningReply: () => ({ code: 422, body: { detail: "too long" } }) },
+    { planningReply: () => ({ code: 422, body: { detail: [{ loc: ["body", "x"], msg: "bad" }] } }) },
   );
 });
 
@@ -1030,7 +1079,21 @@ test("submit_stage_draft after the repository exists names the 409 and explains 
   );
 });
 
-test("submit_stage_draft with over-long markdown is told to shorten it", async () => {
+test("submit_stage_draft with over-long markdown is refused before any request", async () => {
+  const root = makeClone({});
+  await withTools(async ({ call, seen }) => {
+    const result = await call("submit_stage_draft", {
+      workspace_root: root,
+      stage: "plan",
+      markdown: "x".repeat(100_001),
+    });
+    assert.equal(result.isError, true);
+    assert.equal(bodyOf(result), "The markdown is longer than 100,000 characters; shorten it.");
+    assert.ok(!seen.some((s) => s.method === "POST"));
+  });
+});
+
+test("a cloud 422 on a valid-looking draft is reported generically, not as a length error", async () => {
   const root = makeClone({});
   await withTools(
     async ({ call }) => {
@@ -1040,9 +1103,12 @@ test("submit_stage_draft with over-long markdown is told to shorten it", async (
         markdown: "# Plan",
       });
       assert.equal(result.isError, true);
-      assert.equal(bodyOf(result), "The markdown is longer than 100,000 characters; shorten it.");
+      assert.equal(
+        bodyOf(result),
+        "PromptWorkspace rejected the request (422). Check the field values and try again.",
+      );
     },
-    { planningReply: () => ({ code: 422, body: { detail: "too long" } }) },
+    { planningReply: () => ({ code: 422, body: { detail: [{ loc: ["body", "x"], msg: "bad" }] } }) },
   );
 });
 

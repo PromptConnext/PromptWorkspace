@@ -33,15 +33,56 @@ const CONFLICT_SENTENCES: Record<string, string> = {
     "the repository is already created, so planning drafts are no longer accepted",
 };
 
+// The cloud's own bounds (apps/cloud/app/models/schemas.py: AgentRepoAnalysisIn,
+// StageDraftIn), checked here before any request. A 422 carries FastAPI's
+// list-shaped detail, which the client reduces to "cloud HTTP 422", so the
+// field at fault can only be named by catching it locally.
+const MAX_DOCUMENT_CHARS = 100_000;
+const MAX_NAME_CHARS = 200;
+const MAX_TREE_SUMMARY_CHARS = 20_000;
+const MAX_PATHS = 50_000;
+const MIN_SHA_CHARS = 7;
+const MAX_SHA_CHARS = 64;
+
+/** Length in code points, which is what pydantic's `max_length` counts. */
+function charCount(value: string): number {
+  return Array.from(value).length;
+}
+
+function tooLongMessage(field: "baseline" | "markdown"): string {
+  return `The ${field} is longer than 100,000 characters; shorten it.`;
+}
+
+function checkDocument(field: "baseline" | "markdown", value: string): void {
+  if (charCount(value) > MAX_DOCUMENT_CHARS) throw new Error(tooLongMessage(field));
+}
+
+function checkMaxChars(field: string, value: string | undefined, max: number): void {
+  if (value !== undefined && charCount(value) > max) {
+    throw new Error(`\`${field}\` must be at most ${max.toLocaleString("en-US")} characters.`);
+  }
+}
+
 /** The cloud refusals every planning tool shares, as tool errors; anything else
- *  is rethrown to the server's generic failure path. */
-function planningRefusal(err: unknown, field: "baseline" | "markdown", forbidden: string): CallToolResult {
+ *  is rethrown to the server's generic failure path. A 422 is the length
+ *  message only when the document really is over the bound; otherwise the
+ *  cloud refused something this tool did not anticipate, and it says so
+ *  without guessing which field. */
+function planningRefusal(
+  err: unknown,
+  field: "baseline" | "markdown",
+  document: string,
+  forbidden: string,
+): CallToolResult {
   if (err instanceof CloudHttpError) {
     if (err.status === 403) return failure(forbidden);
     const sentence = err.status === 409 ? CONFLICT_SENTENCES[err.message] : undefined;
     if (sentence) return failure(`${err.message}: ${sentence}`);
     if (err.status === 422) {
-      return failure(`The ${field} is longer than 100,000 characters; shorten it.`);
+      if (charCount(document) > MAX_DOCUMENT_CHARS) return failure(tooLongMessage(field));
+      return failure(
+        "PromptWorkspace rejected the request (422). Check the field values and try again.",
+      );
     }
   }
   throw err;
@@ -148,12 +189,29 @@ function analysisBody(args: Record<string, unknown>): AgentRepoAnalysisIn {
   if (typeof fileCount !== "number" || !Number.isInteger(fileCount) || fileCount < 0) {
     throw new Error("`file_count` is required and must be a non-negative integer.");
   }
+  if (paths.length > MAX_PATHS) {
+    throw new Error(
+      "`paths` must list at most 50,000 entries; list the first 50,000 and set tree_truncated.",
+    );
+  }
+  const commitSha = requiredText(args, "commit_sha").trim();
+  const shaChars = charCount(commitSha);
+  if (shaChars < MIN_SHA_CHARS || shaChars > MAX_SHA_CHARS) {
+    throw new Error(
+      `\`commit_sha\` must be ${MIN_SHA_CHARS} to ${MAX_SHA_CHARS} characters; pass the ` +
+        "full commit hash from `git rev-parse HEAD`.",
+    );
+  }
+  const defaultBranch = requiredText(args, "default_branch").trim();
+  checkMaxChars("default_branch", defaultBranch, MAX_NAME_CHARS);
+  const baseline = requiredText(args, "baseline");
+  checkDocument("baseline", baseline);
   const body: AgentRepoAnalysisIn = {
-    default_branch: requiredText(args, "default_branch").trim(),
-    commit_sha: requiredText(args, "commit_sha").trim(),
+    default_branch: defaultBranch,
+    commit_sha: commitSha,
     paths,
     file_count: fileCount,
-    baseline: requiredText(args, "baseline"),
+    baseline,
   };
   if (args.tree_truncated !== undefined && args.tree_truncated !== null) {
     if (typeof args.tree_truncated !== "boolean") {
@@ -176,8 +234,10 @@ function analysisBody(args: Record<string, unknown>): AgentRepoAnalysisIn {
     body.stack = stack;
   }
   const treeSummary = optionalString(args, "tree_summary");
+  checkMaxChars("tree_summary", treeSummary, MAX_TREE_SUMMARY_CHARS);
   if (treeSummary) body.tree_summary = treeSummary;
   const model = optionalString(args, "model");
+  checkMaxChars("model", model, MAX_NAME_CHARS);
   if (model) body.model = model;
   return body;
 }
@@ -200,6 +260,7 @@ export async function submitRepoAnalysis(
     return planningRefusal(
       err,
       "baseline",
+      body.baseline,
       "Only a workspace admin can submit the repository analysis; ask one to run this step.",
     );
   }
@@ -235,7 +296,9 @@ export async function submitStageDraft(
 ): Promise<CallToolResult> {
   const stage = requiredStage(args);
   const markdown = requiredText(args, "markdown");
+  checkDocument("markdown", markdown);
   const model = optionalString(args, "model");
+  checkMaxChars("model", model, MAX_NAME_CHARS);
   const resolved = await resolveProject(client, log, args, "submit_stage_draft");
   if ("error" in resolved) return failure(resolved.error);
   try {
@@ -252,6 +315,7 @@ export async function submitStageDraft(
     return planningRefusal(
       err,
       "markdown",
+      markdown,
       `You may not author ${stage} in this project; ask a workspace admin.`,
     );
   }
