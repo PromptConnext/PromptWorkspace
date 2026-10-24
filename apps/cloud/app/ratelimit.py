@@ -131,6 +131,10 @@ _MAX_FORM_BYTES = 16 * 1024
 
 
 async def _token_client_key(request: Request) -> str:
+    """`client:<id>|ip:<host>`, or the bare ip key when no client_id is
+    readable. The client_id alone is not enough: a CIMD client_id is shared
+    by every user of that client, so one source could drain everyone's
+    bucket."""
     cid = request.query_params.get("client_id")
     if not cid and request.headers.get("content-type", "").startswith(
         "application/x-www-form-urlencoded"
@@ -145,7 +149,7 @@ async def _token_client_key(request: Request) -> str:
             # BaseHTTPMiddleware replays a body read here to the route.
             form = parse_qs((await request.body()).decode("utf-8", "replace"))
             cid = (form.get("client_id") or [""])[0]
-    return f"client:{cid}" if cid else _ip(request)
+    return f"client:{cid}|{_ip(request)}" if cid else _ip(request)
 
 
 def _hourly(rate: int, burst: int) -> TokenBucketLimiter:

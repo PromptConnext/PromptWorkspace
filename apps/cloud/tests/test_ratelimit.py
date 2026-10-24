@@ -138,6 +138,33 @@ def test_token_keyed_by_client_id_and_body_reinjected():
     assert c.post("/oauth/token", data={"client_id": "B"}).status_code == 200
 
 
+def test_token_same_client_id_from_two_ips_has_independent_buckets():
+    # A CIMD client_id (Claude Code's) is shared by every user of that client:
+    # one source draining it must not lock everyone else out.
+    app = _build()
+    attacker, victim = _client(app, "6.6.6.6"), _client(app, "5.5.5.5")
+    cid = "https://claude.ai/oauth/claude-code-client-metadata"
+    for _ in range(20):
+        assert attacker.post("/oauth/token", data={"client_id": cid}).status_code == 200
+    assert attacker.post("/oauth/token", data={"client_id": cid}).status_code == 429
+    assert victim.post("/oauth/token", data={"client_id": cid}).status_code == 200
+
+
+def test_token_key_combines_client_id_and_ip():
+    import asyncio
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/oauth/token",
+        "query_string": b"client_id=Q",
+        "headers": [],
+        "client": ("7.7.7.7", 1),
+    }
+    key = asyncio.run(ratelimit._token_client_key(Request(scope)))
+    assert key == "client:Q|ip:7.7.7.7"
+
+
 def test_token_client_id_from_query_and_non_form_falls_back_to_ip():
     c = _client(_build())
     for _ in range(20):
