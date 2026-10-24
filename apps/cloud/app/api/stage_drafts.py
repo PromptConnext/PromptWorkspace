@@ -331,11 +331,14 @@ def accept_stage_draft(
     draft = _require_pending_draft(repo, project_id, stage, body.draft_id)
     _require_chain(repo, project, stage)
 
+    # The reviewer edits the draft in the stage editor before accepting it;
+    # their text, when they sent any, is what becomes the stage document.
+    markdown = body.markdown if body.markdown and body.markdown.strip() else draft.markdown
     applied = apply_stage_content(
         repo,
         project,
         stage,
-        draft.markdown,
+        markdown,
         source="agent",
         actor_id=user.id,
         app=request.app,

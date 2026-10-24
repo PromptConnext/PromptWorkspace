@@ -10,9 +10,11 @@ const BUTTON =
   "disabled:cursor-not-allowed disabled:opacity-60";
 
 // A stage document the importer's local coding agent drafted through MCP,
-// shown above the stage editor until a human accepts or rejects it. Accepting
-// writes it as the stage document (the cloud runs the same projection a save
-// does); rejecting keeps it here with the note, for the agent to redraft.
+// announced above the stage editor until a human accepts or rejects it. The
+// draft's text itself is loaded into that editor, where the reviewer edits it;
+// Accept writes the editor's text as the stage document (the cloud runs the
+// same projection a save does); rejecting keeps the draft with the note, for
+// the agent to redraft.
 export function StageDraftBanner({
   draft,
   canAct,
@@ -78,9 +80,6 @@ export function StageDraftBanner({
       {draft.last_error && (
         <p className="mt-2 text-xs text-amber-800">Could not apply: {draft.last_error}</p>
       )}
-      <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-700">
-        {draft.markdown}
-      </pre>
       {!canAct && draft.status === "pending" && <p className="mt-2 text-xs text-slate-600">Your Tech Lead reviews this draft.</p>}
       {showButtons && (
         <>

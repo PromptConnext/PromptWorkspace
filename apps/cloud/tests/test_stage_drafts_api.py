@@ -468,3 +468,40 @@ def test_delete_stage_draft_is_guarded_by_id(client: TestClient):
     repo = client.app.state.repository
     assert repo.delete_stage_draft(pid, "specify", draft_id=first) is False
     assert repo.get_stage_draft(pid, "specify") is not None
+
+
+# --------------------------------------------------------------------------- #
+# The reviewer edits the draft in the stage editor before accepting it
+# --------------------------------------------------------------------------- #
+
+
+def test_accept_applies_the_reviewers_edited_markdown(client: TestClient):
+    _, pid = _ready_project(client)
+    _submit(client, pid, "specify", SPEC)
+    edited = "# Story pagination\n\nReaders page through lists, 20 at a time.\n"
+
+    res = _accept(client, pid, "specify", markdown=edited)
+    assert res.status_code == 200, res.text
+    assert res.json()["content"] == edited
+    repo = client.app.state.repository
+    document = repo.get_stage_document(pid, "specify")
+    assert document.content == edited and document.source == "agent"
+    assert repo.get_stage_draft(pid, "specify") is None
+
+
+def test_accept_with_blank_markdown_applies_the_draft(client: TestClient):
+    _, pid = _ready_project(client)
+    _submit(client, pid, "specify", SPEC)
+    res = _accept(client, pid, "specify", markdown="   \n")
+    assert res.status_code == 200, res.text
+    assert client.app.state.repository.get_stage_document(pid, "specify").content == SPEC
+
+
+def test_accept_caps_the_edited_markdown(client: TestClient):
+    _, pid = _ready_project(client)
+    _submit(client, pid, "specify", SPEC)
+    res = _accept(client, pid, "specify", markdown="x" * 100_001)
+    assert res.status_code == 422
+    repo = client.app.state.repository
+    assert repo.get_stage_document(pid, "specify") is None
+    assert repo.get_stage_draft(pid, "specify").status == "pending"

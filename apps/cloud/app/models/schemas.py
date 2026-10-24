@@ -1648,6 +1648,9 @@ class StageDraftAcceptIn(BaseModel):
     # The draft the human read. A draft resubmitted since has a new id, and
     # accepting it unseen is refused with 409 `draft_changed`.
     draft_id: str = Field(min_length=1, max_length=64)
+    # The reviewer's edited text from the stage editor. When given and not
+    # blank it is applied instead of the draft's own markdown.
+    markdown: str | None = Field(default=None, max_length=100_000)
 
 
 class StageDraftRejectIn(BaseModel):

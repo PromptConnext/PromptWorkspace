@@ -41,7 +41,7 @@ function renderBanner(props: Partial<Parameters<typeof StageDraftBanner>[0]> = {
 describe("StageDraftBanner", () => {
   afterEach(cleanup);
 
-  it("loads the draft into view with source, model and a stale badge", () => {
+  it("announces the draft with source, model and a stale badge, leaving its text to the editor", () => {
     renderBanner({ draft: draft({ stale: true, last_error: "graph_write_failed" }) });
 
     expect(screen.getByText("Draft from your coding agent")).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe("StageDraftBanner", () => {
     expect(
       screen.getByText("Stale: written before the previous step changed"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Add a billing module\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Add a billing module\./)).not.toBeInTheDocument();
     expect(screen.getByText("Could not apply: graph_write_failed")).toBeInTheDocument();
     cleanup();
 

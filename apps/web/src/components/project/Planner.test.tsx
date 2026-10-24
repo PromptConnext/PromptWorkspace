@@ -1493,6 +1493,48 @@ describe("Planner", () => {
     await waitFor(() => expect(body).toMatchObject({ draft_id: "sd1" }));
   });
 
+  it("opens a pending draft in the stage editor and accepts the edited text", async () => {
+    mockImported("baseline_ready");
+    let body: { draft_id?: string; markdown?: string } | null = null;
+    withDrafts(
+      () => [stageDraft()],
+      (init) => {
+        body = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({
+            stage: "specify",
+            content: body?.markdown ?? "",
+            updated_at: "2026-10-24T01:00:00Z",
+            projection: "current",
+          }),
+        };
+      },
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    await panel.findByText("Draft from your coding agent");
+    // The draft, not the stored "# Spec", is what the editor shows.
+    const preview = await panel.findByRole("region", { name: "Specification document" });
+    expect(within(preview).getByRole("heading", { name: "Agent spec" })).toBeInTheDocument();
+
+    fireEvent.click(panel.getByRole("button", { name: "Raw" }));
+    const textarea = panel.getByRole("textbox", { name: "Specification document" });
+    expect(textarea).toHaveValue("# Agent spec\n\nBilling for teams.");
+    fireEvent.change(textarea, { target: { value: "# Agent spec\n\nBilling for teams and solo." } });
+    fireEvent.click(panel.getByRole("button", { name: "Accept" }));
+
+    await waitFor(() =>
+      expect(body).toEqual({
+        draft_id: "sd1",
+        markdown: "# Agent spec\n\nBilling for teams and solo.",
+      }),
+    );
+  });
+
   it("reloads the drafts when the agent replaced the draft since it was opened", async () => {
     mockImported("baseline_ready");
     withDrafts(

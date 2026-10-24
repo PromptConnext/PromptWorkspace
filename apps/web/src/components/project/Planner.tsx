@@ -336,6 +336,18 @@ function StageSection({
   const [docRetiredCount, setDocRetiredCount] = useState<number | null>(null);
   const [docRetiredRefs, setDocRetiredRefs] = useState<string[] | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
+  // A pending draft is reviewed in the stage editor: its markdown is loaded
+  // there in place of the stored document, and Accept sends whatever the
+  // editor holds. Reset only when a different draft arrives, so a poll that
+  // rereads the same draft does not throw away the reviewer's edits.
+  const pendingDraft = draft?.status === "pending" ? draft : undefined;
+  const [draftText, setDraftText] = useState(pendingDraft?.markdown ?? "");
+  useEffect(() => {
+    if (pendingDraft) setDraftText(pendingDraft.markdown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDraft?.id]);
+  const editorText = pendingDraft ? draftText : docContent;
+  const setEditorText = pendingDraft ? setDraftText : setDocContent;
 
   // Reported once the document has loaded, so every later change of stamp is
   // a save or a regeneration (the Planner refreshes the docs banner on those).
@@ -409,7 +421,11 @@ function StageSection({
     setDocSaving(true);
     setDocError(null);
     try {
-      const doc = await updateStageDocument(projectId, stage, docContent, authHeaders());
+      // Save writes the stage document, as it always has — with a pending
+      // draft open, that is the editor's text; the draft itself is untouched
+      // and stays pending until it is accepted or rejected.
+      const doc = await updateStageDocument(projectId, stage, editorText, authHeaders());
+      setDocContent(doc.content);
       setDocUpdatedAt(doc.updated_at);
       // The save projects the document onto the graph server-side, so a
       // hand-written stage unlocks the next one without a reload — and says
@@ -435,7 +451,7 @@ function StageSection({
     if (!draft) return;
     setDraftError(null);
     try {
-      const doc = await acceptStageDraft(projectId, stage, draft.id, undefined, authHeaders());
+      const doc = await acceptStageDraft(projectId, stage, draft.id, draftText, authHeaders());
       setDocContent(doc.content);
       setDocUpdatedAt(doc.updated_at);
       setDocProjection(doc.projection);
@@ -624,8 +640,8 @@ function StageSection({
             </p>
           )}
           <MarkdownEditor
-            value={docContent}
-            onChange={setDocContent}
+            value={editorText}
+            onChange={setEditorText}
             onSave={saveDoc}
             saving={docSaving}
             error={docError}
