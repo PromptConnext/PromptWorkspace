@@ -30,12 +30,18 @@ def workspace(client: TestClient) -> str:
     return ws["id"]
 
 
-def _put_gov(client: TestClient, ws: str, selected: list[str], text: str = "") -> None:
+def _put_gov(
+    client: TestClient,
+    ws: str,
+    selected: list[str],
+    text: str = "",
+    hats: list[str] | None = None,
+) -> None:
     res = client.put(
         f"/workspaces/{ws}/governance",
         json={
             "policy_scope": {"selected": selected, "custom_text": text},
-            "required_hats": ["tech_steward"],
+            "required_hats": hats or ["tech_steward"],
             "require_seeded_rules": False,
         },
         headers=ALICE,
@@ -108,7 +114,12 @@ def test_put_governance_rewrites_only_inheriting_unfrozen_projects(
     assert len(receipts) == 1
     assert receipts[0]["subject_type"] == "project_policy"
     assert receipts[0]["subject_id"] == inheriting["id"]
-    assert receipts[0]["body"] == {"source": "workspace", "before": "", "after": "gdpr,soc-2"}
+    assert receipts[0]["body"] == {
+        "source": "workspace",
+        "before": "",
+        "after": "gdpr,soc-2",
+        "custom_text_changed": "false",
+    }
 
     own_got = client.get(f"/projects/{own['id']}", headers=ALICE).json()
     assert own_got["policy_scope"]["selected"] == ["gdpr"]
@@ -152,3 +163,35 @@ def test_receipt_chain_still_verifies_after_policy_receipt(
     assert any(r.event == "policy_scope.updated" for r in chain)
     assert isinstance(chain[0], Receipt)
     assert verify_chain(chain).ok
+
+
+def test_put_governance_with_same_scope_writes_no_project_or_receipt(
+    client: TestClient, workspace: str
+) -> None:
+    _put_gov(client, workspace, ["gdpr"], "tidy")
+    p = _project(client, workspace)
+    repo = client.app.state.repository
+    before_updated = repo.get_project(p["id"]).updated_at
+    before_chain = len(repo.list_receipts(p["id"]))
+
+    _put_gov(client, workspace, ["gdpr"], "tidy", hats=["business_owner", "tech_steward"])
+
+    assert _policy_receipts(client, p["id"]) == []
+    assert len(repo.list_receipts(p["id"])) == before_chain
+    assert repo.get_project(p["id"]).updated_at == before_updated
+
+
+def test_put_governance_custom_text_only_change_writes_receipt_with_flag(
+    client: TestClient, workspace: str
+) -> None:
+    _put_gov(client, workspace, ["gdpr"], "tidy")
+    p = _project(client, workspace)
+    _put_gov(client, workspace, ["gdpr"], "tidier")
+    receipts = _policy_receipts(client, p["id"])
+    assert len(receipts) == 1
+    assert receipts[0]["body"] == {
+        "source": "workspace",
+        "before": "gdpr",
+        "after": "gdpr",
+        "custom_text_changed": "true",
+    }

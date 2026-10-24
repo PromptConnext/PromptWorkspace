@@ -132,7 +132,15 @@ def put_governance(
     for project in repo.list_projects_by_workspace(workspace_id):
         if project.policy_scope_source != "workspace" or project.lifecycle_status == "repo_created":
             continue
-        before = ",".join(project.policy_scope.selected) if project.policy_scope else ""
+        current = project.policy_scope
+        if (
+            current is not None
+            and list(current.selected) == list(saved.policy_scope.selected)
+            and current.custom_text == saved.policy_scope.custom_text
+        ):
+            continue  # nothing changed: no rewrite, no receipt in the chain
+        before = ",".join(current.selected) if current else ""
+        text_changed = current is None or current.custom_text != saved.policy_scope.custom_text
         repo.update_project_policy_scope(
             project.id, saved.policy_scope.model_copy(deep=True), source="workspace"
         )
@@ -145,7 +153,14 @@ def put_governance(
                 subject_type="project_policy",
                 subject_id=project.id,
                 actor=user.id,
-                body={"source": "workspace", "before": before, "after": after},
+                body={
+                    "source": "workspace",
+                    "before": before,
+                    "after": after,
+                    # before/after list template ids only; this explains a
+                    # receipt whose two lists are identical.
+                    "custom_text_changed": "true" if text_changed else "false",
+                },
             ),
         )
     return saved

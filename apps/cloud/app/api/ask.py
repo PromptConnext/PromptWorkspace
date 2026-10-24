@@ -13,13 +13,14 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.api._guards import require_workspace
 from app.api.me import collect_my_decisions
 from app.api.overview import build_overview
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import GenerationRun
+from app.models.schemas import GenerationRun, WorkspaceFacts
 from app.overview.facts import compute_workspace_facts, facts_to_text
 from app.rag.budget import estimate_tokens
 from app.rag.chat import HttpChatProvider
@@ -48,9 +49,14 @@ async def ask_workspace(
     repo: Repository = Depends(get_repository),
 ) -> StreamingResponse:
     require_workspace(repo, workspace_id, user)
-    overview = build_overview(repo, workspace_id, user)
-    mine = [i.decision for i in collect_my_decisions(repo, user, workspace_id)]
-    facts = compute_workspace_facts(overview, mine)
+
+    def _collect() -> WorkspaceFacts:
+        # Sync repository reads: keep them off the event loop (presence WS).
+        overview = build_overview(repo, workspace_id, user)
+        mine = [i.decision for i in collect_my_decisions(repo, user, workspace_id)]
+        return compute_workspace_facts(overview, mine)
+
+    facts = await run_in_threadpool(_collect)
     context = facts_to_text(facts)
 
     managed_chat = getattr(request.app.state, "managed_connection", None)

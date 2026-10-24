@@ -1784,5 +1784,6 @@ class WorkspaceFacts(BaseModel):
     my_open_decisions: list[AskDecisionFact] = Field(default_factory=list)
     projects_missing_hats: list[AskMissingHatsFact] = Field(default_factory=list)
     overdue: list[AskOverdueFact] = Field(default_factory=list)
+    expired: list[AskOverdueFact] = Field(default_factory=list)
     by_runtime: dict[str, list[str]] = Field(default_factory=dict)
     agent_closed_30d: int = 0

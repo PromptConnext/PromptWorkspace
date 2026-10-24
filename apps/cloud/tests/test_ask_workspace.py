@@ -34,12 +34,19 @@ def workspace(client: TestClient) -> str:
     return ws["id"]
 
 
-def _card(pid: str, name: str, hats: dict, overdue: int = 0, runtime: str | None = None):
+def _card(
+    pid: str,
+    name: str,
+    hats: dict,
+    overdue: int = 0,
+    runtime: str | None = None,
+    expired: int = 0,
+):
     now = utcnow()
     return ProjectCardOut(
         id=pid, name=name, lifecycle_status="planning", updated_at=now, hats=hats,
         contributors=[], task_counts={}, decisions={"open": 0, "overdue": overdue,
-                                                     "expired_30d": 0},
+                                                     "expired_30d": expired},
         stack={"runtime": runtime} if runtime else None, policy={}, checks=[],
         agent_closed_30d=3, last_activity_at=now,
     )
@@ -84,6 +91,20 @@ def test_facts_projects_missing_hats():
     assert facts.overdue[0].count == 2
     assert facts.by_runtime == {"python": ["Alpha", "Beta"]}
     assert facts.agent_closed_30d == 6
+
+
+def test_facts_expired_decisions_listed_per_project():
+    ov = _overview(
+        [
+            _card("p1", "Alpha", {"business_owner": "a", "tech_steward": "a"}, expired=1),
+            _card("p2", "Beta", {"business_owner": "a", "tech_steward": "a"}),
+        ]
+    )
+    facts = compute_workspace_facts(ov, [])
+    assert [(e.name, e.count) for e in facts.expired] == [("Alpha", 1)]
+    assert "Decisions expired without an answer: Alpha (1)." in facts_to_text(facts)
+    none = facts_to_text(compute_workspace_facts(_overview([_card("p2", "B", {})]), []))
+    assert "expired" not in none
 
 
 def _events(text: str) -> list[tuple[str, str]]:

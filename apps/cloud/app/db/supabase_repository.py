@@ -227,6 +227,10 @@ _SERVICE_ONLY_TABLES = frozenset(
         # project's. Every rule lives in the LINE routes.
         "pw_project_line_links",
         "pw_line_link_codes",
+        # Migration 0011 (plan 0033): born service-only. RLS is enabled with no
+        # policy for `authenticated`, so a per-user client would hit 42501 on
+        # every read; the admin-only write rule lives in app/api/overview.py.
+        "pw_workspace_governance",
     }
 )
 

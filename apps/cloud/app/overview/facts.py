@@ -38,6 +38,7 @@ def compute_workspace_facts(
     ]
     missing: list[AskMissingHatsFact] = []
     overdue: list[AskOverdueFact] = []
+    expired: list[AskOverdueFact] = []
     by_runtime: dict[str, list[str]] = {}
     closed = 0
     for p in overview.projects:
@@ -47,6 +48,9 @@ def compute_workspace_facts(
         n = p.decisions.get("overdue", 0)
         if n:
             overdue.append(AskOverdueFact(project_id=p.id, name=p.name, count=n))
+        x = p.decisions.get("expired_30d", 0)
+        if x:
+            expired.append(AskOverdueFact(project_id=p.id, name=p.name, count=x))
         runtime = (p.stack or {}).get("runtime")
         if runtime:
             by_runtime.setdefault(runtime, []).append(p.name)
@@ -55,6 +59,7 @@ def compute_workspace_facts(
         my_open_decisions=mine,
         projects_missing_hats=missing,
         overdue=overdue,
+        expired=expired,
         by_runtime=by_runtime,
         agent_closed_30d=closed,
     )
@@ -88,6 +93,9 @@ def facts_to_text(facts: WorkspaceFacts) -> str:
             )
     else:
         lines.append("No decisions are overdue.")
+    if facts.expired:
+        listed = ", ".join(f"{e.name} ({e.count})" for e in facts.expired)
+        lines.append(f"Decisions expired without an answer: {listed}.")
     for runtime, projects in sorted(facts.by_runtime.items()):
         lines.append(f"Projects on {runtime}: {', '.join(projects)}.")
     lines.append(
