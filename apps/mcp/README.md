@@ -68,9 +68,9 @@ the clone and drafts the plan.
 - **`submit_repo_analysis`** — the repository snapshot and the baseline your
   agent wrote. Workspace admins only; it opens the plan and tasks stages.
 - **`submit_stage_draft`** — one stage's Markdown, stored as a **pending
-  draft** a person accepts or rejects in PromptWorkspace. Warnings (gaps in task
-  numbering, paths not in the repository) come back as bullets to fix and
-  resubmit.
+  draft** a person accepts or rejects in PromptWorkspace. Warnings (an empty
+  document, no task lines, gaps in task numbering, paths not in the repository)
+  come back as bullets to fix and resubmit.
 
 Neither write is queued: a refusal or an unreachable cloud is a tool error, and
 the agent submits again. They store a pending draft and the analysis row and

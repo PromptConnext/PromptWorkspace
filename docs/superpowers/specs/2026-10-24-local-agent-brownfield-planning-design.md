@@ -83,11 +83,12 @@ The instruction text in the brief tells the agent, in order: fetch and read the 
 - `POST /projects/{id}/stage-drafts` (per-stage access).
 - `GET /projects/{id}/stage-drafts` (member). Includes computed `stale`.
 - `POST /projects/{id}/stage-drafts/{stage}/accept` (per-stage access). Pre-checks, in order: the caller may author the stage; the same preconditions the generate route checks for that stage (`plan` needs a requirement and no unapproved intent decision, `tasks` needs a SpecDocument); then calls `apply_stage_content`. If projection returns `failed`, the document has been saved as it would be after a Typhoon run, the draft is **kept pending** with `last_error` set, and the response carries the failure so the web can show it. The draft is deleted only on `projection = "ok"`.
-- `POST /projects/{id}/stage-drafts/{stage}/reject` (per-stage access; body `note`).
+- `POST /projects/{id}/stage-drafts/{stage}/reject` (per-stage access; body `draft_id`, `note`).
+- Accept's body is `{draft_id, markdown?}`. Both accept and reject answer 409 `draft_changed` when the stage's pending draft is no longer the one the reviewer opened, and 409 `repo_already_created` once the repository exists. A non-blank `markdown` is the reviewer's edited text and is applied in place of the draft's.
 
 **Gate.** `repo_analysis_required` is unchanged. The agent's baseline opens it. The Typhoon `generate` and `prefill` routes remain reachable for imported projects after that; the web just stops offering them.
 
-**Stale drafts.** A pending draft whose `created_at` is earlier than its predecessor stage document's `updated_at` is `stale`, computed on read. The web shows a badge; accept is still allowed. The brief lists stale drafts so the agent redoes them next sitting.
+**Stale drafts.** On submit a draft records `predecessor_fingerprint`, the sha256 of the predecessor stage's pending draft markdown if there is one, else of its stored document, else of "". A draft is `stale`, computed on read, when the predecessor's stored document exists and its content no longer hashes to that fingerprint. (Amended 2026-10-24 at final review: the first rule compared timestamps, and accepting the predecessor bumps its `updated_at`, so every later draft of a one-sitting run read stale for ever.) The web shows a badge; accept is still allowed. The brief lists stale drafts so the agent redoes them next sitting.
 
 **Provenance.** `source` and `model` on analysis and stage document.
 
@@ -123,6 +124,11 @@ The instruction text in the brief tells the agent, in order: fetch and read the 
 - Stale is computed, not stored.
 - Rejection carries a note the agent sees next time.
 - Size cap 100k characters, matching the existing baseline cap.
+- 2026-10-24, final review: stale is a fingerprint of the predecessor content a draft was written against, not a timestamp comparison, so accepting the predecessor unchanged keeps the successor fresh.
+- 2026-10-24, final review: accept and reject name the draft by id; a draft the agent replaced since the reviewer opened it is refused with 409 `draft_changed`, never applied unseen, and the delete after a successful accept is guarded by the same id.
+- 2026-10-24, final review: the Planner rereads the analysis and the drafts every 15 seconds while the page is visible and the project is waiting for its tasks document, so the checklist moves while the terminal sitting runs.
+- 2026-10-24, final review: a pending draft opens in the stage's own Markdown editor, where the reviewer edits it; Accept sends the editor's text and the cloud applies it in place of the draft. Save still writes the stage document, never the draft.
+- 2026-10-24, final review: submit returns parse warnings for every stage, from one helper shared with the generation route: `empty_document` when nothing is left after parsing, and for tasks `no_task_lines`, `missing_task_numbers` and `unmarked_new_paths`.
 - Plan 0025 and `CLAUDE.md` get a dated amendment lifting the four-tool ceiling for planning reads and draft writes, keeping the graph-write and claim-tool prohibitions.
 - A too-long body is Pydantic's 422, mapped to words in the MCP tool, not a 413.
 - The MCP tools validate the cloud's field bounds locally before sending.

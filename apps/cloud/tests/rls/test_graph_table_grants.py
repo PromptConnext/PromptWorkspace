@@ -245,7 +245,7 @@ def test_member_cannot_touch_stage_drafts_directly(
 ) -> None:
     """Migration 0012: `pw_stage_drafts` is born service-only (RLS on, no
     policy, grants revoked from `authenticated` and `anon`). A draft is an
-    agent's proposed stage markdown awaiting admin approval, so a member
+    agent's proposed stage markdown awaiting a reviewer's accept, so a member
     inserting, rewriting or deleting one straight through PostgREST would
     bypass that review. Every verb must answer 42501, and the table must
     stay empty."""
