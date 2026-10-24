@@ -46,7 +46,7 @@ def run_checks(
     for hat in _HAT_ORDER:
         if hat not in governance.required_hats:
             continue
-        label = _HAT_LABELS.get(hat, hat)
+        label = _HAT_LABELS[hat]
         ok = hat in held
         out.append(
             ProjectCheckOut(

@@ -298,10 +298,9 @@ def test_listing_decisions_reads_snapshots_by_project_not_by_every_id():
 # --- batched reads (plan 0033 task 22) -------------------------------------
 
 
-class _RpcError(Exception):
-    def __init__(self, code: str, message: str = "") -> None:
-        super().__init__(message)
-        self.code = code
+def _rpc_error(code: str, message: str) -> APIError:
+    """The real postgrest error, so detection is pinned to its actual shape."""
+    return APIError({"code": code, "message": message, "hint": None, "details": None})
 
 
 class _TableClient(_Client):
@@ -353,7 +352,14 @@ def test_latest_receipt_at_is_one_rpc_and_no_table_read():
 
 @pytest.mark.parametrize(
     "error",
-    [_RpcError("42883", "function does not exist"), _RpcError("PGRST202", "Could not find")],
+    [
+        _rpc_error("42883", "function public.pw_latest_receipt_at(uuid[]) does not exist"),
+        _rpc_error(
+            "PGRST202",
+            "Could not find the function public.pw_latest_receipt_at(project_ids) "
+            "in the schema cache",
+        ),
+    ],
 )
 def test_latest_receipt_at_falls_back_to_the_paged_read(error):
     rows = [  # newest first, as the query orders them
@@ -371,8 +377,8 @@ def test_latest_receipt_at_falls_back_to_the_paged_read(error):
 
 
 def test_latest_receipt_at_other_rpc_errors_still_raise():
-    client = _TableClient(rpc_error=_RpcError("57014", "statement timeout"))
-    with pytest.raises(_RpcError):
+    client = _TableClient(rpc_error=_rpc_error("57014", "canceling statement due to timeout"))
+    with pytest.raises(APIError):
         _repo(client).latest_receipt_at(["a"])
     assert client.reads == []
 
