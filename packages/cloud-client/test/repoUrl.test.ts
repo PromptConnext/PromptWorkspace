@@ -7,6 +7,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   UnsafeRepoUrlError,
@@ -155,4 +157,33 @@ test("an alias that matches two roster projects is ambiguous and links neither",
     ["p1"],
   );
   assert.deepEqual(projectsMatchingRemotes(alias, [{ projectId: "p4", repoUrl: null }]), []);
+});
+
+// The shared case table (docs/contracts/repo-url-cases.json), which
+// apps/cloud/tests/test_repo_url.py reads too: the hosted MCP server resolves
+// a `repo_url` argument to a project with a Python port of this module, and
+// the two must answer every case the same way. Walked up from the working
+// directory for the reason taskRefs.test.ts gives.
+const CASES_REL = join("docs", "contracts", "repo-url-cases.json");
+
+function findCases(): string {
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = join(dir, CASES_REL);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error(`could not find ${CASES_REL} above ${process.cwd()}`);
+    dir = parent;
+  }
+}
+
+type RepoUrlCase = { a: string; b: string; expect: "exact" | "alias" | "none" };
+
+test("the shared repo-url cases", () => {
+  const cases = JSON.parse(readFileSync(findCases(), "utf8")) as RepoUrlCase[];
+  assert.ok(cases.length > 0);
+  for (const c of cases) {
+    assert.equal(remotesMatch(c.a, c.b), c.expect, `${c.a} vs ${c.b}`);
+    assert.equal(sameRepo(c.a, c.b), c.expect === "exact", `sameRepo ${c.a} vs ${c.b}`);
+  }
 });

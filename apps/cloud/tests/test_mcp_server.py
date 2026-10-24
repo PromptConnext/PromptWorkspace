@@ -199,7 +199,10 @@ async def test_valid_token_lists_the_task_tools_and_touches_the_family(mcp_app):
         async with _session(mcp_app, token) as session:
             names = {t.name for t in (await session.list_tools()).tools}
         assert repo.get_oauth_family(fid).last_used_at is not None
-    assert {"list_my_tasks", "get_task", "close_task"} <= names
+    assert names == {
+        "list_my_tasks", "get_task", "close_task",
+        "start_planning", "submit_repo_analysis", "submit_stage_draft",
+    }  # fmt: skip
 
 
 # --------------------------------------------------------------------------- #

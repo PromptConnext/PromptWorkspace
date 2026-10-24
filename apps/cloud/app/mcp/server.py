@@ -21,6 +21,7 @@ from starlette.applications import Starlette
 
 from app.db.repository import Repository
 from app.mcp.auth import PromptWorkspaceTokenVerifier
+from app.mcp.tools_planning import register_planning_tools
 from app.mcp.tools_tasks import register_task_tools
 from app.oauth.keys import SigningKey
 
@@ -28,7 +29,10 @@ INSTRUCTIONS = (
     "PromptWorkspace task tools. Call list_my_tasks to see the tasks assigned to you, "
     "get_task for one task's acceptance criteria, spec excerpt, branch name and commit "
     "prefix, and close_task to report progress: in_progress when you start, implemented "
-    "with the commit sha when the work is pushed. Verification is a reviewer's step."
+    "with the commit sha when the work is pushed. Verification is a reviewer's step. "
+    "For an imported project still being planned, start_planning returns the brief, "
+    "submit_repo_analysis stores your clone's baseline (admins), and submit_stage_draft "
+    "submits a stage document for review; pass project_id or your clone's repo_url."
 )
 
 
@@ -56,6 +60,7 @@ def build_mcp_server(
     )
     server.promptworkspace_token_verifier = verifier  # type: ignore[attr-defined]
     register_task_tools(server, repo_provider, app_provider)
+    register_planning_tools(server, repo_provider, app_provider)
     return server
 
 

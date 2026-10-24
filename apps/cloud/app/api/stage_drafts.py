@@ -139,6 +139,12 @@ def planning_brief(
     repo: Repository = Depends(get_repository),
 ):
     project = require_project(repo, project_id, user)
+    return planning_brief_for(repo, project, user)
+
+
+def planning_brief_for(repo: Repository, project: Project, user: User) -> PlanningBriefOut:
+    """The brief for a project the caller already passed `require_project`
+    for: the route above, and the hosted MCP server's `start_planning`."""
     _require_open_import(project)
 
     submittable: list[str] = []
@@ -149,7 +155,7 @@ def planning_brief(
             continue
         submittable.append(stage)
 
-    analysis = repo.get_repo_analysis(project_id)
+    analysis = repo.get_repo_analysis(project.id)
     status: RepoAnalysisStatus | Literal["none"] = analysis.status if analysis else "none"
     return PlanningBriefOut(
         project_id=project.id,
@@ -165,7 +171,7 @@ def planning_brief(
         templates={s: stage_template(s, existing_repo=True) for s in STAGES},
         prd_texts=[
             {"title": d.title, "text": d.extracted_text[:PRD_TEXT_MAX_CHARS]}
-            for d in repo.list_documents(project_id)
+            for d in repo.list_documents(project.id)
             if d.extracted_text
         ],
         analysis_status=status,
@@ -179,7 +185,7 @@ def planning_brief(
                 last_error=d.last_error,
                 created_at=d.created_at,
             )
-            for d in repo.list_stage_drafts(project_id)
+            for d in repo.list_stage_drafts(project.id)
         ],
         submittable_stages=submittable,
         instructions=agent_planning_instructions(),
@@ -254,6 +260,15 @@ def submit_stage_draft(
     repo: Repository = Depends(get_repository),
 ) -> StageDraftOut:
     project = require_project(repo, project_id, user)
+    return submit_stage_draft_for(repo, project, user, body)
+
+
+def submit_stage_draft_for(
+    repo: Repository, project: Project, user: User, body: StageDraftIn
+) -> StageDraftOut:
+    """Store one stage draft for a project the caller already passed
+    `require_project` for: the route above, and the hosted MCP server's
+    `submit_stage_draft`. The stage and import checks run here, for both."""
     require_stage_access(repo, project, body.stage, user)
     _require_open_import(project)
 
