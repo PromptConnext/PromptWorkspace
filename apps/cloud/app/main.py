@@ -296,7 +296,13 @@ async def lifespan(app: FastAPI):
         app.state.oauth_http = httpx.AsyncClient()
         oauth_task = asyncio.create_task(_oauth_sweep_loop(app, settings))
     try:
-        yield
+        async with contextlib.AsyncExitStack() as mcp_stack:
+            # The mounted MCP app's own lifespan never runs under a Mount, so
+            # its session manager is started here (hosted MCP).
+            mcp_server = getattr(app.state, "mcp_server", None)
+            if settings.mcp_enabled and mcp_server is not None:
+                await mcp_stack.enter_async_context(mcp_server.session_manager.run())
+            yield
     finally:
         gc_task.cancel()
         sweep_task.cancel()
@@ -319,6 +325,42 @@ async def lifespan(app: FastAPI):
         app.state.line_notifier.shutdown()
 
 
+class _McpRoot:
+    """`/mcp` without the slash, forwarded to the mounted app as `/mcp/`.
+    A Mount only matches `/mcp/...`; this keeps the canonical slash-less URL
+    from falling through to a 404 (or, with redirect_slashes, a 307)."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        scope = dict(scope)
+        scope["path"] = scope["path"] + "/"
+        if scope.get("raw_path"):
+            scope["raw_path"] = scope["raw_path"] + b"/"
+        scope["root_path"] = scope.get("root_path", "") + "/mcp"
+        await self.app(scope, receive, send)
+
+
+def _mount_mcp(app: FastAPI, settings: Settings) -> None:
+    from starlette.routing import Route
+
+    from app.mcp.server import build_mcp_asgi, build_mcp_server
+    from app.oauth.keys import load_signing_keys
+
+    server = build_mcp_server(
+        settings,
+        lambda: app.state.repository,  # service role: tools run the guards themselves
+        load_signing_keys(settings),
+        app_provider=lambda: app,
+    )
+    mcp_asgi = build_mcp_asgi(server, settings)
+    app.state.mcp_server = server
+    app.state.mcp_token_verifier = server.promptworkspace_token_verifier
+    app.router.routes.append(Route("/mcp", endpoint=_McpRoot(mcp_asgi), include_in_schema=False))
+    app.mount("/mcp", mcp_asgi)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
@@ -326,6 +368,9 @@ def create_app() -> FastAPI:
         version=__version__,
         summary="Thin sync + collaboration backend for the PromptWorkspace task graph.",
         lifespan=lifespan,
+        # /mcp and /mcp/ must reach the MCP app identically, with no 307 between
+        # them: clients compare the resource URL byte for byte (hosted MCP).
+        redirect_slashes=False,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -381,6 +426,7 @@ def create_app() -> FastAPI:
     app.include_router(desktop_auth.router)
     if settings.mcp_enabled:
         app.include_router(oauth.router)
+        _mount_mcp(app, settings)
 
     @app.get("/", tags=["health"])
     def root() -> dict:

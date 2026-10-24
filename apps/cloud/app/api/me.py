@@ -45,12 +45,40 @@ def list_my_tasks(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[AssignedTask]:
-    return repo.list_assigned_tasks(
+    return assigned_tasks_for(repo, user, workspace_id=workspace_id, statuses=status, limit=limit)
+
+
+def assigned_tasks_for(
+    repo: Repository,
+    user: User,
+    *,
+    workspace_id: str | None = None,
+    statuses: list[TaskStatus] | None = None,
+    limit: int = 200,
+) -> list[AssignedTask]:
+    """The caller's assigned tasks, shared by `GET /me/tasks` and the hosted
+    MCP `list_my_tasks`/`get_task`/`close_task` tools.
+
+    Membership is re-checked here, per workspace, on top of whatever the
+    adapter does: the MCP tools read through the service-role repository,
+    where no RLS scopes the read, and an assignment outlives a membership
+    removal. A user who left a workspace must stop seeing its tasks at once.
+    """
+    entries = repo.list_assigned_tasks(
         user.id,
         workspace_id=workspace_id,
-        statuses=status or _OPEN_STATUSES,
+        statuses=statuses or _OPEN_STATUSES,
         limit=limit,
     )
+    member_of: dict[str, bool] = {}
+    out: list[AssignedTask] = []
+    for entry in entries:
+        ws = entry.workspace_id
+        if ws not in member_of:
+            member_of[ws] = repo.get_membership(ws, user.id) is not None
+        if member_of[ws]:
+            out.append(entry)
+    return out
 
 
 class InboxItem(BaseModel):

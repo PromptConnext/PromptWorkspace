@@ -82,8 +82,15 @@ def issue_access_token(
 
 
 def verify_access_token(
-    settings, keys: Iterable[SigningKey], token: str, *, now: datetime | None = None
+    settings,
+    keys: Iterable[SigningKey],
+    token: str,
+    *,
+    now: datetime | None = None,
+    public_keys: dict[str, Any] | None = None,
 ) -> AccessClaims:
+    """`public_keys` (kid -> parsed public key) lets a hot caller such as the
+    /mcp verifier skip re-parsing the PEM on every call."""
     try:
         kid = jwt.get_unverified_header(token).get("kid")
     except jwt.PyJWTError as err:
@@ -91,7 +98,9 @@ def verify_access_token(
     key = next((k for k in keys if kid and k.kid == kid), None)
     if key is None:
         raise TokenError("malformed")
-    public = serialization.load_pem_private_key(key.private_pem.encode(), None).public_key()
+    public = (public_keys or {}).get(key.kid)
+    if public is None:
+        public = serialization.load_pem_private_key(key.private_pem.encode(), None).public_key()
     options = {"require": ["exp", "iss", "aud", "sub"]}
     if now is not None:
         # PyJWT checks exp against wall clock; honour an injected clock ourselves.
