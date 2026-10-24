@@ -9,6 +9,9 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace: vi.fn() }
 vi.mock("@/components/RequireAuth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => children,
 }));
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({ authHeaders: () => ({}) }),
+}));
 vi.mock("@/components/TopBar", () => ({ TopBar: () => null }));
 vi.mock("@/components/NewProjectDialog", () => ({
   NewProjectDialog: ({

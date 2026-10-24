@@ -8,6 +8,7 @@ import { InboxLink } from "@/components/InboxLink";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
 import { RequireAuth } from "@/components/RequireAuth";
 import { TopBar } from "@/components/TopBar";
+import { AskBox } from "@/components/workspace/AskBox";
 import { ProjectCard } from "@/components/workspace/ProjectCard";
 import { useOverview } from "@/components/workspace/useOverview";
 import { useIsWorkspaceAdmin, useWorkspace, useWorkspaceName } from "@/lib/workspace";
@@ -94,6 +95,8 @@ function WorkspaceHome({ workspaceId }: { workspaceId: string }) {
             </Link>
           </div>
         </div>
+
+        <AskBox workspaceId={workspaceId} />
 
         <h2 className="mb-3 text-sm font-medium text-slate-500">Projects</h2>
         {loading && <p className="text-sm text-slate-500">Loading projects…</p>}

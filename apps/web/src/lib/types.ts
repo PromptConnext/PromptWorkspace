@@ -893,3 +893,17 @@ export interface GovernanceReport {
   discipline: GovernanceDiscipline;
   projects: { project_id: string; name: string; checks: ProjectCheck[] }[];
 }
+
+// POST /workspaces/{id}/ask — the facts frame (apps/cloud/app/overview/facts.py).
+export interface WorkspaceFacts {
+  my_open_decisions: {
+    project_id: string;
+    project_name: string;
+    kind: string;
+    expires_at: string | null;
+  }[];
+  projects_missing_hats: { project_id: string; name: string; hats: string[] }[];
+  overdue: { project_id: string; name: string; count: number }[];
+  by_runtime: Record<string, string[]>;
+  agent_closed_30d: number;
+}
