@@ -1717,3 +1717,41 @@ class WorkspaceOverviewOut(BaseModel):
     projects: list[ProjectCardOut]
     people: list[PersonLinkOut] = Field(default_factory=list)
     truncated: bool = False
+
+
+class UsageStageOut(BaseModel):
+    stage: str
+    runs: int
+    model: str
+    tokens: int
+
+
+class UsageSourceOut(BaseModel):
+    source: Literal["managed", "byo"]
+    provider: str | None = None
+    runs: int
+    tokens: int
+    today_tokens: int
+    daily_budget: int | None = None
+    by_stage: list[UsageStageOut] = Field(default_factory=list)
+
+
+class DisciplineOut(BaseModel):
+    resolved: int
+    open: int
+    expired_30d: int
+    median_hours_to_decide: float | None = None
+    chains_verified: int
+    chains_total: int
+
+
+class ProjectGovernanceOut(BaseModel):
+    project_id: str
+    name: str
+    checks: list[ProjectCheckOut]
+
+
+class GovernanceReportOut(BaseModel):
+    usage: list[UsageSourceOut]
+    discipline: DisciplineOut
+    projects: list[ProjectGovernanceOut]

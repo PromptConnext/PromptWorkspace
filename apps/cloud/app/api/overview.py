@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api._guards import require_admin, require_workspace
 from app.db.repository import Repository
 from app.delivery.ledger import append_receipt
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
+    GovernanceReportOut,
+    ProjectGovernanceOut,
     ReceiptDraft,
     WorkspaceGovernance,
     WorkspaceGovernanceUpdate,
@@ -16,6 +20,8 @@ from app.models.schemas import (
     utcnow,
 )
 from app.overview.cards import build_card
+from app.overview.checks import run_checks
+from app.overview.report import build_discipline, build_usage
 from app.policies.scope import validate_scope
 
 router = APIRouter(tags=["overview"])
@@ -129,3 +135,46 @@ def put_governance(
             ),
         )
     return saved
+
+
+@router.get("/workspaces/{workspace_id}/governance/report", response_model=GovernanceReportOut)
+def get_governance_report(
+    workspace_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> GovernanceReportOut:
+    """Admin-only: 30-day model usage per source plus decision and receipt discipline."""
+    require_admin(repo, workspace_id, user)
+    now = utcnow()
+    runs = repo.list_generation_runs(workspace_id, now - timedelta(days=30))
+    connection = repo.get_model_connection(workspace_id)
+    usage = build_usage(
+        runs,
+        now,
+        managed_budget=request.app.state.settings.managed_daily_token_budget,
+        byo_budget=connection.daily_token_budget if connection else None,
+        byo_provider=connection.provider if connection else None,
+    )
+    governance = repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
+        workspace_id
+    )
+    decisions = []
+    chains = []
+    per_project = []
+    for p in repo.list_projects_by_workspace(workspace_id):
+        ds = repo.list_decisions(p.id)
+        decisions.extend(ds)
+        chains.append(repo.list_receipts(p.id))
+        per_project.append(
+            ProjectGovernanceOut(
+                project_id=p.id,
+                name=p.name,
+                checks=run_checks(p, repo.list_project_roles(p.id), ds, governance, now),
+            )
+        )
+    return GovernanceReportOut(
+        usage=usage,
+        discipline=build_discipline(decisions, chains, now),
+        projects=per_project,
+    )
