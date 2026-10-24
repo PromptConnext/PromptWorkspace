@@ -1284,6 +1284,8 @@ class StageDocument(BaseModel):
     # worker's duck-typed tombstone check (`node.deleted_at`), shared with
     # every other node_type, works unmodified for this one too.
     deleted_at: datetime | None = None
+    # Provenance: None for rows written before migration 0011.
+    source: Literal["generated", "manual", "agent"] | None = None
 
 
 class StageInputs(BaseModel):
@@ -1524,6 +1526,33 @@ class RepoAnalysis(BaseModel):
     status: RepoAnalysisStatus = "snapshot_ready"
     created_by: str
     updated_at: datetime = Field(default_factory=utcnow)
+    # Who wrote the baseline: the managed model ("cloud") or a local coding
+    # agent ("agent"), and which model the agent reported.
+    source: Literal["cloud", "agent"] = "cloud"
+    model: str | None = None
+
+
+DraftSource = Literal["agent"]
+StageDraftStatus = Literal["pending", "rejected"]
+
+
+class StageDraft(BaseModel):
+    """A planning document a local coding agent submitted, awaiting an
+    admin's decision. One row per (project, stage); a new submission replaces
+    the old one."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    workspace_id: str
+    stage: Literal["constitution", "specify", "plan", "tasks"]
+    markdown: str
+    source: DraftSource = "agent"
+    model: str | None = None
+    status: StageDraftStatus = "pending"
+    rejection_note: str | None = None
+    last_error: str | None = None
+    created_by: str
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class RepoAnalysisOut(BaseModel):

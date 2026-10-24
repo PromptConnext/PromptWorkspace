@@ -56,6 +56,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageDraft,
     StageInputs,
     Task,
     TaskLink,
@@ -864,6 +865,22 @@ class Repository(abc.ABC):
         """Replace the project's one current analysis. `updated_at` is stamped
         here, not trusted from the caller."""
 
+    # -- agent planning drafts -------------------------------------------- #
+    @abc.abstractmethod
+    def get_stage_draft(self, project_id: str, stage: str) -> StageDraft | None: ...
+
+    @abc.abstractmethod
+    def list_stage_drafts(self, project_id: str) -> list[StageDraft]: ...
+
+    @abc.abstractmethod
+    def upsert_stage_draft(self, draft: StageDraft) -> StageDraft:
+        """One row per (project, stage): replaces any existing draft wholesale,
+        id included."""
+
+    @abc.abstractmethod
+    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
+        """True if a draft existed."""
+
     # -- LINE notifications (plan 0032) ----------------------------------- #
     @abc.abstractmethod
     def get_project_line_link(self, project_id: str) -> ProjectLineLink | None: ...
@@ -942,6 +959,7 @@ class InMemoryRepository(Repository):
         self._receipts: dict[str, list[Receipt]] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
+        self._stage_drafts: dict[tuple[str, str], StageDraft] = {}
         # project_id -> link; code -> pending code (plan 0032)
         self._line_links: dict[str, ProjectLineLink] = {}
         self._line_codes: dict[str, LineLinkCode] = {}
@@ -2061,6 +2079,23 @@ class InMemoryRepository(Repository):
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
         self._repo_analyses[analysis.project_id] = stored
         return copy.deepcopy(stored)
+
+    def get_stage_draft(self, project_id: str, stage: str) -> StageDraft | None:
+        draft = self._stage_drafts.get((project_id, stage))
+        return copy.deepcopy(draft) if draft else None
+
+    def list_stage_drafts(self, project_id: str) -> list[StageDraft]:
+        return [
+            copy.deepcopy(d) for (pid, _), d in self._stage_drafts.items() if pid == project_id
+        ]
+
+    def upsert_stage_draft(self, draft: StageDraft) -> StageDraft:
+        stored = draft.model_copy(deep=True)
+        self._stage_drafts[(draft.project_id, draft.stage)] = stored
+        return copy.deepcopy(stored)
+
+    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
+        return self._stage_drafts.pop((project_id, stage), None) is not None
 
     def get_project_line_link(self, project_id: str) -> ProjectLineLink | None:
         link = self._line_links.get(project_id)

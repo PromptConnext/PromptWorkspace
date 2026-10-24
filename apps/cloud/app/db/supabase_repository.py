@@ -73,6 +73,7 @@ from app.models.schemas import (
     Role,
     SpecDocument,
     StageDocument,
+    StageDraft,
     StageInputs,
     Task,
     TaskLink,
@@ -143,6 +144,7 @@ _MISSING_COLUMN_CODES = frozenset({"PGRST204", "42703"})
 # Postgres unique_violation: a receipt insert that lost a seq / decision-event race.
 _UNIQUE_VIOLATION = "23505"
 _REPO_ANALYSES = "pw_repo_analyses"
+_STAGE_DRAFTS = "pw_stage_drafts"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
 _LINE_LINKS = "pw_project_line_links"
 _LINE_CODES = "pw_line_link_codes"
@@ -206,6 +208,9 @@ _SERVICE_ONLY_TABLES = frozenset(
         # customer's source and the admin-only baseline — the rule that only
         # an admin analyses or edits lives in app/api/repo_analysis.py alone.
         "pw_repo_analyses",
+        # Migration 0011: born service-only. Agent-submitted drafts; every
+        # rule lives in app/api/stage_drafts.py.
+        "pw_stage_drafts",
         # Migration 0003: born service-only like pw_stage_documents ended up.
         # The admin-only rule for constitution/plan answers lives in
         # app/api/_guards.py::require_stage_access alone.
@@ -1967,6 +1972,37 @@ class SupabaseRepository(Repository):
         stored = analysis.model_copy(deep=True, update={"updated_at": utcnow()})
         self._table(_REPO_ANALYSES).upsert(_dump(stored), on_conflict="project_id").execute()
         return stored
+
+    def get_stage_draft(self, project_id: str, stage: str) -> StageDraft | None:
+        res = (
+            self._table(_STAGE_DRAFTS)
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("stage", stage)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return StageDraft(**rows[0]) if rows else None
+
+    def list_stage_drafts(self, project_id: str) -> list[StageDraft]:
+        res = self._table(_STAGE_DRAFTS).select("*").eq("project_id", project_id).execute()
+        return [StageDraft(**row) for row in res.data or []]
+
+    def upsert_stage_draft(self, draft: StageDraft) -> StageDraft:
+        # on_conflict replaces the row wholesale, id included.
+        self._table(_STAGE_DRAFTS).upsert(_dump(draft), on_conflict="project_id,stage").execute()
+        return draft
+
+    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
+        res = (
+            self._table(_STAGE_DRAFTS)
+            .delete()
+            .eq("project_id", project_id)
+            .eq("stage", stage)
+            .execute()
+        )
+        return bool(res.data)
 
     # -- LINE notifications (plan 0032) ----------------------------------- #
     def get_project_line_link(self, project_id: str) -> ProjectLineLink | None:
