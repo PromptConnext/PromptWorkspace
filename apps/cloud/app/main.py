@@ -80,6 +80,7 @@ def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
     settings.require_valid_encryption_key()
     settings.require_auth()
+    settings.require_mcp()
     for warning in settings.require_production_safety():
         logger.warning(warning)
     if settings.data_backend == "supabase":
