@@ -73,8 +73,13 @@ const ASSIGNED = {
 };
 
 /** Initialise a client with `clientInfo`, close a task, and hand back the
- *  artifact the fake cloud received. */
-async function artifactFor(clientInfo: { name: string; version: string }): Promise<Record<string, unknown>> {
+ *  artifact the fake cloud received. `failFirst` answers the first PATCH with a
+ *  503 so the write is queued; the returned artifact is then the one a later
+ *  flush sent. */
+async function artifactFor(
+  clientInfo: { name: string; version: string },
+  failFirst = false,
+): Promise<Record<string, unknown>> {
   const bodies: Record<string, unknown>[] = [];
   const http = createHttpServer((req, res) => {
     res.setHeader("content-type", "application/json");
@@ -83,6 +88,11 @@ async function artifactFor(clientInfo: { name: string; version: string }): Promi
     req.on("end", () => {
       if (req.method === "PATCH") {
         bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        if (failFirst && bodies.length === 1) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ detail: "down" }));
+          return;
+        }
         res.end(JSON.stringify({ ...TASK, status: "implemented" }));
       } else if ((req.url ?? "").startsWith("/me/tasks")) {
         res.end(JSON.stringify([ASSIGNED]));
@@ -121,6 +131,14 @@ async function artifactFor(clientInfo: { name: string; version: string }): Promi
       },
     });
     assert.notEqual((result as { isError?: boolean }).isError, true);
+    if (failFirst) {
+      assert.equal(bodies.length, 1);
+      assert.equal((await writer.pending()).size, 1);
+      // A fresh entry is due at once, so one flush resends it.
+      await writer.flush();
+      assert.equal(bodies.length, 2);
+      return bodies[1].artifact as Record<string, unknown>;
+    }
     assert.equal(bodies.length, 1);
     return bodies[0].artifact as Record<string, unknown>;
   } finally {
@@ -139,4 +157,16 @@ test("close_task names the MCP client that initialised the session", async () =>
 test("close_task falls back to plain `mcp` when the client sent no name", async () => {
   const artifact = await artifactFor({ name: "", version: "1" });
   assert.deepEqual(artifact.agent, { client: "mcp" });
+});
+
+test("a client name over 59 characters is cut so the cloud does not refuse the close", async () => {
+  const artifact = await artifactFor({ name: "n".repeat(100), version: "1" });
+  const client = (artifact.agent as { client: string }).client;
+  assert.equal(client.length, 64);
+  assert.ok(client.startsWith("mcp:nnn"));
+});
+
+test("a write queued after a 5xx carries the agent, and the flush sends it", async () => {
+  const artifact = await artifactFor({ name: "cursor", version: "1" }, true);
+  assert.deepEqual(artifact.agent, { client: "mcp:cursor" });
 });

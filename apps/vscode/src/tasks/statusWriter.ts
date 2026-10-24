@@ -59,7 +59,8 @@ export class StatusWriter {
     const previous = this.store.applyLocalStatus(req.taskId, req.status);
     const artifact = req.artifact && {
       ...req.artifact,
-      agent: { client: `vscode:${this.appName}` },
+      // The cloud rejects `agent.client` over 64 characters.
+      agent: { client: `vscode:${this.appName}`.slice(0, 64) },
     };
     try {
       await this.client.patchTaskStatus(req.projectId, req.taskId, {

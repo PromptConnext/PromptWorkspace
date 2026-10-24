@@ -123,7 +123,9 @@ export class StatusWriter {
 
   private withAgent(artifact: StatusArtifact | undefined): StatusArtifact | undefined {
     if (!artifact) return artifact;
-    const client = this.clientName ? `mcp:${this.clientName}` : "mcp";
+    // The cloud rejects `agent.client` over 64 characters, and the name comes
+    // from an arbitrary third party; a 422 here would drop the whole close.
+    const client = (this.clientName ? `mcp:${this.clientName}` : "mcp").slice(0, 64);
     return { ...artifact, agent: { client } };
   }
 

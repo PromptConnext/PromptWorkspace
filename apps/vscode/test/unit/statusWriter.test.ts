@@ -78,3 +78,16 @@ test("a write with no artifact stays without one", async () => {
   await writer.setStatus({ projectId: "p1", taskId: "t1", status: "in_progress" });
   assert.equal(patches[0].update.artifact, undefined);
 });
+
+test("an over-long app name is cut to the cloud's 64-character limit", async () => {
+  const { writer, patches } = await writerFor("x".repeat(100));
+  await writer.setStatus({
+    projectId: "p1",
+    taskId: "t1",
+    status: "implemented",
+    artifact: { commit_sha: "abc123", uri: "git: T1", kind: "code" },
+  });
+  const agent = (patches[0].update.artifact as { agent: { client: string } }).agent;
+  assert.equal(agent.client.length, 64);
+  assert.ok(agent.client.startsWith("vscode:xxx"));
+});
