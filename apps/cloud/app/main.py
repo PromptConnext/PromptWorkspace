@@ -54,7 +54,7 @@ from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
 from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.queue import EmbedQueue, embed_worker_loop
-from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter, default_rules
 from app.requestlog import REQUEST_ID_HEADER, RequestIdMiddleware, configure_logging
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
@@ -308,10 +308,7 @@ def create_app() -> FastAPI:
     if settings.rate_limit_enabled:
         app.add_middleware(
             RateLimitMiddleware,
-            limiter=TokenBucketLimiter(
-                per_minute=settings.rate_limit_per_minute,
-                burst=settings.rate_limit_burst,
-            ),
+            rules=default_rules(settings),
         )
     # Added last, so it is the outermost middleware: Starlette prepends, and
     # the first entry wraps the rest. Everything below it — the rate limiter's
