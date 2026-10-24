@@ -452,8 +452,8 @@ export function createRepository(
 }
 
 // Plan 0027. Member-readable and answers `status: "none"` rather than 404
-// when the repository was never analyzed. The analysis itself is a POST that
-// streams (useRepoAnalysis.ts), so it has no wrapper here.
+// when the repository was never analyzed. The baseline is written by the
+// user's local agent, so there is no analyze call here.
 export function getRepoAnalysis(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<RepoAnalysisOut>(`/projects/${projectId}/repo-analysis`, authHeaders);
 }

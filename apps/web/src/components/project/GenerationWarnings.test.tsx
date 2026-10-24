@@ -75,4 +75,21 @@ describe("GenerationWarnings", () => {
       "Task numbers missing from the generated list: T029, T031. Regenerate, or add them by hand.",
     );
   });
+
+  it("renders the no_task_lines and empty_document warnings", () => {
+    render(
+      <GenerationWarnings
+        warnings={[
+          { code: "no_task_lines", items: [] },
+          { code: "empty_document", items: [] },
+        ]}
+      />,
+    );
+    const notices = screen.getAllByRole("status");
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toHaveTextContent(
+      "No task lines were found. Tasks need - [ ] T001 title lines under ## Phase N: headings.",
+    );
+    expect(notices[1]).toHaveTextContent("The document came back empty after parsing.");
+  });
 });

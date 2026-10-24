@@ -18,27 +18,6 @@ export const CODEBASE_ANALYSIS_ANCHOR = "codebase-analysis";
 // CreateRepositoryPanel.tsx's DETAIL_MESSAGES.
 export const ANALYSIS_ERROR_TEXT: Record<string, string> = {
   admin_required: "Only a workspace admin (the Tech Lead) can analyze the repository.",
-  repo_not_imported: "This project wasn't imported from a repository, so there is nothing to analyze.",
-  repo_already_created:
-    "The repository has already been created for this project — the analysis only matters before that.",
-  github_not_configured:
-    "No GitHub connection for this workspace. A workspace admin needs to connect one in workspace settings.",
-  repo_url_unrecognized: "The imported repository's address isn't a GitHub repository PromptWorkspace recognises.",
-  repo_owner_out_of_scope:
-    "The imported repository isn't under the workspace's connected GitHub account any more — the " +
-    "connection may have been changed since the import.",
-  github_repo_not_in_token_scope:
-    "The workspace's GitHub token can't read this repository. A workspace admin needs to add it to " +
-    "the token's repository access and reissue it.",
-  imported_repo_not_found:
-    "The imported repository can't be found on GitHub — it may have been renamed, moved or deleted.",
-  github_unreachable: "GitHub couldn't be reached. Try again in a moment.",
-  model_connection_not_configured:
-    "No model is configured for this workspace, so the analysis can't be written.",
-  managed_tier_rate_limited: "The shared model is busy right now — try again in a moment.",
-  daily_token_budget_exceeded:
-    "This workspace hit its daily generation budget. Try again tomorrow, or write the baseline " +
-    "below by hand — a saved baseline unlocks planning just the same.",
   repo_analysis_not_found: "There is no baseline to save yet — your coding agent submits it with the start_planning flow.",
 };
 

@@ -10,9 +10,22 @@ export function GenerationWarnings({ warnings }: { warnings?: GenerationWarning[
   const missingItems = warnings?.flatMap((w) => (w.code === "missing_task_numbers" ? w.items : []));
   const hasUnmarked = !!unmarkedItems && unmarkedItems.length > 0;
   const hasMissing = !!missingItems && missingItems.length > 0;
-  if (!hasUnmarked && !hasMissing) return null;
+  const noTaskLines = !!warnings?.some((w) => w.code === "no_task_lines");
+  const emptyDocument = !!warnings?.some((w) => w.code === "empty_document");
+  if (!hasUnmarked && !hasMissing && !noTaskLines && !emptyDocument) return null;
   return (
     <>
+      {noTaskLines && (
+        <div role="status" className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-900">
+          No task lines were found. Tasks need <code>- [ ] T001 title</code> lines under{" "}
+          <code>## Phase N:</code> headings.
+        </div>
+      )}
+      {emptyDocument && (
+        <div role="status" className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-900">
+          The document came back empty after parsing.
+        </div>
+      )}
       {hasMissing && missingItems && (
         <div role="status" className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-900">
           Task numbers missing from the generated list: {missingItems.join(", ")}. Regenerate, or

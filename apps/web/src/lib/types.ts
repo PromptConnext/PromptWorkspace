@@ -397,7 +397,11 @@ export type ProjectionState = "current" | "pending" | "failed" | "not_applicable
 export type GenerationWarning =
   | { code: "unmarked_new_paths"; items: { ref: string; path: string }[] }
   // The generated task list skips numbers between its first and last ref.
-  | { code: "missing_task_numbers"; items: string[] };
+  | { code: "missing_task_numbers"; items: string[] }
+  // The generated document held no `- [ ] T001 title` task lines.
+  | { code: "no_task_lines"; items: [] }
+  // The document was empty after parsing.
+  | { code: "empty_document"; items: [] };
 
 export interface GenerateDoneEvent {
   stage: StageKind;
@@ -554,11 +558,6 @@ export interface StageDraftOut {
   created_by: string;
   created_at: string;
   warnings: StageDraftWarning[];
-}
-
-export interface RepoAnalysisDoneEvent extends RepoAnalysisOut {
-  // Stored and usable, but the model stopped at its output limit.
-  truncated: boolean;
 }
 
 /** GET /projects/{id}/repository/seed-preview (plan 0027 M4): the seed
