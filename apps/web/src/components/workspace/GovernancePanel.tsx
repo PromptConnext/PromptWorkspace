@@ -201,7 +201,9 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
               <li key={p.project_id} className="text-sm">
                 <span className="font-medium text-slate-900">{p.name}</span>
                 {failing.length === 0 ? (
-                  <span className="ml-2 text-xs text-green-700">Follows workspace rules</span>
+                  <span className="ml-2 text-xs text-green-700">
+                    Follows workspace rules (repository not checked here)
+                  </span>
                 ) : (
                   <ul className="mt-1 space-y-0.5">
                     {failing.map((c) => {

@@ -200,10 +200,17 @@ describe("TaskDrawer", () => {
     expect(screen.getByText("Closed via Cursor (editor)")).toBeInTheDocument();
   });
 
-  it("artifact without agent reads Closed on the web", () => {
-    const a = { ...graph.artifacts[0], agent: null };
+  it("commit artifact without agent reads Closed by a push", () => {
+    const a = { ...graph.artifacts[0], agent: null, commit_sha: "abcdef1234567" };
     render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
-    expect(screen.getByText("Closed on the web")).toBeInTheDocument();
+    expect(screen.getByText("Closed by a push")).toBeInTheDocument();
+    expect(screen.queryByText("Closed on the web")).toBeNull();
+  });
+
+  it("non-commit artifact without agent shows no label", () => {
+    const a = { ...graph.artifacts[0], agent: null, commit_sha: null };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.queryByText(/^Closed /)).toBeNull();
   });
 
   it("links commit artifacts by short sha in a new tab", () => {

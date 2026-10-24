@@ -36,6 +36,7 @@ const FACTS = {
     { project_id: "p2", name: "Beta", hats: ["tech_steward"] },
   ],
   overdue: [],
+  expired: [{ project_id: "p1", name: "Alpha", count: 1 }],
   by_runtime: { node: ["Alpha", "Beta"] },
   agent_closed_30d: 7,
 };
@@ -71,6 +72,7 @@ describe("AskBox", () => {
     expect(screen.getByText("Beta has no tech steward.")).toBeInTheDocument();
     expect(screen.getByText("Projects on node: Alpha, Beta.")).toBeInTheDocument();
     expect(screen.getByText("No decisions are overdue.")).toBeInTheDocument();
+    expect(screen.getByText("1 decision expired without an answer in Alpha.")).toBeInTheDocument();
     expect(
       screen.getByText("Agents closed 7 tasks in the last 30 days."),
     ).toBeInTheDocument();

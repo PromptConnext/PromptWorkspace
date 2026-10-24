@@ -90,7 +90,7 @@ describe("GovernancePanel", () => {
       ["Open decisions", "/w/w1/p/p1?tab=decisions"],
     ]);
     expect(screen.getByText("Beta")).toBeInTheDocument();
-    expect(screen.getByText("Follows workspace rules")).toBeInTheDocument();
+    expect(screen.getByText("Follows workspace rules (repository not checked here)")).toBeInTheDocument();
   });
 
   it("Applies to N projects. M projects use their own scope. names the deviating projects", () => {

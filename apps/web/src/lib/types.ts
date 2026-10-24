@@ -904,6 +904,7 @@ export interface WorkspaceFacts {
   }[];
   projects_missing_hats: { project_id: string; name: string; hats: string[] }[];
   overdue: { project_id: string; name: string; count: number }[];
+  expired: { project_id: string; name: string; count: number }[];
   by_runtime: Record<string, string[]>;
   agent_closed_30d: number;
 }

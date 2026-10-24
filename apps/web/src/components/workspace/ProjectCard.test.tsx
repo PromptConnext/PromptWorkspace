@@ -212,6 +212,39 @@ describe("ProjectCard", () => {
     expect(screen.queryByText(DRIFT)).toBeNull();
   });
 
+  it("while docs-status loads the governance line is neutral Checking repository rules…", () => {
+    useCloudGet.mockImplementation((path: string | null) =>
+      path === docsPath
+        ? { data: null, error: null, loading: true }
+        : { data: null, error: null, loading: false },
+    );
+    renderCard(card());
+    expect(screen.getByText("Checking repository rules…").className).toContain("slate");
+    expect(screen.queryByText("Follows workspace rules")).toBeNull();
+  });
+
+  it("a failed docs-status read says Could not check the repository rules in amber", () => {
+    useCloudGet.mockImplementation((path: string | null) =>
+      path === docsPath
+        ? { data: null, error: "boom", loading: false }
+        : { data: null, error: null, loading: false },
+    );
+    renderCard(card());
+    expect(screen.getByText("Could not check the repository rules").className).toContain("amber");
+    expect(screen.queryByText("Follows workspace rules")).toBeNull();
+  });
+
+  it("a server failing check outranks the loading state", () => {
+    useCloudGet.mockImplementation((path: string | null) =>
+      path === docsPath
+        ? { data: null, error: null, loading: true }
+        : { data: null, error: null, loading: false },
+    );
+    renderCard(card({ checks: [{ id: "b", ok: false, text: "No tests run on pull requests." }] }));
+    expect(screen.getByText("No tests run on pull requests.")).toBeInTheDocument();
+    expect(screen.queryByText("Checking repository rules…")).toBeNull();
+  });
+
   it("planning project does not fetch docs-status", () => {
     renderCard(card({ lifecycle_status: "planning" }));
     expect(useCloudGet).toHaveBeenCalledWith(docsPath, false);

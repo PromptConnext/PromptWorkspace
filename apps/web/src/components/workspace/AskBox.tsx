@@ -28,6 +28,9 @@ export function factSentences(f: WorkspaceFacts): string[] {
   } else {
     out.push("No decisions are overdue.");
   }
+  for (const x of f.expired ?? []) {
+    out.push(`${plural(x.count, "decision", "decisions")} expired without an answer in ${x.name}.`);
+  }
   for (const [runtime, names] of Object.entries(f.by_runtime)) {
     out.push(`Projects on ${runtime}: ${names.join(", ")}.`);
   }

@@ -68,10 +68,14 @@ export function ProjectCard({
   const { open, overdue, expired_30d } = card.decisions;
   const liveUrl = safeWebUrl(card.live_url);
   // Lazy: only a repository-backed project that requires seeded rules can drift.
+  const watchDocs = card.lifecycle_status === "repo_created" && card.policy.require_seeded_rules;
   const docs = useCloudGet<RepositoryDocsStatus>(
     `/projects/${card.id}/repository/docs-status`,
-    card.lifecycle_status === "repo_created" && card.policy.require_seeded_rules,
+    watchDocs,
   );
+  // The hook reports loading=true while disabled, so gate on watchDocs.
+  const checkingDocs = watchDocs && docs.loading;
+  const docsFailed = watchDocs && !!docs.error && !docs.data;
   const drifted = !!docs.data?.files.some((f) => f.state !== "current");
   // Server checks rank first; drift only speaks when none of them fail.
   const failingText =
@@ -186,9 +190,17 @@ export function ProjectCard({
         </p>
       )}
 
-      <p className={`flex items-start gap-1.5 text-xs ${failingText ? "text-amber-700" : "text-emerald-700"}`}>
+      <p
+        className={`flex items-start gap-1.5 text-xs ${
+          failingText || docsFailed ? "text-amber-700" : checkingDocs ? "text-slate-500" : "text-emerald-700"
+        }`}
+      >
         {failingText ? (
           <span className="text-amber-700">{failingText}</span>
+        ) : docsFailed ? (
+          <span className="text-amber-700">Could not check the repository rules</span>
+        ) : checkingDocs ? (
+          <span className="text-slate-500">Checking repository rules…</span>
         ) : (
           <>
             <span aria-hidden>✓</span>
