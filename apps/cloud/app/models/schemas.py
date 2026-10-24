@@ -17,7 +17,15 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    AnyUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 
 def new_id() -> str:
@@ -1732,6 +1740,32 @@ class OAuthFamily(BaseModel):
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
 
+
+
+class DcrRegistrationIn(BaseModel):
+    """RFC 7591 client metadata accepted by `POST /oauth/register`. Public
+    clients only: no secret is ever issued or stored. The route reports
+    validation failures as RFC 7591 §3.2.2 errors, never as 422."""
+
+    redirect_uris: list[AnyUrl] = Field(min_length=1, max_length=10)
+    client_name: str = Field("", max_length=120)
+    client_uri: AnyHttpUrl | None = None
+    logo_uri: AnyHttpUrl | None = None
+    application_type: Literal["web", "native"] | None = None
+    token_endpoint_auth_method: Literal["none"] = "none"
+    grant_types: list[str] | None = None
+    response_types: list[str] | None = None
+    scope: str | None = None
+
+
+class DcrRegistrationOut(BaseModel):
+    client_id: str
+    client_id_issued_at: int
+    redirect_uris: list[str]
+    client_name: str
+    token_endpoint_auth_method: Literal["none"]
+    grant_types: list[str]
+    response_types: list[str]
 
 
 class RepoAnalysisOut(BaseModel):
