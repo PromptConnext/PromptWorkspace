@@ -36,7 +36,7 @@ const FACTS = {
     { project_id: "p2", name: "Beta", hats: ["tech_steward"] },
   ],
   overdue: [],
-  by_runtime: {},
+  by_runtime: { node: ["Alpha", "Beta"] },
   agent_closed_30d: 7,
 };
 
@@ -45,12 +45,12 @@ describe("AskBox", () => {
     const fetchMock = mockStream("event: facts\ndata: " + JSON.stringify(FACTS), "event: done\ndata: {}");
     render(<AskBox workspaceId="w1" />);
     expect(screen.getByLabelText("Ask about this workspace")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "What is waiting on me?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Who is waiting on me?" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Which projects have no tech steward?" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "What did agents close this month?" }),
+      screen.getByRole("button", { name: "What did agents close this week?" }),
     ).toBeInTheDocument();
 
     const input = screen.getByLabelText("Ask about this workspace");
@@ -65,9 +65,11 @@ describe("AskBox", () => {
   it("renders facts as sentences when no delta arrives", async () => {
     mockStream("event: facts\ndata: " + JSON.stringify(FACTS), "event: done\ndata: {}");
     render(<AskBox workspaceId="w1" />);
-    fireEvent.click(screen.getByRole("button", { name: "What is waiting on me?" }));
+    fireEvent.click(screen.getByRole("button", { name: "Who is waiting on me?" }));
     expect(await screen.findByText("You have 2 decisions waiting.")).toBeInTheDocument();
-    expect(screen.getByText("Projects with no tech steward: Alpha, Beta.")).toBeInTheDocument();
+    expect(screen.getByText("Alpha has no tech steward.")).toBeInTheDocument();
+    expect(screen.getByText("Beta has no tech steward.")).toBeInTheDocument();
+    expect(screen.getByText("Projects on node: Alpha, Beta.")).toBeInTheDocument();
     expect(screen.getByText("No decisions are overdue.")).toBeInTheDocument();
     expect(
       screen.getByText("Agents closed 7 tasks in the last 30 days."),
@@ -82,7 +84,7 @@ describe("AskBox", () => {
       "event: done\ndata: {}",
     );
     render(<AskBox workspaceId="w1" />);
-    fireEvent.click(screen.getByRole("button", { name: "What is waiting on me?" }));
+    fireEvent.click(screen.getByRole("button", { name: "Who is waiting on me?" }));
     expect(await screen.findByText("Two decisions are waiting.")).toBeInTheDocument();
     expect(screen.queryByText("You have 2 decisions waiting.")).not.toBeInTheDocument();
   });

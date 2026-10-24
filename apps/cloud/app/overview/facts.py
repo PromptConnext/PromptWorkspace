@@ -20,10 +20,11 @@ __all__ = ["WorkspaceFacts", "compute_workspace_facts", "facts_to_text"]
 
 
 def compute_workspace_facts(
-    overview: WorkspaceOverviewOut, user_id: str, my_decisions: list[Decision]
+    overview: WorkspaceOverviewOut, my_decisions: list[Decision]
 ) -> WorkspaceFacts:
-    # `user_id` is the caller; `my_decisions` is already limited to what is
-    # routed to them, so it is only used to scope the facts to one person.
+    # `my_decisions` comes from collect_my_decisions, which already keeps only
+    # decisions the caller can resolve (their hat, or admin), so no user id is
+    # needed here.
     names = {p.id: p.name for p in overview.projects}
     mine = [
         AskDecisionFact(

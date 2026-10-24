@@ -7,6 +7,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.ask import ASK_SYSTEM_PROMPT
 from app.main import create_app
 from app.models.schemas import (
     Decision,
@@ -60,10 +61,10 @@ def _decision(project_id: str) -> Decision:
 
 def test_facts_my_open_decisions_only_routed_to_me():
     ov = _overview([_card("p1", "Alpha", {"business_owner": "a", "tech_steward": "a"})])
-    facts = compute_workspace_facts(ov, "alice", [_decision("p1")])
+    facts = compute_workspace_facts(ov, [_decision("p1")])
     assert [d.project_name for d in facts.my_open_decisions] == ["Alpha"]
     assert "1 decision waiting" in facts_to_text(facts)
-    empty = compute_workspace_facts(ov, "bob", [])
+    empty = compute_workspace_facts(ov, [])
     assert empty.my_open_decisions == []
     assert "no decisions waiting" in facts_to_text(empty)
 
@@ -76,7 +77,7 @@ def test_facts_projects_missing_hats():
             _card("p2", "Beta", {"business_owner": "a", "tech_steward": "b"}, runtime="python"),
         ]
     )
-    facts = compute_workspace_facts(ov, "alice", [])
+    facts = compute_workspace_facts(ov, [])
     assert [(p.name, p.hats) for p in facts.projects_missing_hats] == [
         ("Alpha", ["tech_steward"])
     ]
@@ -136,3 +137,58 @@ def test_ask_rejects_long_question(client: TestClient, workspace: str):
         f"/workspaces/{workspace}/ask", json={"question": "x" * 501}, headers=ALICE
     )
     assert res.status_code == 422
+
+
+def _managed(client: TestClient, budget: int = 20_000) -> None:
+    client.app.state.managed_connection = ModelConnection(
+        workspace_id="managed", provider="typhoon", base_url="https://x/v1", model="m",
+        embed_model="", embed_dim=0, secret_ref="unused", daily_token_budget=budget,
+        created_by="platform", source="managed",
+    )
+    client.app.state.secret_store.decrypt = lambda _ref: "k"
+
+
+class _Capture:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str | None]] = []
+
+    async def stream_chat(self, context, question, model, api_key, base_url, system_prompt=None):
+        self.calls.append((context, question, system_prompt))
+        yield "ok"
+
+
+def test_ask_sends_only_facts_and_the_exact_system_prompt(client: TestClient, workspace: str):
+    pid = client.post(
+        "/projects", json={"name": "Alpha", "workspace_id": workspace}, headers=ALICE
+    ).json()["id"]
+    client.app.state.repository.save_decision(
+        Decision(
+            project_id=pid, workspace_id=workspace, kind="plan_approval",
+            title="SECRET-TITLE", subject_stage="specify", subject_hash="h",
+            subject_content="SECRET-DOC-TEXT", routed_hat="tech_steward",
+            requested_by="bob",
+        )
+    )
+    cap = _Capture()
+    client.app.state.chat_provider = cap
+    _managed(client)
+    res = client.post(f"/workspaces/{workspace}/ask", json={"question": "q?"}, headers=ALICE)
+    assert res.status_code == 200
+    [(context, question, system_prompt)] = cap.calls
+    assert system_prompt == ASK_SYSTEM_PROMPT
+    assert question == "q?"
+    facts = _events(res.text)[0][1]
+    from app.models.schemas import WorkspaceFacts
+    assert context == facts_to_text(WorkspaceFacts.model_validate_json(facts))
+    assert "plan_approval" in context
+    assert "SECRET" not in context and "SECRET" not in facts
+
+
+def test_ask_with_exhausted_budget_streams_facts_only(client: TestClient, workspace: str):
+    _managed(client, budget=100)
+    client.app.state.chat_provider = _Capture()
+    client.app.state.token_budget.record(workspace, 100)
+    res = client.post(f"/workspaces/{workspace}/ask", json={"question": "q"}, headers=ALICE)
+    assert [e for e, _ in _events(res.text)] == ["facts", "done"]
+    assert client.app.state.repository._generation_runs == {}
+    assert client.app.state.chat_provider.calls == []

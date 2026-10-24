@@ -8,6 +8,7 @@ answer exists even with no model connection or an exhausted budget.
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -25,6 +26,7 @@ from app.rag.chat import HttpChatProvider
 from app.rag.models import resolve_assistant_models
 
 router = APIRouter(tags=["ask"])
+log = logging.getLogger(__name__)
 
 ASK_SYSTEM_PROMPT = (
     "You answer questions about a software workspace using only the facts provided. "
@@ -48,7 +50,7 @@ async def ask_workspace(
     require_workspace(repo, workspace_id, user)
     overview = build_overview(repo, workspace_id, user)
     mine = [i.decision for i in collect_my_decisions(repo, user, workspace_id)]
-    facts = compute_workspace_facts(overview, user.id, mine)
+    facts = compute_workspace_facts(overview, mine)
     context = facts_to_text(facts)
 
     managed_chat = getattr(request.app.state, "managed_connection", None)
@@ -72,7 +74,7 @@ async def ask_workspace(
                 )
             )
             parts: list[str] = []
-            status = "succeeded"
+            status = "failed"
             try:
                 async for delta in chat_provider.stream_chat(
                     context,
@@ -84,17 +86,21 @@ async def ask_workspace(
                 ):
                     parts.append(delta)
                     yield f"data: {json.dumps({'delta': delta})}\n\n"
+                status = "succeeded"
             except Exception:
-                status = "failed"
-            prompt_tokens = estimate_tokens(context + body.question)
-            completion_tokens = estimate_tokens("".join(parts)) if parts else 0
-            budget.record(workspace_id, prompt_tokens + completion_tokens)
-            repo.update_generation_run(
-                run.id,
-                status=status,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
+                log.exception("ask:workspace provider failed")
+            finally:
+                # Runs on client disconnect too (CancelledError), so tokens
+                # already spent are still recorded and the run is closed.
+                prompt_tokens = estimate_tokens(context + body.question)
+                completion_tokens = estimate_tokens("".join(parts)) if parts else 0
+                budget.record(workspace_id, prompt_tokens + completion_tokens)
+                repo.update_generation_run(
+                    run.id,
+                    status=status,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
         yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

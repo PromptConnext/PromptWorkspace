@@ -5,9 +5,9 @@ import type { WorkspaceFacts } from "@/lib/types";
 import { useAskWorkspace } from "./useAskWorkspace";
 
 export const EXAMPLE_QUESTIONS = [
-  "What is waiting on me?",
+  "Who is waiting on me?",
   "Which projects have no tech steward?",
-  "What did agents close this month?",
+  "What did agents close this week?",
 ];
 
 function plural(n: number, one: string, many: string) {
@@ -18,11 +18,8 @@ export function factSentences(f: WorkspaceFacts): string[] {
   const out: string[] = [];
   const n = f.my_open_decisions.length;
   out.push(n ? `You have ${plural(n, "decision", "decisions")} waiting.` : "Nothing is waiting on you.");
-  const missing = f.projects_missing_hats;
-  if (missing.length) {
-    const hats = new Set(missing.flatMap((p) => p.hats));
-    const label = hats.size === 1 ? [...hats][0].replace(/_/g, " ") : "owner or tech steward";
-    out.push(`Projects with no ${label}: ${missing.map((p) => p.name).join(", ")}.`);
+  for (const p of f.projects_missing_hats) {
+    out.push(`${p.name} has no ${p.hats.map((h) => h.replace(/_/g, " ")).join(" or ")}.`);
   }
   if (f.overdue.length) {
     for (const o of f.overdue) {
@@ -30,6 +27,9 @@ export function factSentences(f: WorkspaceFacts): string[] {
     }
   } else {
     out.push("No decisions are overdue.");
+  }
+  for (const [runtime, names] of Object.entries(f.by_runtime)) {
+    out.push(`Projects on ${runtime}: ${names.join(", ")}.`);
   }
   out.push(`Agents closed ${plural(f.agent_closed_30d, "task", "tasks")} in the last 30 days.`);
   return out;
