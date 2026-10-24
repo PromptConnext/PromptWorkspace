@@ -1646,3 +1646,44 @@ class SyncDocsOut(BaseModel):
     pr_url: str
     branch: str
     files: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# Workspace overview and governance (plan 0033)
+# --------------------------------------------------------------------------- #
+class ProjectCheckOut(BaseModel):
+    id: str
+    ok: bool
+    text: str
+
+
+class ProjectCardOut(BaseModel):
+    id: str
+    name: str
+    lifecycle_status: str
+    live_url: str | None = None
+    updated_at: datetime
+    hats: dict[str, str | None]
+    contributors: list[str]
+    task_counts: dict[str, int]
+    decisions: dict[str, int]
+    stack: dict | None = None
+    policy: dict
+    checks: list[ProjectCheckOut]
+    agent_closed_30d: int = 0
+    last_activity_at: datetime
+
+
+class WorkspaceGovernance(BaseModel):
+    workspace_id: str
+    policy_scope: PolicyScope = Field(default_factory=PolicyScope)
+    required_hats: list[str] = Field(
+        default_factory=lambda: ["business_owner", "tech_steward"]
+    )
+    require_seeded_rules: bool = True
+    updated_by: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @classmethod
+    def default(cls, workspace_id: str) -> WorkspaceGovernance:
+        return cls(workspace_id=workspace_id)
