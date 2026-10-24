@@ -53,6 +53,8 @@ export interface Project {
   // that predates the field.
   repo_origin?: "imported" | "created" | null;
   policy_scope?: PolicyScope | null;
+  // Plan 0033. "workspace" while the project follows the workspace scope.
+  policy_scope_source?: "workspace" | "project";
   // ADR 0021. `deployment_config` is the Tech Lead's frozen input;
   // `deployment_state` is the server's current view, written only by the
   // signed GitHub webhook. Two fields, not one, because they have different
@@ -854,4 +856,18 @@ export interface WorkspaceOverview {
   members: WorkspaceMember[];
   projects: ProjectCard[];
   people: PersonLink[];
+}
+
+export interface WorkspaceGovernance {
+  workspace_id: string;
+  policy_scope: PolicyScope;
+  required_hats: string[];
+  require_seeded_rules: boolean;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface GovernanceReport {
+  // Usage and discipline are rendered by a later task; only `projects` is typed here.
+  projects: { project_id: string; name: string; checks: ProjectCheck[] }[];
 }
