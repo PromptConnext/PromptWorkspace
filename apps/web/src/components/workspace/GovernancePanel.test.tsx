@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernancePanel } from "./GovernancePanel";
 
 const refetch = vi.fn();
+const requestedPaths: string[] = [];
 const putGovernance = vi.fn();
 
 let GOV: Record<string, unknown> = {
@@ -38,9 +39,6 @@ const REPORT = {
 const card = (id: string, name: string, source: "workspace" | "project") => ({
   id, name, policy: { source, selected: [], require_seeded_rules: true },
 });
-const OVERVIEW = {
-  projects: [card("p1", "Alpha", "project"), card("p2", "Beta", "workspace"), card("p3", "Gamma", "workspace")],
-};
 const TEMPLATES = [
   { id: "gdpr", name: "GDPR", description: "EU rules.", body: "body" },
   { id: "thai-pdpa", name: "Thai PDPA", description: "Thai rules.", body: "body" },
@@ -48,10 +46,10 @@ const TEMPLATES = [
 
 vi.mock("@/lib/hooks", () => ({
   useCloudGet: (path: string) => {
+    requestedPaths.push(path);
     let data: unknown = null;
     if (path.endsWith("/governance/report")) data = REPORT;
     else if (path.endsWith("/governance")) data = GOV;
-    else if (path.endsWith("/overview")) data = OVERVIEW;
     else if (path === "/policy-templates") data = TEMPLATES;
     return { data, error: null, loading: false, refetch };
   },
@@ -68,12 +66,19 @@ vi.mock("next/link", () => ({
 
 const GOV_DEFAULT = { ...GOV };
 afterEach(() => {
+  requestedPaths.length = 0;
   GOV = { ...GOV_DEFAULT };
   cleanup();
   vi.resetAllMocks();
 });
 
 describe("GovernancePanel", () => {
+  it("never fetches the workspace overview", () => {
+    render(<GovernancePanel workspaceId="w1" />);
+    expect(requestedPaths.length).toBeGreaterThan(0);
+    expect(requestedPaths.some((p) => p.endsWith("/overview"))).toBe(false);
+  });
+
   it("renders the scope editor, two switches on by default, and a project row per project with its check sentences", () => {
     render(<GovernancePanel workspaceId="w1" />);
     expect(screen.getByText("AI governance")).toBeInTheDocument();

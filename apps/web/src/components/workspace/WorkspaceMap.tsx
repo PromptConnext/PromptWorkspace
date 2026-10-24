@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { memberFullName } from "@/components/project/MemberChip";
-import { avatarColor, initial } from "@/lib/identity";
+import { avatarColor } from "@/lib/identity";
 import type { WorkspaceOverview } from "@/lib/types";
 import { layoutGraph } from "./layout";
 import type { PositionedEdge } from "./layout";
@@ -160,7 +160,7 @@ export function WorkspaceMap({
                 <>
                   <circle className="shape" r={18} fill={fill} stroke="#fff" strokeWidth={2} />
                   <text textAnchor="middle" dy="0.35em" fontSize={14} fontWeight={600} fill={ink}>
-                    {m ? initial(m) : "?"}
+                    {m ? memberFullName(m).charAt(0).toUpperCase() : "?"}
                   </text>
                   <text y={32} textAnchor="middle" fontSize={11} fill="#475569">{label}</text>
                 </>

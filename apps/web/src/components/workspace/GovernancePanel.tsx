@@ -14,7 +14,6 @@ import type {
   PolicyTemplateOut,
   ProjectCheck,
   WorkspaceGovernance,
-  WorkspaceOverview,
 } from "@/lib/types";
 
 const OWNER_HATS = ["business_owner", "tech_steward"];
@@ -70,7 +69,6 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
   const { authHeaders } = useAuth();
   const governance = useCloudGet<WorkspaceGovernance>(`/workspaces/${workspaceId}/governance`);
   const report = useCloudGet<GovernanceReport>(`/workspaces/${workspaceId}/governance/report`);
-  const overview = useCloudGet<WorkspaceOverview>(`/workspaces/${workspaceId}/overview`);
   const templates = useCloudGet<PolicyTemplateOut[]>("/policy-templates");
 
   const [scope, setScope] = useState<PolicyScope | null>(null);
@@ -100,7 +98,6 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
       setStatus("saved");
       governance.refetch();
       report.refetch();
-      overview.refetch();
     } catch (err) {
       const message = (err as Error).message;
       setStatus("error");
