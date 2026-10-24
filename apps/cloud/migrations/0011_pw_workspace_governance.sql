@@ -9,7 +9,7 @@
 --
 -- SHAPE
 -- pw_workspace_governance: one row per workspace holding the policy scope
--- (selected policies plus free text), the hats required to approve, and
+-- (selected policies plus free text), the hats every project must have, and
 -- whether seeded rules are required. Written by workspace admins.
 -- pw_projects.policy_scope_source: 'workspace' or 'project', default
 -- 'project', so existing projects keep their own policy scope.

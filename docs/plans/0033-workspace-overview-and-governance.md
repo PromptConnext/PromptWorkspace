@@ -1,6 +1,6 @@
 # 0033: Workspace overview and AI governance, Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Status:** Implemented 2026-10-24 on `feature/workspace-overview` (M1 to M4, Tasks 1 to 21). Closing checklist pending the trust walkthrough.
 
@@ -645,6 +645,7 @@ git commit -am "docs: plan 0033 shipped; backlog row 24; deployment checklist 00
 | Run identity beyond `agent.client` (run id, role profile version, model on receipts) | D2 |
 | Thai UI strings for the new screens | With a web i18n decision |
 | Live updates on the map | Needs the presence backplane |
+| Batch the overview and report per-project reads (`list_project_roles`, `list_decisions`, `get_repo_analysis`) into one query per table family, and an RPC for `latest_receipt_at` | Before `develop` → `main` |
 
 ## Closing
 
