@@ -1466,6 +1466,57 @@ describe("Planner", () => {
     ).toBeInTheDocument();
   });
 
+  it("accepts the draft it shows, by id", async () => {
+    mockImported("baseline_ready");
+    let body: unknown = null;
+    withDrafts(
+      () => [stageDraft()],
+      (init) => {
+        body = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({
+            stage: "specify",
+            content: "# Agent spec",
+            updated_at: "2026-10-24T01:00:00Z",
+            projection: "current",
+          }),
+        };
+      },
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    fireEvent.click(await panel.findByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(body).toMatchObject({ draft_id: "sd1" }));
+  });
+
+  it("reloads the drafts when the agent replaced the draft since it was opened", async () => {
+    mockImported("baseline_ready");
+    withDrafts(
+      () => [stageDraft()],
+      () => ({ ok: false, status: 409, json: async () => ({ detail: "draft_changed" }) }),
+    );
+    render(<Planner project={makeProject(IMPORTED)} projectId="p1" onChange={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /specify/i });
+    openTab(/specify/i);
+    const panel = within(screen.getByRole("tabpanel", { name: /specify/i }));
+    await panel.findByRole("button", { name: "Accept" });
+    const before = fetchedHrefs().filter((h) => h.endsWith("/projects/p1/stage-drafts")).length;
+    fireEvent.click(panel.getByRole("button", { name: "Accept" }));
+    expect(
+      await panel.findByText("This draft changed since you opened it — reloading."),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        fetchedHrefs().filter((h) => h.endsWith("/projects/p1/stage-drafts")).length,
+      ).toBeGreaterThan(before),
+    );
+  });
+
   it("says only the Tech Lead may accept when the cloud answers 403", async () => {
     mockImported("baseline_ready");
     withDrafts(

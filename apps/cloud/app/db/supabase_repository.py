@@ -2141,14 +2141,18 @@ class SupabaseRepository(Repository):
         self._table(_STAGE_DRAFTS).upsert(_dump(draft), on_conflict="project_id,stage").execute()
         return draft
 
-    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
-        res = (
+    def delete_stage_draft(
+        self, project_id: str, stage: str, draft_id: str | None = None
+    ) -> bool:
+        query = (
             self._table(_STAGE_DRAFTS)
             .delete()
             .eq("project_id", project_id)
             .eq("stage", stage)
-            .execute()
         )
+        if draft_id is not None:
+            query = query.eq("id", draft_id)
+        res = query.execute()
         return bool(res.data)
 
     # -- LINE notifications (plan 0032) ----------------------------------- #

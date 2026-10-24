@@ -41,6 +41,7 @@ from app.models.schemas import (
     RepoAnalysisStatus,
     Role,
     StageDraft,
+    StageDraftAcceptIn,
     StageDraftIn,
     StageDraftOut,
     StageDraftRejectIn,
@@ -239,10 +240,17 @@ def _task_warnings(markdown: str, repo: Repository, project_id: str) -> list[Sta
     return warnings
 
 
-def _require_pending_draft(repo: Repository, project_id: str, stage: str) -> StageDraft:
+def _require_pending_draft(
+    repo: Repository, project_id: str, stage: str, draft_id: str
+) -> StageDraft:
+    """The pending draft the caller read. 404 when the stage has none; 409
+    `draft_changed` when the agent has resubmitted since, so a human never
+    accepts or rejects a draft they did not open."""
     draft = repo.get_stage_draft(project_id, stage)
     if draft is None or draft.status != "pending":
         raise HTTPException(status_code=404, detail="draft_not_found")
+    if draft.id != draft_id:
+        raise HTTPException(status_code=409, detail="draft_changed")
     return draft
 
 
@@ -313,13 +321,14 @@ def list_stage_drafts(
 def accept_stage_draft(
     project_id: str,
     stage: StageKind,
+    body: StageDraftAcceptIn,
     request: Request,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> StageDocumentSaved:
     project = require_project(repo, project_id, user)
     require_stage_access(repo, project, stage, user)
-    draft = _require_pending_draft(repo, project_id, stage)
+    draft = _require_pending_draft(repo, project_id, stage, body.draft_id)
     _require_chain(repo, project, stage)
 
     applied = apply_stage_content(
@@ -334,9 +343,12 @@ def accept_stage_draft(
     if applied.projection == "failed":
         # The document is saved either way; the draft stays, carrying why the
         # graph refused it, so the human can see it and the agent can fix it.
-        repo.upsert_stage_draft(draft.model_copy(update={"last_error": applied.error}))
+        # Only this draft: a replacement submitted meanwhile is left as it is.
+        current = repo.get_stage_draft(project_id, stage)
+        if current is not None and current.id == draft.id:
+            repo.upsert_stage_draft(current.model_copy(update={"last_error": applied.error}))
     else:
-        repo.delete_stage_draft(project_id, stage)
+        repo.delete_stage_draft(project_id, stage, draft_id=draft.id)
     return StageDocumentSaved(
         id=applied.document_id,
         stage=stage,
@@ -361,9 +373,7 @@ def reject_stage_draft(
 ) -> StageDraftOut:
     project = require_project(repo, project_id, user)
     require_stage_access(repo, project, stage, user)
-    draft = repo.get_stage_draft(project_id, stage)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="draft_not_found")
+    draft = _require_pending_draft(repo, project_id, stage, body.draft_id)
     rejected = repo.upsert_stage_draft(
         draft.model_copy(update={"status": "rejected", "rejection_note": body.note or None})
     )

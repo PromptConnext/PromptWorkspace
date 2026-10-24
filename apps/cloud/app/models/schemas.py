@@ -1644,7 +1644,14 @@ class StageDraftOut(BaseModel):
     warnings: list[StageDraftWarning] = []
 
 
+class StageDraftAcceptIn(BaseModel):
+    # The draft the human read. A draft resubmitted since has a new id, and
+    # accepting it unseen is refused with 409 `draft_changed`.
+    draft_id: str = Field(min_length=1, max_length=64)
+
+
 class StageDraftRejectIn(BaseModel):
+    draft_id: str = Field(min_length=1, max_length=64)
     note: str = Field(default="", max_length=2_000)
 
 

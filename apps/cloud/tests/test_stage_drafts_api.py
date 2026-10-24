@@ -43,14 +43,30 @@ def _submit(client: TestClient, pid: str, stage: str, markdown: str, headers=ALI
     )
 
 
-def _accept(client: TestClient, pid: str, stage: str, headers=ALICE):
-    return client.post(f"/projects/{pid}/stage-drafts/{stage}/accept", headers=headers)
+def _current_id(client: TestClient, pid: str, stage: str) -> str:
+    """The id of the stage's draft as the human sees it, or a placeholder so
+    the route's own 404 answers when there is none."""
+    draft = client.app.state.repository.get_stage_draft(pid, stage)
+    return draft.id if draft is not None else "no-draft"
 
 
-def _reject(client: TestClient, pid: str, stage: str, note: str = "", headers=ALICE):
-    return client.post(
-        f"/projects/{pid}/stage-drafts/{stage}/reject", json={"note": note}, headers=headers
-    )
+def _accept(
+    client: TestClient, pid: str, stage: str, headers=ALICE, draft_id: str | None = None, **extra
+):
+    body = {"draft_id": draft_id or _current_id(client, pid, stage), **extra}
+    return client.post(f"/projects/{pid}/stage-drafts/{stage}/accept", json=body, headers=headers)
+
+
+def _reject(
+    client: TestClient,
+    pid: str,
+    stage: str,
+    note: str = "",
+    headers=ALICE,
+    draft_id: str | None = None,
+):
+    body = {"draft_id": draft_id or _current_id(client, pid, stage), "note": note}
+    return client.post(f"/projects/{pid}/stage-drafts/{stage}/reject", json=body, headers=headers)
 
 
 def _ready_project(client: TestClient) -> tuple[str, str]:
@@ -405,3 +421,50 @@ def test_accepting_the_predecessor_after_editing_its_draft_marks_the_successor_s
         for d in client.get(f"/projects/{pid}/stage-drafts", headers=ALICE).json()
     }
     assert listed["plan"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Accept and reject address the draft the human read, by id
+# --------------------------------------------------------------------------- #
+
+
+def test_accept_and_reject_require_a_draft_id(client: TestClient):
+    _, pid = _ready_project(client)
+    _submit(client, pid, "specify", SPEC)
+    url = f"/projects/{pid}/stage-drafts/specify"
+    assert client.post(f"{url}/accept", json={}, headers=ALICE).status_code == 422
+    assert client.post(f"{url}/reject", json={"note": "x"}, headers=ALICE).status_code == 422
+
+
+def test_accept_of_a_replaced_draft_is_409_and_saves_nothing(client: TestClient):
+    _, pid = _ready_project(client)
+    opened = _submit(client, pid, "specify", SPEC).json()["id"]
+    newer = _submit(client, pid, "specify", "# Something else\n").json()["id"]
+
+    res = _accept(client, pid, "specify", draft_id=opened)
+    assert res.status_code == 409 and res.json()["detail"] == "draft_changed"
+    repo = client.app.state.repository
+    assert repo.get_stage_document(pid, "specify") is None
+    assert repo.get_latest_requirement(pid) is None
+    current = repo.get_stage_draft(pid, "specify")
+    assert current.id == newer and current.status == "pending"
+
+
+def test_reject_of_a_replaced_draft_is_409_and_keeps_it_pending(client: TestClient):
+    _, pid = _ready_project(client)
+    opened = _submit(client, pid, "specify", SPEC).json()["id"]
+    _submit(client, pid, "specify", "# Something else\n")
+
+    res = _reject(client, pid, "specify", "No", draft_id=opened)
+    assert res.status_code == 409 and res.json()["detail"] == "draft_changed"
+    current = client.app.state.repository.get_stage_draft(pid, "specify")
+    assert current.status == "pending" and current.rejection_note is None
+
+
+def test_delete_stage_draft_is_guarded_by_id(client: TestClient):
+    _, pid = _ready_project(client)
+    first = _submit(client, pid, "specify", SPEC).json()["id"]
+    _submit(client, pid, "specify", "# Newer\n")
+    repo = client.app.state.repository
+    assert repo.delete_stage_draft(pid, "specify", draft_id=first) is False
+    assert repo.get_stage_draft(pid, "specify") is not None

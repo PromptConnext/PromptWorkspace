@@ -93,3 +93,24 @@ def test_drafts_are_per_project_and_per_stage(repo: Repository) -> None:
     assert repo.get_stage_draft(other.id, "specify") is None
     assert repo.delete_stage_draft(other.id, "specify") is False
     assert repo.get_stage_draft(one.id, "specify") is not None
+
+
+def test_delete_by_id_leaves_a_replacement_alone(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    first = repo.upsert_stage_draft(_draft(project.id, ws.id, admin))
+    second = repo.upsert_stage_draft(_draft(project.id, ws.id, admin, markdown="# Spec v2"))
+
+    assert repo.delete_stage_draft(project.id, "specify", draft_id=first.id) is False
+    assert repo.get_stage_draft(project.id, "specify").id == second.id
+    assert repo.delete_stage_draft(project.id, "specify", draft_id=second.id) is True
+    assert repo.get_stage_draft(project.id, "specify") is None
+
+
+def test_draft_keeps_its_predecessor_fingerprint(repo: Repository) -> None:
+    ws, admin = h.workspace(repo)
+    project = h.project(repo, ws, admin)
+    repo.upsert_stage_draft(
+        _draft(project.id, ws.id, admin, predecessor_fingerprint="ab" * 32)
+    )
+    assert repo.get_stage_draft(project.id, "specify").predecessor_fingerprint == "ab" * 32

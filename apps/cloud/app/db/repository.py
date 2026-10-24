@@ -923,8 +923,11 @@ class Repository(abc.ABC):
         id included."""
 
     @abc.abstractmethod
-    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
-        """True if a draft existed."""
+    def delete_stage_draft(
+        self, project_id: str, stage: str, draft_id: str | None = None
+    ) -> bool:
+        """True if a draft existed and was deleted. With `draft_id`, only
+        that draft is deleted: a replacement submitted since is left alone."""
 
     # -- LINE notifications (plan 0032) ----------------------------------- #
     @abc.abstractmethod
@@ -2220,8 +2223,14 @@ class InMemoryRepository(Repository):
         self._stage_drafts[(draft.project_id, draft.stage)] = stored
         return copy.deepcopy(stored)
 
-    def delete_stage_draft(self, project_id: str, stage: str) -> bool:
-        return self._stage_drafts.pop((project_id, stage), None) is not None
+    def delete_stage_draft(
+        self, project_id: str, stage: str, draft_id: str | None = None
+    ) -> bool:
+        current = self._stage_drafts.get((project_id, stage))
+        if current is None or (draft_id is not None and current.id != draft_id):
+            return False
+        del self._stage_drafts[(project_id, stage)]
+        return True
 
     def get_project_line_link(self, project_id: str) -> ProjectLineLink | None:
         link = self._line_links.get(project_id)

@@ -215,12 +215,19 @@ const ANALYSIS_GATE_MEMBER_TEXT =
 // the stage (app/api/_guards.py::require_stage_access).
 const DRAFT_FORBIDDEN_TEXT = "Only your Tech Lead can accept this draft.";
 
+// The draft-specific refusals of an accept or reject. Checked before the
+// stage's own error text, whose 409 copy names Generate, which an imported
+// project does not offer.
+const DRAFT_ERROR_TEXT: Record<string, string> = {
+  draft_changed: "This draft changed since you opened it — reloading.",
+};
+
 // A refused accept or reject, in words. The 409s are the same ordering codes
 // generation answers, so they read as the section's own blockedBy text does.
 function draftErrorText(err: unknown): string {
   if (err instanceof ApiError && err.status === 403) return DRAFT_FORBIDDEN_TEXT;
   const code = (err as Error).message;
-  return STAGE_ERROR_TEXT[code] ?? code;
+  return DRAFT_ERROR_TEXT[code] ?? STAGE_ERROR_TEXT[code] ?? code;
 }
 
 // One stepper section. The input surface is stage-shaped: `specify` and `plan`
@@ -422,9 +429,10 @@ function StageSection({
   // save does: same projection report, same graph refresh. A failed
   // projection keeps the draft (it now carries last_error) and says why.
   async function acceptDraft() {
+    if (!draft) return;
     setDraftError(null);
     try {
-      const doc = await acceptStageDraft(projectId, stage, authHeaders());
+      const doc = await acceptStageDraft(projectId, stage, draft.id, undefined, authHeaders());
       setDocContent(doc.content);
       setDocUpdatedAt(doc.updated_at);
       setDocProjection(doc.projection);
@@ -441,9 +449,10 @@ function StageSection({
   }
 
   async function rejectDraft(note: string) {
+    if (!draft) return;
     setDraftError(null);
     try {
-      await rejectStageDraft(projectId, stage, note, authHeaders());
+      await rejectStageDraft(projectId, stage, draft.id, note, authHeaders());
     } catch (err) {
       setDraftError(draftErrorText(err));
       // The banner keeps the typed note when the reject did not land.
