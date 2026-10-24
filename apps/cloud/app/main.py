@@ -29,6 +29,7 @@ from app.api import (
     integrations,
     line,
     me,
+    oauth,
     overview,
     policies,
     presence,
@@ -345,6 +346,8 @@ def create_app() -> FastAPI:
     app.include_router(policies.router)
     app.include_router(deployments.router)
     app.include_router(desktop_auth.router)
+    if settings.mcp_enabled:
+        app.include_router(oauth.router)
 
     @app.get("/", tags=["health"])
     def root() -> dict:
