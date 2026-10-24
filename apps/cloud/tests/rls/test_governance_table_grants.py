@@ -53,12 +53,16 @@ def test_member_cannot_read_workspace_governance(
 def test_member_cannot_write_workspace_governance(
     http: httpx.Client, target: Target, fixture: Fixture
 ) -> None:
+    """INSERT is kept for completeness, but it is the weakest probe here:
+    PostgREST reports an RLS refusal on INSERT as 42501 too, so with RLS on and
+    no policy this passes even if the grant were restored. The read and update
+    probes are the ones that catch a re-grant."""
     res = http.post(
         f"{target.rest}/{_TABLE}",
         headers=target.user_headers(fixture.member.access_token),
         json={
             "workspace_id": fixture.workspace_id,
-            "policy_scope": {"policies": [], "text": "chosen by the member"},
+            "policy_scope": {"selected": [], "custom_text": "chosen by the member"},
             "required_hats": [],
             "require_seeded_rules": False,
             "updated_by": fixture.member.id,
@@ -74,3 +78,33 @@ def test_member_cannot_write_workspace_governance(
     )
     assert check.status_code == 200, check.text
     assert check.json() == [], "a member wrote a governance row"
+
+
+def test_member_cannot_update_workspace_governance(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """The probe that discriminates a re-grant. With UPDATE granted but no
+    policy, PostgREST answers 200 with no rows (RLS hides the row); only a
+    missing grant yields 42501, which `_denied` requires."""
+    seeded = http.post(
+        f"{target.rest}/{_TABLE}",
+        headers=target.service_headers(),
+        json={"workspace_id": fixture.workspace_id, "require_seeded_rules": True},
+    )
+    assert seeded.status_code in (200, 201), f"setup failed: {seeded.status_code} {seeded.text}"
+
+    res = http.patch(
+        f"{target.rest}/{_TABLE}",
+        headers=target.user_headers(fixture.member.access_token),
+        params={"workspace_id": f"eq.{fixture.workspace_id}"},
+        json={"require_seeded_rules": False},
+    )
+    _denied(res)
+
+    check = http.get(
+        f"{target.rest}/{_TABLE}",
+        headers=target.service_headers(),
+        params={"workspace_id": f"eq.{fixture.workspace_id}", "select": "require_seeded_rules"},
+    )
+    assert check.status_code == 200, check.text
+    assert check.json() == [{"require_seeded_rules": True}], "a member changed the governance row"
