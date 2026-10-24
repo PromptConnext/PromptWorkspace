@@ -109,15 +109,23 @@ def test_register_global_bucket_caps_across_ips():
     assert codes[30:] == [429] * 10
 
 
-def test_authorize_limits_only_cimd_https_client_id():
+def test_authorize_cimd_rule_is_tighter_than_the_ip_rule():
     c = _client(_build())
-    plain = [c.get("/oauth/authorize?client_id=abc").status_code for _ in range(10)]
-    assert set(plain) == {200}
     cimd = [
         c.get("/oauth/authorize?client_id=https://app.example/c.json").status_code
         for _ in range(6)
     ]
     assert cimd == [200] * 5 + [429]
+
+
+def test_authorize_21st_rapid_call_from_one_ip_is_429():
+    # Every GET /oauth/authorize writes a request row: bound it per source ip.
+    app = _build()
+    c = _client(app, "8.8.8.8")
+    codes = [c.get("/oauth/authorize?client_id=abc").status_code for _ in range(21)]
+    assert codes == [200] * 20 + [429]
+    assert "Retry-After" in c.get("/oauth/authorize?client_id=abc").headers
+    assert _client(app, "8.8.4.4").get("/oauth/authorize?client_id=abc").status_code == 200
 
 
 def test_mcp_does_not_consume_token_bucket():

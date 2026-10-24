@@ -81,10 +81,14 @@ class LimitRule:
     match: Callable[[Request], bool]
     key: Key
     limiter: TokenBucketLimiter | CompositeLimiter
+    # A floor rule: when it passes, the rules after it are still consulted
+    # (e.g. every authorize call per ip, then the tighter CIMD rule).
+    fall_through: bool = False
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """The first rule whose `match` is true applies; no match passes through."""
+    """The first rule whose `match` is true applies; no match passes through.
+    A matching `fall_through` rule that passes lets the search continue."""
 
     def __init__(self, app, rules: list[LimitRule]) -> None:
         super().__init__(app)
@@ -104,6 +108,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                     headers={"Retry-After": str(retry)},
                 )
+            if rule.fall_through:
+                continue
             break
         return await call_next(request)
 
@@ -177,6 +183,15 @@ def default_rules(settings) -> list[LimitRule]:
                     (_hourly(300, 30), lambda k: "all"),
                 ]
             ),
+        ),
+        LimitRule(
+            # Every authorize call writes a request row (and may resolve a
+            # client), unauthenticated: bound it per source ip.
+            "oauth_authorize",
+            lambda r: r.method == "GET" and r.url.path == "/oauth/authorize",
+            _ip,
+            TokenBucketLimiter(per_minute=60, burst=20),
+            fall_through=True,
         ),
         LimitRule(
             "oauth_authorize_cimd",

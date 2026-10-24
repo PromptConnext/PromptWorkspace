@@ -121,16 +121,17 @@ async def resolve_client(
     *,
     cimd_fetch: Callable[[str], Awaitable[OAuthClient]],
 ) -> OAuthClient:
-    """The stored client (its `last_used_at` bumped), else a CIMD fetched and
-    stored as `kind="cimd"`, else `UnknownClient`. A stored CIMD row whose
-    `metadata["fetched_at"]` is over an hour old is refetched first, so a
-    client's edits to its document (e.g. a removed redirect URI) take effect.
+    """The stored client, else a CIMD fetched and stored as `kind="cimd"`,
+    else `UnknownClient`. A stored CIMD row whose `metadata["fetched_at"]` is
+    over an hour old is refetched (and upserted) first, so a client's edits to
+    its document (e.g. a removed redirect URI) take effect. A stored, fresh
+    client is only read: this runs on every unauthenticated authorize call,
+    so `last_used_at` moves at approve and at token issue instead.
     `cimd_fetch` errors (`CimdError`) propagate."""
     now = utcnow()
     stored = repo.get_oauth_client(client_id)
     if stored is not None and not (stored.kind == "cimd" and _cimd_stale(stored, now)):
-        stored.last_used_at = now
-        return repo.upsert_oauth_client(stored)
+        return stored
     if client_id.lower().startswith("https://"):
         fetched = await cimd_fetch(client_id)
         # `fetched_at` is ours: written after the document, so a document

@@ -252,16 +252,42 @@ def _client(cid: str, kind: str = "dcr") -> OAuthClient:
 
 
 @pytest.mark.anyio
-async def test_resolve_stored_wins_and_bumps_last_used():
+async def test_resolve_stored_wins_without_a_write(monkeypatch):
+    # resolve_client runs on every unauthenticated GET /oauth/authorize, so a
+    # stored client is read, never re-upserted; last_used_at moves at approve
+    # and at token issue instead.
     repo = InMemoryRepository()
     repo.upsert_oauth_client(_client("abc"))
+    writes = []
+    real = repo.upsert_oauth_client
+    monkeypatch.setattr(repo, "upsert_oauth_client", lambda c: writes.append(c) or real(c))
+    monkeypatch.setattr(repo, "touch_oauth_client", lambda *a: writes.append(a))
 
     async def boom(_):  # pragma: no cover - must not be called
         raise AssertionError("fetched")
 
     got = await resolve_client(repo, "abc", cimd_fetch=boom)
     assert got.client_id == "abc"
-    assert repo.get_oauth_client("abc").last_used_at is not None
+    assert writes == []
+    assert repo.get_oauth_client("abc").last_used_at is None
+
+
+@pytest.mark.anyio
+async def test_resolve_fresh_cimd_without_a_write(monkeypatch):
+    repo = InMemoryRepository()
+    url = "https://client.example/meta.json"
+    fresh = _client(url, kind="cimd").model_copy(
+        update={"metadata": {"fetched_at": utcnow().isoformat()}}
+    )
+    repo.upsert_oauth_client(fresh)
+    writes = []
+    monkeypatch.setattr(repo, "upsert_oauth_client", lambda c: writes.append(c))
+
+    async def boom(_):  # pragma: no cover - must not be called
+        raise AssertionError("fetched")
+
+    assert (await resolve_client(repo, url, cimd_fetch=boom)).client_id == url
+    assert writes == []
 
 
 @pytest.mark.anyio
