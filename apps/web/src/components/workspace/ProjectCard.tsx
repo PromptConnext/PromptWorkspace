@@ -178,6 +178,7 @@ export function ProjectCard({
             </Link>
           </>
         )}
+        {card.agent_closed_30d > 0 && ` · ${card.agent_closed_30d} closed by agents`}
       </p>
       {expired_30d > 0 && (
         <p className="text-xs text-amber-700">

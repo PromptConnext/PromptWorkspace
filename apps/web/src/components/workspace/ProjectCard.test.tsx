@@ -133,6 +133,20 @@ describe("ProjectCard", () => {
     expect(link).toHaveAttribute("href", "/w/w1/p/p1?tab=decisions");
   });
 
+  it("card state line appends · N closed by agents when agent_closed_30d > 0", () => {
+    const { unmount } = renderCard(card({ agent_closed_30d: 7 }));
+    const link = screen.getByRole("link", { name: "2 decisions waiting" });
+    expect(link.parentElement!.textContent).toBe(
+      "3 in progress · 12 done · 2 decisions waiting · 7 closed by agents",
+    );
+    unmount();
+    renderCard(card({ agent_closed_30d: 1 }));
+    expect(screen.getByText(/· 1 closed by agents/)).toBeInTheDocument();
+    cleanup();
+    renderCard(card({ agent_closed_30d: 0 }));
+    expect(screen.queryByText(/closed by agents/)).toBeNull();
+  });
+
   it("overdue decision turns amber: 1 decision overdue", () => {
     renderCard(card({ decisions: { open: 2, overdue: 1, expired_30d: 1 } }));
     const link = screen.getByRole("link", { name: "1 decision overdue" });

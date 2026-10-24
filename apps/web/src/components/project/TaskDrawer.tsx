@@ -16,6 +16,7 @@ import type {
 import { memberFullName } from "./MemberChip";
 import { STATUS_LABEL } from "./taskBoardA11y";
 import { InlineCodeText } from "./TaskCard";
+import { agentLabel } from "@/lib/agentLabel";
 import { artifactHref } from "./VerifyConfirmDialog";
 
 /**
@@ -137,6 +138,7 @@ function ArtifactRow({ artifact, repoUrl }: { artifact: Artifact; repoUrl: strin
       ) : (
         <span className="min-w-0 text-slate-700">{label}</span>
       )}
+      <span className="shrink-0 text-xs text-slate-500">{agentLabel(artifact.agent)}</span>
     </li>
   );
 }

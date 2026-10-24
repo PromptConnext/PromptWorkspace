@@ -148,6 +148,8 @@ export interface Artifact {
   kind: ArtifactKind;
   uri: string;
   commit_sha: string | null;
+  /** Which client closed the task; null/absent = closed on the web. */
+  agent?: { client: string; model: string | null } | null;
   updated_at: string | null;
   deleted_at: string | null;
   field_versions: Record<string, unknown>;

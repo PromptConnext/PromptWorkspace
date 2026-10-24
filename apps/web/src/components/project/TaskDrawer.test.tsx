@@ -188,6 +188,24 @@ describe("TaskDrawer", () => {
     expect(screen.getByText("No acceptance criteria")).toBeInTheDocument();
   });
 
+  it("artifact with agent mcp:cursor reads Closed via Cursor (MCP)", () => {
+    const a = { ...graph.artifacts[0], agent: { client: "mcp:cursor", model: null } };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed via Cursor (MCP)")).toBeInTheDocument();
+  });
+
+  it("artifact with agent vscode:Cursor reads Closed via Cursor (editor)", () => {
+    const a = { ...graph.artifacts[0], agent: { client: "vscode:Cursor", model: null } };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed via Cursor (editor)")).toBeInTheDocument();
+  });
+
+  it("artifact without agent reads Closed on the web", () => {
+    const a = { ...graph.artifacts[0], agent: null };
+    render(<TaskDrawer task={task} graph={graph} members={members} artifacts={[a]} onClose={vi.fn()} />);
+    expect(screen.getByText("Closed on the web")).toBeInTheDocument();
+  });
+
   it("links commit artifacts by short sha in a new tab", () => {
     render(
       <TaskDrawer
