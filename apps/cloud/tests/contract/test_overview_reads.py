@@ -116,3 +116,8 @@ def test_list_generation_runs_since_newest_first(repo: Repository) -> None:
 
     assert [r.id for r in got] == [new.id, mid.id]
     assert old.id not in {r.id for r in got}
+
+
+def test_get_workspace_governance_none_when_absent(repo: Repository) -> None:
+    ws, _admin = h.workspace(repo)
+    assert repo.get_workspace_governance(ws.id) is None

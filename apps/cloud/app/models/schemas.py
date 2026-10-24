@@ -1690,3 +1690,21 @@ class WorkspaceGovernance(BaseModel):
     @classmethod
     def default(cls, workspace_id: str) -> WorkspaceGovernance:
         return cls(workspace_id=workspace_id)
+
+
+class PersonLinkOut(BaseModel):
+    kind: Literal["hat", "work", "approval"]
+    from_user_id: str
+    to_user_id: str | None = None
+    project_id: str | None = None
+    hat: str | None = None
+    weight: int = 1
+
+
+class WorkspaceOverviewOut(BaseModel):
+    workspace_id: str
+    generated_at: datetime
+    members: list[WorkspaceMember]
+    projects: list[ProjectCardOut]
+    people: list[PersonLinkOut] = Field(default_factory=list)
+    truncated: bool = False

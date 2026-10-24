@@ -81,6 +81,7 @@ from app.models.schemas import (
     TaskStatus,
     TaskSummary,
     Workspace,
+    WorkspaceGovernance,
     WorkspaceIntegration,
     WorkspaceMember,
     new_id,
@@ -131,6 +132,7 @@ _DECISIONS = "pw_decisions"
 _SNAPSHOTS = "pw_decision_snapshots"
 _PROJECT_ROLES = "pw_project_roles"
 _RECEIPTS = "pw_receipts"
+_WORKSPACE_GOVERNANCE = "pw_workspace_governance"
 # PostgREST caps a response at max_rows (1000); a chain is read page by page.
 _RECEIPT_PAGE = 1000
 _DT = TypeAdapter(datetime)  # tolerant of PostgREST's timestamptz spellings
@@ -1648,6 +1650,22 @@ class SupabaseRepository(Repository):
         for r in rows:
             latest.setdefault(r["project_id"], _DT.validate_python(r["created_at"]))
         return latest
+
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        try:
+            res = (
+                self._table(_WORKSPACE_GOVERNANCE)
+                .select("*")
+                .eq("workspace_id", workspace_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            if self._missing_table(exc):
+                return None
+            raise
+        rows = res.data or []
+        return WorkspaceGovernance(**rows[0]) if rows else None
 
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         rows = self._paged(

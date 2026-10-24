@@ -62,6 +62,7 @@ from app.models.schemas import (
     TaskStatus,
     TaskSummary,
     Workspace,
+    WorkspaceGovernance,
     WorkspaceIntegration,
     WorkspaceMember,
     new_id,
@@ -761,6 +762,10 @@ class Repository(abc.ABC):
         """Newest receipt `created_at` per project; projects with none are absent."""
 
     @abc.abstractmethod
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        """The workspace's governance row, or None when it never set one."""
+
+    @abc.abstractmethod
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         """The workspace's generation runs with `created_at >= since`, newest first."""
 
@@ -960,6 +965,7 @@ class InMemoryRepository(Repository):
         self._project_roles: dict[tuple[str, str], ProjectRole] = {}
         # project_id -> receipt chain, oldest first (enterprise AI v2.1 D1)
         self._receipts: dict[str, list[Receipt]] = {}
+        self._workspace_governance: dict[str, WorkspaceGovernance] = {}
         # project_id -> RepoAnalysis (plan 0027)
         self._repo_analyses: dict[str, RepoAnalysis] = {}
         # project_id -> link; code -> pending code (plan 0032)
@@ -1952,6 +1958,9 @@ class InMemoryRepository(Repository):
             for pid in project_ids
             if self._receipts.get(pid)
         }
+
+    def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
+        return self._workspace_governance.get(workspace_id)
 
     def list_generation_runs(self, workspace_id: str, since: datetime) -> list[GenerationRun]:
         runs = [
