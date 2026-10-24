@@ -292,9 +292,12 @@ class Repository(abc.ABC):
     def update_project_lifecycle_status(self, project_id: str, status: str) -> Project: ...
 
     @abc.abstractmethod
-    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+    def update_project_policy_scope(
+        self, project_id: str, scope: PolicyScope | None, *, source: str | None = None
+    ) -> Project:
         """Replace the whole policy scope atomically (last-write-wins);
-        `None` clears it. Bumps `updated_at`."""
+        `None` clears it. Bumps `updated_at`. `source`, when given, also
+        sets `policy_scope_source` ("workspace" or "project")."""
 
     @abc.abstractmethod
     def update_project_deployment_config(
@@ -1218,9 +1221,14 @@ class InMemoryRepository(Repository):
         self._projects[project_id] = updated
         return updated
 
-    def update_project_policy_scope(self, project_id: str, scope: PolicyScope | None) -> Project:
+    def update_project_policy_scope(
+        self, project_id: str, scope: PolicyScope | None, *, source: str | None = None
+    ) -> Project:
         project = self._projects[project_id]
-        updated = project.model_copy(update={"policy_scope": scope, "updated_at": utcnow()})
+        changes: dict = {"policy_scope": scope, "updated_at": utcnow()}
+        if source is not None:
+            changes["policy_scope_source"] = source
+        updated = project.model_copy(update=changes)
         self._projects[project_id] = updated
         return updated
 

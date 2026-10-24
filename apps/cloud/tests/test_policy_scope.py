@@ -152,7 +152,9 @@ def test_non_admin_member_can_edit_policy_scope(client: TestClient):
     assert res.json()["policy_scope"]["selected"] == ["soc-2"]
 
 
-def test_new_project_has_no_policy_scope_by_default(client: TestClient):
+def test_new_project_inherits_empty_workspace_scope_by_default(client: TestClient):
+    # Plan 0033: a new project copies the workspace scope, even when empty.
     _ws_id, pid = _bootstrap(client)
     fetched = client.get(f"/projects/{pid}", headers=ALICE).json()
-    assert fetched["policy_scope"] is None
+    assert fetched["policy_scope"]["selected"] == []
+    assert fetched["policy_scope_source"] == "workspace"

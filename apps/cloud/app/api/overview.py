@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api._guards import require_admin, require_workspace
 from app.db.repository import Repository
+from app.delivery.ledger import append_receipt
 from app.dependencies import User, get_current_user, get_repository
 from app.models.schemas import (
+    ReceiptDraft,
     WorkspaceGovernance,
     WorkspaceGovernanceUpdate,
     WorkspaceOverviewOut,
@@ -95,7 +97,7 @@ def put_governance(
     scope = validate_scope(body.policy_scope.selected, body.policy_scope.custom_text)
     if any(h not in _HATS for h in body.required_hats):
         raise HTTPException(status_code=422, detail="unknown_hat")
-    return repo.put_workspace_governance(
+    saved = repo.put_workspace_governance(
         WorkspaceGovernance(
             workspace_id=workspace_id,
             policy_scope=scope,
@@ -104,3 +106,26 @@ def put_governance(
             updated_by=user.id,
         )
     )
+    # Fan out to projects that follow the workspace scope. Own-scope and
+    # frozen projects are left alone. Receipt bodies hold template ids only.
+    after = ",".join(saved.policy_scope.selected)
+    for project in repo.list_projects_by_workspace(workspace_id):
+        if project.policy_scope_source != "workspace" or project.lifecycle_status == "repo_created":
+            continue
+        before = ",".join(project.policy_scope.selected) if project.policy_scope else ""
+        repo.update_project_policy_scope(
+            project.id, saved.policy_scope.model_copy(deep=True), source="workspace"
+        )
+        append_receipt(
+            repo,
+            ReceiptDraft(
+                project_id=project.id,
+                workspace_id=workspace_id,
+                event="policy_scope.updated",
+                subject_type="project_policy",
+                subject_id=project.id,
+                actor=user.id,
+                body={"source": "workspace", "before": before, "after": after},
+            ),
+        )
+    return saved

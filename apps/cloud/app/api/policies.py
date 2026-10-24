@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from app.api._guards import require_project
 from app.db.repository import Repository
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import PolicyScopeUpdate, Project
+from app.models.schemas import PolicyScopeUpdate, Project, WorkspaceGovernance
 from app.policies.registry import BUILTIN_TEMPLATES, template_body
 from app.policies.scope import validate_scope
 
@@ -58,4 +58,22 @@ def update_policy_scope(
         raise HTTPException(status_code=409, detail="project_frozen")
 
     scope = validate_scope(body.selected, body.custom_text)
-    return repo.update_project_policy_scope(project_id, scope)
+    return repo.update_project_policy_scope(project_id, scope, source="project")
+
+
+@router.post("/projects/{project_id}/policy-scope/use-workspace", response_model=Project)
+def use_workspace_policy_scope(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    repo: Repository = Depends(get_repository),
+) -> Project:
+    """Drop the project's own scope and follow the workspace's again."""
+    project = require_project(repo, project_id, user)
+    if project.lifecycle_status == "repo_created":
+        raise HTTPException(status_code=409, detail="project_frozen")
+    governance = repo.get_workspace_governance(
+        project.workspace_id
+    ) or WorkspaceGovernance.default(project.workspace_id)
+    return repo.update_project_policy_scope(
+        project_id, governance.policy_scope.model_copy(deep=True), source="workspace"
+    )

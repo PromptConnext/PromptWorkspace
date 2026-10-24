@@ -1421,6 +1421,7 @@ ReceiptEvent = Literal[
     "decision.snapshot_erased",
     "role.assigned",
     "role.cleared",
+    "policy_scope.updated",
 ]
 
 
@@ -1432,7 +1433,7 @@ class ReceiptDraft(BaseModel):
     project_id: str
     workspace_id: str
     event: ReceiptEvent
-    subject_type: Literal["decision", "project_role"]
+    subject_type: Literal["decision", "project_role", "project_policy"]
     subject_id: str
     actor: str
     body: dict[str, str | int | bool | None] = Field(default_factory=dict)
