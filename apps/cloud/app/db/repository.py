@@ -42,6 +42,11 @@ from app.models.schemas import (
     InvitationStatus,
     LineLinkCode,
     ModelConnection,
+    OAuthClient,
+    OAuthCode,
+    OAuthFamily,
+    OAuthRefreshToken,
+    OAuthRequest,
     PolicyScope,
     Project,
     ProjectGraph,
@@ -954,6 +959,75 @@ class Repository(abc.ABC):
         """Return and delete the code if unexpired at `now`. An expired code is
         deleted and None returned."""
 
+    # -- OAuth authorization server (migration 0013) ----------------------- #
+    @abc.abstractmethod
+    def get_oauth_client(self, client_id: str) -> OAuthClient | None: ...
+
+    @abc.abstractmethod
+    def upsert_oauth_client(self, c: OAuthClient) -> OAuthClient: ...
+
+    @abc.abstractmethod
+    def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
+        """Delete clients of `kind` last used (created, if never used) before
+        `cutoff`. Returns the count."""
+
+    @abc.abstractmethod
+    def put_oauth_request(self, r: OAuthRequest) -> OAuthRequest: ...
+
+    @abc.abstractmethod
+    def get_oauth_request(self, request_id: str) -> OAuthRequest | None: ...
+
+    @abc.abstractmethod
+    def update_oauth_request(self, r: OAuthRequest) -> OAuthRequest: ...
+
+    @abc.abstractmethod
+    def delete_oauth_requests_expired(self, now: datetime) -> int: ...
+
+    @abc.abstractmethod
+    def put_oauth_code(self, c: OAuthCode) -> OAuthCode: ...
+
+    @abc.abstractmethod
+    def take_oauth_code(self, code_hash: str, now: datetime) -> OAuthCode | None:
+        """Atomic single use: return the row and mark `used_at`; any later
+        call for the same hash returns None."""
+
+    @abc.abstractmethod
+    def get_oauth_code(self, code_hash: str) -> OAuthCode | None:
+        """Plain read, used to detect reuse after a take."""
+
+    @abc.abstractmethod
+    def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken: ...
+
+    @abc.abstractmethod
+    def get_refresh_token(self, token_hash: str) -> OAuthRefreshToken | None: ...
+
+    @abc.abstractmethod
+    def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken: ...
+
+    @abc.abstractmethod
+    def delete_refresh_tokens_expired(self, now: datetime) -> int: ...
+
+    @abc.abstractmethod
+    def put_oauth_family(self, f: OAuthFamily) -> OAuthFamily: ...
+
+    @abc.abstractmethod
+    def get_oauth_family(self, family_id: str) -> OAuthFamily | None: ...
+
+    @abc.abstractmethod
+    def revoke_oauth_family(
+        self, family_id: str, reason: str, now: datetime
+    ) -> OAuthFamily | None:
+        """Set revoked_at/revoked_reason unless already revoked. Returns the
+        row, or None when the family does not exist."""
+
+    @abc.abstractmethod
+    def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
+        """Newest first."""
+
+    @abc.abstractmethod
+    def revoke_oauth_families_for_user(self, user_id: str, reason: str, now: datetime) -> int:
+        """Returns the number of families newly revoked."""
+
 
 class InMemoryRepository(Repository):
     """Process-local store. State is lost on restart — dev/test only."""
@@ -1012,6 +1086,11 @@ class InMemoryRepository(Repository):
         # project_id -> link; code -> pending code (plan 0032)
         self._line_links: dict[str, ProjectLineLink] = {}
         self._line_codes: dict[str, LineLinkCode] = {}
+        self._oauth_clients: dict[str, OAuthClient] = {}
+        self._oauth_requests: dict[str, OAuthRequest] = {}
+        self._oauth_codes: dict[str, OAuthCode] = {}
+        self._oauth_refresh: dict[str, OAuthRefreshToken] = {}
+        self._oauth_families: dict[str, OAuthFamily] = {}
 
     # -- workspaces ------------------------------------------------------- #
     def create_workspace(
@@ -2260,6 +2339,106 @@ class InMemoryRepository(Repository):
         if found is None or found.expires_at <= now:
             return None
         return found
+
+    # -- OAuth authorization server (migration 0013) ----------------------- #
+    def get_oauth_client(self, client_id: str) -> OAuthClient | None:
+        c = self._oauth_clients.get(client_id)
+        return c.model_copy(deep=True) if c else None
+
+    def upsert_oauth_client(self, c: OAuthClient) -> OAuthClient:
+        self._oauth_clients[c.client_id] = c.model_copy(deep=True)
+        return c.model_copy(deep=True)
+
+    def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
+        gone = [
+            k
+            for k, c in self._oauth_clients.items()
+            if c.kind == kind and (c.last_used_at or c.created_at) < cutoff
+        ]
+        for k in gone:
+            del self._oauth_clients[k]
+        return len(gone)
+
+    def put_oauth_request(self, r: OAuthRequest) -> OAuthRequest:
+        self._oauth_requests[r.request_id] = r.model_copy()
+        return r.model_copy()
+
+    def get_oauth_request(self, request_id: str) -> OAuthRequest | None:
+        r = self._oauth_requests.get(request_id)
+        return r.model_copy() if r else None
+
+    def update_oauth_request(self, r: OAuthRequest) -> OAuthRequest:
+        self._oauth_requests[r.request_id] = r.model_copy()
+        return r.model_copy()
+
+    def delete_oauth_requests_expired(self, now: datetime) -> int:
+        gone = [k for k, r in self._oauth_requests.items() if r.expires_at < now]
+        for k in gone:
+            del self._oauth_requests[k]
+        return len(gone)
+
+    def put_oauth_code(self, c: OAuthCode) -> OAuthCode:
+        self._oauth_codes[c.code_hash] = c.model_copy()
+        return c.model_copy()
+
+    def take_oauth_code(self, code_hash: str, now: datetime) -> OAuthCode | None:
+        found = self._oauth_codes.get(code_hash)
+        if found is None or found.used_at is not None:
+            return None
+        found.used_at = now
+        return found.model_copy()
+
+    def get_oauth_code(self, code_hash: str) -> OAuthCode | None:
+        c = self._oauth_codes.get(code_hash)
+        return c.model_copy() if c else None
+
+    def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
+        self._oauth_refresh[t.token_hash] = t.model_copy()
+        return t.model_copy()
+
+    def get_refresh_token(self, token_hash: str) -> OAuthRefreshToken | None:
+        t = self._oauth_refresh.get(token_hash)
+        return t.model_copy() if t else None
+
+    def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
+        self._oauth_refresh[t.token_hash] = t.model_copy()
+        return t.model_copy()
+
+    def delete_refresh_tokens_expired(self, now: datetime) -> int:
+        gone = [k for k, t in self._oauth_refresh.items() if t.expires_at < now]
+        for k in gone:
+            del self._oauth_refresh[k]
+        return len(gone)
+
+    def put_oauth_family(self, f: OAuthFamily) -> OAuthFamily:
+        self._oauth_families[f.family_id] = f.model_copy()
+        return f.model_copy()
+
+    def get_oauth_family(self, family_id: str) -> OAuthFamily | None:
+        f = self._oauth_families.get(family_id)
+        return f.model_copy() if f else None
+
+    def revoke_oauth_family(
+        self, family_id: str, reason: str, now: datetime
+    ) -> OAuthFamily | None:
+        f = self._oauth_families.get(family_id)
+        if f is None:
+            return None
+        if f.revoked_at is None:
+            f.revoked_at, f.revoked_reason = now, reason
+        return f.model_copy()
+
+    def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
+        mine = [f for f in self._oauth_families.values() if f.user_id == user_id]
+        return [f.model_copy() for f in sorted(mine, key=lambda f: f.created_at, reverse=True)]
+
+    def revoke_oauth_families_for_user(self, user_id: str, reason: str, now: datetime) -> int:
+        n = 0
+        for f in self._oauth_families.values():
+            if f.user_id == user_id and f.revoked_at is None:
+                f.revoked_at, f.revoked_reason = now, reason
+                n += 1
+        return n
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

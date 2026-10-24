@@ -1659,6 +1659,80 @@ class StageDraftRejectIn(BaseModel):
     draft_id: str = Field(min_length=1, max_length=64)
     note: str = Field(default="", max_length=2_000)
 
+# -- OAuth authorization server (migration 0013) ---------------------------- #
+# Design: docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md,
+# "Cloud: the authorization server". Codes and refresh tokens are held only as
+# hashes; these rows are service-only.
+OAuthClientKind = Literal["preregistered", "cimd", "dcr"]
+
+
+class OAuthClient(BaseModel):
+    client_id: str
+    kind: OAuthClientKind
+    client_name: str = ""
+    redirect_uris: list[str]
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    token_endpoint_auth_method: Literal["none"] = "none"
+    metadata: dict = {}
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
+class OAuthRequest(BaseModel):
+    request_id: str = Field(default_factory=new_id)
+    client_id: str
+    redirect_uri: str
+    code_challenge: str
+    resource: str
+    scope: str
+    state: str | None
+    created_at: datetime
+    expires_at: datetime
+    approved_user_id: str | None = None
+    approved_at: datetime | None = None
+    denied_at: datetime | None = None
+
+
+class OAuthCode(BaseModel):
+    code_hash: str
+    request_id: str
+    family_id: str
+    client_id: str
+    user_id: str
+    redirect_uri: str
+    code_challenge: str
+    resource: str
+    scope: str
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class OAuthRefreshToken(BaseModel):
+    token_hash: str
+    family_id: str
+    client_id: str
+    user_id: str
+    scope: str
+    resource: str
+    issued_at: datetime
+    expires_at: datetime
+    rotated_to_hash: str | None = None
+    rotated_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    user_agent: str | None = None
+
+
+class OAuthFamily(BaseModel):
+    family_id: str
+    client_id: str
+    user_id: str
+    created_at: datetime = Field(default_factory=utcnow)
+    revoked_at: datetime | None = None
+    revoked_reason: str | None = None
+
+
 
 class RepoAnalysisOut(BaseModel):
     """GET/PATCH/SSE-`done` shape. A project with no analysis yet answers
