@@ -6,6 +6,11 @@ except loopback (RFC 8252 §7.3): `http://localhost` and `http://127.0.0.1`
 match on any port, with the same scheme, host and path. Hosts are compared on
 the *parsed* hostname, never by string prefix, so `http://localhost.evil.com`
 and `http://localhost@evil.com` are not loopback.
+
+One non-https, non-loopback URI is allowed, by exact string match only:
+Cursor's native callback `cursor://anysphere.cursor-mcp/oauth/callback`,
+which its DCR payload registers and redirects to. Never a `cursor:` scheme
+wildcard: any other `cursor://` URI is refused.
 """
 
 from __future__ import annotations
@@ -18,6 +23,9 @@ from app.models.schemas import OAuthClient, utcnow
 
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
 CIMD_REFRESH = timedelta(seconds=3600)
+CURSOR_NATIVE_CALLBACK = "cursor://anysphere.cursor-mcp/oauth/callback"
+# Exact strings only; see the module docstring.
+NATIVE_CALLBACKS = frozenset({CURSOR_NATIVE_CALLBACK})
 
 
 class RedirectError(ValueError):
@@ -50,8 +58,10 @@ def is_loopback(url: object) -> bool:
 
 
 def redirect_uri_allowed(url: object) -> bool:
-    """A redirect URI a client may register: loopback, or `https` with a host,
-    no userinfo and no fragment."""
+    """A redirect URI a client may register: loopback, `https` with a host,
+    no userinfo and no fragment, or exactly one of `NATIVE_CALLBACKS`."""
+    if isinstance(url, str) and url in NATIVE_CALLBACKS:
+        return True
     p = _split(url)
     if p is None or p.fragment or "#" in str(url):
         return False
@@ -66,7 +76,11 @@ def redirect_uri_allowed(url: object) -> bool:
 
 
 def validate_redirect_uri(candidate: str, registered: list[str]) -> str:
-    """Return the registered URI `candidate` matches; raise `RedirectError`."""
+    """Return the registered URI `candidate` matches; raise `RedirectError`.
+    A candidate that could not be registered today never matches, so a stored
+    row can't widen the allowed set (e.g. to another `cursor://` URI)."""
+    if not redirect_uri_allowed(candidate):
+        raise RedirectError("redirect_uri is not an allowed redirect URI")
     if candidate in registered:
         return candidate
     if is_loopback(candidate):

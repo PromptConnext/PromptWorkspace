@@ -89,6 +89,15 @@ def test_absent_when_disabled(client):
             ["http://localhost:8787/callback", "https://www.cursor.com/agents/mcp/oauth/callback"],
             ("Cursor", True),
         ),
+        (
+            [
+                "cursor://anysphere.cursor-mcp/oauth/callback",
+                "https://www.cursor.com/agents/mcp/oauth/callback",
+                "http://localhost:8787/callback",
+            ],
+            ("Cursor", True),
+        ),
+        (["cursor://evil/callback"], (None, False)),
         (["https://chatgpt.com/connector_platform_oauth_redirect"], ("ChatGPT", True)),
         (["http://localhost:1/cb", "https://chatgpt.com/x"], (None, False)),
         (["https://evil.example/cb"], (None, False)),

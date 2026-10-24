@@ -23,6 +23,7 @@ from app.oauth.clients import (
     RedirectError,
     UnknownClient,
     is_loopback,
+    redirect_uri_allowed,
     resolve_client,
     validate_redirect_uri,
 )
@@ -113,6 +114,51 @@ def test_dcr_refuses_bad_redirect(client, uri):
     assert r.status_code == 400
     assert r.json()["error"] == "invalid_redirect_uri"
     assert r.json()["error_description"]
+
+
+CURSOR_NATIVE = "cursor://anysphere.cursor-mcp/oauth/callback"
+# Cursor's real DCR payload (2026-10): it redirects to the cursor:// one.
+CURSOR_URIS = [
+    CURSOR_NATIVE,
+    "https://www.cursor.com/agents/mcp/oauth/callback",
+    "http://localhost:8787/callback",
+]
+
+
+def test_dcr_accepts_cursor_payload(client):
+    r = client.post("/oauth/register", json={"redirect_uris": CURSOR_URIS, "client_name": "Cursor"})
+    assert r.status_code == 201, r.text
+    assert r.json()["redirect_uris"] == CURSOR_URIS
+    stored = client.app.state.repository.get_oauth_client(r.json()["client_id"])
+    assert stored.redirect_uris == CURSOR_URIS
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "cursor://evil/callback",
+        "cursor://anysphere.cursor-mcp/oauth/callback/",
+        "cursor://anysphere.cursor-mcp/oauth/callback?x=1",
+        "cursor://anysphere.cursor-mcp/oauth/callback#f",
+        "CURSOR://anysphere.cursor-mcp/oauth/callback",
+        "cursor://user@anysphere.cursor-mcp/oauth/callback",
+    ],
+)
+def test_cursor_scheme_is_exact_match_only(client, uri):
+    assert redirect_uri_allowed(CURSOR_NATIVE)
+    assert not redirect_uri_allowed(uri)
+    r = client.post("/oauth/register", json={"redirect_uris": [uri]})
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_redirect_uri"
+
+
+def test_validate_redirect_cursor_exact():
+    assert validate_redirect_uri(CURSOR_NATIVE, CURSOR_URIS) == CURSOR_NATIVE
+    with pytest.raises(RedirectError):
+        validate_redirect_uri("cursor://evil/callback", CURSOR_URIS)
+    # Never a scheme wildcard, even if such a URI were somehow stored.
+    with pytest.raises(RedirectError):
+        validate_redirect_uri("cursor://evil/callback", ["cursor://evil/callback"])
 
 
 @pytest.mark.parametrize(
@@ -375,6 +421,17 @@ async def test_fetch_happy_path_pins_ip_and_keeps_hostname():
 
 
 @pytest.mark.anyio
+async def test_fetch_accepts_cursor_native_redirect():
+    got = await fetch_client_metadata(
+        CID,
+        cache={},
+        resolver=_resolver(PUBLIC),
+        transport_factory=_transport(_json_handler(_doc(redirect_uris=CURSOR_URIS))),
+    )
+    assert got.redirect_uris == CURSOR_URIS
+
+
+@pytest.mark.anyio
 async def test_fetch_ipv6_literal_url():
     seen: list[httpx.Request] = []
     await fetch_client_metadata(
@@ -478,6 +535,7 @@ async def test_fetch_redirect_refused(status):
         httpx.Response(200, json=_doc(redirect_uris="http://localhost/cb")),
         httpx.Response(200, json=_doc(redirect_uris=[])),
         httpx.Response(200, json=_doc(redirect_uris=["http://evil.example/cb"])),
+        httpx.Response(200, json=_doc(redirect_uris=["cursor://evil/callback"])),
         httpx.Response(200, json=_doc(token_endpoint_auth_method="client_secret_basic")),
     ],
 )

@@ -156,6 +156,32 @@ def test_happy_path_end_to_end(client):
     assert repo.get_oauth_client(cid).last_used_at is not None
 
 
+CURSOR_NATIVE = "cursor://anysphere.cursor-mcp/oauth/callback"
+CURSOR_URIS = (
+    CURSOR_NATIVE,
+    "https://www.cursor.com/agents/mcp/oauth/callback",
+    "http://localhost:8787/callback",
+)
+
+
+def test_cursor_native_callback_end_to_end(client):
+    cid = _register(client, uris=CURSOR_URIS, name="Cursor")
+    rid = _request_id(_authorize(client, cid, redirect=CURSOR_NATIVE))
+    v = client.get(f"/oauth/authorize/{rid}", headers=ALICE).json()
+    assert v["vendor"] == "Cursor" and v["verified"] is True
+    a = client.post(f"/oauth/authorize/{rid}/approve", headers=ALICE)
+    assert a.status_code == 200, a.text
+    to = a.json()["redirect_to"]
+    assert to.startswith(CURSOR_NATIVE + "?")
+    assert _q(to)["code"]
+
+
+def test_cursor_evil_callback_refused(client):
+    cid = _register(client, uris=CURSOR_URIS, name="Cursor")
+    r = _authorize(client, cid, redirect="cursor://evil/callback")
+    _assert_html_400(r, "invalid_redirect_uri")
+
+
 def test_request_expires_in_ten_minutes(client):
     cid = _register(client)
     rid = _request_id(_authorize(client, cid))

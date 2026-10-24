@@ -153,6 +153,18 @@ describe("OAuth consent page", () => {
     expect(denyConsent).toHaveBeenCalledWith("req-1", { authorization: "Bearer tok" });
   });
 
+  it("follows Cursor's native cursor:// callback", async () => {
+    getConsent.mockResolvedValue(base);
+    approveConsent.mockResolvedValue({
+      redirect_to: "cursor://anysphere.cursor-mcp/oauth/callback?code=x",
+    });
+    await renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith("cursor://anysphere.cursor-mcp/oauth/callback?code=x"),
+    );
+  });
+
   it("refuses a script redirect", async () => {
     getConsent.mockResolvedValue(base);
     approveConsent.mockResolvedValue({ redirect_to: "javascript:alert(1)" });

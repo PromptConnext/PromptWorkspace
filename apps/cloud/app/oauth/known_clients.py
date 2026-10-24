@@ -11,11 +11,17 @@ class KnownClient:
     vendor: str
     redirect_hosts: frozenset[str]
     loopback: bool
+    exact_uris: frozenset[str] = frozenset()
 
 
 KNOWN: tuple[KnownClient, ...] = (
     KnownClient("Claude", frozenset({"claude.ai", "claude.com"}), True),
-    KnownClient("Cursor", frozenset({"www.cursor.com"}), True),
+    KnownClient(
+        "Cursor",
+        frozenset({"www.cursor.com"}),
+        True,
+        frozenset({"cursor://anysphere.cursor-mcp/oauth/callback"}),
+    ),
     KnownClient("ChatGPT", frozenset({"chatgpt.com"}), False),
 )
 
@@ -51,7 +57,9 @@ def classify(redirect_uris: list[str]) -> tuple[str | None, bool]:
         return "loopback", True
     for client in KNOWN:
         if all(
-            _is_loopback(u) and client.loopback or _host(u) in client.redirect_hosts
+            _is_loopback(u) and client.loopback
+            or u in client.exact_uris
+            or _host(u) in client.redirect_hosts
             for u in redirect_uris
         ):
             return client.vendor, True
