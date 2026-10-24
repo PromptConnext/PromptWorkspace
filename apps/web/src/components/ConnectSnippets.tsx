@@ -10,15 +10,17 @@ export function claudeCodeCommand(apiUrl: string): string {
   return `claude mcp add --transport http promptworkspace ${mcpUrl(apiUrl)}`;
 }
 
-function base64Url(text: string): string {
+// Cursor's install link (cursor.com/docs/context/mcp/install-links) takes
+// standard, padded base64 of the JSON config, URL-encoded as a query value.
+function base64Param(text: string): string {
   const bytes = new TextEncoder().encode(text);
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return encodeURIComponent(btoa(binary));
 }
 
 export function cursorDeeplink(apiUrl: string): string {
-  const config = base64Url(JSON.stringify({ url: mcpUrl(apiUrl) }));
+  const config = base64Param(JSON.stringify({ url: mcpUrl(apiUrl) }));
   return `cursor://anysphere.cursor-deeplink/mcp/install?name=promptworkspace&config=${config}`;
 }
 

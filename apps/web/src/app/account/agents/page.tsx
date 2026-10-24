@@ -80,8 +80,9 @@ function AgentsView() {
                 </button>
                 <button
                   type="button"
+                  disabled={busy !== null}
                   onClick={() => setConfirmAll(false)}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   Cancel
                 </button>

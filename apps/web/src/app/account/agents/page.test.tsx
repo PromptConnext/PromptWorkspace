@@ -121,6 +121,17 @@ describe("Connected agents page", () => {
     await waitFor(() => expect(screen.queryAllByText("Active")).toHaveLength(0));
   });
 
+  it("disables Cancel while revoke all is in flight", async () => {
+    listOauthGrants.mockResolvedValue(grants);
+    let finish: () => void = () => {};
+    revokeAllOauthGrants.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    await renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "Revoke all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm: revoke all" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await act(async () => finish());
+  });
+
   it("shows a load error", async () => {
     listOauthGrants.mockRejectedValue(new Error("boom"));
     await renderPage();

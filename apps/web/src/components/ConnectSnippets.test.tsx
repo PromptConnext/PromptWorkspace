@@ -6,11 +6,6 @@ import { ConnectSnippets, claudeCodeCommand, cursorDeeplink } from "./ConnectSni
 
 const API = "https://api.example.com";
 
-function fromBase64Url(s: string): string {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-  return atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
-}
-
 afterEach(cleanup);
 
 describe("ConnectSnippets", () => {
@@ -24,13 +19,14 @@ describe("ConnectSnippets", () => {
     );
   });
 
-  it("encodes the Cursor config as unpadded base64url", () => {
+  it("encodes the Cursor config as URL-encoded, padded standard base64", () => {
     const link = cursorDeeplink(API);
     const prefix = "cursor://anysphere.cursor-deeplink/mcp/install?name=promptworkspace&config=";
     expect(link.startsWith(prefix)).toBe(true);
     const config = link.slice(prefix.length);
-    expect(config).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(JSON.parse(fromBase64Url(config))).toEqual({ url: "https://api.example.com/mcp" });
+    expect(decodeURIComponent(config)).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(decodeURIComponent(config).length % 4).toBe(0);
+    expect(JSON.parse(atob(decodeURIComponent(config)))).toEqual({ url: "https://api.example.com/mcp" });
   });
 
   it("renders the three forms with the API URL", () => {
