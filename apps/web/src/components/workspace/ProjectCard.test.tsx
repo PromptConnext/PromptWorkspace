@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectCard as Card, WorkspaceMember } from "@/lib/types";
 import { ProjectCard } from "./ProjectCard";
 
@@ -10,7 +10,15 @@ vi.mock("@/lib/hooks", () => ({
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ authHeaders: () => ({}) }),
 }));
-afterEach(cleanup);
+const NOW = new Date("2026-10-24T12:00:00Z");
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function member(id: string, email: string, name: string | null = null): WorkspaceMember {
   return {
@@ -48,7 +56,7 @@ function card(over: Partial<Card> = {}): Card {
     policy: { source: "workspace", selected: [] },
     checks: [{ id: "c1", ok: true, text: "All good" }],
     agent_closed_30d: 0,
-    last_activity_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    last_activity_at: "2026-10-24T10:00:00Z",
     ...over,
   };
 }
@@ -60,9 +68,12 @@ describe("ProjectCard", () => {
   it("leads with people: hat holders then contributors", () => {
     renderCard(card({ contributors: ["u1", "u2", "u3", "u4", "u5", "u6", "u7"] }));
     expect(screen.getByText("Somchai")).toBeInTheDocument();
-    expect(screen.getByText(/Tech steward/)).toBeInTheDocument();
-    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByText("(Tech steward)")).toBeInTheDocument();
+    expect(screen.getByText("Ann")).toBeInTheDocument();
+    expect(screen.getByText("(Business owner)")).toBeInTheDocument();
     expect(screen.getByTestId("contributors").children).toHaveLength(6); // five avatars + "+2"
+    expect(screen.getByTestId("contributors")).toHaveTextContent(/^.*\+2$/);
+    expect(screen.getByText("+2")).toBeInTheDocument();
   });
 
   it("hat with no holder reads No tech steward and links to settings for admins", () => {
@@ -75,6 +86,26 @@ describe("ProjectCard", () => {
     renderCard(c, false);
     expect(screen.getByText("No tech steward")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "No tech steward" })).toBeNull();
+  });
+
+  it("hat with no business owner reads No business owner, plain text for members", () => {
+    const c = card({ hats: { business_owner: null, tech_steward: "u1" } });
+    const { unmount } = renderCard(c, true);
+    expect(screen.getByRole("link", { name: "No business owner" })).toHaveAttribute(
+      "href",
+      "/w/w1/p/p1/settings",
+    );
+    unmount();
+    renderCard(c, false);
+    const text = screen.getByText("No business owner");
+    expect(text.className).toContain("amber");
+    expect(screen.queryByRole("link", { name: "No business owner" })).toBeNull();
+  });
+
+  it("hat holder missing from members renders Unknown member", () => {
+    renderCard(card({ hats: { business_owner: null, tech_steward: "gone-id" } }));
+    expect(screen.getByText("Unknown member")).toBeInTheDocument();
+    expect(screen.queryByText(/gone-id/)).toBeNull();
   });
 
   it("unknown contributor renders Unknown member", () => {
@@ -95,7 +126,8 @@ describe("ProjectCard", () => {
 
   it("state line: 3 in progress · 12 done · 2 decisions waiting", () => {
     renderCard(card());
-    expect(screen.getByText("3 in progress · 12 done")).toBeInTheDocument();
+    const line = screen.getByRole("link", { name: "2 decisions waiting" }).parentElement!;
+    expect(line.textContent).toBe("3 in progress · 12 done · 2 decisions waiting");
     const link = screen.getByRole("link", { name: "2 decisions waiting" });
     expect(link).toHaveAttribute("href", "/w/w1/p/p1?tab=decisions");
   });
@@ -104,6 +136,7 @@ describe("ProjectCard", () => {
     renderCard(card({ decisions: { open: 2, overdue: 1, expired_30d: 1 } }));
     const link = screen.getByRole("link", { name: "1 decision overdue" });
     expect(link.className).toContain("amber");
+    expect(screen.queryByText(/waiting/)).toBeNull();
     expect(screen.getByText("1 decision expired without an answer").className).toContain("amber");
   });
 
