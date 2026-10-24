@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { avatarColor, displayName, initial } from "@/lib/identity";
 import type { WorkspaceOverview } from "@/lib/types";
 import { layoutGraph } from "./layout";
@@ -52,12 +52,16 @@ export function WorkspaceMap({
   height?: number;
 }) {
   const router = useRouter();
+  const arrowId = useId();
   const box = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState<number | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const w = width ?? measured ?? DEFAULT_W;
   const h = height ?? DEFAULT_H;
 
+  const { members, projects, people } = overview;
+  const connected = new Set(people.flatMap((l) => [l.from_user_id, l.to_user_id ?? ""]));
+  const nothing = projects.length === 0 && !members.some((m) => connected.has(m.user_id));
   useEffect(() => {
     const el = box.current;
     if (width !== undefined || !el || typeof ResizeObserver === "undefined") return;
@@ -67,9 +71,8 @@ export function WorkspaceMap({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [width]);
+  }, [width, nothing]);
 
-  const { members, projects, people } = overview;
   const { nodes, edges } = useMemo(
     () => layoutGraph(members, projects, people, w, h),
     [members, projects, people, w, h],
@@ -77,8 +80,6 @@ export function WorkspaceMap({
   const memberById = useMemo(() => new Map(members.map((m) => [m.user_id, m])), [members]);
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
-  const connected = new Set(people.flatMap((l) => [l.from_user_id, l.to_user_id ?? ""]));
-  const nothing = projects.length === 0 && !members.some((m) => connected.has(m.user_id));
   if (nothing) {
     return <p className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Nothing to map yet</p>;
   }
@@ -100,7 +101,7 @@ export function WorkspaceMap({
       >
         <title>Workspace map</title>
         <defs>
-          <marker id="map-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0 0L10 5L0 10z" fill={SLATE_500} />
           </marker>
         </defs>
@@ -117,7 +118,7 @@ export function WorkspaceMap({
                 stroke={s.stroke}
                 strokeWidth={s.width}
                 strokeDasharray={s.dash}
-                markerEnd={e.kind === "approval" ? "url(#map-arrow)" : undefined}
+                markerEnd={e.kind === "approval" ? `url(#${arrowId})` : undefined}
                 opacity={lit ? 1 : 0.25}
               />
             );

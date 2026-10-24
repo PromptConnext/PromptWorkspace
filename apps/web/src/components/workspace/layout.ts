@@ -31,6 +31,18 @@ export type Positioned = PositionedNode | PositionedEdge;
 const MARGIN_X = 70;
 const MARGIN_Y = 28;
 const TICKS = 300;
+/** Drawn size of a node: member circle radius, project box half-extents. */
+const MEMBER_R = 18;
+const BOX_HX = 56;
+const BOX_HY = 16;
+/** Length of the approval arrowhead, so the tip lands on the node edge. */
+const ARROW_LEN = 10;
+
+/** Distance from a node's centre to its outline along the unit direction (ux, uy). */
+function reach(type: "member" | "project", ux: number, uy: number): number {
+  if (type === "member") return MEMBER_R;
+  return Math.min(ux === 0 ? Infinity : BOX_HX / Math.abs(ux), uy === 0 ? Infinity : BOX_HY / Math.abs(uy));
+}
 
 type SimNode = SimulationNodeDatum & { id: string; type: "member" | "project"; refId: string };
 
@@ -94,7 +106,23 @@ export function layoutGraph(
   const edges: PositionedEdge[] = edgeDefs.map((e) => {
     const a = at.get(e.from)!;
     const b = at.get(e.to)!;
-    return { ...e, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    // Trim both ends to the node outlines (the arrow tip, too, stays visible).
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return { ...e, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    const ux = dx / len;
+    const uy = dy / len;
+    const startCut = reach(a.type, ux, uy);
+    const endCut = reach(b.type, -ux, -uy) + (e.kind === "approval" ? ARROW_LEN : 0);
+    if (startCut + endCut >= len) return { ...e, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    return {
+      ...e,
+      x1: a.x + ux * startCut,
+      y1: a.y + uy * startCut,
+      x2: b.x - ux * endCut,
+      y2: b.y - uy * endCut,
+    };
   });
   return { nodes, edges };
 }

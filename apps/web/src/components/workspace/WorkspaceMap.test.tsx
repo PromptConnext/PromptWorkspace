@@ -64,7 +64,10 @@ describe("WorkspaceMap", () => {
     fireEvent.mouseEnter(alpha);
     expect(container.querySelector('path[data-edge="hat"]')).toHaveAttribute("opacity", "1");
     expect(container.querySelector('path[data-edge="work"]')).toHaveAttribute("opacity", "0.25");
+    expect(screen.getByLabelText("Somchai, member")).toHaveAttribute("opacity", "1");
+    expect(screen.getByLabelText("Beta, project")).toHaveAttribute("opacity", "0.25");
     fireEvent.mouseLeave(alpha);
+    expect(screen.getByLabelText("Beta, project")).toHaveAttribute("opacity", "1");
     expect(container.querySelector('path[data-edge="work"]')).toHaveAttribute("opacity", "1");
     fireEvent.keyDown(alpha, { key: "Enter" });
     expect(push).toHaveBeenCalledWith("/w/w1/p/p1");

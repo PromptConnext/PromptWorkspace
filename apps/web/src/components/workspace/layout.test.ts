@@ -33,4 +33,17 @@ describe("layoutGraph", () => {
       expect(n.y).toBeLessThanOrEqual(300);
     }
   });
+
+  it("ends an approval edge short of the target centre, on the segment toward it", () => {
+    const { nodes, edges } = layoutGraph(members, cards, links, 900, 560);
+    const a = nodes.find((n) => n.id === "m:u1")!;
+    const b = nodes.find((n) => n.id === "m:u3")!;
+    const e = edges.find((x) => x.kind === "approval")!;
+    expect(Math.hypot(e.x2 - b.x, e.y2 - b.y)).toBeGreaterThan(18);
+    const cross = (b.x - a.x) * (e.y2 - a.y) - (b.y - a.y) * (e.x2 - a.x);
+    const dot = (b.x - a.x) * (e.x2 - a.x) + (b.y - a.y) * (e.y2 - a.y);
+    expect(Math.abs(cross)).toBeLessThan(1e-6);
+    expect(dot).toBeGreaterThan(0);
+    expect(Math.hypot(e.x2 - a.x, e.y2 - a.y)).toBeLessThan(Math.hypot(b.x - a.x, b.y - a.y));
+  });
 });
