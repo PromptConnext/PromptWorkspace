@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { DisciplinePanel } from "@/components/workspace/DisciplinePanel";
+import { UsagePanel } from "@/components/workspace/UsagePanel";
 import { PolicyScopeEditor } from "@/components/policy/PolicyScopeEditor";
 import { putGovernance } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -219,6 +221,13 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
             );
           })}
         </ul>
+      )}
+
+      {report.data && (
+        <>
+          <UsagePanel usage={report.data.usage ?? []} />
+          {report.data.discipline && <DisciplinePanel discipline={report.data.discipline} />}
+        </>
       )}
     </section>
   );

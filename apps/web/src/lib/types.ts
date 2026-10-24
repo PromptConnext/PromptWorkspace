@@ -867,7 +867,27 @@ export interface WorkspaceGovernance {
   updated_at: string;
 }
 
+export interface GovernanceUsage {
+  source: "managed" | "byo";
+  provider: string | null;
+  runs: number;
+  tokens: number;
+  today_tokens: number;
+  daily_budget: number | null;
+  by_stage: { stage: string; runs: number; model: string; tokens: number }[];
+}
+
+export interface GovernanceDiscipline {
+  resolved: number;
+  open: number;
+  expired_30d: number;
+  median_hours_to_decide: number | null;
+  chains_verified: number;
+  chains_total: number;
+}
+
 export interface GovernanceReport {
-  // Usage and discipline are rendered by a later task; only `projects` is typed here.
+  usage: GovernanceUsage[];
+  discipline: GovernanceDiscipline;
   projects: { project_id: string; name: string; checks: ProjectCheck[] }[];
 }
