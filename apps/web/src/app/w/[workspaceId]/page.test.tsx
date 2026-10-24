@@ -133,6 +133,20 @@ describe("workspace home", () => {
     );
   });
 
+  it("notes when the project list is truncated", async () => {
+    state.overview = { data: overview({ truncated: true }), loading: false };
+    await renderPage();
+    expect(
+      await screen.findByText("Showing the 200 most recently updated projects."),
+    ).toBeInTheDocument();
+  });
+
+  it("has no truncation note otherwise", async () => {
+    await renderPage();
+    await screen.findByText("Projects");
+    expect(screen.queryByText(/most recently updated/)).toBeNull();
+  });
+
   it("shows plain Inbox when nothing is waiting", async () => {
     state.decisions = { data: [], loading: false };
     await renderPage();

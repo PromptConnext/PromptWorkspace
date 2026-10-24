@@ -116,10 +116,6 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
     setStatus("idle");
   }
 
-  const cards = overview.data?.projects ?? [];
-  const deviating = cards.filter((p) => p.policy.source === "project");
-  const following = cards.length - deviating.length;
-
   return (
     <section className="mb-10 rounded-xl border border-slate-200 bg-white p-5">
       <h2 className="mb-1 text-sm font-medium text-slate-900">AI governance</h2>
@@ -133,16 +129,16 @@ export function GovernancePanel({ workspaceId }: { workspaceId: string }) {
         </p>
       )}
 
-      {overview.data && (
+      {loaded && (
         <p className="mb-3 text-xs text-slate-600">
-          {`Applies to ${plural(following, "project", "projects")}.`}
-          {deviating.length > 0 && (
+          {`Applies to ${plural(loaded.inheriting_unfrozen, "project", "projects")}.`}
+          {loaded.own_scope.length > 0 && (
             <>
               {" "}
-              {deviating.length === 1
+              {loaded.own_scope.length === 1
                 ? "1 project uses its own scope"
-                : `${deviating.length} projects use their own scope`}
-              {`: ${deviating.map((p) => p.name).join(", ")}.`}
+                : `${loaded.own_scope.length} projects use their own scope`}
+              {`: ${loaded.own_scope.join(", ")}.`}
             </>
           )}
         </p>

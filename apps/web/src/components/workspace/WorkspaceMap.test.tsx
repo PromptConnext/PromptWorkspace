@@ -84,3 +84,13 @@ describe("WorkspaceMap", () => {
     expect(screen.getByText("Nothing to map yet")).toBeInTheDocument();
   });
 });
+
+describe("WorkspaceMap names", () => {
+  it("labels a nameless member Unnamed member, not the raw id", () => {
+    const ghost = { ...m("u-raw-id", ""), email: "" } as WorkspaceMember;
+    const ov = { ...overview([]), members: [ghost] };
+    render(<WorkspaceMap overview={ov} workspaceId="w1" onSelectMember={() => {}} />);
+    expect(screen.getByLabelText("Unnamed member, member")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/u-raw-id/)).toBeNull();
+  });
+});

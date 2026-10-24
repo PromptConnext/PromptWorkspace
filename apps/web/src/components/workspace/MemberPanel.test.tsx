@@ -122,3 +122,17 @@ describe("MemberPanel", () => {
     expect(screen.getByText("1 task assigned")).toBeInTheDocument();
   });
 });
+
+describe("MemberPanel names and headings", () => {
+  beforeEach(() => mockApi({}));
+  afterEach(cleanup);
+
+  it("never shows a raw id for a nameless member; section is Assigned", () => {
+    const ghost = { ...member("u-raw-id", ""), email: "" } as WorkspaceMember;
+    panel({ member: ghost, overview: { ...overview([]), members: [ghost] } });
+    expect(screen.getByRole("heading", { name: "Unnamed member" })).toBeInTheDocument();
+    expect(screen.queryByText(/u-raw-id/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Assigned" })).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).toBeNull();
+  });
+});

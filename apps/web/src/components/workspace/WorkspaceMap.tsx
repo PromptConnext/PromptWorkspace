@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { avatarColor, displayName, initial } from "@/lib/identity";
+import { memberFullName } from "@/components/project/MemberChip";
+import { avatarColor, initial } from "@/lib/identity";
 import type { WorkspaceOverview } from "@/lib/types";
 import { layoutGraph } from "./layout";
 import type { PositionedEdge } from "./layout";
@@ -128,7 +129,7 @@ export function WorkspaceMap({
           const isMember = n.type === "member";
           const m = isMember ? memberById.get(n.refId) : undefined;
           const p = isMember ? undefined : projectById.get(n.refId);
-          const label = m ? displayName(m) : (p?.name ?? n.refId);
+          const label = isMember ? memberFullName(m) : (p?.name ?? n.refId);
           const dim = hover !== null && hover !== n.id && !edges.some(
             (e) => (e.from === hover && e.to === n.id) || (e.to === hover && e.from === n.id),
           );

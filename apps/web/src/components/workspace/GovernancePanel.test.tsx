@@ -13,6 +13,8 @@ const GOV = {
   require_seeded_rules: true,
   updated_by: null,
   updated_at: "2026-10-24T00:00:00Z",
+  inheriting_unfrozen: 5,
+  own_scope: ["Zed", "Yan"],
 };
 const REPORT = {
   projects: [
@@ -93,10 +95,10 @@ describe("GovernancePanel", () => {
     expect(screen.getByText("Follows workspace rules (repository not checked here)")).toBeInTheDocument();
   });
 
-  it("Applies to N projects. M projects use their own scope. names the deviating projects", () => {
+  it("Applies to N projects. M projects use their own scope. comes from the governance fields", () => {
     render(<GovernancePanel workspaceId="w1" />);
     expect(
-      screen.getByText("Applies to 2 projects. 1 project uses its own scope: Alpha."),
+      screen.getByText("Applies to 5 projects. 2 projects use their own scope: Zed, Yan."),
     ).toBeInTheDocument();
   });
 

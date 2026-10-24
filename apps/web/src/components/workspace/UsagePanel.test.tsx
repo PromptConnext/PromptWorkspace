@@ -56,3 +56,15 @@ describe("UsagePanel", () => {
     expect(rows).toHaveLength(3);
   });
 });
+
+describe("UsagePanel polish", () => {
+  it("says so when there were no AI runs", () => {
+    render(<UsagePanel usage={[]} />);
+    expect(screen.getByText("No AI runs in the last 30 days.")).toBeInTheDocument();
+  });
+
+  it("column headers carry scope=col", () => {
+    render(<UsagePanel usage={[managed]} />);
+    for (const th of screen.getAllByRole("columnheader")) expect(th).toHaveAttribute("scope", "col");
+  });
+});

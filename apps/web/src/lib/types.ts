@@ -892,6 +892,10 @@ export interface WorkspaceGovernance {
   require_seeded_rules: boolean;
   updated_by: string | null;
   updated_at: string;
+  /** Projects following the workspace scope, frozen ones excluded. */
+  inheriting_unfrozen: number;
+  /** Names of projects that use their own scope. */
+  own_scope: string[];
 }
 
 export interface GovernanceUsage {

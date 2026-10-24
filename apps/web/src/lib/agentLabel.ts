@@ -17,6 +17,9 @@ export function agentLabel(
     if (!name) return "Closed via an MCP client";
     return `Closed via ${name.charAt(0).toUpperCase()}${name.slice(1)} (MCP)`;
   }
-  if (client.startsWith("vscode:")) return `Closed via ${client.slice(7)} (editor)`;
+  if (client.startsWith("vscode:")) {
+    const name = client.slice(7);
+    return name ? `Closed via ${name} (editor)` : "Closed via an editor";
+  }
   return client ? `Closed via ${client}` : hasCommit ? "Closed by a push" : null;
 }

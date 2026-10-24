@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useCloudGet } from "@/lib/hooks";
-import { displayName } from "@/lib/identity";
+import { memberFullName } from "@/components/project/MemberChip";
 import type {
   DecisionKind,
   DecisionsOut,
@@ -141,8 +141,8 @@ export function MemberPanel({
   const queue = Object.values(waiting).flat();
 
   return (
-    <aside aria-label={`${displayName(member)} details`} className="rounded-xl border border-slate-200 bg-white p-4">
-      <h2 className="text-lg font-semibold text-slate-900">{displayName(member)}</h2>
+    <aside aria-label={`${memberFullName(member)} details`} className="rounded-xl border border-slate-200 bg-white p-4">
+      <h2 className="text-lg font-semibold text-slate-900">{memberFullName(member)}</h2>
 
       {isSelf && canSeeQueue && <SelfDecisions workspaceId={workspaceId} onItems={onItems} />}
       {!isSelf && viewerIsAdmin &&
@@ -189,7 +189,7 @@ export function MemberPanel({
       </section>
 
       <section className="mt-4">
-        <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">In progress</h3>
+        <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">Assigned</h3>
         <p className="mt-1 text-sm text-slate-900">{plural(assigned)}</p>
       </section>
 
