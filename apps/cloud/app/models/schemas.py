@@ -1622,7 +1622,9 @@ class StageDraftIn(BaseModel):
 
 
 class StageDraftWarning(BaseModel):
-    code: Literal["missing_task_numbers", "unmarked_new_paths"]
+    code: Literal[
+        "missing_task_numbers", "unmarked_new_paths", "no_task_lines", "empty_document"
+    ]
     items: list[Any]
 
 

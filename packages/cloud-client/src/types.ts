@@ -165,9 +165,9 @@ export interface StageDraftIn {
 }
 
 export interface StageDraftWarning {
-  code: "missing_task_numbers" | "unmarked_new_paths";
+  code: "missing_task_numbers" | "unmarked_new_paths" | "no_task_lines" | "empty_document";
   /** `missing_task_numbers`: refs such as `"T003"`. `unmarked_new_paths`:
-   *  `{ ref, path }` objects. */
+   *  `{ ref, path }` objects. `no_task_lines` and `empty_document`: empty. */
   items: unknown[];
 }
 

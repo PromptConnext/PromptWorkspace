@@ -1028,6 +1028,42 @@ test("submit_stage_draft relays the cloud's warnings as bullets", async () => {
   );
 });
 
+test("submit_stage_draft words the parse warnings: no task lines, empty document", async () => {
+  const root = makeClone({});
+  await withTools(
+    async ({ call }) => {
+      const result = await call("submit_stage_draft", {
+        workspace_root: root,
+        stage: "tasks",
+        markdown: "We will add a queue.",
+      });
+      assert.equal(result.isError, undefined);
+      assert.equal(
+        bodyOf(result),
+        [
+          "Draft for tasks is pending review in PromptWorkspace.",
+          "",
+          "Warnings to fix and resubmit:",
+          '- No task lines found: use "- [ ] T001 title" lines under "## Phase N:" headings',
+          "- The document is empty after parsing",
+        ].join("\n"),
+      );
+    },
+    {
+      planningReply: () => ({
+        code: 201,
+        body: {
+          ...STAGE_DRAFT,
+          warnings: [
+            { code: "no_task_lines", items: [] },
+            { code: "empty_document", items: [] },
+          ],
+        },
+      }),
+    },
+  );
+});
+
 test("submit_stage_draft with no warnings is one line", async () => {
   const root = makeClone({});
   await withTools(async ({ call }) => {

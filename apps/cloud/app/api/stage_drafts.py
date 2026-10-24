@@ -32,10 +32,9 @@ from app.api.stage_documents import StageDocumentSaved
 from app.db.repository import Repository
 from app.delivery.decisions import latest_decision
 from app.dependencies import User, get_current_user, get_repository
-from app.generation.parsing import missing_task_refs, parse_task_lines
-from app.generation.path_check import unknown_task_paths
 from app.generation.prompts import StageKind, agent_planning_instructions, stage_template
 from app.generation.stage_apply import apply_stage_content
+from app.generation.warnings import stage_warnings
 from app.models.schemas import (
     Project,
     RepoAnalysisStatus,
@@ -212,34 +211,6 @@ def _draft_out(
     )
 
 
-def _task_warnings(markdown: str, repo: Repository, project_id: str) -> list[StageDraftWarning]:
-    """The same checks a generated tasks document is reported against
-    (app/api/generation.py): gaps in the numbering, and paths that are neither
-    in the repository nor marked `(new)`. Reported, never rewritten."""
-    warnings: list[StageDraftWarning] = []
-    gaps = missing_task_refs([t["ref"] for t in parse_task_lines(markdown)])
-    if gaps:
-        warnings.append(StageDraftWarning(code="missing_task_numbers", items=gaps))
-    codebase = _codebase_context(repo.get_repo_analysis(project_id))
-    if codebase is not None:
-        snapshot = codebase.snapshot
-        unknown = unknown_task_paths(
-            markdown,
-            snapshot.paths,
-            listing_complete=(
-                not snapshot.tree_truncated and snapshot.file_count <= len(snapshot.paths)
-            ),
-        )
-        if unknown:
-            warnings.append(
-                StageDraftWarning(
-                    code="unmarked_new_paths",
-                    items=[{"ref": u.ref, "path": u.path} for u in unknown],
-                )
-            )
-    return warnings
-
-
 def _require_pending_draft(
     repo: Repository, project_id: str, stage: str, draft_id: str
 ) -> StageDraft:
@@ -301,7 +272,12 @@ def submit_stage_draft(
             created_by=user.id,
         )
     )
-    warnings = _task_warnings(body.markdown, repo, project.id) if body.stage == "tasks" else []
+    # The same checks a generated document is reported against, so the agent
+    # can fix and resubmit before a human reads the draft.
+    codebase = _codebase_context(repo.get_repo_analysis(project.id))
+    warnings = [
+        StageDraftWarning(**w) for w in stage_warnings(body.stage, body.markdown, codebase)
+    ]
     return _draft_out(draft, repo, warnings)
 
 

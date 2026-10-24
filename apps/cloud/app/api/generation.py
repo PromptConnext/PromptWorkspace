@@ -40,8 +40,6 @@ from app.api._guards import require_project, require_stage_access
 from app.db.repository import Repository
 from app.delivery.decisions import latest_decision
 from app.dependencies import User, get_current_user, get_repository
-from app.generation.parsing import missing_task_refs, parse_task_lines
-from app.generation.path_check import unknown_task_paths
 from app.generation.prefill import SYSTEM_PROMPT as PREFILL_SYSTEM_PROMPT
 from app.generation.prefill import build_prompt as build_prefill_prompt
 from app.generation.prefill import parse_prefill
@@ -55,6 +53,7 @@ from app.generation.prompts import (
 from app.generation.routing import select_model
 from app.generation.service import GenerationError, HttpGenerationProvider, parse_stage_output
 from app.generation.stage_apply import StageApplyResult, apply_stage_content
+from app.generation.warnings import stage_warnings
 from app.imports.snapshot import occurrences_text, quoted_strings, repo_occurrences
 from app.models.schemas import (
     GenerateRequest,
@@ -368,27 +367,9 @@ async def generate(
             payload["task_count"] = applied.task_count
             payload["retired_count"] = applied.retired_count
             payload["retired_refs"] = applied.retired_refs
-            gaps = missing_task_refs([t["ref"] for t in parse_task_lines(result.content)])
-            if gaps:
-                payload["warnings"] = [{"code": "missing_task_numbers", "items": gaps}]
-            if codebase is not None:
-                snapshot = codebase.snapshot
-                unknown = unknown_task_paths(
-                    result.content,
-                    snapshot.paths,
-                    listing_complete=(
-                        not snapshot.tree_truncated and snapshot.file_count <= len(snapshot.paths)
-                    ),
-                )
-                if unknown:
-                    # Reported, never rewritten: what a path was meant to be is
-                    # the author's call.
-                    payload.setdefault("warnings", []).append(
-                        {
-                            "code": "unmarked_new_paths",
-                            "items": [{"ref": u.ref, "path": u.path} for u in unknown],
-                        }
-                    )
+            warnings = stage_warnings(stage, result.content, codebase)
+            if warnings:
+                payload["warnings"] = warnings
 
         repo.update_generation_run(
             run.id,

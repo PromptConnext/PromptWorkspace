@@ -272,6 +272,12 @@ function warningLines(warning: StageDraftWarning): string[] {
   if (warning.code === "missing_task_numbers") {
     return [`- Task numbers missing: ${warning.items.map(String).join(", ")}`];
   }
+  if (warning.code === "no_task_lines") {
+    return ['- No task lines found: use "- [ ] T001 title" lines under "## Phase N:" headings'];
+  }
+  if (warning.code === "empty_document") {
+    return ["- The document is empty after parsing"];
+  }
   return warning.items.map((item) => {
     const { ref, path } = (item ?? {}) as { ref?: unknown; path?: unknown };
     return (

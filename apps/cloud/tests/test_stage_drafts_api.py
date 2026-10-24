@@ -505,3 +505,29 @@ def test_accept_caps_the_edited_markdown(client: TestClient):
     repo = client.app.state.repository
     assert repo.get_stage_document(pid, "specify") is None
     assert repo.get_stage_draft(pid, "specify").status == "pending"
+
+
+# --------------------------------------------------------------------------- #
+# Parse warnings on submit
+# --------------------------------------------------------------------------- #
+
+
+def test_a_tasks_draft_of_prose_only_warns_no_task_lines(client: TestClient):
+    _, pid = _ready_project(client)
+    res = _submit(client, pid, "tasks", "# Tasks\n\nWe will add pagination soon.\n")
+    assert res.status_code == 201, res.text
+    codes = [w["code"] for w in res.json()["warnings"]]
+    assert codes == ["no_task_lines"]
+
+
+def test_a_draft_with_nothing_left_after_parsing_warns_empty_document(client: TestClient):
+    _, pid = _ready_project(client)
+    res = _submit(client, pid, "specify", "<think>only thinking</think>")
+    assert res.status_code == 201, res.text
+    assert [w["code"] for w in res.json()["warnings"]] == ["empty_document"]
+
+
+def test_a_well_formed_specification_has_no_warnings(client: TestClient):
+    _, pid = _ready_project(client)
+    res = _submit(client, pid, "specify", SPEC)
+    assert res.json()["warnings"] == []
