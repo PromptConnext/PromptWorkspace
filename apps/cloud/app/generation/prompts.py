@@ -51,6 +51,19 @@ def _template(name: str) -> str:
     return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
 
 
+def stage_template(stage: StageKind, *, existing_repo: bool) -> str:
+    """The Spec Kit template for a stage; `tasks` for a project imported from a
+    repository uses the brownfield variant (see `_TASKS_TEMPLATE_EXISTING`)."""
+    if stage == "tasks" and existing_repo:
+        return _template(_TASKS_TEMPLATE_EXISTING)
+    return _template(_STAGE_TEMPLATE[stage])
+
+
+def agent_planning_instructions() -> str:
+    """The brief a local coding agent follows to plan an imported project."""
+    return _template("agent-planning-brief.md")
+
+
 # Observed on a real import (finding #33): the repository as shipped did not
 # install, and with no CI and no tests nothing said so until an agent tried.
 # Added only when the specification adds CI or tests (the first rule's "only
