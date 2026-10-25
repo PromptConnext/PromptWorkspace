@@ -66,14 +66,89 @@ def test_two_clients_see_each_others_presence(client):
         assert {u["user_id"] for u in roster_a2["users"]} == {"alice"}
 
 
-def test_heartbeat_updates_cursor_hint(client):
+def test_client_frame_updates_state_but_is_not_rebroadcast(client):
+    """A heartbeat (or cursor_hint) frame must produce no outbound frame to any
+    socket in the room; the next frame each side sees is the *next* roster
+    change, not an echo of the heartbeat."""
     pid = _project_with_two_members(client)
     with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a:
-        a.receive_json()  # initial roster
-        a.send_json({"cursor_hint": "task:t1"})
-        roster = a.receive_json()
-        me = next(u for u in roster["users"] if u["user_id"] == "alice")
-        assert me["cursor_hint"] == "task:t1"
+        a.receive_json()  # alice's join
+        with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob") as b:
+            b.receive_json()
+            a.receive_json()  # bob's join
+            a.send_json({})
+            b.send_json({"cursor_hint": "task:t1"})
+            b.send_json({})
+            # State is still updated server-side.
+            hints = {u["user_id"]: u["cursor_hint"] for u in client.app.state.presence.roster(pid)}
+            assert hints["bob"] == "task:t1"
+        # Bob leaves. If any heartbeat had been rebroadcast, alice would see an
+        # extra {alice, bob} roster before this one.
+        nxt = a.receive_json()
+        assert {u["user_id"] for u in nxt["users"]} == {"alice"}
+
+
+def test_second_socket_of_same_user_does_not_broadcast(client):
+    pid = _project_with_two_members(client)
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a1:
+        a1.receive_json()
+        with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice"):
+            # The second tab is accepted but nothing is sent to anyone.
+            assert client.app.state.presence.occupancy() == (1, 2)
+            with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob") as b:
+                # First frame a1 sees after bob joins is bob's roster, so the
+                # a2 join produced nothing.
+                assert {u["user_id"] for u in a1.receive_json()["users"]} == {"alice", "bob"}
+                b.receive_json()
+        # Bob left (broadcast); now a2 leaves while a1 remains (no broadcast).
+        assert {u["user_id"] for u in a1.receive_json()["users"]} == {"alice"}
+    assert client.app.state.presence.occupancy() == (0, 0)
+
+
+def test_last_socket_leave_broadcasts_to_remaining_room(client):
+    pid = _project_with_two_members(client)
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a:
+        a.receive_json()
+        with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob"):
+            assert {u["user_id"] for u in a.receive_json()["users"]} == {"alice", "bob"}
+        assert {u["user_id"] for u in a.receive_json()["users"]} == {"alice"}
+
+
+def test_per_user_cap_refuses_with_1013(client):
+    pid = _project_with_two_members(client)
+    client.app.state.presence = ConnectionManager(10, 100, 1)
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a:
+        a.receive_json()
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice"):
+                pass
+        assert exc.value.code == 1013
+        assert client.app.state.presence.occupancy() == (1, 1)
+
+
+def test_per_project_cap_refuses_with_1013(client):
+    pid = _project_with_two_members(client)
+    client.app.state.presence = ConnectionManager(1, 100, 5)
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a:
+        a.receive_json()
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob"):
+                pass
+        assert exc.value.code == 1013
+
+
+def test_global_cap_refuses_with_1013_and_frees_after_disconnect(client):
+    pid = _project_with_two_members(client)
+    client.app.state.presence = ConnectionManager(10, 1, 5)
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=alice") as a:
+        a.receive_json()
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob"):
+                pass
+        assert exc.value.code == 1013
+    # Cap freed once alice disconnects.
+    with client.websocket_connect(f"/ws/projects/{pid}/presence?user_id=bob") as b:
+        assert b.receive_json()["type"] == "presence"
 
 
 def test_es256_jwks_token_accepted(monkeypatch):
@@ -198,33 +273,47 @@ async def test_client_hangup_during_broadcast_is_not_an_asgi_error():
 
 
 # --------------------------------------------------------------------------- #
-# Idle prune (unit — deterministic, no timers)
+# Caps (unit — deterministic)
 # --------------------------------------------------------------------------- #
 class _FakeSocket:
+    def __init__(self):
+        self.accepted = False
+
     async def accept(self):
-        pass
+        self.accepted = True
 
     async def send_json(self, message):
         pass
 
 
 @pytest.mark.anyio
-async def test_prune_removes_idle_connections():
-    mgr = ConnectionManager(max_per_project=10)
-    s1, s2 = _FakeSocket(), _FakeSocket()
-    await mgr.connect("p1", s1, "alice", now=0.0)
-    await mgr.connect("p1", s2, "bob", now=100.0)
-    # At t=110 with ttl=20: alice (last_seen 0) is idle, bob (100) is not.
-    stale = mgr.prune_idle("p1", ttl=20.0, now=110.0)
-    assert stale == [s1]
-    assert {u["user_id"] for u in mgr.roster("p1")} == {"bob"}
+async def test_each_cap_refuses_without_accepting_and_frees_on_disconnect():
+    mgr = ConnectionManager(max_per_project=2, max_total=3, max_per_user=1)
+    a1, a2 = _FakeSocket(), _FakeSocket()
+    assert await mgr.connect("p1", a1, "alice", now=0.0) is True
+    # per-user cap
+    assert await mgr.connect("p1", a2, "alice", now=0.0) is False
+    assert a2.accepted is False
+    b1, c1 = _FakeSocket(), _FakeSocket()
+    assert await mgr.connect("p1", b1, "bob", now=0.0) is True
+    # per-project cap (room has 2)
+    assert await mgr.connect("p1", c1, "carol", now=0.0) is False
+    assert c1.accepted is False
+    # global cap (3 total)
+    assert await mgr.connect("p2", _FakeSocket(), "x", now=0.0) is True
+    over = _FakeSocket()
+    assert await mgr.connect("p3", over, "y", now=0.0) is False
+    assert over.accepted is False
+    # free a slot -> accepted again
+    mgr.disconnect("p1", a1)
+    assert await mgr.connect("p3", over, "y", now=0.0) is True
 
 
 def test_capacity_limit_rejects_extra_connections():
     import asyncio
 
     async def run():
-        mgr = ConnectionManager(max_per_project=1)
+        mgr = ConnectionManager(1, 10, 10)
         s1, s2 = _FakeSocket(), _FakeSocket()
         assert await mgr.connect("p1", s1, "alice", now=0.0) is True
         # Second connection to a full room is refused (not accepted).

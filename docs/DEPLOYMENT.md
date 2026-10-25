@@ -174,8 +174,9 @@ Production values (develop differs only where noted in §2.7):
 | `CORS_ORIGINS` | `https://workspace.promptconnext.com` | The environment's own web origin only — see [§2.8](#28-web-app-apps-web--vercel) |
 | `RATE_LIMIT_ENABLED` | `true` | |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `300` / `60` | Defaults are fine to start |
-| `WS_HEARTBEAT_SECONDS` | `20` | |
-| `WS_MAX_CONNECTIONS_PER_PROJECT` | `50` | |
+| `WS_MAX_CONNECTIONS_PER_PROJECT` | `15` | Max presence sockets in one project room; extra sockets are refused with close code 1013. |
+| `WS_MAX_CONNECTIONS_TOTAL` | `200` | Max presence sockets across the whole instance. |
+| `WS_MAX_CONNECTIONS_PER_USER_PER_PROJECT` | `3` | Max presence sockets one user may hold in one project (tabs). |
 | `TOMBSTONE_TTL_DAYS` | `30` | `0` disables the GC loop |
 | `TOMBSTONE_GC_INTERVAL_SECONDS` | `3600` | |
 | `JIRA_EMAIL` / `JIRA_API_TOKEN` | as needed | Only if the Jira mirror (M5) is in use — the *outbound* credential. There is no longer a `JIRA_WEBHOOK_SECRET`: since plan 0019 the *inbound* secret is generated per Atlassian site when an admin configures the integration and stored encrypted in `pw_workspace_integrations`, because one shared secret cannot tell two tenants apart and a Jira issue key is unique per site, not per provider. ClickUp is registered but not advertised or configurable (`provider_unavailable`) until it has a credential path of its own. |
@@ -236,7 +237,7 @@ The budget block reports headroom against `MANAGED_DAILY_TOKEN_BUDGET` — the c
 - **`instance_id` changed between two sequential polls ⇒ the single instance restarted.** Not an error by itself (a deploy does this), but it drops every queued embed job and empties every presence room, so an unexplained change is worth an alert.
 - **`capacity.queue.depth` non-zero and not decreasing across 3 consecutive polls ⇒ the embed worker is stuck or jobs are being discarded.** A legitimate backfill sweep queues hundreds and drains steadily, so test the trend, not the value. Confirm the cause with `GET /projects/{id}/assistant/index-status`, whose `last_error` distinguishes "still draining" from "thrown away for want of a model connection".
 - **`capacity.budget.headroom_fraction` below `0.1` ⇒ the busiest workspace is about to start getting 429s** from the Planner and the assistant, and on the managed tier that number is also the day's spend. Below `0.0`-adjacent values it is already blocked.
-- **`capacity.presence.connections` climbing toward `WS_MAX_CONNECTIONS_PER_PROJECT` × active projects** is the only saturation signal presence has; a room at capacity rejects new sockets with close code 1013.
+- **`capacity.presence.connections` approaching `WS_MAX_CONNECTIONS_TOTAL`** is the only saturation signal presence has; a socket over any cap is refused with close code 1013. Each socket costs roughly 185 KB of memory (measured locally), so 200 sockets is about 37 MB.
 
 The rate limiter is the one component with no counter of its own: a bucket count measures how many clients have been seen, not how close anything is to a limit, and its multi-instance failure is caught by the `instance_id` check like everything else that degrades quietly.
 

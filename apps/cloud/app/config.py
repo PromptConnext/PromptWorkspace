@@ -103,8 +103,10 @@ class Settings(BaseSettings):
 
     # Presence (M6): ephemeral who's-here over WebSocket. In-memory, single
     # instance — horizontal scale needs a Redis/pub-sub backplane (flagged).
-    ws_heartbeat_seconds: int = 20
-    ws_max_connections_per_project: int = 50
+    # Each socket costs roughly 185 KB of memory (measured locally).
+    ws_max_connections_per_project: int = 15
+    ws_max_connections_total: int = 200
+    ws_max_connections_per_user_per_project: int = 3
 
     # Rate limiting (M4/M7): token bucket per identity on /sync and webhook
     # endpoints. `burst` is the bucket capacity; `per_minute` the refill rate.

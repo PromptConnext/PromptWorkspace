@@ -144,7 +144,11 @@ async def lifespan(app: FastAPI):
         logger.info("Error reporting enabled (environment=%s)", settings.app_env)
     app.state.settings = settings
     app.state.repository = _build_repository(settings)
-    app.state.presence = ConnectionManager(settings.ws_max_connections_per_project)
+    app.state.presence = ConnectionManager(
+        settings.ws_max_connections_per_project,
+        settings.ws_max_connections_total,
+        settings.ws_max_connections_per_user_per_project,
+    )
     from app.desktop_auth_store import HandoffStore
 
     app.state.handoff_store = HandoffStore()
