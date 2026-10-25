@@ -3,9 +3,26 @@
 
 import threading
 import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app import ratelimit, schema_gate
 from app.schema_gate import MIGRATIONS_DIR as _MIGRATIONS_DIR
+
+
+@pytest.fixture(autouse=True)
+def _reset_inflight():
+    schema_gate._inflight = None
+    yield
+    schema_gate._inflight = None
+
+
+def _settle():
+    attempt = schema_gate._inflight
+    if attempt is not None:
+        attempt.done.wait(1)
 
 
 def _newest():
@@ -112,6 +129,7 @@ def test_a_hung_ledger_read_is_bounded(client, monkeypatch):
         assert elapsed < 1.0
     finally:
         release.set()
+        _settle()
 
 
 def test_probes_during_a_hang_do_not_pile_up(client, monkeypatch):
@@ -136,6 +154,7 @@ def test_probes_during_a_hang_do_not_pile_up(client, monkeypatch):
         assert len(calls) == 1
     finally:
         release.set()
+        _settle()
 
 
 def test_ready_recovers_after_ttl_when_database_catches_up(client, monkeypatch):
@@ -173,5 +192,56 @@ def test_a_wedged_probe_does_not_block_interpreter_exit():
         "app = SimpleNamespace(state=SimpleNamespace(repository=R()))\n"
         "assert schema_gate.read_status(app).state == 'unknown'\n"
     )
-    done = subprocess.run([sys.executable, "-c", code], timeout=10, capture_output=True)
+    done = subprocess.run(
+        [sys.executable, "-c", code], timeout=10, capture_output=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
     assert done.returncode == 0, done.stderr
+
+
+def _bare_app(repo):
+    return SimpleNamespace(state=SimpleNamespace(repository=repo))
+
+
+def test_probe_right_after_a_released_hang_always_reaches_the_ledger(monkeypatch):
+    monkeypatch.setattr(schema_gate, "_PROBE_TIMEOUT", 0.01)
+    for _ in range(50):
+        release = threading.Event()
+        hung = SimpleNamespace(applied_migrations=lambda ev=release: ev.wait(10) and [])
+        schema_gate._inflight = None
+        assert schema_gate.read_status(_bare_app(hung)).state == "unknown"
+        release.set()
+        _settle()
+        calls = []
+        fresh = SimpleNamespace(applied_migrations=lambda c=calls: c.append(1) or [])
+        schema_gate.read_status(_bare_app(fresh))
+        assert calls == [1]
+
+
+def test_thread_start_failure_is_unknown_not_a_500(monkeypatch):
+    def boom(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", boom)
+    app = _bare_app(SimpleNamespace(applied_migrations=lambda: []))
+    assert schema_gate.read_status(app).state == "unknown"
+    assert schema_gate._inflight is None
+
+
+def test_cache_is_rechecked_inside_the_lock(monkeypatch):
+    calls = []
+    app = _bare_app(SimpleNamespace(applied_migrations=lambda: calls.append(1) or []))
+    filled = schema_gate.evaluate(["x.sql"], ["x.sql"])
+
+    class FillOnEnter:
+        """Another probe finishes between our unlocked TTL check and the lock."""
+
+        def __enter__(self):
+            setattr(app.state, schema_gate._CACHE_ATTR, (schema_gate._now(), filled))
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(schema_gate, "_lock", FillOnEnter())
+    assert schema_gate.read_status(app) is filled
+    assert calls == []

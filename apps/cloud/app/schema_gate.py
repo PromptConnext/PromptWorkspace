@@ -87,11 +87,20 @@ def read_status(app) -> SchemaStatus:
     if cached is not None and _now() - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
     with _lock:
+        # Re-check: another probe may have finished since the unlocked check above.
+        cached = getattr(app.state, _CACHE_ATTR, None)
+        if cached is not None and _now() - cached[0] < CACHE_TTL_SECONDS:
+            return cached[1]
         if _inflight is not None and not _inflight.done.is_set():
             return cached[1] if cached is not None else evaluate(_code_files(), None)
-        _inflight = attempt = _Attempt(app.state.repository.applied_migrations)
+        try:
+            attempt = _Attempt(app.state.repository.applied_migrations)
+        except RuntimeError:  # cannot start a thread: unknown, never a 500
+            attempt = None
+        else:
+            _inflight = attempt
     # A timed-out attempt is abandoned: its late result lands on `attempt` only.
-    applied = attempt.applied if attempt.done.wait(_PROBE_TIMEOUT) else None
+    applied = attempt.applied if attempt and attempt.done.wait(_PROBE_TIMEOUT) else None
     status = evaluate(_code_files(), applied)
     setattr(app.state, _CACHE_ATTR, (_now(), status))
     return status

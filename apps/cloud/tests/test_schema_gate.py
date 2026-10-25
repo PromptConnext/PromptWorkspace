@@ -60,6 +60,13 @@ def _app(repo):
     return SimpleNamespace(state=SimpleNamespace(repository=repo))
 
 
+@pytest.fixture(autouse=True)
+def _reset_inflight():
+    schema_gate._inflight = None
+    yield
+    schema_gate._inflight = None
+
+
 @pytest.fixture
 def clock(monkeypatch):
     t = {"now": 1000.0}
