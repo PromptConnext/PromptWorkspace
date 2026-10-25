@@ -376,6 +376,48 @@ def test_latest_receipt_at_falls_back_to_the_paged_read(error):
     assert {k: v.day for k, v in got.items()} == {"a": 3, "b": 2}
 
 
+def _split_repo(user: _Client, service: _Client) -> SupabaseRepository:
+    """A per-user repository: `_client` is the caller's scoped client."""
+    repo = _repo(user)
+    repo._service_client = service
+    return repo
+
+
+def test_latest_receipt_at_calls_the_rpc_on_the_service_client():
+    """Migration 0013 grants the function to service_role only, so the call on
+    the caller's scoped client would fail with 42501 in supabase auth mode."""
+    user = _TableClient()
+    service = _TableClient(rpc_rows=[
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+    ])
+    got = _split_repo(user, service).latest_receipt_at(["a"])
+
+    assert service.rpc_calls == [("pw_latest_receipt_at", {"p_project_ids": ["a"]})]
+    assert user.rpc_calls == []
+    assert set(got) == {"a"}
+
+
+def test_latest_receipt_at_fallback_reads_the_paged_table_on_the_service_client():
+    # Function not deployed yet: the paged fallback still reads via `_table`
+    # (pw_receipts is service-only) and still gives the per-project max.
+    rows = [
+        {"project_id": "a", "created_at": "2026-10-03T00:00:00+00:00"},
+        {"project_id": "a", "created_at": "2026-10-01T00:00:00+00:00"},
+        {"project_id": "b", "created_at": "2026-10-02T00:00:00+00:00"},
+    ]
+    user = _TableClient()
+    service = _TableClient(
+        rows_by_table={"pw_receipts": rows},
+        rpc_error=_rpc_error("PGRST202", "Could not find the function public.pw_latest_receipt_at"),
+    )
+    got = _split_repo(user, service).latest_receipt_at(["a", "b"])
+
+    assert user.rpc_calls == [] and user.reads == []
+    assert len(service.rpc_calls) == 1
+    assert service.reads == ["pw_receipts"]
+    assert {k: v.day for k, v in got.items()} == {"a": 3, "b": 2}
+
+
 def test_latest_receipt_at_other_rpc_errors_still_raise():
     client = _TableClient(rpc_error=_rpc_error("57014", "canceling statement due to timeout"))
     with pytest.raises(APIError):
@@ -532,3 +574,19 @@ def test_applied_migrations_calls_the_rpc_on_the_service_client():
     assert repo.applied_migrations() == ["0001_a.sql"]
     assert service.rpc_calls == [("pw_applied_migrations", {})]
     assert scoped.rpc_calls == []
+
+
+def test_freeze_deployment_tasks_calls_the_rpc_on_the_service_client():
+    """pw_freeze_deployment_tasks is granted to service_role only (migration
+    0002); the re-attribute route hands the repository a per-user client."""
+    user = _TableClient()
+    service = _TableClient(rpc_rows=[{"ok": True}])
+    got = _split_repo(user, service).freeze_deployment_tasks(
+        "d1", ["t1", "t2"], datetime(2026, 10, 1, tzinfo=timezone.utc)
+    )
+
+    assert service.rpc_calls == [
+        ("pw_freeze_deployment_tasks", {"p_deployment_id": "d1", "p_task_ids": ["t1", "t2"]})
+    ]
+    assert user.rpc_calls == []
+    assert got is True
