@@ -9,12 +9,24 @@ ledger is `unknown`, never `behind`.
 
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
+
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 CACHE_TTL_SECONDS = 15.0
 _CACHE_ATTR = "schema_status_cache"
+_PROBE_TIMEOUT = 3.0  # seconds a probe waits for the ledger RPC
+
+# One worker, one call in flight: a hung RPC wedges at most this one thread.
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="schema-gate")
+_lock = threading.Lock()
+_inflight: Future | None = None
 
 
 def _now() -> float:
@@ -41,25 +53,33 @@ def evaluate(code_files: list[str], applied: list[str] | None) -> SchemaStatus:
 
 
 def _code_files() -> list[str]:
-    # Imported here: app.main imports the health router, which imports this module.
-    from app.main import _MIGRATIONS_DIR
-
     try:
-        return sorted(f"{p.stem}.sql" for p in _MIGRATIONS_DIR.glob("*.sql"))
+        return sorted(f"{p.stem}.sql" for p in MIGRATIONS_DIR.glob("*.sql"))
     except OSError:
         return []
 
 
 def read_status(app) -> SchemaStatus:
-    """Status for `app`, cached on `app.state` for 15 s (failures are cached too)."""
+    """Status for `app`, cached on `app.state` for 15 s (failures are cached too).
+
+    The ledger call is single-flight and time-bounded: while a previous call is
+    still running no new one starts, and callers get the last cached status (or
+    `unknown`) immediately, so a hung database cannot pile up threads.
+    """
+    global _inflight
     cached = getattr(app.state, _CACHE_ATTR, None)
-    now = _now()
-    if cached is not None and now - cached[0] < CACHE_TTL_SECONDS:
+    if cached is not None and _now() - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
+    with _lock:
+        if _inflight is not None and not _inflight.done():
+            return cached[1] if cached is not None else evaluate(_code_files(), None)
+        _inflight = future = _executor.submit(app.state.repository.applied_migrations)
     try:
-        applied = app.state.repository.applied_migrations()
+        applied = future.result(timeout=_PROBE_TIMEOUT)
+    except FutureTimeout:
+        applied = None
     except Exception:  # noqa: BLE001 - the adapter already warned; unreadable means unknown
         applied = None
     status = evaluate(_code_files(), applied)
-    setattr(app.state, _CACHE_ATTR, (now, status))
+    setattr(app.state, _CACHE_ATTR, (_now(), status))
     return status

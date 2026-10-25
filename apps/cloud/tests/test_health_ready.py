@@ -1,8 +1,11 @@
 """/health always answers 200; /ready refuses traffic while the database is behind."""
 
 
+import threading
+import time
+
 from app import ratelimit, schema_gate
-from app.main import _MIGRATIONS_DIR
+from app.schema_gate import MIGRATIONS_DIR as _MIGRATIONS_DIR
 
 
 def _newest():
@@ -10,7 +13,7 @@ def _newest():
 
 
 def _fresh(client):
-    client.app.state.__dict__.pop("schema_status_cache", None)
+    client.app.state.__dict__.pop(schema_gate._CACHE_ATTR, None)
 
 
 def _behind(client, monkeypatch):
@@ -88,3 +91,68 @@ def test_ready_gets_the_same_rate_limit_treatment_as_health():
     for path in ("/health", "/ready"):
         assert not path.startswith(ratelimit._LIMITED_PREFIXES)
         assert not path.endswith(ratelimit._LIMITED_SUFFIXES)
+
+
+def test_a_hung_ledger_read_is_bounded(client, monkeypatch):
+    release = threading.Event()
+
+    def hang():
+        release.wait(10)
+        return []
+
+    monkeypatch.setattr(client.app.state.repository, "applied_migrations", hang)
+    monkeypatch.setattr(schema_gate, "_PROBE_TIMEOUT", 0.2)
+    _fresh(client)
+    try:
+        start = time.monotonic()
+        res = client.get("/ready")
+        elapsed = time.monotonic() - start
+        assert res.status_code == 200
+        assert res.json()["schema"]["state"] == "unknown"
+        assert elapsed < 1.0
+    finally:
+        release.set()
+
+
+def test_probes_during_a_hang_do_not_pile_up(client, monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def hang():
+        calls.append(1)
+        release.wait(10)
+        return []
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(client.app.state.repository, "applied_migrations", hang)
+    monkeypatch.setattr(schema_gate, "_PROBE_TIMEOUT", 0.2)
+    monkeypatch.setattr(schema_gate, "_now", lambda: clock["now"])
+    _fresh(client)
+    try:
+        assert schema_gate.read_status(client.app).state == "unknown"
+        clock["now"] += 60  # TTL expired, worker still stuck
+        for _ in range(20):
+            assert schema_gate.read_status(client.app).state == "unknown"
+        assert len(calls) == 1
+    finally:
+        release.set()
+
+
+def test_ready_recovers_after_ttl_when_database_catches_up(client, monkeypatch):
+    names = sorted(p.name for p in _MIGRATIONS_DIR.glob("*.sql"))
+    answer = {"v": names[:-1]}
+    clock = {"now": 100.0}
+    monkeypatch.setattr(client.app.state.repository, "applied_migrations", lambda: answer["v"])
+    monkeypatch.setattr(schema_gate, "_now", lambda: clock["now"])
+    _fresh(client)
+    assert client.get("/ready").status_code == 503
+    answer["v"] = names
+    assert client.get("/ready").status_code == 503  # still cached
+    clock["now"] += schema_gate.CACHE_TTL_SECONDS + 1
+    assert client.get("/ready").status_code == 200
+
+
+def test_health_keeps_every_pre_existing_key(client):
+    keys = {"status", "service", "version", "backend", "schema_version", "env",
+            "metrics", "capacity", "time"}
+    assert keys | {"schema"} <= set(client.get("/health").json())
