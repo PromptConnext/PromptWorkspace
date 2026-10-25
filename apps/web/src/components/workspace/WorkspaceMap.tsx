@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { avatarColor, displayName, initial } from "@/lib/identity";
+import { memberFullName } from "@/components/project/MemberChip";
+import { avatarColor } from "@/lib/identity";
 import type { WorkspaceOverview } from "@/lib/types";
 import { layoutGraph } from "./layout";
 import type { PositionedEdge } from "./layout";
@@ -128,7 +129,7 @@ export function WorkspaceMap({
           const isMember = n.type === "member";
           const m = isMember ? memberById.get(n.refId) : undefined;
           const p = isMember ? undefined : projectById.get(n.refId);
-          const label = m ? displayName(m) : (p?.name ?? n.refId);
+          const label = isMember ? memberFullName(m) : (p?.name ?? "Unknown project");
           const dim = hover !== null && hover !== n.id && !edges.some(
             (e) => (e.from === hover && e.to === n.id) || (e.to === hover && e.from === n.id),
           );
@@ -159,7 +160,7 @@ export function WorkspaceMap({
                 <>
                   <circle className="shape" r={18} fill={fill} stroke="#fff" strokeWidth={2} />
                   <text textAnchor="middle" dy="0.35em" fontSize={14} fontWeight={600} fill={ink}>
-                    {m ? initial(m) : "?"}
+                    {m ? memberFullName(m).charAt(0).toUpperCase() : "?"}
                   </text>
                   <text y={32} textAnchor="middle" fontSize={11} fill="#475569">{label}</text>
                 </>

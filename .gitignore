@@ -19,3 +19,6 @@ apps/cloud/scripts/brevo-test-email.sh
 *.png
 !apps/vscode/media/prompt-connext.png
 graphify-out/
+
+# superpowers git worktrees
+.worktrees/

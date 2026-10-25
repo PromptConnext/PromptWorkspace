@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,3 +129,24 @@ def test_overview_uses_default_governance_without_row(client, workspace):
     assert ok["hat_business_owner"] is False
     assert ok["hat_tech_steward"] is False
     assert repo.get_workspace_governance(workspace) is None
+
+
+def test_overview_reads_each_family_once(client, workspace):
+    for i in range(3):
+        _new_project(client, workspace, f"P{i}")
+    repo = client.app.state.repository
+    with (
+        patch.object(repo, "list_project_roles_for", wraps=repo.list_project_roles_for) as roles,
+        patch.object(repo, "list_decisions_for", wraps=repo.list_decisions_for) as decisions,
+        patch.object(repo, "get_repo_analyses", wraps=repo.get_repo_analyses) as analyses,
+        patch.object(repo, "list_project_roles", wraps=repo.list_project_roles) as one_roles,
+        patch.object(repo, "list_decisions", wraps=repo.list_decisions) as one_decisions,
+        patch.object(repo, "get_repo_analysis", wraps=repo.get_repo_analysis) as one_analysis,
+    ):
+        res = _overview(client, workspace)
+    assert res.status_code == 200
+    assert len(res.json()["projects"]) == 3
+    for batched in (roles, decisions, analyses):
+        assert batched.call_count == 1
+    for single in (one_roles, one_decisions, one_analysis):
+        assert single.call_count == 0

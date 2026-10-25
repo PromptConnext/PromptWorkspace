@@ -15,6 +15,7 @@ from app.models.schemas import (
     ProjectGovernanceOut,
     ReceiptDraft,
     WorkspaceGovernance,
+    WorkspaceGovernanceOut,
     WorkspaceGovernanceUpdate,
     WorkspaceOverviewOut,
     utcnow,
@@ -59,8 +60,9 @@ def build_overview(repo: Repository, workspace_id: str, user: User) -> Workspace
         tasks_by_project.setdefault(t.project_id, []).append(t)
     receipts = repo.latest_receipt_at(ids)
 
-    roles_by_project = {p.id: repo.list_project_roles(p.id) for p in projects}
-    decisions_by_project = {p.id: repo.list_decisions(p.id) for p in projects}
+    roles_by_project = repo.list_project_roles_for(ids)
+    decisions_by_project = repo.list_decisions_for(ids)
+    analyses = repo.get_repo_analyses(ids)
 
     cards = [
         build_card(
@@ -68,7 +70,7 @@ def build_overview(repo: Repository, workspace_id: str, user: User) -> Workspace
             roles_by_project[p.id],
             tasks_by_project[p.id],
             decisions_by_project[p.id],
-            repo.get_repo_analysis(p.id),
+            analyses.get(p.id),
             governance,
             receipts.get(p.id),
             now,
@@ -92,26 +94,42 @@ def build_overview(repo: Repository, workspace_id: str, user: User) -> Workspace
 _HATS = {"business_owner", "tech_steward"}
 
 
-@router.get("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernance)
+def _with_scope_summary(
+    repo: Repository, workspace_id: str, g: WorkspaceGovernance
+) -> WorkspaceGovernanceOut:
+    projects = repo.list_projects_by_workspace(workspace_id)
+    return WorkspaceGovernanceOut(
+        **g.model_dump(),
+        inheriting_unfrozen=sum(
+            1
+            for p in projects
+            if p.policy_scope_source == "workspace" and p.lifecycle_status != "repo_created"
+        ),
+        own_scope=[p.name for p in projects if p.policy_scope_source != "workspace"],
+    )
+
+
+@router.get("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernanceOut)
 def get_governance(
     workspace_id: str,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> WorkspaceGovernance:
+) -> WorkspaceGovernanceOut:
     """The stored row, or the defaults when none was set. Never writes."""
     require_workspace(repo, workspace_id, user)
-    return repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
+    stored = repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
         workspace_id
     )
+    return _with_scope_summary(repo, workspace_id, stored)
 
 
-@router.put("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernance)
+@router.put("/workspaces/{workspace_id}/governance", response_model=WorkspaceGovernanceOut)
 def put_governance(
     workspace_id: str,
     body: WorkspaceGovernanceUpdate,
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
-) -> WorkspaceGovernance:
+) -> WorkspaceGovernanceOut:
     """Admin-only full replace."""
     require_admin(repo, workspace_id, user)
     scope = validate_scope(body.policy_scope.selected, body.policy_scope.custom_text)
@@ -163,7 +181,7 @@ def put_governance(
                 },
             ),
         )
-    return saved
+    return _with_scope_summary(repo, workspace_id, saved)
 
 
 @router.get("/workspaces/{workspace_id}/governance/report", response_model=GovernanceReportOut)
@@ -188,18 +206,23 @@ def get_governance_report(
     governance = repo.get_workspace_governance(workspace_id) or WorkspaceGovernance.default(
         workspace_id
     )
+    projects = repo.list_projects_by_workspace(workspace_id)
+    ids = [p.id for p in projects]
+    roles_by_project = repo.list_project_roles_for(ids)
+    decisions_by_project = repo.list_decisions_for(ids)
+    receipts_by_project = repo.list_receipts_for(ids)
     decisions = []
     chains = []
     per_project = []
-    for p in repo.list_projects_by_workspace(workspace_id):
-        ds = repo.list_decisions(p.id)
+    for p in projects:
+        ds = decisions_by_project[p.id]
         decisions.extend(ds)
-        chains.append(repo.list_receipts(p.id))
+        chains.append(receipts_by_project[p.id])
         per_project.append(
             ProjectGovernanceOut(
                 project_id=p.id,
                 name=p.name,
-                checks=run_checks(p, repo.list_project_roles(p.id), ds, governance, now),
+                checks=run_checks(p, roles_by_project[p.id], ds, governance, now),
             )
         )
     return GovernanceReportOut(

@@ -1,4 +1,4 @@
--- 0013_pw_oauth — the cloud as an OAuth 2.1 authorization server for the hosted
+-- 0014_pw_oauth — the cloud as an OAuth 2.1 authorization server for the hosted
 -- MCP (design 2026-10-24-hosted-mcp-oauth, "Cloud: the authorization server").
 -- Idempotent. All five tables are service-only: every rule lives in the OAuth
 -- routes, and code/refresh values are stored only as hashes.

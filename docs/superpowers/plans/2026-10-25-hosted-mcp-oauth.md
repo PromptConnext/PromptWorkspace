@@ -18,7 +18,7 @@
 - PKCE S256 only. `resource` required on authorize and token, must equal the canonical URL. `iss` returned in authorization responses; `authorization_response_iss_parameter_supported: true`; `client_id_metadata_document_supported: true`; `token_endpoint_auth_methods_supported: ["none"]`; `code_challenge_methods_supported: ["S256"]`; `grant_types_supported: ["authorization_code","refresh_token"]`; `response_types_supported: ["code"]`.
 - Access token: JWT ES256, claims `iss, sub, aud, client_id, fid, scope, email, iat, exp, jti`, TTL `MCP_ACCESS_TOKEN_TTL_SECONDS=900`. Refresh: opaque `secrets.token_urlsafe(48)`, sha256 at rest, TTL `MCP_REFRESH_TOKEN_TTL_DAYS=60`, rotated per use, 30 s grace returning the same successor, reuse after grace revokes the family. Codes: 5 min, single use, hashed; reuse revokes the family. Pending requests: 10 min.
 - Redirect URIs: exact match, except `http://localhost` and `http://127.0.0.1` match any port with the registered path. Every other redirect must be `https`.
-- Tables `pw_oauth_clients`, `pw_oauth_requests`, `pw_oauth_codes`, `pw_oauth_refresh_tokens`, `pw_oauth_families`: service-only (RLS on, no policy, grants revoked from `authenticated`/`anon`, `service_role` granted), names added to `_SERVICE_ONLY_TABLES`. Migration file `apps/cloud/migrations/0013_pw_oauth.sql`; check the directory first.
+- Tables `pw_oauth_clients`, `pw_oauth_requests`, `pw_oauth_codes`, `pw_oauth_refresh_tokens`, `pw_oauth_families`: service-only (RLS on, no policy, grants revoked from `authenticated`/`anon`, `service_role` granted), names added to `_SERVICE_ONLY_TABLES`. Migration file `apps/cloud/migrations/0014_pw_oauth.sql`; check the directory first.
 - Settings (env names are the upper-cased field names): `MCP_ENABLED` (default false), `MCP_OAUTH_SIGNING_KEY` (PEM EC P-256 private key; boot refuses when enabled and missing), `MCP_OAUTH_PREVIOUS_SIGNING_KEY` (optional), `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_DAYS`, `OAUTH_SWEEP_INTERVAL_SECONDS=600`, `FORWARDED_ALLOW_IPS`. `PUBLIC_API_URL` required when `MCP_ENABLED`.
 - Tool handlers call the service-role repository and the existing `require_*` guards before any read or write; `/me/tasks` equivalent filters by current membership.
 - CIMD fetch: `https` port 443 only, resolve once, reject private/loopback/link-local/multicast/IPv4-mapped/NAT64 addresses, connect pinned to the checked address with the hostname for SNI and `Host`, no redirects, 10 s, 64 KB, cached 1 h, `client_id` must equal the document's `client_id`.
@@ -113,10 +113,10 @@ git commit -am "feat(cloud): OAuth settings, ES256 signing keys, access token is
 
 ---
 
-### Task 2: Migration 0013, models and repository for OAuth state
+### Task 2: Migration 0014, models and repository for OAuth state
 
 **Files:**
-- Create: `apps/cloud/migrations/0013_pw_oauth.sql`
+- Create: `apps/cloud/migrations/0014_pw_oauth.sql`
 - Modify: `apps/cloud/app/models/schemas.py` (new block after `StageDraft`)
 - Modify: `apps/cloud/app/db/repository.py` (ABC + InMemory), `apps/cloud/app/db/supabase_repository.py` (impl + `_SERVICE_ONLY_TABLES` + table constants)
 - Test: `apps/cloud/tests/test_oauth_repo.py`, `apps/cloud/tests/contract/test_oauth_store.py`
@@ -155,7 +155,7 @@ Cases: client round trip and DCR purge by cutoff; request put/get/update and exp
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -am "feat(cloud): OAuth clients, requests, codes, refresh tokens and families (migration 0013)"
+git commit -am "feat(cloud): OAuth clients, requests, codes, refresh tokens and families (migration 0014)"
 ```
 
 ---

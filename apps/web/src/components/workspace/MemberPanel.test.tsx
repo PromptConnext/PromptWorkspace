@@ -122,3 +122,29 @@ describe("MemberPanel", () => {
     expect(screen.getByText("1 task assigned")).toBeInTheDocument();
   });
 });
+
+describe("MemberPanel names and headings", () => {
+  beforeEach(() => mockApi({}));
+  afterEach(cleanup);
+
+  it("never shows a raw id for a nameless member; section is Assigned", () => {
+    const ghost = { ...member("u-raw-id", ""), email: "" } as WorkspaceMember;
+    panel({ member: ghost, overview: { ...overview([]), members: [ghost] } });
+    expect(screen.getByRole("heading", { name: "Unnamed member" })).toBeInTheDocument();
+    expect(screen.queryByText(/u-raw-id/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Assigned" })).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).toBeNull();
+  });
+});
+
+describe("MemberPanel unknown project", () => {
+  beforeEach(() => mockApi({}));
+  afterEach(cleanup);
+
+  it("a hat on a project outside the overview reads Unknown project, never the id", () => {
+    const people = [link({ kind: "hat", project_id: "p-gone-uuid", hat: "tech_steward" })];
+    panel({ overview: overview(people) });
+    expect(screen.getByText("Tech steward · Unknown project")).toBeInTheDocument();
+    expect(screen.queryByText(/p-gone-uuid/)).toBeNull();
+  });
+});

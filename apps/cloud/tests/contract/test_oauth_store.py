@@ -1,4 +1,4 @@
-"""The OAuth authorization-server tables (migration 0013) on either adapter.
+"""The OAuth authorization-server tables (migration 0014) on either adapter.
 Single use of a code and the family revoke rules are what the token endpoint
 leans on, so they must hold in Postgres, not only in the in-memory double."""
 

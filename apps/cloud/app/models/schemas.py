@@ -1486,6 +1486,8 @@ class TaskSummary(BaseModel):
     status: TaskStatus
     assigned_user_id: str | None = None
     agent_closed: bool = False
+    # Newest `updated_at` among the task's artifacts that carry `agent`.
+    agent_closed_at: datetime | None = None
     updated_at: datetime
 
 
@@ -1668,7 +1670,7 @@ class StageDraftRejectIn(BaseModel):
     draft_id: str = Field(min_length=1, max_length=64)
     note: str = Field(default="", max_length=2_000)
 
-# -- OAuth authorization server (migration 0013) ---------------------------- #
+# -- OAuth authorization server (migration 0014) ---------------------------- #
 # Design: docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md,
 # "Cloud: the authorization server". Codes and refresh tokens are held only as
 # hashes; these rows are service-only.
@@ -1970,6 +1972,14 @@ class WorkspaceGovernance(BaseModel):
     @classmethod
     def default(cls, workspace_id: str) -> WorkspaceGovernance:
         return cls(workspace_id=workspace_id)
+
+
+class WorkspaceGovernanceOut(WorkspaceGovernance):
+    """GET/PUT response: the stored row plus what it applies to, so the web
+    does not derive the count from the overview."""
+
+    inheriting_unfrozen: int = 0
+    own_scope: list[str] = Field(default_factory=list)
 
 
 class WorkspaceGovernanceUpdate(BaseModel):

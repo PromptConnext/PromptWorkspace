@@ -26,3 +26,9 @@ describe("agentLabel", () => {
     expect(agentLabel(undefined, false)).toBeNull();
   });
 });
+
+describe("agentLabel vscode without a name", () => {
+  it("reads Closed via an editor", () => {
+    expect(agentLabel({ client: "vscode:" }, true)).toBe("Closed via an editor");
+  });
+});
