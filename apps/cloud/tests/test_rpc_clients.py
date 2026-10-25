@@ -7,6 +7,9 @@
 fail with SQLSTATE 42501 on the scoped client, and the contract suite (service
 key) cannot notice. Any new scoped rpc call must be added to the allowlist
 deliberately.
+
+Only the literal `self._client.rpc(` is inspected; aliasing the client, getattr,
+or a helper is not detected.
 """
 
 from __future__ import annotations

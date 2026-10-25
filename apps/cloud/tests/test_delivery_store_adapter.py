@@ -396,6 +396,8 @@ def test_latest_receipt_at_calls_the_rpc_on_the_service_client():
     assert user.rpc_calls == []
     assert set(got) == {"a"}
 
+
+def test_latest_receipt_at_fallback_reads_the_paged_table_on_the_service_client():
     # Function not deployed yet: the paged fallback still reads via `_table`
     # (pw_receipts is service-only) and still gives the per-project max.
     rows = [
@@ -529,7 +531,7 @@ def test_list_tasks_summary_agent_closed_at_is_the_latest_agent_artifact():
     assert got["B"].agent_closed_at is None
 
 
-def test_set_deployment_tasks_calls_the_freeze_rpc_on_the_service_client():
+def test_freeze_deployment_tasks_calls_the_rpc_on_the_service_client():
     """pw_freeze_deployment_tasks is granted to service_role only (migration
     0002); the re-attribute route hands the repository a per-user client."""
     user = _TableClient()
