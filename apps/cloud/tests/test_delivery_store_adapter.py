@@ -509,7 +509,9 @@ def test_applied_migrations_missing_function_is_none_with_one_warning(caplog):
         "PGRST202", "Could not find the function public.pw_applied_migrations"))
     with caplog.at_level("WARNING", logger="promptworkspace.db"):
         assert _repo(client).applied_migrations() is None
-    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "apply migration 0015" in warnings[0].getMessage()
 
 
 def test_applied_migrations_other_error_is_none_with_one_warning(caplog):
@@ -520,3 +522,13 @@ def test_applied_migrations_other_error_is_none_with_one_warning(caplog):
     assert len(warnings) == 1
     assert "RuntimeError" in warnings[0].getMessage()
     assert "secret" not in warnings[0].getMessage()
+
+
+def test_applied_migrations_calls_the_rpc_on_the_service_client():
+    scoped = _TableClient(rpc_rows=["wrong.sql"])
+    service = _TableClient(rpc_rows=["0001_a.sql"])
+    repo = _repo(scoped)
+    repo._service_client = service
+    assert repo.applied_migrations() == ["0001_a.sql"]
+    assert service.rpc_calls == [("pw_applied_migrations", {})]
+    assert scoped.rpc_calls == []

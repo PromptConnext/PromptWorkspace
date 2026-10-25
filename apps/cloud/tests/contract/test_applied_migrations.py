@@ -9,7 +9,7 @@ from app.db.repository import InMemoryRepository, Repository
 pytestmark = pytest.mark.contract
 
 
-def test_memory_backend_has_no_ledger(repo: Repository) -> None:
+def test_applied_migrations_reports_the_ledger_or_none(repo: Repository) -> None:
     got = repo.applied_migrations()
 
     if isinstance(repo, InMemoryRepository):

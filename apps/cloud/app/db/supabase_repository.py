@@ -1688,7 +1688,9 @@ class SupabaseRepository(Repository):
 
     def applied_migrations(self) -> list[str] | None:
         try:
-            res = self._client.rpc("pw_applied_migrations", {}).execute()
+            # Service client: execute is granted to service_role only, and the
+            # /health and /ready probes carry no user token to scope with.
+            res = self._service_client.rpc("pw_applied_migrations", {}).execute()
             names = [
                 next(iter(r.values())) if isinstance(r, dict) else r for r in res.data or []
             ]
