@@ -156,3 +156,22 @@ def test_health_keeps_every_pre_existing_key(client):
     keys = {"status", "service", "version", "backend", "schema_version", "env",
             "metrics", "capacity", "time"}
     assert keys | {"schema"} <= set(client.get("/health").json())
+
+
+def test_a_wedged_probe_does_not_block_interpreter_exit():
+    import subprocess
+    import sys
+
+    code = (
+        "import threading\n"
+        "from types import SimpleNamespace\n"
+        "from app import schema_gate\n"
+        "schema_gate._PROBE_TIMEOUT = 0.2\n"
+        "class R:\n"
+        "    def applied_migrations(self):\n"
+        "        threading.Event().wait()\n"
+        "app = SimpleNamespace(state=SimpleNamespace(repository=R()))\n"
+        "assert schema_gate.read_status(app).state == 'unknown'\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], timeout=10, capture_output=True)
+    assert done.returncode == 0, done.stderr

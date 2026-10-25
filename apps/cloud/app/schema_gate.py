@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -23,15 +21,33 @@ CACHE_TTL_SECONDS = 15.0
 _CACHE_ATTR = "schema_status_cache"
 _PROBE_TIMEOUT = 3.0  # seconds a probe waits for the ledger RPC
 
-# One worker, one call in flight: a hung RPC wedges at most this one thread.
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="schema-gate")
-_lock = threading.Lock()
-_inflight: Future | None = None
-
 
 def _now() -> float:
     """Injectable clock for tests."""
     return time.monotonic()
+
+
+class _Attempt:
+    """One ledger call on a daemon thread; `done` is set when it returns or raises."""
+
+    def __init__(self, fn) -> None:
+        self.done = threading.Event()
+        self.applied: list[str] | None = None
+        threading.Thread(target=self._run, args=(fn,), daemon=True, name="schema-gate").start()
+
+    def _run(self, fn) -> None:
+        try:
+            self.applied = fn()
+        except Exception:  # noqa: BLE001 - the adapter already warned; unreadable is unknown
+            self.applied = None
+        finally:
+            self.done.set()
+
+
+# Single-flight: at most one ledger call is ever in progress. A daemon thread
+# (not an executor) so a wedged call cannot delay interpreter exit on shutdown.
+_lock = threading.Lock()
+_inflight: _Attempt | None = None
 
 
 @dataclass(frozen=True)
@@ -71,15 +87,11 @@ def read_status(app) -> SchemaStatus:
     if cached is not None and _now() - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
     with _lock:
-        if _inflight is not None and not _inflight.done():
+        if _inflight is not None and not _inflight.done.is_set():
             return cached[1] if cached is not None else evaluate(_code_files(), None)
-        _inflight = future = _executor.submit(app.state.repository.applied_migrations)
-    try:
-        applied = future.result(timeout=_PROBE_TIMEOUT)
-    except FutureTimeout:
-        applied = None
-    except Exception:  # noqa: BLE001 - the adapter already warned; unreadable means unknown
-        applied = None
+        _inflight = attempt = _Attempt(app.state.repository.applied_migrations)
+    # A timed-out attempt is abandoned: its late result lands on `attempt` only.
+    applied = attempt.applied if attempt.done.wait(_PROBE_TIMEOUT) else None
     status = evaluate(_code_files(), applied)
     setattr(app.state, _CACHE_ATTR, (_now(), status))
     return status
