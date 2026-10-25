@@ -783,6 +783,11 @@ class Repository(abc.ABC):
         """Newest receipt `created_at` per project; projects with none are absent."""
 
     @abc.abstractmethod
+    def applied_migrations(self) -> list[str] | None:
+        """Sorted filenames recorded in the migration ledger, or None when the
+        ledger cannot be read (no ledger, function missing, any read error)."""
+
+    @abc.abstractmethod
     def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
         """The workspace's governance row, or None when it never set one."""
 
@@ -2139,6 +2144,9 @@ class InMemoryRepository(Repository):
             for pid in project_ids
             if self._receipts.get(pid)
         }
+
+    def applied_migrations(self) -> list[str] | None:
+        return None  # the in-memory double has no migration ledger
 
     def get_workspace_governance(self, workspace_id: str) -> WorkspaceGovernance | None:
         return self._workspace_governance.get(workspace_id)

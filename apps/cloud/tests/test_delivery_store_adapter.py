@@ -487,3 +487,36 @@ def test_list_tasks_summary_agent_closed_at_is_the_latest_agent_artifact():
     assert got["A"].agent_closed_at.tzinfo is not None
     assert got["B"].agent_closed is False
     assert got["B"].agent_closed_at is None
+
+
+# --- applied migrations (plan 0034 task 1) ---------------------------------
+
+
+def test_applied_migrations_returns_sorted_filenames():
+    client = _TableClient(rpc_rows=["0002_b.sql", "0001_a.sql"])
+    assert _repo(client).applied_migrations() == ["0001_a.sql", "0002_b.sql"]
+    assert client.rpc_calls == [("pw_applied_migrations", {})]
+
+
+def test_applied_migrations_accepts_wrapped_scalar_rows():
+    client = _TableClient(rpc_rows=[{"pw_applied_migrations": "0002_b.sql"},
+                                    {"pw_applied_migrations": "0001_a.sql"}])
+    assert _repo(client).applied_migrations() == ["0001_a.sql", "0002_b.sql"]
+
+
+def test_applied_migrations_missing_function_is_none_with_one_warning(caplog):
+    client = _TableClient(rpc_error=_rpc_error(
+        "PGRST202", "Could not find the function public.pw_applied_migrations"))
+    with caplog.at_level("WARNING", logger="promptworkspace.db"):
+        assert _repo(client).applied_migrations() is None
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+def test_applied_migrations_other_error_is_none_with_one_warning(caplog):
+    client = _TableClient(rpc_error=RuntimeError("boom postgres://secret"))
+    with caplog.at_level("WARNING", logger="promptworkspace.db"):
+        assert _repo(client).applied_migrations() is None
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "RuntimeError" in warnings[0].getMessage()
+    assert "secret" not in warnings[0].getMessage()
