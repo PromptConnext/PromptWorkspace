@@ -135,6 +135,18 @@ class Settings(BaseSettings):
     # cannot reach anyway.
     public_api_url: str = ""
 
+    # Hosted MCP endpoint: the cloud is its own OAuth 2.1 authorization server
+    # (design 2026-10-24). Access tokens are ES256 JWTs signed with the PEM
+    # below; the previous key stays published in JWKS and accepted for
+    # verification during rotation.
+    mcp_enabled: bool = False
+    mcp_oauth_signing_key: str = ""
+    mcp_oauth_previous_signing_key: str = ""
+    mcp_access_token_ttl_seconds: int = 900
+    mcp_refresh_token_ttl_days: int = 60
+    oauth_sweep_interval_seconds: int = 600
+    forwarded_allow_ips: str = ""
+
     # Deployment templates (ADR 0021). Every provider except this one is a
     # per-workspace credential on the workspace row; the `static-r2` template
     # is the exception, because for it the platform *is* the provider and
@@ -288,6 +300,29 @@ class Settings(BaseSettings):
                 "AUTH_MODE=supabase requires SUPABASE_URL (for JWKS verification) or "
                 "SUPABASE_JWT_SECRET (legacy HS256 secret from Supabase project "
                 "settings → API → JWT Settings)."
+            )
+
+    @property
+    def oauth_issuer(self) -> str:
+        """The OAuth issuer: `PUBLIC_API_URL` without a trailing slash. The
+        metadata `issuer`, the JWT `iss` and its verification all use this,
+        so the two can never differ by a slash."""
+        return self.public_api_url.rstrip("/")
+
+    @property
+    def canonical_mcp_url(self) -> str:
+        return f"{self.oauth_issuer}/mcp"
+
+    def require_mcp(self) -> None:
+        if not self.mcp_enabled:
+            return
+        if not self.mcp_oauth_signing_key:
+            raise RuntimeError(
+                "MCP_ENABLED=true requires MCP_OAUTH_SIGNING_KEY (a PEM EC P-256 private key)."
+            )
+        if not self.public_api_url:
+            raise RuntimeError(
+                "MCP_ENABLED=true requires PUBLIC_API_URL (the token issuer and MCP audience)."
             )
 
     def require_rag(self) -> None:

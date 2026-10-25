@@ -31,7 +31,7 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.observability import _sanitize_url, before_send, init_sentry
 from app.rag.queue import EmbedJob, _process_code_file_job
-from app.ratelimit import _identity
+from app.ratelimit import identity
 
 ALICE = {"X-User-Id": "alice"}
 
@@ -236,7 +236,7 @@ def test_rate_limit_bearer_suffix_key_is_not_captured(events: list[dict]):
         client = None
 
     def limit_and_fail() -> None:
-        key = _identity(_Req())
+        key = identity(_Req(), stub_mode=False)
         assert key.startswith("tok:")
         raise RuntimeError("bucket lookup failed")
 

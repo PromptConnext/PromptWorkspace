@@ -15,9 +15,18 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    AnyUrl,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 
 def new_id() -> str:
@@ -1660,6 +1669,169 @@ class StageDraftAcceptIn(BaseModel):
 class StageDraftRejectIn(BaseModel):
     draft_id: str = Field(min_length=1, max_length=64)
     note: str = Field(default="", max_length=2_000)
+
+# -- OAuth authorization server (migration 0014) ---------------------------- #
+# Design: docs/superpowers/specs/2026-10-24-hosted-mcp-oauth-design.md,
+# "Cloud: the authorization server". Codes and refresh tokens are held only as
+# hashes; these rows are service-only.
+OAuthClientKind = Literal["preregistered", "cimd", "dcr"]
+
+
+class OAuthClient(BaseModel):
+    client_id: str
+    kind: OAuthClientKind
+    client_name: str = ""
+    redirect_uris: list[str]
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    token_endpoint_auth_method: Literal["none"] = "none"
+    metadata: dict = {}
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
+class OAuthRequest(BaseModel):
+    request_id: str = Field(default_factory=new_id)
+    client_id: str
+    redirect_uri: str
+    code_challenge: str
+    resource: str
+    scope: str
+    state: str | None
+    created_at: datetime
+    expires_at: datetime
+    approved_user_id: str | None = None
+    approved_at: datetime | None = None
+    denied_at: datetime | None = None
+
+
+class OAuthCode(BaseModel):
+    code_hash: str
+    request_id: str
+    family_id: str
+    client_id: str
+    user_id: str
+    redirect_uri: str
+    code_challenge: str
+    resource: str
+    scope: str
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class OAuthRefreshToken(BaseModel):
+    token_hash: str
+    family_id: str
+    client_id: str
+    user_id: str
+    scope: str
+    resource: str
+    issued_at: datetime
+    expires_at: datetime
+    rotated_to_hash: str | None = None
+    rotated_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    user_agent: str | None = None
+
+
+class OAuthFamily(BaseModel):
+    family_id: str
+    client_id: str
+    user_id: str
+    created_at: datetime = Field(default_factory=utcnow)
+    revoked_at: datetime | None = None
+    revoked_reason: str | None = None
+    last_used_at: datetime | None = None
+
+
+class OAuthGrantOut(BaseModel):
+    """One row of Connected agents: a token family and who it was issued to.
+    `client_name`/`vendor`/`verified` come from the stored client (empty and
+    unverified when a DCR client has since been purged)."""
+
+    family_id: str
+    client_id: str
+    client_name: str
+    vendor: str | None = None
+    verified: bool
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ConsentWorkspace(BaseModel):
+    id: str
+    name: str
+
+
+class ConsentView(BaseModel):
+    """What the web consent page shows for a pending `/oauth/authorize`.
+    `vendor`/`verified` come from the redirect URIs, never the self-declared
+    name; `loopback` means "an app on this computer"."""
+
+    client_name: str
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    vendor: str | None = None
+    verified: bool
+    redirect_host: str
+    loopback: bool
+    scopes: list[str]
+    account_email: str
+    workspaces: list[ConsentWorkspace]
+    expires_at: datetime
+
+
+class ConsentDecisionOut(BaseModel):
+    redirect_to: str
+
+
+DCR_MAX_BODY = 16_384
+DCR_MAX_URI = 2048
+DCR_MAX_SCOPE = 1000
+
+
+def _cap_dcr_uri(v: Any) -> Any:
+    # Checked on the raw string: pydantic's URL types have no length cap.
+    if isinstance(v, str) and len(v) > DCR_MAX_URI:
+        raise ValueError(f"URI longer than {DCR_MAX_URI} characters")
+    return v
+
+
+class DcrRegistrationIn(BaseModel):
+    """RFC 7591 client metadata accepted by `POST /oauth/register`. Public
+    clients only: no secret is ever issued or stored. The route reports
+    validation failures as RFC 7591 §3.2.2 errors, never as 422."""
+
+    MAX_BODY: ClassVar[int] = DCR_MAX_BODY
+
+    redirect_uris: list[Annotated[AnyUrl, BeforeValidator(_cap_dcr_uri)]] = Field(
+        min_length=1, max_length=10
+    )
+    client_name: str = Field("", max_length=120)
+    client_uri: AnyHttpUrl | None = None
+    logo_uri: AnyHttpUrl | None = None
+    application_type: Literal["web", "native"] | None = None
+    token_endpoint_auth_method: Literal["none"] = "none"
+    grant_types: list[str] | None = Field(None, max_length=10)
+    response_types: list[str] | None = Field(None, max_length=10)
+    scope: str | None = Field(None, max_length=DCR_MAX_SCOPE)
+
+    @field_validator("client_uri", "logo_uri", mode="before")
+    @classmethod
+    def _cap_uri(cls, v: Any) -> Any:
+        return _cap_dcr_uri(v)
+
+
+class DcrRegistrationOut(BaseModel):
+    client_id: str
+    client_id_issued_at: int
+    redirect_uris: list[str]
+    client_name: str
+    token_endpoint_auth_method: Literal["none"]
+    grant_types: list[str]
+    response_types: list[str]
 
 
 class RepoAnalysisOut(BaseModel):

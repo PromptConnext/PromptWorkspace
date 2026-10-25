@@ -419,6 +419,15 @@ def submit_agent_analysis(
     same way the cloud's own snapshot is: secret-shaped and vendored paths
     never reach the stored snapshot."""
     project = require_project(repo, project_id, user)
+    return submit_agent_analysis_for(repo, project, user, body)
+
+
+def submit_agent_analysis_for(
+    repo: Repository, project: Project, user: User, body: AgentRepoAnalysisIn
+) -> RepoAnalysisOut:
+    """Store an agent's analysis for a project the caller already passed
+    `require_project` for: the route above, and the hosted MCP server's
+    `submit_repo_analysis`. The admin and import checks run here, for both."""
     require_admin(repo, project.workspace_id, user)
     if not project.is_imported:
         raise HTTPException(status_code=409, detail="repo_not_imported")
@@ -453,5 +462,5 @@ def submit_agent_analysis(
             created_by=user.id,
         )
     )
-    _stale_cache.pop(project_id, None)
+    _stale_cache.pop(project.id, None)
     return _out(project, stored)

@@ -11,8 +11,11 @@ is flagged for the same follow-up as presence fan-out.
 
 from __future__ import annotations
 
+import inspect
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from urllib.parse import parse_qs
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -37,7 +40,7 @@ class _Bucket:
 class TokenBucketLimiter:
     """Refills `per_minute` tokens/minute up to `burst` capacity."""
 
-    per_minute: int
+    per_minute: float
     burst: int
     _buckets: dict[str, _Bucket] = field(default_factory=dict)
 
@@ -56,34 +59,168 @@ class TokenBucketLimiter:
         return True
 
 
+class CompositeLimiter:
+    """Passes only if every member passes. Each member is `(limiter, key_fn)`
+    where `key_fn` maps the rule's key to that member's bucket key (a constant
+    for a global bucket). Members are checked in order and short-circuit."""
+
+    def __init__(self, members: list[tuple[TokenBucketLimiter, Callable[[str], str]]]) -> None:
+        self._members = members
+        self.per_minute = min(m.per_minute for m, _ in members)
+
+    def allow(self, key: str, now: float) -> bool:
+        return all(limiter.allow(kf(key), now) for limiter, kf in self._members)
+
+
+Key = Callable[[Request], "str | Awaitable[str]"]
+
+
+@dataclass
+class LimitRule:
+    name: str
+    match: Callable[[Request], bool]
+    key: Key
+    limiter: TokenBucketLimiter | CompositeLimiter
+    # A floor rule: when it passes, the rules after it are still consulted
+    # (e.g. every authorize call per ip, then the tighter CIMD rule).
+    fall_through: bool = False
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, limiter: TokenBucketLimiter) -> None:
+    """The first rule whose `match` is true applies; no match passes through.
+    A matching `fall_through` rule that passes lets the search continue."""
+
+    def __init__(self, app, rules: list[LimitRule]) -> None:
         super().__init__(app)
-        self._limiter = limiter
+        self._rules = rules
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        limited = path.startswith(_LIMITED_PREFIXES) or path.endswith(_LIMITED_SUFFIXES)
-        if not limited:
-            return await call_next(request)
-        key = _identity(request)
-        if not self._limiter.allow(key, time.monotonic()):
-            retry = max(1, round(60 / max(1, self._limiter.per_minute)))
-            return JSONResponse(
-                {"detail": "rate_limited"},
-                status_code=429,
-                headers={"Retry-After": str(retry)},
-            )
+        for rule in self._rules:
+            if not rule.match(request):
+                continue
+            key = rule.key(request)
+            if inspect.isawaitable(key):
+                key = await key
+            if not rule.limiter.allow(key, time.monotonic()):
+                retry = max(1, round(60 / max(rule.limiter.per_minute, 1e-9)))
+                return JSONResponse(
+                    {"detail": "rate_limited"},
+                    status_code=429,
+                    headers={"Retry-After": str(retry)},
+                )
+            if rule.fall_through:
+                continue
+            break
         return await call_next(request)
 
 
-def _identity(request: Request) -> str:
-    uid = request.headers.get("x-user-id")
-    if uid:
-        return f"user:{uid}"
+def identity(request: Request, *, stub_mode: bool) -> str:
+    # X-User-Id is client-supplied; it is only an identity in stub auth mode.
+    if stub_mode:
+        uid = request.headers.get("x-user-id")
+        if uid:
+            return f"user:{uid}"
     auth = request.headers.get("authorization")
     if auth:
         # Key by a stable suffix of the bearer token; avoids storing the token.
         return f"tok:{auth[-24:]}"
     client = request.client
     return f"ip:{client.host if client else 'unknown'}"
+
+
+def _ip(request: Request) -> str:
+    client = request.client
+    return f"ip:{client.host if client else 'unknown'}"
+
+
+_MAX_FORM_BYTES = 16 * 1024
+
+
+async def _token_client_key(request: Request) -> str:
+    """`client:<id>|ip:<host>`, or the bare ip key when no client_id is
+    readable. The client_id alone is not enough: a CIMD client_id is shared
+    by every user of that client, so one source could drain everyone's
+    bucket."""
+    cid = request.query_params.get("client_id")
+    if not cid and request.headers.get("content-type", "").startswith(
+        "application/x-www-form-urlencoded"
+    ):
+        # Unknown (absent / non-numeric) length means unbounded: never buffer it.
+        try:
+            length = int(request.headers.get("content-length", ""))
+        except ValueError:
+            length = None
+        too_big = length is None or length > _MAX_FORM_BYTES
+        if not too_big:
+            # BaseHTTPMiddleware replays a body read here to the route.
+            form = parse_qs((await request.body()).decode("utf-8", "replace"))
+            cid = (form.get("client_id") or [""])[0]
+    return f"client:{cid}|{_ip(request)}" if cid else _ip(request)
+
+
+def _hourly(rate: int, burst: int) -> TokenBucketLimiter:
+    return TokenBucketLimiter(per_minute=rate / 60, burst=burst)
+
+
+def default_rules(settings) -> list[LimitRule]:
+    stub_mode = settings.auth_mode == "stub"
+
+    def ident(request: Request) -> str:
+        return identity(request, stub_mode=stub_mode)
+
+    def is_api(request: Request) -> bool:
+        path = request.url.path
+        return path.startswith(_LIMITED_PREFIXES) or path.endswith(_LIMITED_SUFFIXES)
+
+    return [
+        LimitRule(
+            "oauth_register",
+            lambda r: r.method == "POST" and r.url.path == "/oauth/register",
+            _ip,
+            CompositeLimiter(
+                [
+                    (_hourly(30, 5), lambda k: k),
+                    (_hourly(300, 30), lambda k: "all"),
+                ]
+            ),
+        ),
+        LimitRule(
+            # Every authorize call writes a request row (and may resolve a
+            # client), unauthenticated: bound it per source ip.
+            "oauth_authorize",
+            lambda r: r.method == "GET" and r.url.path == "/oauth/authorize",
+            _ip,
+            TokenBucketLimiter(per_minute=60, burst=20),
+            fall_through=True,
+        ),
+        LimitRule(
+            "oauth_authorize_cimd",
+            lambda r: (
+                r.method == "GET"
+                and r.url.path == "/oauth/authorize"
+                and r.query_params.get("client_id", "").lower().startswith("https://")
+            ),
+            _ip,
+            _hourly(20, 5),
+        ),
+        LimitRule(
+            "oauth_token",
+            lambda r: r.method == "POST" and r.url.path == "/oauth/token",
+            _token_client_key,
+            TokenBucketLimiter(per_minute=60, burst=20),
+        ),
+        LimitRule(
+            "mcp",
+            lambda r: r.url.path == "/mcp" or r.url.path.startswith("/mcp/"),
+            ident,
+            TokenBucketLimiter(per_minute=300, burst=60),
+        ),
+        LimitRule(
+            "api",
+            is_api,
+            ident,
+            TokenBucketLimiter(
+                per_minute=settings.rate_limit_per_minute, burst=settings.rate_limit_burst
+            ),
+        ),
+    ]

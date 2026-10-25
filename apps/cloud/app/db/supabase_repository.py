@@ -62,6 +62,11 @@ from app.models.schemas import (
     InvitationStatus,
     LineLinkCode,
     ModelConnection,
+    OAuthClient,
+    OAuthCode,
+    OAuthFamily,
+    OAuthRefreshToken,
+    OAuthRequest,
     PolicyScope,
     Project,
     ProjectGraph,
@@ -159,6 +164,11 @@ _STAGE_DRAFTS = "pw_stage_drafts"
 _REPO_WEBHOOKS = "pw_repo_webhooks"
 _LINE_LINKS = "pw_project_line_links"
 _LINE_CODES = "pw_line_link_codes"
+_OAUTH_CLIENTS = "pw_oauth_clients"
+_OAUTH_REQUESTS = "pw_oauth_requests"
+_OAUTH_CODES = "pw_oauth_codes"
+_OAUTH_REFRESH = "pw_oauth_refresh_tokens"
+_OAUTH_FAMILIES = "pw_oauth_families"
 _WORKSPACE_INTEGRATIONS = "pw_workspace_integrations"
 _DEPLOYMENTS = "pw_deployments"
 _DEPLOYMENT_TASKS = "pw_deployment_tasks"
@@ -240,6 +250,13 @@ _SERVICE_ONLY_TABLES = frozenset(
         # policy for `authenticated`, so a per-user client would hit 42501 on
         # every read; the admin-only write rule lives in app/api/overview.py.
         "pw_workspace_governance",
+        # Migration 0014 (hosted MCP OAuth): born service-only. Codes and
+        # refresh tokens are stored hashed and only the OAuth routes touch them.
+        "pw_oauth_clients",
+        "pw_oauth_requests",
+        "pw_oauth_codes",
+        "pw_oauth_refresh_tokens",
+        "pw_oauth_families",
     }
 )
 
@@ -1099,6 +1116,11 @@ class SupabaseRepository(Repository):
             .limit(1)
             .execute()
         )
+        rows = res.data or []
+        return Task(**rows[0]) if rows else None
+
+    def find_task(self, task_id: str) -> Task | None:
+        res = self._table(_TABLE["tasks"]).select("*").eq("id", task_id).limit(1).execute()
         rows = res.data or []
         return Task(**rows[0]) if rows else None
 
@@ -2257,6 +2279,150 @@ class SupabaseRepository(Repository):
             return None
         found = LineLinkCode(**rows[0])
         return None if found.expires_at <= now else found
+
+    # -- OAuth authorization server (migration 0014) ----------------------- #
+    def _oauth_one(self, table: str, col: str, value: str, model):
+        res = self._table(table).select("*").eq(col, value).limit(1).execute()
+        rows = res.data or []
+        return model(**rows[0]) if rows else None
+
+    def get_oauth_client(self, client_id: str) -> OAuthClient | None:
+        return self._oauth_one(_OAUTH_CLIENTS, "client_id", client_id, OAuthClient)
+
+    def upsert_oauth_client(self, c: OAuthClient) -> OAuthClient:
+        self._table(_OAUTH_CLIENTS).upsert(_dump(c), on_conflict="client_id").execute()
+        return c
+
+    def touch_oauth_client(self, client_id: str, now: datetime) -> None:
+        self._table(_OAUTH_CLIENTS).update({"last_used_at": now.isoformat()}).eq(
+            "client_id", client_id
+        ).execute()
+
+    def delete_oauth_clients_unused_since(self, cutoff: datetime, kind: str = "dcr") -> int:
+        iso = cutoff.isoformat()
+        used = (
+            self._table(_OAUTH_CLIENTS)
+            .delete()
+            .eq("kind", kind)
+            .lt("last_used_at", iso)
+            .execute()
+        )
+        never = (
+            self._table(_OAUTH_CLIENTS)
+            .delete()
+            .eq("kind", kind)
+            .is_("last_used_at", "null")
+            .lt("created_at", iso)
+            .execute()
+        )
+        return len(used.data or []) + len(never.data or [])
+
+    def put_oauth_request(self, r: OAuthRequest) -> OAuthRequest:
+        self._table(_OAUTH_REQUESTS).insert(_dump(r)).execute()
+        return r
+
+    def get_oauth_request(self, request_id: str) -> OAuthRequest | None:
+        return self._oauth_one(_OAUTH_REQUESTS, "request_id", request_id, OAuthRequest)
+
+    def update_oauth_request(self, r: OAuthRequest) -> OAuthRequest:
+        self._table(_OAUTH_REQUESTS).upsert(_dump(r), on_conflict="request_id").execute()
+        return r
+
+    def delete_oauth_requests_expired(self, now: datetime) -> int:
+        res = self._table(_OAUTH_REQUESTS).delete().lt("expires_at", now.isoformat()).execute()
+        return len(res.data or [])
+
+    def put_oauth_code(self, c: OAuthCode) -> OAuthCode:
+        self._table(_OAUTH_CODES).insert(_dump(c)).execute()
+        return c
+
+    def take_oauth_code(self, code_hash: str, now: datetime) -> OAuthCode | None:
+        # The `used_at is null` filter makes the update the burn: of two racing
+        # takers only one gets a row back.
+        res = (
+            self._table(_OAUTH_CODES)
+            .update({"used_at": now.isoformat()})
+            .eq("code_hash", code_hash)
+            .is_("used_at", "null")
+            .execute()
+        )
+        rows = res.data or []
+        return OAuthCode(**rows[0]) if rows else None
+
+    def get_oauth_code(self, code_hash: str) -> OAuthCode | None:
+        return self._oauth_one(_OAUTH_CODES, "code_hash", code_hash, OAuthCode)
+
+    def delete_oauth_codes_expired(self, now: datetime) -> int:
+        res = self._table(_OAUTH_CODES).delete().lt("expires_at", now.isoformat()).execute()
+        return len(res.data or [])
+
+    def put_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
+        self._table(_OAUTH_REFRESH).insert(_dump(t)).execute()
+        return t
+
+    def get_refresh_token(self, token_hash: str) -> OAuthRefreshToken | None:
+        return self._oauth_one(_OAUTH_REFRESH, "token_hash", token_hash, OAuthRefreshToken)
+
+    def update_refresh_token(self, t: OAuthRefreshToken) -> OAuthRefreshToken:
+        self._table(_OAUTH_REFRESH).upsert(_dump(t), on_conflict="token_hash").execute()
+        return t
+
+    def claim_refresh_rotation(self, token_hash: str, to_hash: str, now: datetime) -> bool:
+        # The `rotated_to_hash is null` filter makes the update the claim: of
+        # two racing refreshes only one gets a row back.
+        iso = now.isoformat()
+        res = (
+            self._table(_OAUTH_REFRESH)
+            .update({"rotated_to_hash": to_hash, "rotated_at": iso, "last_used_at": iso})
+            .eq("token_hash", token_hash)
+            .is_("rotated_to_hash", "null")
+            .execute()
+        )
+        return bool(res.data)
+
+    def delete_refresh_tokens_expired(self, now: datetime) -> int:
+        res = self._table(_OAUTH_REFRESH).delete().lt("expires_at", now.isoformat()).execute()
+        return len(res.data or [])
+
+    def put_oauth_family(self, f: OAuthFamily) -> OAuthFamily:
+        self._table(_OAUTH_FAMILIES).insert(_dump(f)).execute()
+        return f
+
+    def get_oauth_family(self, family_id: str) -> OAuthFamily | None:
+        return self._oauth_one(_OAUTH_FAMILIES, "family_id", family_id, OAuthFamily)
+
+    def revoke_oauth_family(
+        self, family_id: str, reason: str, now: datetime
+    ) -> OAuthFamily | None:
+        self._table(_OAUTH_FAMILIES).update(
+            {"revoked_at": now.isoformat(), "revoked_reason": reason}
+        ).eq("family_id", family_id).is_("revoked_at", "null").execute()
+        return self.get_oauth_family(family_id)
+
+    def touch_oauth_family(self, family_id: str, now: datetime) -> None:
+        self._table(_OAUTH_FAMILIES).update({"last_used_at": now.isoformat()}).eq(
+            "family_id", family_id
+        ).execute()
+
+    def list_oauth_families_for_user(self, user_id: str) -> list[OAuthFamily]:
+        res = (
+            self._table(_OAUTH_FAMILIES)
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return [OAuthFamily(**r) for r in res.data or []]
+
+    def revoke_oauth_families_for_user(self, user_id: str, reason: str, now: datetime) -> int:
+        res = (
+            self._table(_OAUTH_FAMILIES)
+            .update({"revoked_at": now.isoformat(), "revoked_reason": reason})
+            .eq("user_id", user_id)
+            .is_("revoked_at", "null")
+            .execute()
+        )
+        return len(res.data or [])
 
 
 def _dump(model) -> dict:

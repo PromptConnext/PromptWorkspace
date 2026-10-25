@@ -49,6 +49,7 @@ function Chip({ children }: { children: string }) {
 // `repo_created` — and the analysis state itself is owned there, because the
 // Plan and Tasks tabs read it too.
 export function CodebaseAnalysisPanel({
+  workspaceId,
   projectId,
   analysis,
   canEdit,
@@ -56,6 +57,7 @@ export function CodebaseAnalysisPanel({
   drafts = [],
   stageDocsPresent = {},
 }: {
+  workspaceId: string;
   projectId: string;
   analysis: RepoAnalysisOut;
   /** Workspace admin — the cloud refuses both writes to anyone else. */
@@ -183,6 +185,7 @@ export function CodebaseAnalysisPanel({
 
       {analysis.required === true && (
         <AgentPlanningChecklist
+          workspaceId={workspaceId}
           analysis={analysis}
           drafts={drafts}
           stageDocsPresent={stageDocsPresent}

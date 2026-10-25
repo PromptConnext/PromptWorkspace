@@ -92,3 +92,13 @@ describe("workspace settings: notification language", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 });
+
+describe("workspace settings: connect your coding agent", () => {
+  it("shows the connect snippets and a link to connected agents for every member", async () => {
+    isWorkspaceAdmin.mockReturnValue(false);
+    await page();
+    expect(screen.getByRole("heading", { name: "Connect your coding agent" })).toBeInTheDocument();
+    expect(screen.getByText(/claude mcp add --transport http promptworkspace .*\/mcp/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connected agents" })).toHaveAttribute("href", "/account/agents");
+  });
+});

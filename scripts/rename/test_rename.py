@@ -57,6 +57,11 @@ FIXTURES = [
     ("dev.ideva.promptconnext", "com.promptconnext.promptworkspace"),
     ("com.promptconnext.promptworkspace", "com.promptconnext.promptworkspace"),
     ("@promptconnext/mcp", "@promptworkspace/mcp"),
+    # The published npm package and its scope are owned by the company's npm org.
+    ("@promptconnext/promptworkspace-mcp", "@promptconnext/promptworkspace-mcp"),
+    ("@promptconnext/promptworkspace-mcpX", "@promptworkspace/promptworkspace-mcpX"),
+    ("the @promptconnext scope", "the @promptconnext scope"),
+    ("the `@promptconnext` scope", "the `@promptconnext` scope"),
     ("promptconnext-mcp", "promptworkspace-mcp"),
     ("promptconnext-vscode-0.2.1.vsix", "promptworkspace-0.2.1.vsix"),
     ("packages/pz-cloud", "packages/cloud-client"),

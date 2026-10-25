@@ -11,6 +11,8 @@ promptconnext-projects(?![A-Za-z0-9-])
 promptconnext\.promptworkspace(?![A-Za-z0-9-])
 com\.promptconnext\.promptworkspace(?![A-Za-z0-9-])
 no-reply@promptconnext\.com(?![A-Za-z0-9-])
+@promptconnext/promptworkspace-mcp(?![A-Za-z0-9-])
+@promptconnext(?=`?\s+scope\b)
 promptconnext\.truthledgers\.com(?![A-Za-z0-9-])
 promptconnext\.com(?![A-Za-z0-9-])
 ©\s*\d{4}(?:[–-]\d{4})?\s+PromptConnext

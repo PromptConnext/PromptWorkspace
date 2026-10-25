@@ -736,6 +736,7 @@ export function Planner({
                   fresh import lands on. */}
               {analysis && analysisRequired && (
                 <CodebaseAnalysisPanel
+                  workspaceId={project.workspace_id}
                   projectId={projectId}
                   analysis={analysis}
                   canEdit={isTechLead}

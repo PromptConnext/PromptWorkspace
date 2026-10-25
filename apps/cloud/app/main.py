@@ -29,6 +29,7 @@ from app.api import (
     integrations,
     line,
     me,
+    oauth,
     overview,
     policies,
     presence,
@@ -54,7 +55,7 @@ from app.rag.budget import DailyTokenBudget
 from app.rag.chat import HttpChatProvider
 from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.queue import EmbedQueue, embed_worker_loop
-from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter, default_rules
 from app.requestlog import REQUEST_ID_HEADER, RequestIdMiddleware, configure_logging
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
@@ -80,6 +81,7 @@ def _build_repository(settings: Settings) -> Repository:
     settings.require_supabase()
     settings.require_valid_encryption_key()
     settings.require_auth()
+    settings.require_mcp()
     for warning in settings.require_production_safety():
         logger.warning(warning)
     if settings.data_backend == "supabase":
@@ -125,6 +127,24 @@ async def _decision_sweep_loop(app: FastAPI, settings: Settings) -> None:
                 logger.info("Decision sweep: %s expired, %s reminded", *result)
         except Exception:  # noqa: BLE001 - the sweep must never crash the app
             logger.exception("Decision sweep pass failed")
+
+
+async def _oauth_sweep_loop(app: FastAPI, settings: Settings) -> None:
+    """Delete expired OAuth requests, codes and refresh tokens, and DCR
+    clients unused for 90 days (hosted MCP). Off the event loop: the Supabase
+    adapter is synchronous."""
+    if settings.oauth_sweep_interval_seconds <= 0:
+        return
+    from app.oauth.tokens import sweep_oauth
+
+    while True:
+        await asyncio.sleep(settings.oauth_sweep_interval_seconds)
+        try:
+            counts = await asyncio.to_thread(sweep_oauth, app.state.repository, utcnow())
+            if any(counts.values()):
+                logger.info("OAuth sweep: %s", counts)
+        except Exception:  # noqa: BLE001 - the sweep must never crash the app
+            logger.exception("OAuth sweep pass failed")
 
 
 @asynccontextmanager
@@ -266,8 +286,23 @@ async def lifespan(app: FastAPI):
     sweep_task = asyncio.create_task(_decision_sweep_loop(app, settings))
     embed_task = asyncio.create_task(embed_worker_loop(app))
     reconcile_task = asyncio.create_task(reconcile_loop(app, settings))
+    # Hosted MCP authorization server: one shared client for the Supabase
+    # admin user check at /oauth/token, and the expired-row sweep.
+    oauth_task = None
+    app.state.oauth_http = None
+    if settings.mcp_enabled:
+        import httpx
+
+        app.state.oauth_http = httpx.AsyncClient()
+        oauth_task = asyncio.create_task(_oauth_sweep_loop(app, settings))
     try:
-        yield
+        async with contextlib.AsyncExitStack() as mcp_stack:
+            # The mounted MCP app's own lifespan never runs under a Mount, so
+            # its session manager is started here (hosted MCP).
+            mcp_server = getattr(app.state, "mcp_server", None)
+            if settings.mcp_enabled and mcp_server is not None:
+                await mcp_stack.enter_async_context(mcp_server.session_manager.run())
+            yield
     finally:
         gc_task.cancel()
         sweep_task.cancel()
@@ -281,7 +316,49 @@ async def lifespan(app: FastAPI):
             await embed_task
         with contextlib.suppress(asyncio.CancelledError):
             await reconcile_task
+        if oauth_task is not None:
+            oauth_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await oauth_task
+        if app.state.oauth_http is not None:
+            await app.state.oauth_http.aclose()
         app.state.line_notifier.shutdown()
+
+
+class _McpRoot:
+    """`/mcp` without the slash, forwarded to the mounted app as `/mcp/`.
+    A Mount only matches `/mcp/...`; this keeps the canonical slash-less URL
+    from falling through to a 404 (or, with redirect_slashes, a 307)."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        scope = dict(scope)
+        scope["path"] = scope["path"] + "/"
+        if scope.get("raw_path"):
+            scope["raw_path"] = scope["raw_path"] + b"/"
+        scope["root_path"] = scope.get("root_path", "") + "/mcp"
+        await self.app(scope, receive, send)
+
+
+def _mount_mcp(app: FastAPI, settings: Settings) -> None:
+    from starlette.routing import Route
+
+    from app.mcp.server import build_mcp_asgi, build_mcp_server
+    from app.oauth.keys import load_signing_keys
+
+    server = build_mcp_server(
+        settings,
+        lambda: app.state.repository,  # service role: tools run the guards themselves
+        load_signing_keys(settings),
+        app_provider=lambda: app,
+    )
+    mcp_asgi = build_mcp_asgi(server, settings)
+    app.state.mcp_server = server
+    app.state.mcp_token_verifier = server.promptworkspace_token_verifier
+    app.router.routes.append(Route("/mcp", endpoint=_McpRoot(mcp_asgi), include_in_schema=False))
+    app.mount("/mcp", mcp_asgi)
 
 
 def create_app() -> FastAPI:
@@ -291,6 +368,9 @@ def create_app() -> FastAPI:
         version=__version__,
         summary="Thin sync + collaboration backend for the PromptWorkspace task graph.",
         lifespan=lifespan,
+        # /mcp and /mcp/ must reach the MCP app identically, with no 307 between
+        # them: clients compare the resource URL byte for byte (hosted MCP).
+        redirect_slashes=False,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -307,10 +387,7 @@ def create_app() -> FastAPI:
     if settings.rate_limit_enabled:
         app.add_middleware(
             RateLimitMiddleware,
-            limiter=TokenBucketLimiter(
-                per_minute=settings.rate_limit_per_minute,
-                burst=settings.rate_limit_burst,
-            ),
+            rules=default_rules(settings),
         )
     # Added last, so it is the outermost middleware: Starlette prepends, and
     # the first entry wraps the rest. Everything below it — the rate limiter's
@@ -347,6 +424,9 @@ def create_app() -> FastAPI:
     app.include_router(policies.router)
     app.include_router(deployments.router)
     app.include_router(desktop_auth.router)
+    if settings.mcp_enabled:
+        app.include_router(oauth.router)
+        _mount_mcp(app, settings)
 
     @app.get("/", tags=["health"])
     def root() -> dict:

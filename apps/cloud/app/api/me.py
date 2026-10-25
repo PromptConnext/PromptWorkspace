@@ -10,7 +10,9 @@ a dependency on graph pagination for a question that is not about the graph.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from app.api._guards import member_role
@@ -18,7 +20,15 @@ from app.api.delivery import DecisionBase, _routing_context
 from app.db.repository import Repository
 from app.delivery.decisions import can_resolve, is_overdue, latest_decision
 from app.dependencies import User, get_current_user, get_repository
-from app.models.schemas import AssignedTask, Role, TaskStatus, WorkspaceMember, utcnow
+from app.models.schemas import (
+    AssignedTask,
+    OAuthGrantOut,
+    Role,
+    TaskStatus,
+    WorkspaceMember,
+    utcnow,
+)
+from app.oauth.known_clients import classify
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -35,12 +45,40 @@ def list_my_tasks(
     user: User = Depends(get_current_user),
     repo: Repository = Depends(get_repository),
 ) -> list[AssignedTask]:
-    return repo.list_assigned_tasks(
+    return assigned_tasks_for(repo, user, workspace_id=workspace_id, statuses=status, limit=limit)
+
+
+def assigned_tasks_for(
+    repo: Repository,
+    user: User,
+    *,
+    workspace_id: str | None = None,
+    statuses: list[TaskStatus] | None = None,
+    limit: int = 200,
+) -> list[AssignedTask]:
+    """The caller's assigned tasks, shared by `GET /me/tasks` and the hosted
+    MCP `list_my_tasks`/`get_task`/`close_task` tools.
+
+    Membership is re-checked here, per workspace, on top of whatever the
+    adapter does: the MCP tools read through the service-role repository,
+    where no RLS scopes the read, and an assignment outlives a membership
+    removal. A user who left a workspace must stop seeing its tasks at once.
+    """
+    entries = repo.list_assigned_tasks(
         user.id,
         workspace_id=workspace_id,
-        statuses=status or _OPEN_STATUSES,
+        statuses=statuses or _OPEN_STATUSES,
         limit=limit,
     )
+    member_of: dict[str, bool] = {}
+    out: list[AssignedTask] = []
+    for entry in entries:
+        ws = entry.workspace_id
+        if ws not in member_of:
+            member_of[ws] = repo.get_membership(ws, user.id) is not None
+        if member_of[ws]:
+            out.append(entry)
+    return out
 
 
 class InboxItem(BaseModel):
@@ -131,3 +169,78 @@ def collect_my_decisions(
                     )
     items.sort(key=lambda i: i.decision.created_at, reverse=True)
     return items
+
+
+# --------------------------------------------------------------------------- #
+# Connected agents: the caller's OAuth grants (hosted MCP)
+# --------------------------------------------------------------------------- #
+
+
+def _own_family_id(family_id: str) -> str | None:
+    """`family_id` normalised, or None when it is not a UUID (the column is
+    uuid; a malformed id would otherwise be a database error, not a 404)."""
+    try:
+        return str(uuid.UUID(family_id))
+    except ValueError:
+        return None
+
+
+@router.get("/oauth-grants", response_model=list[OAuthGrantOut])
+def list_my_oauth_grants(
+    request: Request, user: User = Depends(get_current_user)
+) -> list[OAuthGrantOut]:
+    repo = request.app.state.repository  # pw_oauth_* are service-only
+    out: list[OAuthGrantOut] = []
+    clients: dict[str, object] = {}
+    for fam in repo.list_oauth_families_for_user(user.id):
+        if fam.client_id not in clients:
+            clients[fam.client_id] = repo.get_oauth_client(fam.client_id)
+        client = clients[fam.client_id]
+        name, vendor, verified = "", None, False
+        if client is not None:
+            name = client.client_name
+            vendor, verified = classify(client.redirect_uris)
+            if vendor == "loopback":
+                vendor = None
+        out.append(
+            OAuthGrantOut(
+                family_id=fam.family_id, client_id=fam.client_id, client_name=name,
+                vendor=vendor, verified=verified, created_at=fam.created_at,
+                last_used_at=fam.last_used_at, revoked_at=fam.revoked_at,
+            )
+        )  # fmt: skip
+    return out
+
+
+def _evict_families(request: Request, family_ids) -> None:
+    """Drop revoked families from the hosted MCP verifier's liveness cache, so
+    revocation is immediate in this process (absent when MCP is off)."""
+    verifier = getattr(request.app.state, "mcp_token_verifier", None)
+    if verifier is None:
+        return
+    for fid in family_ids:
+        verifier.evict(fid)
+
+
+@router.delete("/oauth-grants/{family_id}", status_code=204)
+def revoke_my_oauth_grant(
+    family_id: str, request: Request, user: User = Depends(get_current_user)
+) -> Response:
+    repo = request.app.state.repository
+    fid = _own_family_id(family_id)
+    fam = repo.get_oauth_family(fid) if fid else None
+    if fam is None or fam.user_id != user.id:
+        raise HTTPException(status_code=404, detail="grant_not_found")
+    repo.revoke_oauth_family(fid, "user_revoke", utcnow())
+    _evict_families(request, [fid])
+    return Response(status_code=204)
+
+
+@router.delete("/oauth-grants", status_code=204)
+def revoke_all_my_oauth_grants(
+    request: Request, user: User = Depends(get_current_user)
+) -> Response:
+    repo = request.app.state.repository
+    repo.revoke_oauth_families_for_user(user.id, "user_revoke_all", utcnow())
+    _evict_families(request, [f.family_id for f in repo.list_oauth_families_for_user(user.id)])
+    return Response(status_code=204)

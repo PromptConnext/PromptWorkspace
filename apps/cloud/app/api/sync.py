@@ -1193,6 +1193,19 @@ def set_task_status(
     0018 made for assignment, same answer.
     """
     project = require_project(repo, project_id, user)  # membership-gated
+    return apply_task_status(repo, request.app, project, user, task_id, body)
+
+
+def apply_task_status(
+    repo: Repository, request_app, project: Project, user: User, task_id: str,
+    body: TaskStatusUpdate,
+) -> Task:
+    """The status write behind `PATCH .../status`, shared with the hosted MCP
+    `close_task` tool. The caller has already passed `require_project` for
+    `project`; the role rules (assignee or admin, `verified` admin-only) are
+    applied here so both doors enforce them identically. `request_app` is the
+    FastAPI app, for the LINE notice; None skips the notice."""
+    project_id = project.id
     task = repo.get_task(project_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -1228,11 +1241,12 @@ def set_task_status(
     previous = task.status
     updated = repo.set_task_status(project_id, task_id, body.status, now)
     # Only a real transition into implemented asks the group to verify.
-    if body.status == TaskStatus.implemented and previous != TaskStatus.implemented:
+    if (request_app is not None and body.status == TaskStatus.implemented
+            and previous != TaskStatus.implemented):
         try:
-            web = request.app.state.settings.web_app_url.rstrip("/")
+            web = request_app.state.settings.web_app_url.rstrip("/")
             link = f"{web}/w/{project.workspace_id}/p/{project_id}?tab=tasks&task={task_id}"
-            request.app.state.line_notifier.notify_project(project_id, partial(
+            request_app.state.line_notifier.notify_project(project_id, partial(
                 line_notices.ready_to_verify, project.name,
                 (updated.feature_tag or "").removesuffix(" [P]"), updated.title, link))
         except Exception:

@@ -3,7 +3,10 @@
 
 import { CLOUD_API_URL } from "./config";
 import type {
+  ConsentDecisionOut,
+  ConsentView,
   DecisionKind,
+  OAuthGrantOut,
   DecisionMutationOut,
   DeployConnection,
   DeploymentStatus,
@@ -597,4 +600,41 @@ export function disconnectLine(projectId: string, authHeaders: Record<string, st
 
 export function sendLineTest(projectId: string, authHeaders: Record<string, string>) {
   return apiFetch<unknown>(`/projects/${projectId}/line/test`, authHeaders, { method: "POST" });
+}
+
+// Hosted MCP OAuth (apps/cloud/app/api/oauth.py). The consent calls carry only
+// the Supabase bearer — no cookie — so a cross-site page cannot ride on them.
+// 404 `request_not_found` (expired or unknown), 409 `request_decided`.
+export function getConsent(requestId: string, authHeaders: Record<string, string>) {
+  return apiFetch<ConsentView>(`/oauth/authorize/${encodeURIComponent(requestId)}`, authHeaders);
+}
+
+export function approveConsent(requestId: string, authHeaders: Record<string, string>) {
+  return apiFetch<ConsentDecisionOut>(
+    `/oauth/authorize/${encodeURIComponent(requestId)}/approve`,
+    authHeaders,
+    { method: "POST" },
+  );
+}
+
+export function denyConsent(requestId: string, authHeaders: Record<string, string>) {
+  return apiFetch<ConsentDecisionOut>(
+    `/oauth/authorize/${encodeURIComponent(requestId)}/deny`,
+    authHeaders,
+    { method: "POST" },
+  );
+}
+
+export function listOauthGrants(authHeaders: Record<string, string>) {
+  return apiFetch<OAuthGrantOut[]>("/me/oauth-grants", authHeaders);
+}
+
+export function revokeOauthGrant(familyId: string, authHeaders: Record<string, string>) {
+  return apiFetch<void>(`/me/oauth-grants/${encodeURIComponent(familyId)}`, authHeaders, {
+    method: "DELETE",
+  });
+}
+
+export function revokeAllOauthGrants(authHeaders: Record<string, string>) {
+  return apiFetch<void>("/me/oauth-grants", authHeaders, { method: "DELETE" });
 }

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use } from "react";
+import { ConnectSnippets } from "@/components/ConnectSnippets";
 import { DeployConnectionsPanel } from "@/components/DeployConnectionsPanel";
 import { GovernancePanel } from "@/components/workspace/GovernancePanel";
 import { GithubConnectionForm } from "@/components/GithubConnectionForm";
@@ -11,6 +12,7 @@ import { TopBar } from "@/components/TopBar";
 import { WorkspaceLanguageForm } from "@/components/WorkspaceLanguageForm";
 import { WorkspaceNameForm } from "@/components/WorkspaceNameForm";
 import { WorkspaceReindexPanel } from "@/components/WorkspaceReindexPanel";
+import { CLOUD_API_URL } from "@/lib/config";
 import { useIsWorkspaceAdmin, useWorkspaceName } from "@/lib/workspace";
 
 function SettingsView({ workspaceId }: { workspaceId: string }) {
@@ -38,6 +40,19 @@ function SettingsView({ workspaceId }: { workspaceId: string }) {
 
         <WorkspaceNameForm workspaceId={workspaceId} />
         <WorkspaceLanguageForm workspaceId={workspaceId} />
+
+        {/* Every member connects their own agent; the grant is per user, not
+            per workspace, so this is not behind the admin check. */}
+        <section className="mb-10">
+          <h2 className="mb-1 text-sm font-semibold text-slate-900">Connect your coding agent</h2>
+          <p className="mb-3 text-sm text-slate-500">
+            Your agent signs in as you and can work in the workspaces you approve.{" "}
+            <Link href="/account/agents" className="text-indigo-600 hover:underline">
+              Connected agents
+            </Link>
+          </p>
+          <ConnectSnippets apiUrl={CLOUD_API_URL} />
+        </section>
 
         {isAdmin && (
           <>

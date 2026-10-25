@@ -26,4 +26,4 @@ EXPOSE 8080
 # a shell left as PID 1 ignores the signal). On SIGTERM uvicorn stops accepting connections
 # and gives requests in flight, generation streams included, up to 30 s to
 # finish; the platform's grace period must be longer (docs/DEPLOYMENT.md §2.3).
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-graceful-shutdown 30"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-graceful-shutdown 30 --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]
