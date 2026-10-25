@@ -224,6 +224,10 @@ jobs:
           python-version: "3.11"
       - run: python -m unittest scripts/rename/test_rename.py
       - run: python scripts/rename/check.py
+      # Plan 0034: migrations after the baseline must be additive, so applying
+      # them on start can never break the code still serving.
+      - run: python -m unittest scripts/migrations/test_check_additive.py
+      - run: python scripts/migrations/check_additive.py
       - run: python scripts/baseline/build_baseline.py --check
 
   # The one required status check (ruleset `protect-main`). Path-filtered jobs
