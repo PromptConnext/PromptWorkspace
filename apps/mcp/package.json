@@ -2,7 +2,7 @@
   "name": "@promptconnext/promptworkspace-mcp",
   "version": "0.2.0",
   "description": "PromptWorkspace MCP server — assigned tasks and their context, for the editors the VS Code extension cannot reach (ADR 0019 decision 3).",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/PromptConnext/PromptWorkspace.git",
