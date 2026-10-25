@@ -125,9 +125,10 @@ def _budget(state: Any) -> dict:
 def _presence(state: Any) -> dict:
     manager = getattr(state, "presence", None)
     if manager is None:
-        return {"rooms": None, "connections": None}
+        return {"rooms": None, "connections": None, "max_connections": None}
     rooms, connections = manager.occupancy()
-    return {"rooms": rooms, "connections": connections}
+    limit = getattr(getattr(state, "settings", None), "ws_max_connections_total", None)
+    return {"rooms": rooms, "connections": connections, "max_connections": limit}
 
 
 def _queue(state: Any) -> dict:

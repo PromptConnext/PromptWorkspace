@@ -41,7 +41,7 @@ def _project(client) -> str:
 
 def test_quiet_instance_reports_zeroes_and_full_headroom(client):
     capacity = _capacity(client)
-    assert capacity["presence"] == {"rooms": 0, "connections": 0}
+    assert capacity["presence"] == {"rooms": 0, "connections": 0, "max_connections": 200}
     assert capacity["queue"] == {"depth": 0, "projects": 0}
     budget = capacity["budget"]
     assert budget["busiest_workspace_tokens"] == 0
@@ -77,15 +77,17 @@ def test_presence_counts_real_sockets(client):
     project_id = _project(client)
     with client.websocket_connect(f"/ws/projects/{project_id}/presence?user_id=alice") as ws:
         ws.receive_json()  # the roster broadcast on join — the socket is now in the room
-        assert _capacity(client)["presence"] == {"rooms": 1, "connections": 1}
-    assert _capacity(client)["presence"] == {"rooms": 0, "connections": 0}
+        presence = _capacity(client)["presence"]
+        assert presence == {"rooms": 1, "connections": 1, "max_connections": 200}
+    presence = _capacity(client)["presence"]
+    assert presence == {"rooms": 0, "connections": 0, "max_connections": 200}
 
 
 def test_presence_occupancy_counts_sockets_not_users():
     """Two tabs are two sockets in one room, and `roster()` de-duplicates by
     user while this must not: the constraint being reported is how much state
     the process is holding."""
-    manager = ConnectionManager(max_per_project=10)
+    manager = ConnectionManager(10, 100, 10)
     manager._rooms = {"p1": {object(): None, object(): None}, "p2": {object(): None}}
     assert manager.occupancy() == (2, 3)
 

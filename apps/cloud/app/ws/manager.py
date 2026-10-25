@@ -21,8 +21,10 @@ class Presence:
 
 
 class ConnectionManager:
-    def __init__(self, max_per_project: int) -> None:
+    def __init__(self, max_per_project: int, max_total: int, max_per_user: int) -> None:
         self._max = max_per_project
+        self._max_total = max_total
+        self._max_per_user = max_per_user
         # project_id -> {socket: Presence}
         self._rooms: dict[str, dict[object, Presence]] = {}
 
@@ -30,13 +32,27 @@ class ConnectionManager:
         self, project_id: str, socket, user_id: str, now: float
     ) -> bool:
         """Accept the socket and join the room. Returns False (without accepting)
-        when the room is at capacity, so the caller can reject with a code."""
-        room = self._rooms.setdefault(project_id, {})
-        if len(room) >= self._max:
+        when a cap is hit (per project, global, or per user in this project), so
+        the caller can reject with a code."""
+        room = self._rooms.get(project_id, {})
+        if (
+            len(room) >= self._max
+            or sum(len(r) for r in self._rooms.values()) >= self._max_total
+            or sum(1 for p in room.values() if p.user_id == user_id)
+            >= self._max_per_user
+        ):
             return False
         await socket.accept()
+        room = self._rooms.setdefault(project_id, {})
         room[socket] = Presence(user_id=user_id, cursor_hint=None, last_seen=now)
         return True
+
+    def has_other_socket(self, project_id: str, socket, user_id: str) -> bool:
+        """True when `user_id` has a socket in the room besides `socket`."""
+        return any(
+            s is not socket and p.user_id == user_id
+            for s, p in self._rooms.get(project_id, {}).items()
+        )
 
     def disconnect(self, project_id: str, socket) -> None:
         room = self._rooms.get(project_id)
@@ -78,18 +94,7 @@ class ConnectionManager:
 
         Read-only, for the single-instance report on /health (plan 0021 M4,
         see app/capacity.py). `rooms` needs no "non-empty" filter: both
-        `disconnect` and `prune_idle` drop a room that empties, so a key here
+        `disconnect` drops a room that empties, so a key here
         always has a socket behind it.
         """
         return len(self._rooms), sum(len(room) for room in self._rooms.values())
-
-    def prune_idle(self, project_id: str, ttl: float, now: float) -> list[object]:
-        """Drop connections idle longer than `ttl`. Returns the removed sockets
-        so the caller can close them. Deterministic — no timers involved."""
-        room = self._rooms.get(project_id, {})
-        stale = [s for s, p in room.items() if now - p.last_seen > ttl]
-        for socket in stale:
-            room.pop(socket, None)
-        if not room:
-            self._rooms.pop(project_id, None)
-        return stale

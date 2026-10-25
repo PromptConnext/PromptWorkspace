@@ -2,12 +2,14 @@
 
 `WS /ws/projects/{id}/presence` — authenticates the caller (JWT in supabase
 mode, `?user_id=` in stub mode), verifies workspace membership, joins a
-per-project room, and fans out the roster on every join/leave/heartbeat. JWT
+per-project room, and fans out the roster when it changes (a user's first
+socket joins, or their last one leaves). JWT
 verification reuses `app.dependencies._verify_jwt` — the same JWKS/ES256
 first, HS256-fallback logic as the REST auth path.
 
-Clients send periodic heartbeats `{"cursor_hint": "..."}`; the server updates
-last-seen and rebroadcasts. No graph data flows here.
+Liveness is the server's protocol-level pings (uvicorn), not an application
+heartbeat. A client frame (e.g. `{"cursor_hint": "..."}`) updates server state
+but is never rebroadcast. No graph data flows here.
 """
 
 from __future__ import annotations
@@ -58,11 +60,14 @@ async def presence(websocket: WebSocket, project_id: str) -> None:
         await websocket.close(code=_POLICY_VIOLATION)
         return
 
+    already_present = manager.has_other_socket(project_id, websocket, user.id)
     if not await manager.connect(project_id, websocket, user.id, time.monotonic()):
         await websocket.close(code=_TRY_AGAIN_LATER)
         return
 
-    await manager.broadcast_roster(project_id)
+    # Same user's extra tab leaves the roster unchanged: nothing to announce.
+    if not already_present:
+        await manager.broadcast_roster(project_id)
     try:
         # The state check is not decoration. `broadcast_roster` fans out to
         # every socket in the room *including this one*, and swallows the
@@ -77,9 +82,9 @@ async def presence(websocket: WebSocket, project_id: str) -> None:
             manager.touch(
                 project_id, websocket, data.get("cursor_hint"), time.monotonic()
             )
-            await manager.broadcast_roster(project_id)
     except WebSocketDisconnect:
         pass
     finally:
         manager.disconnect(project_id, websocket)
-        await manager.broadcast_roster(project_id)
+        if not manager.has_other_socket(project_id, websocket, user.id):
+            await manager.broadcast_roster(project_id)

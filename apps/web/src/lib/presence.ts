@@ -1,13 +1,12 @@
 "use client";
 
 // Client for WS /ws/projects/{id}/presence (apps/cloud/app/api/presence.py).
-// Ephemeral who's-viewing roster; no graph data flows here.
+// Ephemeral who's-viewing roster; no graph data flows here. No application
+// heartbeat: liveness is handled by the server's protocol-level pings.
 
 import { useEffect, useState } from "react";
 import { CLOUD_WS_URL } from "./config";
 import { usePresenceAuthParam } from "./auth";
-
-const HEARTBEAT_MS = 15_000;
 
 export interface PresenceRosterEntry {
   user_id: string;
@@ -35,12 +34,8 @@ export function usePresence(projectId: string | null): PresenceRosterEntry[] {
         // ignore malformed frames
       }
     };
-    const heartbeat = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({}));
-    }, HEARTBEAT_MS);
 
     return () => {
-      clearInterval(heartbeat);
       ws.close();
     };
   }, [projectId, authParam]);
