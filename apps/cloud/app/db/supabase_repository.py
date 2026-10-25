@@ -1690,7 +1690,11 @@ class SupabaseRepository(Repository):
         if not project_ids:
             return {}
         try:
-            res = self._client.rpc("pw_latest_receipt_at", {"p_project_ids": project_ids}).execute()
+            # The function is granted to service_role only (migration 0013), and
+            # `self._client` is the caller's scoped client in per-user repositories.
+            res = self._service_client.rpc(
+                "pw_latest_receipt_at", {"p_project_ids": project_ids}
+            ).execute()
             return {r["project_id"]: _DT.validate_python(r["created_at"]) for r in res.data or []}
         except Exception as exc:
             if self._missing_table(exc):
