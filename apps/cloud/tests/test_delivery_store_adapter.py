@@ -527,3 +527,19 @@ def test_list_tasks_summary_agent_closed_at_is_the_latest_agent_artifact():
     assert got["A"].agent_closed_at.tzinfo is not None
     assert got["B"].agent_closed is False
     assert got["B"].agent_closed_at is None
+
+
+def test_set_deployment_tasks_calls_the_freeze_rpc_on_the_service_client():
+    """pw_freeze_deployment_tasks is granted to service_role only (migration
+    0002); the re-attribute route hands the repository a per-user client."""
+    user = _TableClient()
+    service = _TableClient(rpc_rows=[{"ok": True}])
+    got = _split_repo(user, service).freeze_deployment_tasks(
+        "d1", ["t1", "t2"], datetime(2026, 10, 1, tzinfo=timezone.utc)
+    )
+
+    assert service.rpc_calls == [
+        ("pw_freeze_deployment_tasks", {"p_deployment_id": "d1", "p_task_ids": ["t1", "t2"]})
+    ]
+    assert user.rpc_calls == []
+    assert got is True

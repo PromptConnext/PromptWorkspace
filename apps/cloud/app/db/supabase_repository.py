@@ -753,7 +753,9 @@ class SupabaseRepository(Repository):
         # written against. The parameter stays in the signature because the
         # in-memory adapter has no such clock and the contract suite drives
         # both through one interface.
-        res = self._client.rpc(
+        # Granted to service_role only (migration 0002), and `self._client` is the
+        # caller's scoped client in per-user repositories (the re-attribute route).
+        res = self._service_client.rpc(
             _FREEZE_DEPLOYMENT_TASKS_RPC,
             {"p_deployment_id": deployment_id, "p_task_ids": list(task_ids)},
         ).execute()

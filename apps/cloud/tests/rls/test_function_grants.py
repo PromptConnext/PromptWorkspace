@@ -46,3 +46,17 @@ def test_member_cannot_call_the_receipts_function(
         json={"p_project_ids": []},
     )
     _denied(res)
+
+
+def test_member_cannot_call_the_freeze_function(
+    http: httpx.Client, target: Target, fixture: Fixture
+) -> None:
+    """Migration 0002 grants `pw_freeze_deployment_tasks` to service_role only;
+    the re-attribute route runs on a per-user client, so it must use the
+    service-role one."""
+    res = http.post(
+        f"{target.rest}/rpc/pw_freeze_deployment_tasks",
+        headers=target.user_headers(fixture.member.access_token),
+        json={"p_deployment_id": "00000000-0000-0000-0000-000000000000", "p_task_ids": []},
+    )
+    _denied(res)
