@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,12 +56,13 @@ from app.rag.embedder import HttpEmbeddingProvider
 from app.rag.queue import EmbedQueue, embed_worker_loop
 from app.ratelimit import RateLimitMiddleware, TokenBucketLimiter, default_rules
 from app.requestlog import REQUEST_ID_HEADER, RequestIdMiddleware, configure_logging
+from app.schema_gate import MIGRATIONS_DIR
 from app.secrets import build_secret_store
 from app.ws.manager import ConnectionManager
 
 logger = logging.getLogger("promptworkspace")
 
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+_MIGRATIONS_DIR = MIGRATIONS_DIR
 
 
 def _schema_version() -> str:

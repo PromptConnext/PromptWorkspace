@@ -1688,6 +1688,26 @@ class SupabaseRepository(Repository):
             for r in task_rows
         ]
 
+    def applied_migrations(self) -> list[str] | None:
+        try:
+            # Service client: execute is granted to service_role only, and the
+            # /health and /ready probes carry no user token to scope with.
+            res = self._service_client.rpc("pw_applied_migrations", {}).execute()
+            names = [
+                next(iter(r.values())) if isinstance(r, dict) else r for r in res.data or []
+            ]
+            return sorted(str(n) for n in names)
+        except Exception as exc:
+            # Never the message body: it can carry connection details.
+            logger.warning(
+                "migration ledger unreadable (%s)%s",
+                type(exc).__name__,
+                "; pw_applied_migrations is missing, apply migration 0015"
+                if self._missing_function(exc)
+                else "",
+            )
+            return None
+
     def latest_receipt_at(self, project_ids: list[str]) -> dict[str, datetime]:
         if not project_ids:
             return {}
