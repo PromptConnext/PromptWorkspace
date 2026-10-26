@@ -58,9 +58,10 @@ export function WorkspaceMap({
   const [measured, setMeasured] = useState<number | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const w = width ?? measured ?? DEFAULT_W;
-  const h = height ?? DEFAULT_H;
-
   const { members, projects, people } = overview;
+  // Grow with the graph so a big workspace scrolls inside the frame instead of crowding.
+  const h = height ?? Math.max(DEFAULT_H, (members.length + projects.length) * 60);
+
   const connected = new Set(people.flatMap((l) => [l.from_user_id, l.to_user_id ?? ""]));
   const nothing = projects.length === 0 && !members.some((m) => connected.has(m.user_id));
   useEffect(() => {
@@ -91,7 +92,7 @@ export function WorkspaceMap({
   };
 
   return (
-    <div ref={box} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <div ref={box} className="max-h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white">
       <svg
         role="img"
         aria-label="Workspace map"

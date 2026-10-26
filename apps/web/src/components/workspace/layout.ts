@@ -30,6 +30,8 @@ export type Positioned = PositionedNode | PositionedEdge;
 /** Half-extents kept clear of the viewport edge (a project box is the wider). */
 const MARGIN_X = 70;
 const MARGIN_Y = 28;
+/** A member's name label hangs below the circle, so it needs more room at the bottom. */
+const MARGIN_BOTTOM = 52;
 const TICKS = 300;
 /** Drawn size of a node: member circle radius, project box half-extents. */
 const MEMBER_R = 18;
@@ -100,7 +102,7 @@ export function layoutGraph(
     type: n.type,
     refId: n.refId,
     x: clamp(n.x ?? cx, loX, width - loX),
-    y: clamp(n.y ?? cy, loY, height - loY),
+    y: clamp(n.y ?? cy, loY, height - Math.min(MARGIN_BOTTOM, height / 2)),
   }));
   const at = new Map(nodes.map((n) => [n.id, n]));
   const edges: PositionedEdge[] = edgeDefs.map((e) => {
